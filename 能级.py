@@ -9,7 +9,7 @@
 
 import sys
 import numpy as np
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 from PyQt5.QtGui import QColor, QIcon, QPixmap
 from PyQt5.QtWidgets import *
 from matplotlib.figure import Figure
@@ -40,13 +40,33 @@ class EnergyPlotPanel(QWidget):
 
     # 点击频谱峰后发出（which='off'/'on'，idx=谱线下标，-1=清除）
     peakPicked = pyqtSignal(str, int)
+    # 选中峰频率变化后发出（off_freq_ghz / on_freq_ghz，None=该侧未选中）
+    peakFreqsChanged = pyqtSignal(object, object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        # 能级图（占主导地位，保持原有比例）
+        # 能级图（占主导地位，保持原有比例）——单图模式（默认）
         self.level_fig = Figure(figsize=(7, 5), dpi=100)
         self.ax = self.level_fig.add_subplot(111)
         self.level_canvas = FigureCanvas(self.level_fig)
+        # 双图模式：非寻址光（off）/ 寻址光（on）各一张，并排
+        self.level_off_fig = Figure(figsize=(7, 5), dpi=100)
+        self.ax_off = self.level_off_fig.add_subplot(111)
+        self.level_off_canvas = FigureCanvas(self.level_off_fig)
+        self.level_on_fig = Figure(figsize=(7, 5), dpi=100)
+        self.ax_on = self.level_on_fig.add_subplot(111)
+        self.level_on_canvas = FigureCanvas(self.level_on_fig)
+        dual_host = QWidget()
+        dual_lay = QHBoxLayout(dual_host)
+        dual_lay.setContentsMargins(0, 0, 0, 0)
+        dual_lay.setSpacing(1)
+        dual_lay.addWidget(self.level_off_canvas, 1)
+        dual_lay.addWidget(self.level_on_canvas, 1)
+        # 能级图切换容器：页 0 = 单图，页 1 = off/on 双图
+        self.level_stack = QStackedWidget()
+        self.level_stack.addWidget(self.level_canvas)
+        self.level_stack.addWidget(dual_host)
+        self._level_mode = 'single'
         # 镜像对比频谱（一块画布）：off 谱向上、on 谱向下，共用一条 x 轴。
         # 两根谱线根部在 y=0（x 轴）对齐，共振的线上下对齐、非共振错开。
         self.spec_mirror_fig = Figure(figsize=(7, 2.2), dpi=100)
@@ -58,7 +78,7 @@ class EnergyPlotPanel(QWidget):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(1)
-        lay.addWidget(self.level_canvas, 5)
+        lay.addWidget(self.level_stack, 5)
         lay.addWidget(self.spec_mirror_canvas, 2)
 
         # 镜像频谱点击：先按 y 上下判断 off/on，再按点到竖线的 display 距离定位
@@ -95,76 +115,121 @@ class EnergyPlotPanel(QWidget):
     # ---------------- 能级图 ----------------
 
     def _draw_level_axes(self, cache, field_B, groups, address_cfg, relative, visible):
-        """把 core.build_level_rows 算出的能级行直接画到 self.ax。"""
-        self.ax.clear()
+        """把 core.build_level_rows 算出的能级行画到当前模式对应的画布。
 
+        'single'：画到 self.ax（单图，含 off/on 两条跃迁连线）；
+        'dual'  ：非寻址光（裸能级）+ 寻址光（移后）各一张并排。
+        """
         rows = core.build_level_rows(cache, field_B, groups, address_cfg, visible)
+        if self._level_mode == 'dual':
+            return self._draw_level_dual(rows, relative, visible)
 
         if not rows:
+            self.ax.clear()
             self.ax.set_xlim(-1.5, 1.5)
             self.ax.set_ylim(-1.0, 1.0)
-            self.ax.set_xlabel('Sublevel ($m_J$ / $m_F$)')
-            self.ax.set_ylabel('Energy (MHz)')
-            self.ax.set_title('Rb-87 energy levels')
             self.ax.text(0, 0, 'Add level groups to begin.', ha='center', va='center')
             self._rows = []
             self.level_fig.tight_layout()
             self.level_canvas.draw_idle()
             return rows
 
+        x_values, y, y0 = self._level_coords(rows, relative)
+        self._rows = rows
+        self._render_level_plot(
+            self.ax, self.level_fig, rows, x_values, y, y0, relative, visible,
+            title=None, use_shifted=True, connectors='both')
+        return rows
+
+    def _draw_level_dual(self, rows, relative, visible):
+        """双图模式：off（裸能级，无箭头）+ on（移后能级，带箭头）各一张。"""
+        if not rows:
+            for ax, fig in ((self.ax_off, self.level_off_fig),
+                            (self.ax_on, self.level_on_fig)):
+                ax.clear()
+                ax.set_xlim(-1.5, 1.5)
+                ax.set_ylim(-1.0, 1.0)
+                ax.text(0, 0, 'Add level groups to begin.', ha='center', va='center')
+                fig.tight_layout()
+            self.level_off_canvas.draw_idle()
+            self.level_on_canvas.draw_idle()
+            self._rows = []
+            return rows
+        x_values, y, y0 = self._level_coords(rows, relative)
+        self._rows = rows
+        self._render_level_plot(
+            self.ax_off, self.level_off_fig, rows, x_values, y, y0, relative,
+            visible, title='off: no address light',
+            use_shifted=False, connectors='off')
+        self._render_level_plot(
+            self.ax_on, self.level_on_fig, rows, x_values, y, y0, relative,
+            visible, title='on: with address light',
+            use_shifted=True, connectors='on')
+        return rows
+
+    @staticmethod
+    def _level_coords(rows, relative):
+        """返回 (x_values, y, y0)：y=移后能级，y0=裸能级（相对可选）。"""
         x_values = np.array([r['x'] for r in rows])
         energies = np.array([r['E'] for r in rows])
         energies0 = np.array([r['E0'] for r in rows])
-
         if relative:
-            # 相对基准同时包含能移前与能移后，保证箭头在视野内
             ref = np.min(np.concatenate([energies, energies0]))
             y = energies - ref
             y0 = energies0 - ref
-            ylabel = 'Energy (MHz, relative to lowest sublevel)'
         else:
             y = energies
             y0 = energies0
-            ylabel = 'Energy (MHz, absolute)'
+        return x_values, y, y0
+
+    def _render_level_plot(self, ax, fig, rows, x_values, y, y0, relative, visible,
+                           title, use_shifted, connectors):
+        """把能级行渲染到指定 ax。
+
+        use_shifted=True：画移后能级（y）+ 箭头（受寻址光影响子能级）；
+        use_shifted=False：只画裸能级（y0），无箭头（非寻址光视图）。
+        connectors：'both'/'off'/'on'——画哪一侧选中谱峰的跃迁连线。
+        """
+        ax.clear()
+        if use_shifted:
+            yy, yy0 = y, y0
+            y_all = np.concatenate([y, y0])
+        else:
+            yy, yy0 = y0, y0
+            y_all = y0
 
         x_min = np.min(x_values) - 0.6
         x_max = np.max(x_values) + 0.6
-        self.ax.set_xlim(x_min, x_max)
-
-        # y 轴自动缩放：范围含能移前与能移后的全部能级
-        y_all = np.concatenate([y, y0])
+        ax.set_xlim(x_min, x_max)
         span_all = np.max(y_all) - np.min(y_all)
         if span_all < 1e-12:
             span_all = 1.0
         margin = max(span_all * 0.08, 10.0)
-        self.ax.set_ylim(np.min(y_all) - margin, np.max(y_all) + margin)
-        self.ax.set_xlabel('Sublevel ($m_J$ / $m_F$)')
-        self.ax.set_ylabel(ylabel)
-        self.ax.set_title('Rb-87 energy levels with Zeeman and AC-Stark shifts')
-        self.ax.grid(True, alpha=0.3)
+        ax.set_ylim(np.min(y_all) - margin, np.max(y_all) + margin)
+        ax.grid(True, alpha=0.3)
+        # 不画标题/坐标轴标题（省空间，刻度数值已足够）；
+        # 双图模式用左上角极小角标区分 off/on
+        if title:
+            ax.text(0.005, 0.985, title, transform=ax.transAxes,
+                    fontsize=6.5, va='top', color='0.45')
 
-        # 受影响子能级：画出能移前（灰细线）+ 箭头连接 + 能移后（粗线圆点标注）
-        for r, yy, yy0 in zip(rows, y, y0):
-            if r['affected']:
-                # 能移前位置（灰色细线）
-                self.ax.hlines(yy0, r['x'] - 0.18, r['x'] + 0.18, color='0.5', lw=1.5, alpha=0.7)
-                # 箭头：从能移前指向能移后
-                self.ax.annotate('', xy=(r['x'], yy), xytext=(r['x'], yy0),
-                                 arrowprops=dict(arrowstyle='->', color=r['color'], lw=1.6))
-                # 能移后位置（粗线 + 圆点 + 位移标注）
-                self.ax.hlines(yy, r['x'] - 0.22, r['x'] + 0.22, color=r['color'], lw=4)
-                self.ax.plot([r['x']], [yy], 'o', color=r['color'], ms=6, zorder=5)
-                self.ax.text(r['x'] + 0.3, yy, self._format_ac(r['ac']), fontsize=8,
-                             color=r['color'], va='center')
+        for r, yyv, yy0v in zip(rows, yy, yy0):
+            if r['affected'] and use_shifted:
+                ax.hlines(yy0v, r['x'] - 0.18, r['x'] + 0.18, color='0.5', lw=1.5, alpha=0.7)
+                ax.annotate('', xy=(r['x'], yyv), xytext=(r['x'], yy0v),
+                            arrowprops=dict(arrowstyle='->', color=r['color'], lw=1.6))
+                ax.hlines(yyv, r['x'] - 0.22, r['x'] + 0.22, color=r['color'], lw=4)
+                ax.plot([r['x']], [yyv], 'o', color=r['color'], ms=6, zorder=5)
+                ax.text(r['x'] + 0.3, yyv, self._format_ac(r['ac']), fontsize=8,
+                        color=r['color'], va='center')
             else:
-                self.ax.hlines(yy, r['x'] - 0.18, r['x'] + 0.18, color=r['color'], lw=2.5, alpha=0.8)
+                ax.hlines(yy0v, r['x'] - 0.18, r['x'] + 0.18, color=r['color'],
+                          lw=2.5, alpha=0.8)
 
         unique_x = sorted(set(np.round(x_values, 3).tolist()))
-        self.ax.set_xticks(unique_x)
-        self.ax.set_xticklabels([f'{x:.1f}' for x in unique_x])
+        ax.set_xticks(unique_x)
+        ax.set_xticklabels([f'{x:.1f}' for x in unique_x])
 
-        # 图例：每个能级组 + 能移前/受寻址光影响说明
-        # 图例只显示当前视野内的能级组，且使用组绑定的固定颜色
         legend_handles = []
         legend_labels = []
         seen = set()
@@ -174,20 +239,16 @@ class EnergyPlotPanel(QWidget):
                 seen.add(label)
                 legend_handles.append(Line2D([], [], color=group.get('color', COLOR_CYCLE[0]), lw=2.5))
                 legend_labels.append(label)
-        if any(r['affected'] for r in rows):
+        if use_shifted and any(r['affected'] for r in rows):
             legend_handles.append(Line2D([], [], color='0.5', lw=1.5))
             legend_labels.append('before shift')
             legend_handles.append(Line2D([], [], color='0.4', lw=4, marker='o', ms=5))
             legend_labels.append('AC-affected sublevel')
-        self.ax.legend(legend_handles, legend_labels, loc='upper left')
+        ax.legend(legend_handles, legend_labels, loc='upper left', fontsize=8)
 
-        # 保存能级行并叠加当前选中的跃迁对连线（off 用裸能级，on 用移后能级）
-        self._rows = rows
-        self._draw_transition_connectors(rows, x_values, y, y0)
-
-        self.level_fig.tight_layout()
-        self.level_canvas.draw_idle()
-        return rows
+        self._draw_transition_connectors(ax, rows, x_values, yy, yy0, connectors)
+        fig.tight_layout()
+        fig.canvas.draw_idle()
 
     # ---------------- 频谱图 ----------------
 
@@ -217,32 +278,20 @@ class EnergyPlotPanel(QWidget):
         ax.set_ylim(-span, span)
         ax.axhline(0, color='0.25', lw=0.8)
         freqs_off, freqs_on = [], []
-        for idx, ln in enumerate(off):
-            nu, A, la, lb, qa, qb, col, pol = ln
-            nu_g = nu / 1e9
-            y = float(np.log10(max(A, floor) / floor))
-            hl = (idx == self._hl_off)
-            c = 'red' if hl else col
-            ax.vlines(nu_g, 0, y, color=c, lw=2.5 if hl else 1.2)
-            ax.plot([nu_g], [y], 'o', color=c, ms=7 if hl else 3, zorder=5)
-            if hl:
-                ax.annotate(f'{nu_g:.3f}', (nu_g, y),
-                            textcoords='offset points', xytext=(0, 7),
-                            ha='center', fontsize=7, color='red')
-            freqs_off.append(nu_g)
-        for idx, ln in enumerate(on):
-            nu, A, la, lb, qa, qb, col, pol = ln
-            nu_g = nu / 1e9
-            y = -float(np.log10(max(A, floor) / floor))
-            hl = (idx == self._hl_on)
-            c = 'red' if hl else col
-            ax.vlines(nu_g, 0, y, color=c, lw=2.5 if hl else 1.2)
-            ax.plot([nu_g], [y], 'o', color=c, ms=7 if hl else 3, zorder=5)
-            if hl:
-                ax.annotate(f'{nu_g:.3f}', (nu_g, y),
-                            textcoords='offset points', xytext=(0, -7),
-                            ha='center', fontsize=7, color='red')
-            freqs_on.append(nu_g)
+        # off 谱向上（+）、on 谱向下（−）；两段绘制逻辑完全相同，合并为一处
+        for which, lines, sign, hl_idx in (
+                ('off', off, 1.0, self._hl_off), ('on', on, -1.0, self._hl_on)):
+            freqs = freqs_off if which == 'off' else freqs_on
+            for idx, ln in enumerate(lines):
+                nu, A, la, lb, qa, qb, col, pol = ln
+                nu_g = nu / 1e9
+                y = sign * float(np.log10(max(A, floor) / floor))
+                hl = (idx == hl_idx)
+                c = 'red' if hl else col
+                ax.vlines(nu_g, 0, y, color=c, lw=2.5 if hl else 1.2)
+                ax.plot([nu_g], [y], 'o', color=c, ms=7 if hl else 3, zorder=5)
+                # 选中峰频率不再标在图上，改由右侧面板显示（peakFreqsChanged 信号）
+                freqs.append(nu_g)
         if self._spec_ref is not None:
             ax.axvline(self._spec_ref, color='0.3', ls='--', lw=1.2, alpha=0.9)
         ax.set_yticks([])
@@ -356,6 +405,20 @@ class EnergyPlotPanel(QWidget):
         if self._last_draw is not None:
             cache, field_B, groups, address_cfg, relative, visible = self._last_draw
             self.draw_levels(cache, field_B, groups, address_cfg, relative, visible)
+        # 通知右侧面板显示选中峰频率 / 频率差
+        self._emit_peak_freqs()
+
+    def _emit_peak_freqs(self):
+        """发出当前 off/on 选中峰频率（GHz），None 表示该侧未选中。"""
+        off_f = None
+        on_f = None
+        if (self._hl_off >= 0 and self._freqs_off is not None
+                and self._hl_off < len(self._freqs_off)):
+            off_f = float(self._freqs_off[self._hl_off])
+        if (self._hl_on >= 0 and self._freqs_on is not None
+                and self._hl_on < len(self._freqs_on)):
+            on_f = float(self._freqs_on[self._hl_on])
+        self.peakFreqsChanged.emit(off_f, on_f)
 
     @staticmethod
     def _line_key(lines, idx):
@@ -379,11 +442,13 @@ class EnergyPlotPanel(QWidget):
         self._hl_off = self._find_line(self._lines_off, self._hl_off_key)
         self._hl_on = self._find_line(self._lines_on, self._hl_on_key)
 
-    def _draw_transition_connectors(self, rows, x_values, y, y0):
-        """在能级图上画当前选中的跃迁对连线。
+    def _draw_transition_connectors(self, ax, rows, x_values, y, y0, which='both'):
+        """在指定 ax 上画当前选中的跃迁对连线。
 
-        off 谱用裸能级 y0、on 谱用移后能级 y（与频谱数据一致）；
+        off 谱用裸能级 y0、on 谱用移后能级 y（与频谱数据一致），
         连线中点上方标注跃迁频率（GHz）。
+        which='both'：off（虚线）+ on（实线）都画（单图模式）；
+        which='off'/'on'：只画对应一侧（双图模式）。
         """
         if not rows:
             return
@@ -391,9 +456,14 @@ class EnergyPlotPanel(QWidget):
         y_lo = min(float(np.min(y)), float(np.min(y0)))
         y_hi = max(float(np.max(y)), float(np.max(y0)))
         yspan = max(y_hi - y_lo, 1.0)
-        for which, yy in (('off', y0), ('on', y)):
-            lines = self._lines_off if which == 'off' else self._lines_on
-            idx = self._hl_off if which == 'off' else self._hl_on
+        pairs = []
+        if which in ('off', 'both'):
+            pairs.append(('off', y0))
+        if which in ('on', 'both'):
+            pairs.append(('on', y))
+        for w, yy in pairs:
+            lines = self._lines_off if w == 'off' else self._lines_on
+            idx = self._hl_off if w == 'off' else self._hl_on
             if idx < 0 or idx >= len(lines):
                 continue
             nu, A, la, lb, qa, qb, col, pol = lines[idx]
@@ -403,17 +473,26 @@ class EnergyPlotPanel(QWidget):
                 continue
             x1, x2 = float(x_values[i1]), float(x_values[i2])
             y1, y2 = float(yy[i1]), float(yy[i2])
-            self.ax.plot([x1, x2], [y1, y2], color='red', lw=1.6,
-                         ls='-' if which == 'on' else '--', zorder=6)
-            self.ax.plot([x1, x2], [y1, y2], 'o', color='red', ms=4, zorder=6)
-            self.ax.text((x1 + x2) / 2, max(y1, y2) + 0.04 * yspan,
-                         f'{nu / 1e9:.4f} GHz', ha='center', va='bottom',
-                         fontsize=8, color='red')
+            ax.plot([x1, x2], [y1, y2], color='red', lw=1.6,
+                    ls='-' if w == 'on' else '--', zorder=6)
+            ax.plot([x1, x2], [y1, y2], 'o', color='red', ms=4, zorder=6)
+            ax.text((x1 + x2) / 2, max(y1, y2) + 0.04 * yspan,
+                    f'{nu / 1e9:.4f} GHz', ha='center', va='bottom',
+                    fontsize=8, color='red')
 
     def set_spectrum_ref(self, freq_ghz):
         """设置频谱参考频率 (GHz)；None 表示不画竖线。"""
         self._spec_ref = freq_ghz
         self._redraw_spectra()
+
+    def set_level_mode(self, mode):
+        """切换能级图模式：'single'（单图）/ 'dual'（off/on 双图并排）。"""
+        self._level_mode = 'dual' if mode == 'dual' else 'single'
+        self.level_stack.setCurrentIndex(1 if self._level_mode == 'dual' else 0)
+        if self._last_draw is not None:
+            cache, field_B, groups, address_cfg, relative, visible = self._last_draw
+            self.draw_levels(cache, field_B, groups, address_cfg, relative, visible)
+        self._emit_peak_freqs()
 
     def _redraw_spectra(self):
         """用缓存谱线重绘镜像频谱（不重算物理量）。"""
@@ -452,8 +531,11 @@ class EnergyPlotPanel(QWidget):
         gkey = tuple((g['n'], g['l'], g['j']) for g in groups)
         vkey = tuple((g['n'], g['l'], g['j']) for g in visible)
         sig_off = (field_B, gkey, vkey)
+        ell = address_cfg.get('elliptical')
+        ell_key = (ell.get('alpha_deg', 0.0), ell.get('theta_deg', 0.0),
+                   ell.get('eps_deg', 0.0)) if ell else None
         sig_on = (sig_off, address_cfg['intensity'], address_cfg['frequency_hz'],
-                  address_cfg['polarization'], enabled)
+                  address_cfg['polarization'], ell_key, enabled)
 
         # 谱线数据：无寻址光与裸能级输入相关，有寻址光随光参数变化；
         # 任一变化则重算对应谱线并重绘镜像画布
@@ -463,6 +545,8 @@ class EnergyPlotPanel(QWidget):
             self._sig_off = sig_off
             redraw = True
         if sig_on != self._sig_on:
+            # on 谱始终显示全部偏振的跃迁线（寻址光只负责移位，不筛谱线）；
+            # AC 位移本身已按寻址光偏振计算，sig_on 缓存含偏振/椭偏键
             self._lines_on = core.spectrum_lines(cache, rows, ac_on=True)
             self._sig_on = sig_on
             redraw = True
@@ -473,6 +557,8 @@ class EnergyPlotPanel(QWidget):
             self.spec_mirror_canvas.draw_idle()
 
         self._sync_spectrum_xlims()
+        # 谱线重算后选中峰频率可能变化，同步右侧面板
+        self._emit_peak_freqs()
         return rows
 
 
@@ -499,6 +585,7 @@ class MainWindow(QMainWindow):
         self._last_lines_on = None
         self._selected_spec_table = 'off'   # 最近选中的能谱表（off/on）
         self._selected_spec_row = -1        # 最近选中的谱线行（-1=无）
+        self._scan_pair = None   # 光强扫描目标能级对 (la, qa, lb, qb)；跟随能级对而非下标
         self._target_line = None   # 目标跃迁对（能谱表确定）: (which,row,nu_hz,la,qa,lb,qb,pol)；None=直接频率模式
         self._programmatic_freq = False   # 程序设置 freq_box 的临时标志（区分用户手动改频率）
 
@@ -518,32 +605,88 @@ class MainWindow(QMainWindow):
         control_layout.setSpacing(10)
 
         # ---------------- 右侧控制面板（紧凑排布：短组件挤一行） -------------
-        # B 场 + address 启用 + 偏振 一行
-        row_field = QHBoxLayout()
-        row_field.addWidget(QLabel('B (G)'))
+        # 磁场单独一行
+        row_b = QHBoxLayout()
+        row_b.addWidget(QLabel('磁场 B (G)'))
         self.spin_box = QDoubleSpinBox()
         self.spin_box.setRange(0.0, 1000000.0)
         self.spin_box.setDecimals(2)
         self.spin_box.setSingleStep(1.0)
         self.spin_box.setValue(21.7)
-        self.spin_box.editingFinished.connect(self.on_field_changed)
-        row_field.addWidget(self.spin_box)
+        # 实时提交：改值立即生效（无需回车/失焦），构造中 setValue 在连接前不触发
+        self.spin_box.valueChanged.connect(self.on_field_changed)
+        row_b.addWidget(self.spin_box, 1)
+        control_layout.addLayout(row_b)
+
+        # address 启用 + 偏振 + 频移后端 一行
+        row_field = QHBoxLayout()
         self.enable_box = QCheckBox('address 光')
         self.enable_box.toggled.connect(self.on_address_changed)
         row_field.addWidget(self.enable_box)
         row_field.addWidget(QLabel('偏振'))
         self.pol_box = QComboBox()
-        self.pol_box.addItems(core.POLARIZATION_LABELS)
+        self.pol_box.addItems(core.POLARIZATION_LABELS + ['任意椭偏'])
+        self.pol_box.setToolTip(
+            '偏振：σ+ / π / σ- 为三种标准偏振；\n'
+            '任意椭偏 = 用 传播方向角 α、主轴方位角 θ、椭偏角 ε 描述任意\n'
+            '完全偏振光（α 决定 π 分量占比，ε=0 线偏、±45° 圆偏）')
         self.pol_box.currentTextChanged.connect(self.on_address_changed)
         row_field.addWidget(self.pol_box)
+        row_field.addWidget(QLabel('频移'))
+        self.backend_box = QComboBox()
+        self.backend_box.addItems(['矩阵对角化', '解析/微扰'])
+        self.backend_box.setToolTip(
+            '频移计算后端：\n'
+            '  矩阵对角化（默认）：Floquet 直接对角化，自洽含近共振 dressed +\n'
+            '    远失谐反旋项 + 多态同时耦合，精度最高（numpy，无需 GPU）\n'
+            '  解析/微扰：逐伙伴 RWA dressed + 远失谐 SOS，速度最快')
+        self.backend_box.setCurrentIndex(0 if core.SHIFT_BACKEND == 'direct' else 1)
+        self.backend_box.currentIndexChanged.connect(self.on_backend_changed)
+        row_field.addWidget(self.backend_box)
         control_layout.addLayout(row_field)
+
+        # 任意椭偏参数行：传播方向角 α / 主轴方位角 θ / 椭偏角 ε（仅椭偏时显示）
+        self.ell_widget = QWidget()
+        row_ell = QHBoxLayout(self.ell_widget)
+        row_ell.setContentsMargins(0, 0, 0, 0)
+        row_ell.addWidget(QLabel('α°'))
+        self.alpha_spin = QDoubleSpinBox()
+        self.alpha_spin.setRange(0.0, 90.0)
+        self.alpha_spin.setDecimals(1)
+        self.alpha_spin.setSingleStep(1.0)
+        self.alpha_spin.setValue(0.0)
+        self.alpha_spin.setToolTip('传播方向与量子化轴 z 的夹角（0°=沿 z，90°=垂直 z）')
+        self.alpha_spin.editingFinished.connect(self.on_address_changed)
+        row_ell.addWidget(self.alpha_spin)
+        row_ell.addWidget(QLabel('θ°'))
+        self.theta_spin = QDoubleSpinBox()
+        self.theta_spin.setRange(0.0, 180.0)
+        self.theta_spin.setDecimals(1)
+        self.theta_spin.setSingleStep(1.0)
+        self.theta_spin.setValue(0.0)
+        self.theta_spin.setToolTip('偏振椭圆主轴在垂直传播方向平面内的方位角（0~180°）')
+        self.theta_spin.editingFinished.connect(self.on_address_changed)
+        row_ell.addWidget(self.theta_spin)
+        row_ell.addWidget(QLabel('ε°'))
+        self.eps_spin = QDoubleSpinBox()
+        self.eps_spin.setRange(-45.0, 45.0)
+        self.eps_spin.setDecimals(1)
+        self.eps_spin.setSingleStep(1.0)
+        self.eps_spin.setValue(0.0)
+        self.eps_spin.setToolTip('椭偏角（0=线偏，+45=左旋圆偏，−45=右旋圆偏）')
+        self.eps_spin.editingFinished.connect(self.on_address_changed)
+        row_ell.addWidget(self.eps_spin)
+        control_layout.addWidget(self.ell_widget)
+        # 仅当选"任意椭偏"时才显示（on_address_changed 里切换显隐）
+        self.ell_widget.setVisible(False)
 
         # 光强数值 + 粗调滑块 一行
         row_intensity = QHBoxLayout()
         row_intensity.addWidget(QLabel('光强 (mW/cm²)'))
         self.intensity_box = QDoubleSpinBox()
         self.intensity_box.setRange(0.0, 1000000000.0)
-        self.intensity_box.setSingleStep(1000000)
+        # 小步长：扫描结果附近精细微调（不再一次跳 1e6）
+        self.intensity_box.setSingleStep(1000)
         self.intensity_box.setDecimals(1)
         self.intensity_box.setValue(1.0)
         self.intensity_box.editingFinished.connect(self.on_address_changed)
@@ -554,6 +697,32 @@ class MainWindow(QMainWindow):
         self.intensity_slider.sliderReleased.connect(self.on_intensity_slider)
         row_intensity.addWidget(self.intensity_slider, 1)
         control_layout.addLayout(row_intensity)
+
+        # 光强扫描：固定 B/偏振/频率，小步长扫描光强使选中能级对的跃迁频移=目标值
+        row_scan = QHBoxLayout()
+        row_scan.addWidget(QLabel('目标频移 (MHz)'))
+        self.target_shift_spin = QDoubleSpinBox()
+        self.target_shift_spin.setRange(-100000.0, 100000.0)
+        self.target_shift_spin.setDecimals(2)
+        self.target_shift_spin.setSingleStep(1.0)
+        self.target_shift_spin.setValue(20.0)
+        self.target_shift_spin.setToolTip(
+            '想要选中能级对（From→To）的跃迁频率频移（带符号，MHz）')
+        row_scan.addWidget(self.target_shift_spin)
+        self.scan_button = QPushButton('扫描光强')
+        self.scan_button.setToolTip(
+            '先在下方能谱表选中一条谱线，设置目标频移后点此按钮：\n'
+            '保持 B/偏振/频率不变，对选中能级对小步长扫描光强，\n'
+            '使该能级对跃迁频率频移达到目标值（结果写入光强框）。\n'
+            '目标量 = 能级差频移 Δν = AC_To − AC_From，不是单个能级位移。')
+        self.scan_button.clicked.connect(self.on_scan_intensity)
+        row_scan.addWidget(self.scan_button)
+        control_layout.addLayout(row_scan)
+        # 扫描目标能级对显示（选中谱线即更新，让用户确认算的是哪一对）
+        self.scan_target_label = QLabel('')
+        self.scan_target_label.setWordWrap(True)
+        self.scan_target_label.setStyleSheet('color: #0b5394;')
+        control_layout.addWidget(self.scan_target_label)
 
         # 频率一行
         row_freq = QHBoxLayout()
@@ -623,7 +792,20 @@ class MainWindow(QMainWindow):
         self.relative_box = QCheckBox('相对显示')
         self.relative_box.setChecked(True)
         self.relative_box.toggled.connect(self.on_address_changed)
-        control_layout.addWidget(self.relative_box)
+        # 能级图显示模式：单一 / off-on 双图
+        row_display = QHBoxLayout()
+        row_display.addWidget(self.relative_box)
+        row_display.addWidget(QLabel('能级图'))
+        self.level_mode_box = QComboBox()
+        self.level_mode_box.addItems(['单一', 'off/on 双图'])
+        self.level_mode_box.setToolTip(
+            '能级图显示模式：\n'
+            '  单一：一张能级图（Zeeman + AC 位移与箭头），off/on 跃迁连线叠加\n'
+            '  off/on 双图：非寻址光（裸能级）与寻址光（移后）各一张并排，\n'
+            '    分别标注对应频谱（off 谱 / on 谱）选中的跃迁连线')
+        self.level_mode_box.currentIndexChanged.connect(self.on_level_mode_changed)
+        row_display.addWidget(self.level_mode_box)
+        control_layout.addLayout(row_display)
 
         # y 轴上下限组 一行
         row_y = QHBoxLayout()
@@ -663,6 +845,13 @@ class MainWindow(QMainWindow):
         row_specx.addWidget(self.spec_freq_hi_edit, 1)
         control_layout.addLayout(row_specx)
 
+        # 双谱选中峰频率：off 峰频率 | on 峰频率 | 频率差（一行，不标在图上）
+        self.peak_pair_label = QLabel('')
+        self.peak_pair_label.setStyleSheet(
+            'font-family: Consolas; font-size: 9pt;')
+        self.peak_pair_label.setWordWrap(False)
+        control_layout.addWidget(self.peak_pair_label)
+
         # ---------------- 底部：能级组 / 能级数据 / 两个谱表（等高相连） -------------
         self.group_list = QListWidget()
         self.group_list.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -680,40 +869,15 @@ class MainWindow(QMainWindow):
         control_layout.addWidget(self.info_text)
 
         # 两个谱峰数据表（点击行高亮图中对应峰）
-        self.spec_off_table = QTableWidget(0, 4)
-        self.spec_off_table.setHorizontalHeaderLabels(['Freq (GHz)', 'From', 'To', 'Pol'])
-        self.spec_off_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.spec_off_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.spec_off_table.verticalHeader().setVisible(False)
-        self.spec_off_table.setMinimumWidth(0)
-        self.spec_off_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        # Pol 列固定窄，给 Freq/From/To 留地方
-        self.spec_off_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Fixed)
-        self.spec_off_table.setColumnWidth(3, 55)
-        self.spec_off_table.setFixedHeight(170)
-        self.spec_off_table.verticalHeader().setDefaultSectionSize(18)
-        self.spec_off_table.cellClicked.connect(
-            lambda r, c: self._on_peak_table_clicked('off', r, c))
+        self.spec_off_table = self._make_spec_table('off')
         control_layout.addWidget(self.spec_off_table)
-
-        self.spec_on_table = QTableWidget(0, 4)
-        self.spec_on_table.setHorizontalHeaderLabels(['Freq (GHz)', 'From', 'To', 'Pol'])
-        self.spec_on_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.spec_on_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.spec_on_table.verticalHeader().setVisible(False)
-        self.spec_on_table.setMinimumWidth(0)
-        self.spec_on_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        # Pol 列固定窄，给 Freq/From/To 留地方
-        self.spec_on_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Fixed)
-        self.spec_on_table.setColumnWidth(3, 55)
-        self.spec_on_table.setFixedHeight(170)
-        self.spec_on_table.verticalHeader().setDefaultSectionSize(18)
-        self.spec_on_table.cellClicked.connect(
-            lambda r, c: self._on_peak_table_clicked('on', r, c))
+        self.spec_on_table = self._make_spec_table('on')
         control_layout.addWidget(self.spec_on_table)
 
         # 点击频谱峰 → 对应峰表滚动并选中该行（定位跃迁对）
         self.canvas.peakPicked.connect(self._on_peak_picked)
+        # 选中峰频率变化 → 右侧面板显示 off/on 频率与频率差
+        self.canvas.peakFreqsChanged.connect(self._update_peak_pair_label)
 
         # 面板放入滚动区（仅纵向滚动；宽度跟随视图，禁用横向滚动条）
         self.panel_scroll = QScrollArea()
@@ -723,12 +887,22 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(self.panel_scroll, 2)
 
         self._rebuild_y_combos()
+        # 初始磁场直接用 spinbox 显示值（21.7），无需回车
+        self.field_B = self.spin_box.value()
         self.refresh_plot()
+        # 启动后按全屏尺寸适配各组件（面板宽度、表高、画布 dpi、字号）
+        QTimer.singleShot(0, self._apply_fullscreen_layout)
 
     # ---------------- 事件处理 ----------------
-    def on_field_changed(self):
-        # editingFinished 无参数；从数值框读取
+    def on_field_changed(self, *_):
+        # valueChanged 实时提交（带新值参数，忽略）；从数值框读取
         self.field_B = self.spin_box.value()
+        self.refresh_plot()
+
+    def on_backend_changed(self, *_):
+        """切换频移计算后端：矩阵对角化（默认）/ 解析微扰。"""
+        core.SHIFT_BACKEND = ('direct' if self.backend_box.currentIndex() == 0
+                              else 'legacy')
         self.refresh_plot()
 
     def on_address_changed(self, *_):
@@ -736,6 +910,17 @@ class MainWindow(QMainWindow):
         self.address_cfg['intensity'] = self.intensity_box.value()
         self.address_cfg['frequency_hz'] = self.freq_box.value() * 1e9
         self.address_cfg['polarization'] = self.pol_box.currentText()
+        # 任意椭偏：写入三参数；标准偏振则清除（address_pol_coeffs 据此切换）
+        is_ell = (self.address_cfg['polarization'] == '任意椭偏')
+        self.ell_widget.setVisible(is_ell)
+        if is_ell:
+            self.address_cfg['elliptical'] = {
+                'alpha_deg': self.alpha_spin.value(),
+                'theta_deg': self.theta_spin.value(),
+                'eps_deg': self.eps_spin.value(),
+            }
+        else:
+            self.address_cfg.pop('elliptical', None)
         # 同步光强滑块（整数粗调；QSlider.setValue 会自动按滑块范围钳位）
         slider_val = int(round(self.intensity_box.value()))
         if self.intensity_slider.value() != slider_val:
@@ -783,6 +968,24 @@ class MainWindow(QMainWindow):
             f = None
         self.canvas.set_spectrum_ref(f)
 
+    def _make_spec_table(self, which):
+        """构造谱峰数据表（off/on 共用样式与点击行为）。"""
+        table = QTableWidget(0, 4)
+        table.setHorizontalHeaderLabels(['Freq (GHz)', 'From', 'To', 'Pol'])
+        table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        table.verticalHeader().setVisible(False)
+        table.setMinimumWidth(0)
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        # Pol 列固定窄，给 Freq/From/To 留地方
+        table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Fixed)
+        table.setColumnWidth(3, 55)
+        table.setFixedHeight(170)
+        table.verticalHeader().setDefaultSectionSize(18)
+        table.cellClicked.connect(
+            lambda r, c: self._on_peak_table_clicked(which, r, c))
+        return table
+
     @staticmethod
     def _populate_peak_table(table, lines):
         """把谱线数据填入峰表：频率、源子能级、目标子能级、偏振。
@@ -806,17 +1009,40 @@ class MainWindow(QMainWindow):
         table = self.spec_off_table if which == 'off' else self.spec_on_table
         table.clearSelection()
         if idx < 0 or idx >= table.rowCount():
+            self._scan_pair = None
+            self._update_scan_target()
             return
         self._selected_spec_table = which
         self._selected_spec_row = idx
         table.selectRow(idx)
         table.scrollToItem(table.item(idx, 0))
+        self._store_scan_pair(which, idx)
+
+    def _update_peak_pair_label(self, off_f, on_f):
+        """右侧面板一行显示：off 峰频率 | on 峰频率 | 频率差。"""
+        if off_f is None and on_f is None:
+            self.peak_pair_label.setText('')
+            return
+        parts = []
+        if off_f is not None:
+            parts.append(f'off {off_f:.4f} GHz')
+        if on_f is not None:
+            parts.append(f'on {on_f:.4f} GHz')
+        if off_f is not None and on_f is not None:
+            parts.append(f'Δ {(on_f - off_f) * 1000:+.1f} MHz')
+        self.peak_pair_label.setText('   |   '.join(parts))
+
+    def on_level_mode_changed(self, *_):
+        """能级图显示模式切换：单一 / off-on 双图。"""
+        mode = 'dual' if self.level_mode_box.currentIndex() == 1 else 'single'
+        self.canvas.set_level_mode(mode)
 
     def _on_peak_table_clicked(self, which, row, col):
         """能谱表点击：记录选中谱线并高亮图中对应峰。"""
         self._selected_spec_table = which
         self._selected_spec_row = row
         self.canvas.set_spectrum_highlight(which, row)
+        self._store_scan_pair(which, row)
 
     def on_freq_edited(self):
         """用户直接修改频率 → 回到"直接频率"模式（目标对失效，失谐标红）。"""
@@ -837,13 +1063,17 @@ class MainWindow(QMainWindow):
             return
         nu_line = self._target_line[2]
         nu = nu_line + self.detune_spin.value() * 1e6
+        self._set_freq_programmatic(nu)
+        self.statusBar().showMessage(
+            f'失谐 Δ={self.detune_spin.value():+.1f} MHz → 频率 {nu / 1e9:.4f} GHz', 5000)
+
+    def _set_freq_programmatic(self, nu):
+        """程序设置频率框（不触发"用户手动改频→清除目标模式"），并刷新。"""
         self._programmatic_freq = True
         self.freq_box.setValue(nu / 1e9)
         self.freq_box.editingFinished.emit()   # → on_freq_edited（跳过清除）→ 刷新
         self._programmatic_freq = False
         self._set_detune_indicator(True)
-        self.statusBar().showMessage(
-            f'失谐 Δ={self.detune_spin.value():+.1f} MHz → 频率 {nu / 1e9:.4f} GHz', 5000)
 
     def _set_detune_indicator(self, valid):
         """失谐组件标记：无效（直接频率模式/失谐不匹配）时红边框。"""
@@ -863,15 +1093,193 @@ class MainWindow(QMainWindow):
         # 记录目标跃迁对（模式 B：频率由 目标线频率+失谐 决定）
         self._target_line = (self._selected_spec_table, row, nu_line,
                              la, qa, lb, qb, pol)
-        self._programmatic_freq = True
-        self.freq_box.setValue(nu / 1e9)
-        self.freq_box.editingFinished.emit()   # → on_freq_edited（跳过清除）→ 刷新
-        self._programmatic_freq = False
-        self._set_detune_indicator(True)
+        self._set_freq_programmatic(nu)
         self.statusBar().showMessage(
             f'已设目标跃迁对 {la} {qa} → {lb} {qb} (pol={pol})：'
             f'线频 {nu_line / 1e9:.4f} GHz + Δ{self.detune_spin.value():+.1f} MHz'
             f' = {nu / 1e9:.4f} GHz', 8000)
+
+    # ---------------- 光强扫描（固定 B/偏振/频率，小步长迭代求目标频移） ----------------
+    def _store_scan_pair(self, which, row):
+        """从选中谱线记录扫描目标能级对 (la, qa, lb, qb)。
+
+        跟随"能级对"而非行下标（与"获取自能谱"的 _target_line 同理）：
+        参数变化谱线重排后仍指向用户选的那一对。未选中则清空。
+        """
+        lines = (self.canvas._lines_off if which == 'off' else self.canvas._lines_on)
+        if row < 0 or row >= len(lines):
+            self._scan_pair = None
+        else:
+            nu, A, la, lb, qa, qb, col, pol = lines[row]
+            self._scan_pair = (la, qa, lb, qb)
+        self._update_scan_target()
+
+    def _update_scan_target(self):
+        """在界面上显示当前扫描目标能级对（让用户确认算的是哪一对）。"""
+        if self._scan_pair is None:
+            self.scan_target_label.setText('')
+            return
+        la, qa, lb, qb = self._scan_pair
+        src = 'off 谱' if self._selected_spec_table == 'off' else 'on 谱'
+        self.scan_target_label.setText(
+            f'扫描目标能级对（{src}）：{la} {qa} → {lb} {qb}')
+
+    def _pair_shift_at_intensity(self, la, qa, lb, qb, I_mw):
+        """给定光强下，选中能级对 (From=la,qa → To=lb,qb) 的跃迁频率频移 (MHz)。
+
+        目标量 = 能级对之间能级差的频移（盯单个能级没有意义）：
+            Δν(I) = [E_To(I) − E_From(I)] − [E_To0 − E_From0] = ac_To − ac_From
+        扫描统一用 direct 后端：单次 Floquet 对角化自洽（多态/超精细相干），
+        不随用户当前后端切换而改变扫描结果。能级对不在可见组中返回 None。
+        """
+        cfg = dict(self.address_cfg)
+        cfg['enabled'] = True
+        cfg['intensity'] = I_mw
+        rows = core.build_level_rows(
+            self.cache, self.field_B, self.groups, cfg,
+            self.groups, backend='direct')
+        ac = {}
+        for r in rows:
+            if (r['label'], r['qstr']) in ((la, qa), (lb, qb)):
+                ac[(r['label'], r['qstr'])] = r['ac']
+        if (la, qa) not in ac or (lb, qb) not in ac:
+            return None
+        return ac[(lb, qb)] - ac[(la, qa)]
+
+    def _sweep_pair_shifts(self, keys, shifts, la, qa, lb, qb):
+        """从 direct_ac_stark_sweep 结果提取能级对频移数组 (MHz)；缺失返回 None。
+
+        keys 为 [(n,l,j,qstr,occ), ...]，label 由 core.auto_label 反推，
+        与选中谱线的 (label, qstr) 匹配（重复 qstr 取第一个）。
+        """
+        la_key = lb_key = None
+        for k in keys:
+            n, l, j, qstr, occ = k
+            if core.auto_label(n, l, j) == la and qstr == qa and la_key is None:
+                la_key = k
+            if core.auto_label(n, l, j) == lb and qstr == qb and lb_key is None:
+                lb_key = k
+        if la_key is None or lb_key is None:
+            return None
+        return shifts[lb_key] - shifts[la_key]
+
+    def on_scan_intensity(self):
+        """固定 B/偏振/频率，对选中能级对小步长扫描光强，使跃迁频移=目标值。
+
+        目标 = 选中能级对（From→To）的跃迁频率频移 Δν = ac_To − ac_From
+        （不是单个能级位移——能级差才是有物理意义的量）。
+        算法（direct_ac_stark_sweep：一次构建耦合、按 sqrt(I) 重标定批量对角化）：
+          1) win=1 精简基组粗扫 24 点定位跨越区间；
+          2) win=2 基组（与默认全基组误差 <0.3%）区间内小步长细扫 24 点 + 插值；
+          3) 默认全基组（win=3）验证，超出容差则割线校正一次。
+        目标区间内光强相对步长 <3%，最终以软件默认全基组结果为准。
+        """
+        pair = self._scan_pair
+        if pair is None:
+            QMessageBox.information(self, '提示', '请先在下方能谱表中选中一条谱线')
+            return
+        la, qa, lb, qb = pair
+        target = self.target_shift_spin.value()   # MHz
+        if abs(target) < 1e-9:
+            QMessageBox.information(self, '提示', '目标频移不能为 0')
+            return
+        if not self.address_cfg.get('enabled', False):
+            QMessageBox.information(self, '提示', '请先勾选 address 光（扫描需在寻址光下）')
+            return
+        cfg = dict(self.address_cfg)
+        cfg['enabled'] = True
+        SCAN_WIN, REFINE_WIN = 1, 2
+        tol = max(abs(target) * 0.01, 0.05)    # MHz
+
+        self._update_scan_target()
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            # 1) win=1 对数粗扫：定位目标频移所在区间（覆盖弱到强驱动）
+            grid = np.geomspace(1e-6, 1e9, 24)     # mW/cm²
+            keys, s_by_key = core.direct_ac_stark_sweep(
+                self.cache, self.groups, cfg, self.field_B, grid,
+                sos_n_window=SCAN_WIN)
+            shifts = self._sweep_pair_shifts(keys, s_by_key, la, qa, lb, qb)
+            if shifts is None:
+                QMessageBox.warning(
+                    self, '能级对缺失',
+                    f'扫描时找不到能级对 {la} {qa} → {lb} {qb}，\n'
+                    f'请重新在能谱表中选中一条谱线。')
+                return
+            # 找所有跨越目标值的区间（多态共振/非单调时可能有多个）
+            crossings = [k for k in range(len(grid) - 1)
+                         if (shifts[k] < target < shifts[k + 1])
+                         or (shifts[k + 1] < target < shifts[k])]
+            if not crossings:
+                best = int(np.argmin(np.abs(shifts - target)))
+                QMessageBox.warning(
+                    self, '未收敛',
+                    f'光强扫描未跨越目标频移 {target:+.2f} MHz\n'
+                    f'（可能强驱动多态共振，光强→频移不再单调）。\n'
+                    f'最接近点：I={grid[best]:.4g} mW/cm² → 频移 {shifts[best]:+.3f} MHz。\n'
+                    f'请调整目标值，或改用失谐/频率扫描。')
+                self._set_intensity_and_refresh(grid[best])
+                return
+            # 多个跨越区间取端点频移最接近目标值的一个（最相关段）
+            idx = min(crossings,
+                      key=lambda c: min(abs(shifts[c] - target),
+                                        abs(shifts[c + 1] - target)))
+            Ia, Ib = grid[idx], grid[idx + 1]
+
+            # 2) win=2 区间内小步长细扫 + 插值（与默认全基组误差 <0.3%）
+            fine = np.geomspace(Ia, Ib, 24)
+            keys2, f_by_key = core.direct_ac_stark_sweep(
+                self.cache, self.groups, cfg, self.field_B, fine,
+                sos_n_window=REFINE_WIN)
+            sf = self._sweep_pair_shifts(keys2, f_by_key, la, qa, lb, qb)
+            fj = next((j for j in range(len(fine) - 1)
+                       if (sf[j] < target < sf[j + 1])
+                       or (sf[j + 1] < target < sf[j])), None)
+            if fj is None:
+                jb = int(np.argmin(np.abs(sf - target)))
+                I_best = float(fine[jb])
+            else:
+                t = (target - sf[fj]) / (sf[fj + 1] - sf[fj]) if sf[fj + 1] != sf[fj] else 0.5
+                t = min(max(t, 1e-9), 1 - 1e-9)
+                I_best = fine[fj] + t * (fine[fj + 1] - fine[fj])
+            I_best = min(max(I_best, 1e-6), 1e9)
+
+            # 3) 默认全基组（win=3）验证；超出容差则割线校正一次
+            actual = self._pair_shift_at_intensity(la, qa, lb, qb, I_best)
+            if actual is None:
+                QMessageBox.warning(
+                    self, '能级对缺失',
+                    f'最终验证找不到能级对 {la} {qa} → {lb} {qb}')
+                return
+            if abs(actual - target) > tol:
+                I2 = I_best * (1.3 if actual < target else 0.7)
+                S2 = self._pair_shift_at_intensity(la, qa, lb, qb, I2)
+                if S2 is not None and abs(S2 - actual) > 1e-12:
+                    I_best = I_best + (target - actual) * (I2 - I_best) / (S2 - actual)
+                    I_best = min(max(I_best, 1e-6), 1e9)
+                    actual = self._pair_shift_at_intensity(la, qa, lb, qb, I_best)
+                    if actual is None:
+                        actual = 0.0
+            self._set_intensity_and_refresh(I_best)
+            src = 'off 谱' if self._selected_spec_table == 'off' else 'on 谱'
+            self.scan_target_label.setText(
+                f'扫描目标能级对（{src}）：{la} {qa} → {lb} {qb}\n'
+                f'目标频移 {target:+.3f} MHz → 光强 {I_best:.6g} mW/cm²'
+                f'（实际 {actual:+.3f} MHz）')
+            self.statusBar().showMessage(
+                f'扫描完成：目标频移 {target:+.3f} MHz @ {la} {qa}→{lb} {qb}，'
+                f'光强 {I_best:.6g} mW/cm² → 实际 {actual:+.3f} MHz'
+                f'（差 {actual - target:+.3f} MHz）', 12000)
+        finally:
+            QApplication.restoreOverrideCursor()
+
+    def _set_intensity_and_refresh(self, I_mw):
+        """写回光强框并刷新（钳位到 spinbox 范围）。"""
+        lo = self.intensity_box.minimum()
+        hi = self.intensity_box.maximum()
+        I_mw = min(max(I_mw, lo), hi)
+        self.intensity_box.setValue(I_mw)
+        self.on_address_changed()
 
     # ---------------- y 轴显示范围（按能级组节点） ----------------
     def _rebuild_y_combos(self):
@@ -972,6 +1380,33 @@ class MainWindow(QMainWindow):
                 self._rebuild_y_combos()
                 self.refresh_plot()
 
+    def _apply_fullscreen_layout(self):
+        """全屏/最大化后按屏幕尺寸适配：面板宽度、表高、画布 dpi、字号。"""
+        screen = QApplication.primaryScreen()
+        if screen is None:
+            return
+        geo = screen.availableGeometry()
+        w, h = geo.width(), geo.height()
+        # 右侧面板宽度：屏宽 22% ~ 34%（超宽屏不占满）
+        self.panel_scroll.setMinimumWidth(int(w * 0.22))
+        self.panel_scroll.setMaximumWidth(int(w * 0.34))
+        # 底部表/列表高度按屏高比例（全屏下更大）
+        self.group_list.setFixedHeight(max(110, int(h * 0.09)))
+        self.info_text.setFixedHeight(max(110, int(h * 0.09)))
+        th = max(160, min(int(h * 0.13), 340))
+        self.spec_off_table.setFixedHeight(th)
+        self.spec_on_table.setFixedHeight(th)
+        # 画布 dpi：按屏高提升分辨率，文字保持清晰
+        dpi = max(100, min(int(h / 9), 150))
+        for fig in (self.canvas.level_fig, self.canvas.level_off_fig,
+                    self.canvas.level_on_fig, self.canvas.spec_mirror_fig):
+            fig.set_dpi(dpi)
+        # 控制面板字号略增
+        if self.panel_scroll.widget() is not None:
+            self.panel_scroll.widget().setStyleSheet(
+                "font-family: 'Microsoft YaHei'; font-size: 11pt;")
+        self.refresh_plot()
+
     def refresh_plot(self):
         visible = self._visible_groups()
         rows = self.canvas.draw_levels(
@@ -1050,5 +1485,6 @@ class MainWindow(QMainWindow):
 if __name__ == '__main__':
     app = QApplication(sys.argv)
     window = MainWindow()
-    window.show()
+    # 最大化而非真全屏：保留右上角最小化/最大化/关闭三个窗口按钮
+    window.showMaximized()
     sys.exit(app.exec_())

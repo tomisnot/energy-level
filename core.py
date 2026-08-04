@@ -33,6 +33,14 @@
    矩阵元按 m_J 分辨；低激发态用其 |m_J,m_I> 本征振幅叠加
    （m_I 由 m_F−m_J 唯一确定）。偏振 q 逐项计算，给出该峰的偏振组成。
 
+4) 频移计算后端（build_level_rows 可选，UI 控件切换，默认 SHIFT_BACKEND='direct'）
+   - 'legacy'：逐伙伴解析/微扰（近共振 RWA dressed + 远失谐非 RWA SOS）
+   - 'direct'：Floquet 直接矩阵对角化（见 direct_ac_stark_shifts）——一次
+     对角化得全部子能级位移，自洽包含近共振 dressed + 远失谐反旋项
+     (rotating+counter-rotating) + 多态同时耦合 + 超精细相干性；
+     仅用 numpy（np.linalg.eigh），无需 GPU。基组自动纳入每个已添加组
+     的偶极伙伴（|Δn|≤DIRECT_SOS_N_WINDOW），保证亚 MHz 精度。
+
 单位约定:
    - 能级: MHz
    - 频率: Hz
@@ -64,12 +72,69 @@ SOS_BASIS_N_MAX = 100                         # 远失谐 SOS 基组的 n 上限
 POLARIZATION_LABELS = ['σ+', 'π', 'σ-']
 POLARIZATION_Q = {'σ+': 1, 'π': 0, 'σ-': -1}
 
+
+def elliptical_coeffs(alpha_deg, theta_deg, eps_deg):
+    """任意椭偏光 → 球基复系数 (c_{+1}, c_0, c_{-1})，满足 Σ|c|²=1。
+
+    参数（度）：
+      alpha_deg : 传播方向与量子化轴 z 的夹角（0~90°）。α=0 → 传播沿 z，
+                  电场在 xy 平面（只有 σ± 分量、无 π）；α=90° → 传播垂直 z。
+      theta_deg : 偏振椭圆主轴在垂直于传播方向平面内的方位角（0~180°）。
+      eps_deg   : 椭偏角（−45°~+45°）。0=线偏，±45°=圆偏（正/负旋）。
+
+    约定：传播 k=(sinα, 0, cosα)，垂直基 e1=(cosα,0,−sinα)、e2=(0,1,0)；
+    球基 d_{+1}=−(d_x+id_y)/√2、d_0=d_z、d_{−1}=(d_x−id_y)/√2。
+    特例：α=0,θ=0,ε=0 → x 线偏（σ± 等权）；α=0,ε=45° → σ⁺ 圆偏；
+          α=90°,θ=0,ε=0 → 纯 π（电场沿 z）。
+    """
+    a = np.deg2rad(alpha_deg)
+    t = np.deg2rad(theta_deg)
+    e = np.deg2rad(eps_deg)
+    ca, sa = np.cos(a), np.sin(a)
+    # Jones 矢量（e1/e2 基上的复振幅）
+    A = np.cos(e) * np.cos(t) + 1j * np.sin(e) * np.sin(t)
+    B = np.cos(e) * np.sin(t) - 1j * np.sin(e) * np.cos(t)
+    Ex, Ey, Ez = ca * A, B, -sa * A
+    cp = -(Ex + 1j * Ey) / np.sqrt(2)
+    c0 = Ez
+    cm = (Ex - 1j * Ey) / np.sqrt(2)
+    norm = (abs(cp) ** 2 + abs(c0) ** 2 + abs(cm) ** 2) ** 0.5
+    if norm < 1e-12:
+        return 0.0j, 0.0j, 0.0j
+    return cp / norm, c0 / norm, cm / norm
+
+
+def address_pol_coeffs(address_cfg):
+    """返回寻址光在球基上的复系数 [(q, c_q), ...]（仅非零分量）。
+
+    - address_cfg 含 'elliptical'（dict: alpha_deg/theta_deg/eps_deg）→ 任意椭偏；
+    - 否则按 'polarization'（σ+/π/σ-）单 q 系数。
+    满足 Σ|c_q|² = 1。所有物理量（AC 位移、Rabi、谱线强度）据此叠加。
+    """
+    ell = address_cfg.get('elliptical')
+    if ell:
+        cp, c0, cm = elliptical_coeffs(
+            float(ell.get('alpha_deg', 0.0)),
+            float(ell.get('theta_deg', 0.0)),
+            float(ell.get('eps_deg', 0.0)))
+        return [(1, cp), (0, c0), (-1, cm)]
+    q = POLARIZATION_Q.get(address_cfg.get('polarization', 'π'), 0)
+    return [(q, 1.0)]
+
+# ---------------- 频移计算后端 ----------------
+# 'direct'：Floquet 直接矩阵对角化（默认）。一次对角化得到全部子能级 AC 位移，
+#           自洽包含近共振 dressed + 远失谐反旋项 + 多态耦合 + 超精细相干性；
+#           用 numpy 的 np.linalg.eigh，无需 GPU。
+# 'legacy'：逐伙伴解析/微扰（近共振 RWA dressed + 远失谐非 RWA 二阶 SOS）。
+# 两后端返回相同行结构（见 build_level_rows），UI 通过 core.SHIFT_BACKEND 切换。
+SHIFT_BACKEND = 'direct'
+# 直接后端的自动基组窗口：每个已添加组自动纳入其偶极伙伴中 |Δn|≤此值的态。
+# （|Δn|=0 的同 n 细结构伙伴，如 60P3/2 距 60P1/2 仅 ~461 MHz，也会被纳入；
+#  保证亚 MHz 精度。典型寻址强度 Ω~10~100 MHz 下默认 3 足够；
+#  极强驱动/宽扫描可调大。）
+DIRECT_SOS_N_WINDOW = 3
+
 _SPECTROSCOPIC_LETTERS = 'SPDFGHIKLMNOQRT'
-
-
-def state_energy_mhz(atom, n, l, j):
-    """ARC 态能量（单位 eV，相对电离阈为负）-> MHz。"""
-    return atom.getEnergy(n, l, j) * EV_TO_HZ / 1e6
 
 
 def transition_frequency_hz(atom, n1, l1, j1, n2, l2, j2):
@@ -208,11 +273,6 @@ class ArcCache:
             d = self.atom.getDipoleMatrixElement(n1, l1, j1, m1, n2, l2, j2, m2, q)
             self._dme[key] = d
         return d
-
-    def transition_frequency_hz(self, n1, l1, j1, n2, l2, j2):
-        # E_mhz 差 × 1e6 = Hz
-        return (self.E_mhz(n2, l2, j2) - self.E_mhz(n1, l1, j1)) * 1e6
-
 
 def _candidate_F(j, I, mF):
     """给定 J、I、mF，返回所有可能的 F（|J-I| <= F <= J+I 且 F >= |mF|）。"""
@@ -357,41 +417,62 @@ def _partner_sublevels(cache, n1, l1, j1, m2, B_gauss):
     return out
 
 
-def pair_contribution_mhz(cache, n, l, j, m, n1, l1, j1, q,
-                          E0_sq, omega, freq, E_i_sub, B_gauss, address_cfg):
+def pair_contribution_mhz(cache, n, l, j, m, n1, l1, j1, coeffs,
+                          E0_sq, omega, freq, E_i_sub, B_gauss):
     """单个偶极伙伴 (n1,l1,j1) 对当前子能级 (n,l,j,m) 的 AC 位移 (MHz)。
 
-    失谐用**子能级能量**（含超精细/Zeeman）算到最精细：
-    - 当前态能量 E_i_sub（MHz，fine + 超精细 + Zeeman）
-    - 伙伴按 mJ=m+q 分量分解到子能级（里德堡单值；低激发超精细各 F 态
-      按 |振幅|² 加权），每个子能级有各自失谐与 Rabi。
+    coeffs 为球基偏振复系数 [(q, c_q), ...]（address_pol_coeffs 返回）。
+    对每个 q 分量独立贡献：dressed/SOS 失谐用**子能级能量**（含超精细/Zeeman）
+    算到最精细，Rabi 乘 |c_q|、SOS 项乘 |c_q|²（同一 (m,m') 对只能经唯一 q
+    耦合，无干涉，位移可对各 q 分量相加）。
+
     近共振（|Δ| < max(AC_FAR_DETUNE_CUTOFF_HZ, Rabi)）→ dressed 精确解；
     远失谐 → 非 RWA 二阶项（rotating + counter-rotating）。
+
+    每个 q 的两个旋转波方向都要考虑（dme 约定：dme(a; b; q)=⟨b|d_q|a⟩，
+    非零需 m_b=m_a+q）：
+      fwd：源为低态（吸收光子到伙伴），伙伴 mJ = m+q，耦合 = dme(源; 伙伴; q)；
+      rev：源为高态（发射光子到伙伴），伙伴 mJ = m−q，耦合 = dme(伙伴; 源; q)
+           （参数交换，例如 60S mJ+0.5 经 σ⁻ 发射到 6P mJ+1.5）。
+    仅保留旋转波对：fwd 只取伙伴能量更高的子能级，rev 只取伙伴能量更低的
+    子能级；跳过反旋转波对（偏振不匹配的 σ⁺/σ⁻ 型对），避免把错误配对误作
+    近共振 dressed。只做 fwd 会漏掉高态源的共振耦合（曾导致强驱动下 60S 位移
+    被低估十余倍且符号错误）；π 偏振时两通道互补覆盖全部子能级，无重复。
     """
-    m2 = m + q
-    if abs(m2) > j1 + 1e-9:
-        return 0.0
-    d_au = cache.dme(n, l, j, m, n1, l1, j1, m2, q)
-    if abs(d_au) < 1e-12:
-        return 0.0
-    d_cm = abs(d_au) * E_CHARGE * A0
-    omega_rabi = np.sqrt(E0_sq) * d_cm / hbar            # fine 层面 Rabi (rad/s)
     total = 0.0
-    for E_k, weight in _partner_sublevels(cache, n1, l1, j1, m2, B_gauss):
-        nu_gk = (E_k - E_i_sub) * 1e6                    # Hz，带符号（子能级能量差）
-        delta = freq - abs(nu_gk)
-        if abs(delta) < max(AC_FAR_DETUNE_CUTOFF_HZ, omega_rabi / (2.0 * np.pi)):
-            # 近共振：dressed 精确解。耦合 Rabi = Ω_fine·|振幅|（=√weight）
-            om_f = omega_rabi * (weight ** 0.5)
-            total += _dressed_shift_mhz(
-                2.0 * np.pi * delta, om_f, is_source=(E_i_sub < E_k))
-        else:
-            # 远失谐：非 RWA 二阶项（|d|² 按权重，ω_ki 用子能级能量差）。
-            # dE_j 量纲是能量 (J)，换算 MHz 除以 h = 2π·ħ
-            # （曾缺 ħ，导致 SOS 背景被低估 ~1e34 倍）。
-            w_ki = 2.0 * np.pi * nu_gk
-            dE_j = -(E0_sq / (4.0 * hbar)) * (weight * d_cm ** 2) * (2.0 * w_ki) / (w_ki ** 2 - omega ** 2)
-            total += dE_j / (2.0 * np.pi * hbar) / 1e6
+    for q, c_q in coeffs:
+        wgt = abs(c_q) ** 2
+        if wgt < 1e-12:
+            continue
+        sqrt_w = abs(c_q)
+        for name, m2, swapped in (('fwd', m + q, False), ('rev', m - q, True)):
+            if abs(m2) > j1 + 1e-9:
+                continue
+            if swapped:
+                d_au = cache.dme(n1, l1, j1, m2, n, l, j, m, q)
+            else:
+                d_au = cache.dme(n, l, j, m, n1, l1, j1, m2, q)
+            if abs(d_au) < 1e-12:
+                continue
+            d_cm = abs(d_au) * E_CHARGE * A0
+            omega_rabi = sqrt_w * np.sqrt(E0_sq) * d_cm / hbar   # 该 q 分量的 Rabi
+            for E_k, weight in _partner_sublevels(cache, n1, l1, j1, m2, B_gauss):
+                if (E_k > E_i_sub) == swapped:
+                    continue          # 反旋转波方向（偏振不匹配），跳过
+                nu_gk = (E_k - E_i_sub) * 1e6               # Hz，带符号（子能级能量差）
+                delta = freq - abs(nu_gk)
+                if abs(delta) < max(AC_FAR_DETUNE_CUTOFF_HZ, omega_rabi / (2.0 * np.pi)):
+                    # 近共振：dressed 精确解。耦合 Rabi = Ω_q·|振幅|（=√weight）
+                    om_f = omega_rabi * (weight ** 0.5)
+                    total += _dressed_shift_mhz(
+                        2.0 * np.pi * delta, om_f, is_source=(E_i_sub < E_k))
+                else:
+                    # 远失谐：非 RWA 二阶项（|d|² 按权重与 |c_q|²，ω_ki 用子能级能量差）。
+                    # dE_j 量纲是能量 (J)，换算 MHz 除以 h = 2π·ħ
+                    # （曾缺 ħ，导致 SOS 背景被低估 ~1e34 倍）。
+                    w_ki = 2.0 * np.pi * nu_gk
+                    dE_j = -(E0_sq / (4.0 * hbar)) * (wgt * weight * d_cm ** 2) * (2.0 * w_ki) / (w_ki ** 2 - omega ** 2)
+                    total += dE_j / (2.0 * np.pi * hbar) / 1e6
     return total
 
 
@@ -410,7 +491,7 @@ def ac_stark_shift_mhz(cache, group, m, groups, address_cfg, B_gauss=0.0, E_sub=
     if not address_cfg.get('enabled', False):
         return 0.0
 
-    q = POLARIZATION_Q[address_cfg['polarization']]
+    coeffs = address_pol_coeffs(address_cfg)
     n, l, j = group['n'], group['l'], group['j']
     if E_sub is None:
         E_sub = _sublevel_energy(cache, n, l, j, m, B_gauss)
@@ -425,8 +506,8 @@ def ac_stark_shift_mhz(cache, group, m, groups, address_cfg, B_gauss=0.0, E_sub=
         if (k['n'], k['l'], k['j']) == (n, l, j):
             continue
         total += pair_contribution_mhz(
-            cache, n, l, j, m, k['n'], k['l'], k['j'], q,
-            E0_sq, omega, freq, E_sub, B_gauss, address_cfg)
+            cache, n, l, j, m, k['n'], k['l'], k['j'], coeffs,
+            E0_sq, omega, freq, E_sub, B_gauss)
 
     # 2) 完整偶极基组中未添加的伙伴（远失谐背景 + 未添加的近共振态）
     added = {(k['n'], k['l'], k['j']) for k in groups}
@@ -434,29 +515,329 @@ def ac_stark_shift_mhz(cache, group, m, groups, address_cfg, B_gauss=0.0, E_sub=
         if (n1, l1, j1) == (n, l, j) or (n1, l1, j1) in added:
             continue
         total += pair_contribution_mhz(
-            cache, n, l, j, m, n1, l1, j1, q,
-            E0_sq, omega, freq, E_sub, B_gauss, address_cfg)
+            cache, n, l, j, m, n1, l1, j1, coeffs,
+            E0_sq, omega, freq, E_sub, B_gauss)
 
     return total
+
+
+# ============================================================
+# 直接矩阵对角化频移后端（Floquet，numpy）
+# ============================================================
+
+_DIRECT_COUPLING_KEY = None
+_DIRECT_COUPLING = None    # (states, E_mhz, C)：耦合只依赖(基组,B,强度,偏振)，不依赖频率
+
+
+def _occ_keys_direct(items):
+    """生成唯一键 (n,l,j,qstr,occ)。B≠0 时 get_hyperfine_levels 的 F 标注启发式
+    可能给出重复 qstr（如 6P3/2 在 21.7 G 下两个 'F=0.0, m_F=+0.0'），
+    用出现序号 occ 区分。"""
+    seen = {}
+    keys = []
+    for it in items:
+        base = (it['n'], it['l'], it['j'], it['qstr'])
+        occ = seen.get(base, 0)
+        seen[base] = occ + 1
+        keys.append(base + (occ,))
+    return keys
+
+
+def dipole_amplitude(cache, a, b, q):
+    """⟨b|d_q|a⟩（a.u.，复）。transition_strength_q 取其模平方。
+
+    偶极算符只作用于电子（Δm_J = q），因此耦合矩阵元必须命中对方子能级的
+    mJ：mJ-mJ 需 m2==b['mj']；F-mJ 需 mj+q==b['mj']；mJ-F 需 mj+q==a['mj']。
+    缺此匹配会把"与其他 mJ 态的耦合"错误归到本对（实测 bug：6P3/2 F=3
+    mF=-1 ↔ 60S mJ=+0.5 在 σ- 下被误报非零，实际是到 60S mJ=-0.5 的耦合）。
+    F--F 需 mF 守恒（mF_b = mF_a + q，核自旋不参与跃迁），缺此检查会给出
+    违反选择定则的非零强度（ARC getDipoleMatrixElementHFS 对不满足者返回 0）。
+    """
+    if a['kind'] == 'mJ' and b['kind'] == 'mJ':
+        m2 = a['mj'] + q
+        if abs(m2 - b['mj']) > 1e-9:
+            return 0.0j
+        return cache.dme(a['n'], a['l'], a['j'], a['mj'],
+                         b['n'], b['l'], b['j'], m2, q)
+    if a['kind'] == 'F' and b['kind'] == 'mJ':
+        amp = 0.0j
+        for mj, am in a['amps'].items():
+            m2 = mj + q
+            if abs(m2 - b['mj']) > 1e-9:
+                continue
+            amp += am.conjugate() * cache.dme(
+                a['n'], a['l'], a['j'], mj, b['n'], b['l'], b['j'], m2, q)
+        return amp
+    if a['kind'] == 'mJ' and b['kind'] == 'F':
+        amp = 0.0j
+        for mj, am in b['amps'].items():
+            m1 = mj + q
+            if abs(m1 - a['mj']) > 1e-9:
+                continue
+            amp += am.conjugate() * cache.dme(
+                b['n'], b['l'], b['j'], mj, a['n'], a['l'], a['j'], m1, q)
+        return amp
+    # F -- F（mF 守恒）
+    if abs((a['mF'] + q) - b['mF']) > 1e-9:
+        return 0.0j
+    amp = 0.0j
+    for mj1, am1 in a['amps'].items():
+        mj2 = mj1 + q
+        if abs(mj2) <= b['j'] + 1e-9:
+            am2 = b['amps'].get(mj2)
+            if am2 is not None:
+                amp += am1.conjugate() * am2 * cache.dme(
+                    a['n'], a['l'], a['j'], mj1, b['n'], b['l'], b['j'], mj2, q)
+    return amp
+
+
+def _direct_basis(cache, groups, B_gauss, window):
+    """直接法基组：全部已添加组子能级 + 每组偶极伙伴（|Δn|≤window）。
+
+    里德堡组（n≥RYDBERG_N_MIN）也加入其偶极伙伴（如 60S 的 60P/59P/61P），
+    但其中**远失谐**的里德堡↔里德堡对会在 direct_ac_stark_shifts 中按频率
+    屏蔽（见该函数 docstring），既保留近共振对的真实贡献，又避免有限光子块
+    截断在边界块产生虚假大位移。
+    """
+    states = []
+    seen = set()
+
+    def add(n, l, j):
+        if (n, l, j) in seen:
+            return
+        seen.add((n, l, j))
+        states.extend(_group_sublevel_rows(cache, n, l, j, B_gauss))
+
+    for g in groups:
+        add(g['n'], g['l'], g['j'])
+    for g in groups:
+        n, l, j = g['n'], g['l'], g['j']
+        n_min = max(1, n - window)
+        n_max = n + window
+        for l1 in (l - 1, l + 1):
+            if l1 < 0:
+                continue
+            for j1 in (l1 - 0.5, l1 + 0.5):
+                if j1 < 0.5 or abs(j - j1) > 1.0 + 1e-9:
+                    continue
+                for n1 in range(max(n_min, l1 + 1), n_max + 1):
+                    add(n1, l1, j1)
+    return states
+
+
+def _direct_coupling(cache, states, address_cfg):
+    """构造与频率/强度无关的耦合结构。返回 (E_mhz 数组, 单位 E0 耦合 C_unit)。
+
+    C_unit_ij = −d_ij·(e·a0)/(2h·1e6)（MHz），实际强度下 C = E0·C_unit，
+    E0² = 2I/(ε0·c)。偶极选择定则预过滤（Δl=±1, |Δj|≤1）。返回单位 E0
+    耦合使光强扫描可一次构建、按 sqrt(I) 重标定（见 direct_ac_stark_sweep）。
+    """
+    N = len(states)
+    E = np.array([s['E_mhz'] for s in states], dtype=np.float64)
+    coeffs = address_pol_coeffs(address_cfg)
+    t_unit = (E_CHARGE * A0) / (2.0 * h * 1e6)
+    C_unit = np.zeros((N, N), dtype=np.complex128)
+    for q, c_q in coeffs:
+        if abs(c_q) < 1e-12:
+            continue
+        for i in range(N):
+            si = states[i]
+            for j in range(i + 1, N):
+                sj = states[j]
+                if abs(si['l'] - sj['l']) != 1 or abs(si['j'] - sj['j']) > 1.0 + 1e-9:
+                    continue
+                d = dipole_amplitude(cache, si, sj, q)
+                if abs(d) > 1e-16:
+                    # 同一对 (i,j) 只能经唯一 q 耦合（选择定则），直接叠加
+                    v = -t_unit * c_q * d
+                    C_unit[i, j] += v
+                    C_unit[j, i] += np.conj(v)
+    return E, C_unit
+
+
+def direct_ac_stark_shifts(cache, groups, address_cfg, B_gauss=0.0,
+                           n_photon=1, sos_n_window=None):
+    """直接矩阵对角化计算全部已添加组子能级的 AC 位移（MHz）。
+
+    基组 = 已添加组子能级 + 各组偶极伙伴（|Δn|≤sos_n_window，默认
+    DIRECT_SOS_N_WINDOW）。构造含光子数的 Floquet 哈密顿量并一次对角化：
+        H_F = Σ_n (H0 + n·ħω)⊗|n⟩⟨n| + (V/2)⊗(|n+1⟩⟨n| + |n⟩⟨n+1|)
+    自洽包含近共振 dressed + 远失谐反旋项 + 多态耦合 + 超精细相干性。
+    耦合矩阵 C 只依赖(基组, B, 强度, 偏振)不依赖频率，已做模块级缓存，
+    频率变化只重建对角块并重新对角化（numpy，无需 GPU）。
+
+    返回 dict[(n,l,j,qstr,occ)] -> shift_mhz；occ 为重复 qstr 的出现序号。
+    """
+    if not address_cfg.get('enabled', False) or not groups:
+        return {}
+    if sos_n_window is None:
+        sos_n_window = DIRECT_SOS_N_WINDOW
+    global _DIRECT_COUPLING_KEY, _DIRECT_COUPLING
+    key = (tuple(sorted((g['n'], g['l'], g['j']) for g in groups)),
+           round(float(B_gauss), 6),
+           float(address_cfg['intensity']),
+           str(address_cfg.get('elliptical')) + '|' + str(address_cfg['polarization']),
+           sos_n_window)
+    if _DIRECT_COUPLING_KEY != key or _DIRECT_COUPLING is None:
+        states = _direct_basis(cache, groups, B_gauss, sos_n_window)
+        E, C = _direct_coupling(cache, states, address_cfg)
+        _DIRECT_COUPLING_KEY = key
+        _DIRECT_COUPLING = (states, E, C)
+    states, E, C_unit = _DIRECT_COUPLING
+    N = len(states)
+    M = 2 * n_photon + 1
+    freq_mhz = address_cfg['frequency_hz'] / 1e6
+    # 按强度重标定单位耦合：C = E0·C_unit（E0² = 2I/(ε0·c)）
+    C = (2.0 * address_cfg['intensity'] * MW_PER_CM2_TO_W_PER_M2
+         / (epsilon_0 * c)) ** 0.5 * C_unit
+    # 屏蔽远失谐的里德堡↔里德堡耦合：对 ω0=|E_i−E_j| 满足 |ω0−ω|>ω0 的对，
+    # 其净 AC 位移 ≈ Ω²·ω0/(2ω²) 可忽略（ω≫ω0），但有限光子块截断下该对
+    # 在光子块边界态上只剩旋转波方向通道，产生虚假的 ~Ω²/ω 位移并破坏与
+    # 目标态的共振（曾导致强驱动下 6P/60S 位移被低估十余倍）。近共振对
+    # （如 60S↔60P3/2，|ω0−ω|≤ω0）保留其真实 dressed/SOS 贡献。
+    freq_hz = float(address_cfg['frequency_hz'])
+    if any(s['n'] >= RYDBERG_N_MIN for s in states):
+        mask = np.ones((N, N), dtype=np.complex128)
+        for i in range(N):
+            if states[i]['n'] < RYDBERG_N_MIN:
+                continue
+            for j in range(i + 1, N):
+                if states[j]['n'] < RYDBERG_N_MIN:
+                    continue
+                w0 = abs(E[i] - E[j]) * 1e6
+                if abs(w0 - freq_hz) > w0:
+                    mask[i, j] = 0.0
+                    mask[j, i] = 0.0
+        C = C * mask
+    H = np.zeros((N * M, N * M), dtype=np.complex128)
+    for p in range(M):
+        sl = slice(p * N, (p + 1) * N)
+        H[sl, sl] = np.diag(E) + (p - n_photon) * freq_mhz * np.eye(N)
+    for p in range(M - 1):
+        H[p * N:(p + 1) * N, (p + 1) * N:(p + 2) * N] = C
+        H[(p + 1) * N:(p + 2) * N, p * N:(p + 1) * N] = C.conj().T
+    evals, evecs = np.linalg.eigh(H)
+    keys = _occ_keys_direct(states)
+    return _floquet_shifts(evals, evecs, E, keys, n_photon)
+
+
+def _floquet_shifts(evals, evecs, E, keys, n_photon, E0mat=None):
+    """从 Floquet 本征值/向量提取各子能级位移（MHz）。
+
+    通过本征态对光子块 0 的投影确定归属：取重叠最大者；共振 50/50 劈裂
+    （重叠 <30%·max）时取离裸能量最近的分支。E0mat 可复用（扫描批量调用）。
+    """
+    N = len(keys)
+    M = 2 * n_photon + 1
+    p0 = n_photon                          # 光子块 0
+    if E0mat is None:
+        E0mat = np.zeros((N * M, N), dtype=np.complex128)
+        E0mat[p0 * N:(p0 + 1) * N, :] = np.eye(N)
+    ov = np.abs(np.conj(evecs).T @ E0mat) ** 2     # (NM, N)：本征态对源的重叠
+    out = {}
+    for s in range(N):
+        ov_s = ov[:, s]
+        best = int(np.argmax(ov_s))
+        thr = 0.3 * ov_s[best]
+        cand = np.where(ov_s >= thr)[0]
+        # 共振 50/50 劈裂时取离裸能量最近的分支
+        k = int(cand[np.argmin(np.abs(evals[cand] - E[s]))])
+        out[keys[s]] = float(evals[k] - E[s])
+    return out
+
+
+def direct_ac_stark_sweep(cache, groups, address_cfg, B_gauss, intensities,
+                          n_photon=1, sos_n_window=None):
+    """一次构建 Floquet 结构，对一系列光强批量计算全部子能级位移（MHz）。
+
+    耦合矩阵 C ∝ E0 ∝ sqrt(I)，基组与对角块不随光强变化；本函数只构建
+    一次（基组, E, C_unit），对每个 I 重标定耦合并重对角化，比反复调用
+    direct_ac_stark_shifts 快一个量级（省去每次重建基组与偶极矩阵元），
+    用于光强扫描。sos_n_window 可用精简基组（如 1）加速定位，
+    再以更全基组（如 2，误差 <0.3%）局部迭代收敛。
+
+    返回 (keys, shifts)：
+      keys  : [(n,l,j,qstr,occ), ...]（与 direct_ac_stark_shifts 键一致）
+      shifts: dict[occ_key] -> np.array（长度 = len(intensities)，MHz）
+    """
+    if (not address_cfg.get('enabled', False) or not groups
+            or len(intensities) == 0):
+        return [], {}
+    if sos_n_window is None:
+        sos_n_window = DIRECT_SOS_N_WINDOW
+    states = _direct_basis(cache, groups, B_gauss, sos_n_window)
+    N = len(states)
+    M = 2 * n_photon + 1
+    E = np.array([s['E_mhz'] for s in states], dtype=np.float64)
+    keys = _occ_keys_direct(states)
+    freq_mhz = address_cfg['frequency_hz'] / 1e6
+    _, C_unit = _direct_coupling(cache, states, address_cfg)
+    # 远失谐里德堡↔里德堡屏蔽（频率相关，与光强无关）
+    freq_hz = float(address_cfg['frequency_hz'])
+    if any(s['n'] >= RYDBERG_N_MIN for s in states):
+        mask = np.ones((N, N), dtype=np.complex128)
+        for i in range(N):
+            if states[i]['n'] < RYDBERG_N_MIN:
+                continue
+            for j in range(i + 1, N):
+                if states[j]['n'] < RYDBERG_N_MIN:
+                    continue
+                w0 = abs(E[i] - E[j]) * 1e6
+                if abs(w0 - freq_hz) > w0:
+                    mask[i, j] = 0.0
+                    mask[j, i] = 0.0
+        C_unit = C_unit * mask
+    # 与光强无关的光子块结构：H(I) = H_diag + E0(I)·H_coup
+    NM = N * M
+    H_diag = np.zeros((NM, NM), dtype=np.complex128)
+    for p in range(M):
+        sl = slice(p * N, (p + 1) * N)
+        H_diag[sl, sl] = np.diag(E) + (p - n_photon) * freq_mhz * np.eye(N)
+    H_coup = np.zeros((NM, NM), dtype=np.complex128)
+    for p in range(M - 1):
+        a, b = p * N, (p + 1) * N
+        H_coup[a:b, b:b + N] = C_unit
+        H_coup[b:b + N, a:b] = C_unit.conj().T
+    p0 = n_photon
+    E0mat = np.zeros((NM, N), dtype=np.complex128)
+    E0mat[p0 * N:(p0 + 1) * N, :] = np.eye(N)
+    shifts = {k: np.zeros(len(intensities)) for k in keys}
+    for t, I in enumerate(intensities):
+        E0 = (2.0 * I * MW_PER_CM2_TO_W_PER_M2 / (epsilon_0 * c)) ** 0.5
+        H = H_diag + E0 * H_coup
+        evals, evecs = np.linalg.eigh(H)
+        sh = _floquet_shifts(evals, evecs, E, keys, n_photon, E0mat)
+        for k in keys:
+            shifts[k][t] = sh[k]
+    return keys, shifts
 
 
 # ============================================================
 # 子能级行（UI 直接渲染）
 # ============================================================
 
-def build_level_rows(cache, field_B, groups, address_cfg, visible):
+def build_level_rows(cache, field_B, groups, address_cfg, visible, backend=None):
     """计算可见能级组的全部子能级，返回行 dict 列表（UI 直接绘制）。
 
-    每行字段：
-      x        : m_J 或 m_F（横轴坐标）
-      E0       : 裸能量 (MHz)，含 Zeeman，不含 AC
-      E        : 移后能量 (MHz) = E0 + ac
-      ac       : AC-Stark 位移 (MHz)
-      affected : |ac| > AC_EFFECT_THRESHOLD_MHZ
-      label, qstr, color : 显示用
-      n, l, j, kind('mJ'/'F'), mj 或 mF/amps : 供跃迁频谱计算
-    里德堡态忽略核自旋；低激发态含超精细，AC 位移 = 各 m_J 分量
-    （超精细本征振幅）的 dressed/SOS 加权和。
+    backend: 'direct'（矩阵对角化，默认按 SHIFT_BACKEND）| 'legacy'（解析/微扰）。
+    每行字段：x/E0/E/ac/affected/label/qstr/color/n/l/j/kind('mJ'/'F')/mj 或 mF/amps。
+    """
+    if backend is None:
+        backend = SHIFT_BACKEND
+    if backend == 'direct':
+        return build_level_rows_direct(cache, field_B, groups, address_cfg, visible)
+    if backend != 'legacy':
+        raise ValueError(f"未知频移后端: {backend!r}（可选 'direct' / 'legacy'）")
+    return build_level_rows_legacy(cache, field_B, groups, address_cfg, visible)
+
+
+def _base_level_rows(cache, field_B, visible):
+    """构造可见能级组的全部子能级行（ac=0，E=E0，affected=False）。
+
+    里德堡态忽略核自旋（只画 fine-structure 的 m_J 子能级）；低激发态
+    画出所有超精细子能级 (F, m_F)。两后端共用此基础结构，再各自填入
+    AC 位移（legacy 逐子能级解析/微扰，direct 一次对角化）。
+    行字段：x/E0/E/ac/affected/label/qstr/color/n/l/j/kind/mj 或 mF/amps。
     """
     rows = []
     for group in visible:
@@ -465,34 +846,62 @@ def build_level_rows(cache, field_B, groups, address_cfg, visible):
         E0_mhz = cache.E_mhz(n, l, j)
         hf = get_hyperfine_levels(cache, n, l, j, field_B)
         if hf is None:
-            # 里德堡态：只画 fine-structure 的 m_J 子能级（忽略核自旋）
             gJ = cache.gJ(l, j)
             for m in np.arange(-j, j + 1, 1.0):
-                zeeman = gJ * MU_B_MHZ_PER_G * m * field_B
-                ac = ac_stark_shift_mhz(cache, group, m, groups, address_cfg,
-                                        B_gauss=field_B)
-                affected = abs(ac) > AC_EFFECT_THRESHOLD_MHZ
-                E_level = E0_mhz + zeeman
+                E_level = E0_mhz + gJ * MU_B_MHZ_PER_G * m * field_B
                 rows.append(dict(
-                    x=float(m), E0=E_level, E=E_level + ac, ac=ac, color=color,
-                    label=group['label'], affected=affected,
+                    x=float(m), E0=E_level, E=E_level, ac=0.0, color=color,
+                    label=group['label'], affected=False,
                     qstr=f'm_J={m:+.1f}',
                     n=n, l=l, j=j, kind='mJ', mj=m, mF=None, amps=None))
         else:
-            # 低激发态：画出所有超精细子能级 (F, m_F)
-            for F, mF, e_hf, mJ_weights, mJ_amps in hf:
-                E_sub_level = E0_mhz + e_hf   # 超精细子能级能量（含 Zeeman）
-                ac = sum(
-                    w * ac_stark_shift_mhz(cache, group, mj, groups, address_cfg,
-                                           B_gauss=field_B, E_sub=E_sub_level)
-                    for mj, w in mJ_weights.items())
-                affected = abs(ac) > AC_EFFECT_THRESHOLD_MHZ
+            for F, mF, e_hf, _w, mJ_amps in hf:
                 E_level = E0_mhz + e_hf
                 rows.append(dict(
-                    x=float(mF), E0=E_level, E=E_level + ac, ac=ac, color=color,
-                    label=group['label'], affected=affected,
+                    x=float(mF), E0=E_level, E=E_level, ac=0.0, color=color,
+                    label=group['label'], affected=False,
                     qstr=f'F={F:.1f}, m_F={mF:+.1f}',
                     n=n, l=l, j=j, kind='F', mj=None, mF=mF, amps=mJ_amps))
+    return rows
+
+
+def _fill_ac(rows, acs):
+    """把逐行 AC 位移（列表/生成器）写回行结构：E = E0 + ac，affected 标记。"""
+    for r, ac in zip(rows, acs):
+        r['ac'] = ac
+        r['E'] = r['E0'] + ac
+        r['affected'] = abs(ac) > AC_EFFECT_THRESHOLD_MHZ
+    return rows
+
+
+def build_level_rows_legacy(cache, field_B, groups, address_cfg, visible):
+    """legacy 后端：逐子能级解析/微扰（近共振 RWA dressed + 远失谐非 RWA SOS）。"""
+    rows = _base_level_rows(cache, field_B, visible)
+    acs = []
+    for r in rows:
+        # 由行字段重建组信息（ac_stark_shift_mhz 只读 n/l/j）
+        group = {'n': r['n'], 'l': r['l'], 'j': r['j'],
+                 'label': r['label'], 'color': r['color']}
+        if r['kind'] == 'mJ':
+            acs.append(ac_stark_shift_mhz(cache, group, r['mj'], groups,
+                                          address_cfg, B_gauss=field_B))
+        else:
+            # 低激发态：AC = 各 m_J 分量（超精细本征振幅 |amp|²=权重）的加权和
+            acs.append(sum(
+                abs(am) ** 2 * ac_stark_shift_mhz(
+                    cache, group, mj, groups, address_cfg,
+                    B_gauss=field_B, E_sub=r['E0'])
+                for mj, am in r['amps'].items()))
+    return _fill_ac(rows, acs)
+
+
+def build_level_rows_direct(cache, field_B, groups, address_cfg, visible):
+    """direct 后端：行结构与 legacy 完全一致，但 ac 来自一次 Floquet 对角化
+    （direct_ac_stark_shifts），自洽含近共振 dressed + 远失谐反旋项 + 多态耦合。"""
+    rows = _base_level_rows(cache, field_B, visible)
+    if address_cfg.get('enabled', False):
+        shifts = direct_ac_stark_shifts(cache, groups, address_cfg, field_B)
+        _fill_ac(rows, (shifts.get(key, 0.0) for key in _occ_keys_direct(rows)))
     return rows
 
 
@@ -559,7 +968,7 @@ def collect_transitions(cache, groups, address_cfg, field_B=0.0):
     if not address_cfg.get('enabled', False) or len(groups) < 2:
         return pairs
 
-    q = POLARIZATION_Q[address_cfg['polarization']]
+    coeffs = address_pol_coeffs(address_cfg)
     I_wm2 = address_cfg['intensity'] * MW_PER_CM2_TO_W_PER_M2
     E0 = (2.0 * I_wm2 / (epsilon_0 * c)) ** 0.5
     freq = address_cfg['frequency_hz']
@@ -570,69 +979,40 @@ def collect_transitions(cache, groups, address_cfg, field_B=0.0):
             # 恒以能量低的态为源（gi）、能量高的态为目标（gk）
             if cache.E_mhz(gi['n'], gi['l'], gi['j']) > cache.E_mhz(gk['n'], gk['l'], gk['j']):
                 gi, gk = gk, gi
-            sub = _closest_sublevel_pair(cache, gi, gk, q, E0, field_B, freq)
-            if sub is None:
+            # 任意偏振：遍历非零 q 分量，取全局失谐最小的耦合子能级对
+            best = None
+            for q, c_q in coeffs:
+                if abs(c_q) < 1e-12:
+                    continue
+                sub = _closest_sublevel_pair(cache, gi, gk, q, E0, field_B, freq)
+                if sub is None:
+                    continue
+                qstr_i, qstr_k, det, omega = sub
+                if best is None or abs(det) < abs(best[2]):
+                    best = (qstr_i, qstr_k, det, abs(c_q) * omega)
+            if best is None:
                 continue
-            qstr_i, qstr_k, det, omega = sub
+            qstr_i, qstr_k, det, omega = best
             pairs.append((gi['label'], qstr_i, gk['label'], qstr_k, det, omega))
     return pairs
 
 
 def transition_strength_q(cache, a, b, q):
-    """子能级对 (a,b) 在偏振 q 下的偶极强度 |<a|d_q|b>|²。
+    """子能级对 (a,b) 在偏振 q 下的偶极强度 |⟨a|d_q|b⟩|²。
 
-    偶极算符只作用于电子（Δm_J = q），因此耦合矩阵元必须命中对方
-    子能级的 mJ：mJ-mJ 需 m2 == b['mj']；F-mJ 需 mj+q == b['mj']；
-    mJ-F 需 mj+q == a['mj']。缺此匹配会把"与其他 mJ 态的耦合"错误
-    归到本对（实测 bug：6P3/2 F=3 mF=-1 ↔ 60S mJ=+0.5 在 σ- 下被
-    误报非零，实际是到 60S mJ=-0.5 的耦合）。
+    复用 dipole_amplitude（同一矩阵元与选择定则逻辑），只取模平方。
+    矩阵元按 m_J 分辨：里德堡态为纯 m_J；低激发态超精细子能级用其
+    |m_J,m_I> 本征振幅叠加（m_I 由 m_F−m_J 确定）。
     """
-    if a['kind'] == 'mJ' and b['kind'] == 'mJ':
-        m2 = a['mj'] + q
-        if abs(m2 - b['mj']) > 1e-9:
-            return 0.0
-        d = cache.dme(a['n'], a['l'], a['j'], a['mj'],
-                      b['n'], b['l'], b['j'], m2, q)
-        return abs(d) ** 2
-    elif a['kind'] == 'F' and b['kind'] == 'mJ':
-        amp = 0.0j
-        for mj, am in a['amps'].items():
-            m2 = mj + q
-            if abs(m2 - b['mj']) > 1e-9:
-                continue
-            amp += am.conjugate() * cache.dme(
-                a['n'], a['l'], a['j'], mj, b['n'], b['l'], b['j'], m2, q)
-        return abs(amp) ** 2
-    elif a['kind'] == 'mJ' and b['kind'] == 'F':
-        amp = 0.0j
-        for mj, am in b['amps'].items():
-            m1 = mj + q
-            if abs(m1 - a['mj']) > 1e-9:
-                continue
-            amp += am.conjugate() * cache.dme(
-                b['n'], b['l'], b['j'], mj, a['n'], a['l'], a['j'], m1, q)
-        return abs(amp) ** 2
-    else:  # F -- F（两个超精细子能级）
-        # 偶极算符只作用于电子（J），核自旋 m_I 不变 ⟺ m_F 守恒：
-        # mF_b = mF_a + q。缺此检查会给出违反选择定则的非零强度
-        # （交叉验证发现：ARC getDipoleMatrixElementHFS 对不满足者返回 0）。
-        if abs((a['mF'] + q) - b['mF']) > 1e-9:
-            return 0.0
-        amp = 0.0j
-        for mj1, am1 in a['amps'].items():
-            mj2 = mj1 + q
-            if abs(mj2) <= b['j'] + 1e-9:
-                am2 = b['amps'].get(mj2)
-                if am2 is not None:
-                    amp += am1.conjugate() * am2 * cache.dme(
-                        a['n'], a['l'], a['j'], mj1,
-                        b['n'], b['l'], b['j'], mj2, q)
-        return abs(amp) ** 2
-    return 0.0
+    return abs(dipole_amplitude(cache, a, b, q)) ** 2
 
 
-def spectrum_lines(cache, rows, ac_on):
+def spectrum_lines(cache, rows, ac_on, coeffs=None):
     """计算子能级之间全部偶极允许跃迁的频谱线。
+
+    coeffs 为球基偏振复系数（address_pol_coeffs 返回）；None 表示全偏振等权
+    （无寻址光视图）。有系数时谱线强度按各 q 分量 |c_q|² 加权，pol 只标注
+    非零系数对应的 q。
 
     返回 [(freq_hz, A, label_a, label_b, qstr_a, qstr_b, color_a, pol), ...]：
     - freq: 跃迁频率 (Hz)，ac_on=True 时用 AC 移后能量
@@ -642,6 +1022,10 @@ def spectrum_lines(cache, rows, ac_on):
     矩阵元按 m_J 分辨计算：里德堡态为纯 m_J；低激发态超精细子能级
     用其 |m_J,m_I> 本征振幅叠加（m_I 由 m_F−m_J 确定）。
     """
+    if coeffs is None:
+        qw = [(-1, 1.0), (0, 1.0), (1, 1.0)]      # 全偏振等权（原行为）
+    else:
+        qw = [(q, abs(c) ** 2) for q, c in coeffs if abs(c) > 1e-12]
     lines = []
     for i in range(len(rows)):
         for k in range(i + 1, len(rows)):
@@ -650,10 +1034,10 @@ def spectrum_lines(cache, rows, ac_on):
                 continue
             S = 0.0
             qs = []
-            for q in (-1, 0, 1):
+            for q, w in qw:
                 sq = transition_strength_q(cache, a, b, q)
                 if sq > 1e-16:
-                    S += sq
+                    S += w * sq
                     qs.append(q)
             if S < 1e-16:
                 continue

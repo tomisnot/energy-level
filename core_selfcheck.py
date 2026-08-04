@@ -28,6 +28,11 @@ import sys
 import importlib.util
 import numpy as np
 
+# Windows 控制台默认 GBK，无法打印 ² 等字符；强制 UTF-8 输出避免崩溃。
+if sys.platform == 'win32' and hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
 # ---- 加载 core（不触发 GUI / 不执行 UI 代码） ----
@@ -197,7 +202,7 @@ def t7():
            'frequency_hz': 295723722000000.0, 'polarization': 'π'}
     groups = [dict(n=60, l=0, j=0.5, label='60S', color='r'),
               dict(n=60, l=1, j=0.5, label='60P1/2', color='b')]
-    rows = core.build_level_rows(cache, 0.0, groups, cfg, groups)
+    rows = core.build_level_rows(cache, 0.0, groups, cfg, groups, backend='legacy')
     check('60S/60P 行数 = 4', len(rows) == 4, len(rows))
     off = core.spectrum_lines(cache, rows, False)
     on = core.spectrum_lines(cache, rows, True)
@@ -272,7 +277,7 @@ def t9():
     freq_hz = (a60['E_mhz'] - b63['E_mhz']) * 1e6
     cfg = {'enabled': True, 'intensity': 10000.0,
            'frequency_hz': freq_hz, 'polarization': 'σ-'}
-    rows = core.build_level_rows(cache, B, groups, cfg, groups)
+    rows = core.build_level_rows(cache, B, groups, cfg, groups, backend='legacy')
     r63 = next(r for r in rows if r['label'] == '6P_{3/2}'
                and r['qstr'] == 'F=3.0, m_F=+3.0')
     print(f'  6P3/2 F=3 mF=3 ac = {r63["ac"] * 1000:.1f} kHz')
@@ -314,11 +319,38 @@ def t10():
     check('σ- 下 F=3 mF=-1 ↔ 60S mJ=+0.5 强度=0（禁忌）', s == 0.0, s)
 
 
+def t11():
+    print('T11 双频移后端：direct（矩阵对角化）vs legacy（解析/微扰）')
+    cache = core.ArcCache(Rubidium87())
+    check('SHIFT_BACKEND 默认 = direct', core.SHIFT_BACKEND == 'direct',
+          core.SHIFT_BACKEND)
+    groups = [dict(n=60, l=0, j=0.5, label='60S', color='r'),
+              dict(n=60, l=1, j=0.5, label='60P1/2', color='b')]
+    base = core.transition_frequency_hz(cache.atom, 60, 0, 0.5, 60, 1, 0.5)
+    maxdev = 0.0
+    n_pairs = 0
+    for det in (-500.0, -200.0, 200.0, 500.0):
+        cfg = dict(enabled=True, intensity=1e-4,
+                   frequency_hz=base + det * 1e6, polarization='π')
+        rows_d = core.build_level_rows(cache, 0.0, groups, cfg, groups,
+                                       backend='direct')
+        rows_l = core.build_level_rows(cache, 0.0, groups, cfg, groups,
+                                       backend='legacy')
+        check(f'T11 行数一致（direct/legacy，Δ={det:+.0f} MHz）',
+              len(rows_d) == len(rows_l), (len(rows_d), len(rows_l)))
+        for rd, rl in zip(rows_d, rows_l):
+            if rd['qstr'] == rl['qstr']:
+                maxdev = max(maxdev, abs(rd['ac'] - rl['ac']))
+                n_pairs += 1
+    check(f'T11 direct/legacy 位移一致（{n_pairs} 对，亚 MHz）',
+          maxdev < 0.2, f'maxdev={maxdev:.4f} MHz')
+
+
 def main():
     print('=' * 64)
     print('core.py 自检（手写算法 vs ARC 官方函数）')
     print('=' * 64)
-    for fn in (t1, t2, t3, t4, t5, t6, t7, t8, t9, t10):
+    for fn in (t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11):
         fn()
         print('-' * 64)
     print(f'汇总: PASS={_PASS}  FAIL={_FAIL}')
