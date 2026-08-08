@@ -9,6 +9,7 @@
 每次对角化约 1.3s，故采样 33 点（含 I=0）：低区对数步长捕捉近共振快变，
 高区线性步长覆盖 1e7→5.6e8 的饱和段。
 """
+import os
 import sys
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 import time
@@ -18,6 +19,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from arc import Rubidium87
 import core
+_DIR = os.path.dirname(os.path.abspath(__file__))  # 输出到脚本所在目录
 
 FREQ_HZ = 295724.048e9      # 寻址光频率 (Hz)
 POL = 'σ-'
@@ -72,7 +74,7 @@ ax2.set_title('log x')
 fig.suptitle(f'60S AC shift vs intensity  |  ν={FREQ_HZ/1e9:.3f} GHz, '
              f'σ-, B={B_G} G, direct 对角化')
 fig.tight_layout()
-out_png = 'ac_shift_60S.png'
+out_png = os.path.join(_DIR, 'ac_shift_60S.png')
 fig.savefig(out_png, dpi=150)
 print(f'已保存 {out_png}', flush=True)
 

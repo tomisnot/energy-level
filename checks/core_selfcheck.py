@@ -1,0 +1,266 @@
+# -*- coding: utf-8 -*-
+"""core.py 精简自检（20 项）：手写算法 vs ARC，每类功能保留代表项。
+
+覆盖（T1-T11 全功能面）：
+  T1 原子参数/超精细   T2 超精细能量 J=1/2   T3 超精细能量 J=3/2(含B)
+  T4 超精细偶极矩阵元  T5 sum rule           T6 Einstein A 系数
+  T7 基本功能回归      T8 远失谐 SOS         T9 共振 dressed
+  T10 F↔mJ 合法/禁忌   T11 双后端一致
+"""
+import os
+import sys
+import importlib.util
+import numpy as np
+if sys.platform == 'win32' and hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_ROOT = os.path.dirname(_HERE)     # 项目根（core.py 所在）
+
+# ---- 加载 core（不触发 GUI / 不执行 UI 代码） ----
+spec = importlib.util.spec_from_file_location('core', os.path.join(_ROOT, 'core.py'))
+core = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(core)
+
+from arc.alkali_atom_data import Rubidium87, Caesium
+from arc.calculations_atom_single import DynamicPolarizability
+from scipy.constants import c, epsilon_0, hbar
+from checklib import Checker
+
+ch = Checker('core_selfcheck')
+
+
+def _hf_min_E(cache, n, l, j, B):
+    """{F: 该 F 最低子能级能量 MHz}（相对 fine 态中心）。"""
+    hf = core.get_hyperfine_levels(cache, n, l, j, B)
+    out = {}
+    for F, mF, e, w, a in hf:
+        out.setdefault(round(F), []).append(e)
+    return {F: min(v) for F, v in out.items()}
+
+
+# ----------------------------------------------------------------------
+def t1():
+    print('T1 原子参数 / 超精细结构')
+    cache = core.ArcCache(Rubidium87())
+    ch.check('Rb87 I/gI 来自 ARC',
+             abs(cache.I - 1.5) < 1e-9 and abs(cache.gI + 0.0009951414) < 1e-12,
+             (cache.I, cache.gI))
+    cache = core.ArcCache(Caesium())
+    hf = core.get_hyperfine_levels(cache, 6, 0, 0.5, 0.0)
+    E = {}
+    for F, mF, e, w, a in hf:
+        E.setdefault(round(F), []).append(e)
+    E = {F: min(v) for F, v in E.items()}
+    dE = max(E.values()) - min(E.values())
+    ch.close('Cs133 6S 分裂 = 9192.6318 MHz（铯原子钟）', dE, 9192.631770, rtol=1e-6)
+
+
+def t2():
+    print('T2 超精细能量 J=1/2 vs ARC getHFSEnergyShift')
+    cache = core.ArcCache(Rubidium87())
+    ours = _hf_min_E(cache, 5, 0, 0.5, 0.0)
+    A_hz, B_hz = cache.atom.getHFSCoefficients(5, 0, 0.5)
+    ref = {F: cache.atom.getHFSEnergyShift(0.5, F, A_hz, B_hz) / 1e6 for F in (1, 2)}
+    for F in sorted(ours):
+        ch.close(f'5S F={F}', ours[F], ref[F], atol=1e-6)
+
+
+def t3():
+    print('T3 超精细能量 J=3/2（含 B 四极项）vs ARC')
+    cache = core.ArcCache(Rubidium87())
+    ours = _hf_min_E(cache, 6, 1, 1.5, 0.0)
+    A_hz, B_hz = cache.atom.getHFSCoefficients(6, 1, 1.5)
+    ref = {F: cache.atom.getHFSEnergyShift(1.5, F, A_hz, B_hz) / 1e6 for F in (0, 1, 2, 3)}
+    for F in sorted(ours):
+        ch.close(f'6P3/2 F={F}', ours[F], ref[F], atol=1e-4)
+
+
+def t4():
+    print('T4 超精细态间偶极矩阵元（B=0）全量 vs ARC')
+    cache = core.ArcCache(Rubidium87())
+    rows = core.build_level_rows(
+        cache, 0.0, [], {},
+        [dict(n=5, l=0, j=0.5, label='5S', color='r'),
+         dict(n=6, l=1, j=1.5, label='6P3/2', color='b')])
+    maxdev, n_tot = 0.0, 0
+    for a in rows:
+        if a['n'] != 5:
+            continue
+        for b in rows:
+            if b['n'] != 6:
+                continue
+            Fa = float(a['qstr'].split('F=')[1].split(',')[0])
+            Fb = float(b['qstr'].split('F=')[1].split(',')[0])
+            for q in (-1, 0, 1):
+                ours = core.transition_strength_q(cache, a, b, q)
+                arc = cache.atom.getDipoleMatrixElementHFS(
+                    5, 0, 0.5, Fa, a['mF'], 6, 1, 1.5, Fb, b['mF'], q) ** 2
+                maxdev = max(maxdev, abs(ours - arc))
+                n_tot += 1
+    ch.check(f'5S×6P3/2 全部 {n_tot} 项一致（含 mF 守恒）', maxdev < 1e-12,
+             f'maxdev={maxdev:.3e}')
+
+
+def t5():
+    print('T5 Σ|d_pair|² == getReducedMatrixElementJ²')
+    cache = core.ArcCache(Rubidium87())
+    n1, l1, j1, n2, l2, j2 = 60, 1, 0.5, 60, 0, 0.5
+    S = 0.0
+    for m1 in np.arange(-j1, j1 + 1, 1.0):
+        for m2 in np.arange(-j2, j2 + 1, 1.0):
+            q = int(round(m2 - m1))
+            S += abs(cache.dme(n1, l1, j1, m1, n2, l2, j2, m2, q)) ** 2
+    red = cache.atom.getReducedMatrixElementJ(n1, l1, j1, n2, l2, j2) ** 2
+    ch.close('Σ(60P1/2→60S) / reduced²', S / red, 1.0, rtol=1e-9)
+
+
+def t6():
+    print('T6 Einstein A：spectrum_lines vs 标准公式')
+    cache = core.ArcCache(Rubidium87())
+    rows = core.build_level_rows(
+        cache, 0.0, [], {},
+        [dict(n=60, l=0, j=0.5, label='60S', color='r'),
+         dict(n=60, l=1, j=0.5, label='60P1/2', color='b')])
+    lines = core.spectrum_lines(cache, rows, False)
+    maxdev, maxA = 0.0, 0.0
+    for nu, A, la, lb, qa, qb, col, pol in lines:
+        maxA = max(maxA, A)
+        a = next(r for r in rows if r['label'] == la and r['qstr'] == qa)
+        b = next(r for r in rows if r['label'] == lb and r['qstr'] == qb)
+        S = sum(core.transition_strength_q(cache, a, b, q) for q in (-1, 0, 1))
+        A_ref = ((2 * np.pi * nu) ** 3 / (3 * np.pi * epsilon_0 * hbar * c ** 3)
+                 * S * (core.E_CHARGE * core.A0) ** 2)
+        maxdev = max(maxdev, abs(A - A_ref))
+    ch.check('每条线 A == 标准公式', maxdev < 1e-9 * maxA, f'maxdev={maxdev:.3e}')
+    A_sum = sum(ln[1] for ln in lines)
+    A_arc = cache.atom.getTransitionRate(60, 1, 0.5, 60, 0, 0.5)
+    ch.check('Σ_A / getTransitionRate = 2.0（ARC asymmetric 约定）',
+             abs(A_sum / A_arc - 2.0) < 0.01, f'r={A_sum / A_arc:.4f}')
+
+
+def t7():
+    print('T7 基本功能回归（行/谱线/collect_transitions）')
+    cache = core.ArcCache(Rubidium87())
+    cfg = {'enabled': True, 'intensity': 10000.0,
+           'frequency_hz': 295723722000000.0, 'polarization': 'π'}
+    groups = [dict(n=60, l=0, j=0.5, label='60S', color='r'),
+              dict(n=60, l=1, j=0.5, label='60P1/2', color='b')]
+    rows = core.build_level_rows(cache, 0.0, groups, cfg, groups, backend='legacy')
+    off = core.spectrum_lines(cache, rows, False)
+    on = core.spectrum_lines(cache, rows, True)
+    ch.check('行数=4 且 off/on 线数=4/4',
+             len(rows) == 4 and len(off) == 4 and len(on) == 4,
+             (len(rows), len(off), len(on)))
+    a_ = core.ac_stark_shift_mhz(cache, groups[0], -0.5, groups, cfg)
+    b_ = core.ac_stark_shift_mhz(cache, groups[0], 0.5, groups, cfg)
+    ch.close('60S m=±0.5 位移相等（π）', a_, b_, atol=1e-12)
+    nu = sorted(set(round(ln[0] / 1e9, 4) for ln in off))
+    ch.check('谱线频率 ≈ 16.8267 GHz', abs(nu[0] - 16.8267) < 1e-3, nu)
+    pairs = core.collect_transitions(cache, groups, cfg)
+    ch.check('collect_transitions 1 对且 qstr=m_J',
+             len(pairs) == 1 and 'm_J=' in pairs[0][1], pairs)
+    groups2 = [dict(n=5, l=0, j=0.5, label='5S', color='r'),
+               dict(n=6, l=1, j=1.5, label='6P3/2', color='b')]
+    cfg2 = dict(cfg, frequency_hz=core.transition_frequency_hz(
+        cache.atom, 5, 0, 0.5, 6, 1, 1.5))
+    pairs2 = core.collect_transitions(cache, groups2, cfg2)
+    ch.check('超精细 5S↔6P3/2 qstr 含 F/m_F',
+             len(pairs2) >= 1 and 'F=' in pairs2[0][1], pairs2)
+
+
+def t8():
+    print('T8 远失谐 SOS vs DynamicPolarizability（比值=-0.5）')
+    cache = core.ArcCache(Rubidium87())
+    n, l, j, m = 6, 0, 0.5, 0.5
+    I_mw = 1.0
+    E0_sq = 2.0 * (I_mw * core.MW_PER_CM2_TO_W_PER_M2) / (epsilon_0 * c)
+    dp = DynamicPolarizability(cache.atom, n, l, j)
+    dp.defineBasis(5, 19)
+    nu0 = core.transition_frequency_hz(cache.atom, 6, 0, 0.5, 6, 1, 0.5)
+    freq_hz = nu0 + 500.0 * 1e9
+    cfg = {'enabled': True, 'intensity': I_mw,
+           'frequency_hz': freq_hz, 'polarization': 'π'}
+    ours = core.ac_stark_shift_mhz(cache, dict(n=n, l=l, j=j, label='6S', color='r'),
+                                   m, [], cfg)
+    alpha0 = dp.getPolarizability(c / freq_hz, units='SI', mj=m)[0]
+    dp_mhz = 0.5 * alpha0 * E0_sq / 1e6
+    ch.close('6S det=500GHz 比值=-0.5', ours / dp_mhz, -0.5, rtol=0.02)
+
+
+def t9():
+    print('T9 共振 dressed（±Ω/2，与显示一致）')
+    cache = core.ArcCache(Rubidium87())
+    B = 21.7
+    groups = [dict(n=6, l=1, j=1.5, label='6P_{3/2}', color='r'),
+              dict(n=60, l=0, j=0.5, label='60S_{1/2}', color='b')]
+    b63 = next(r for r in core._group_sublevel_rows(cache, 6, 1, 1.5, B)
+               if r['qstr'] == 'F=3.0, m_F=+3.0')
+    a60 = next(r for r in core._group_sublevel_rows(cache, 60, 0, 0.5, B)
+               if r['qstr'] == 'm_J=+0.5')
+    cfg = {'enabled': True, 'intensity': 10000.0,
+           'frequency_hz': (a60['E_mhz'] - b63['E_mhz']) * 1e6, 'polarization': 'σ-'}
+    rows = core.build_level_rows(cache, B, groups, cfg, groups, backend='legacy')
+    r63 = next(r for r in rows if r['label'] == '6P_{3/2}'
+               and r['qstr'] == 'F=3.0, m_F=+3.0')
+    ch.check('共振位移 > 100 kHz（≈Ω/2，非 kHz 微扰）', abs(r63['ac']) > 0.1, r63['ac'])
+    p = min(core.collect_transitions(cache, groups, cfg, B), key=lambda x: abs(x[4]))
+    ch.close('ac ≈ +Ω/2（Rabi 自 collect_transitions）',
+             r63['ac'], p[5] / (2.0 * np.pi) / 1e6 / 2.0, rtol=0.05)
+
+
+def t10():
+    print('T10 F↔mJ 矩阵元 vs ARC（合法 + 禁忌）')
+    cache = core.ArcCache(Rubidium87())
+    rows_6p = core._group_sublevel_rows(cache, 6, 1, 1.5, 0.0)
+    rows_60s = core._group_sublevel_rows(cache, 60, 0, 0.5, 0.0)
+    for qs_a, qs_b, q in (('F=3.0, m_F=+3.0', 'm_J=+0.5', -1),   # σ- 合法
+                          ('F=3.0, m_F=-1.0', 'm_J=+0.5', -1)):  # σ- 禁忌
+        a = next(r for r in rows_6p if r['qstr'] == qs_a)
+        b = next(r for r in rows_60s if r['qstr'] == qs_b)
+        ours = core.transition_strength_q(cache, a, b, q)
+        Fa = float(qs_a.split(',')[0].split('=')[1])
+        mFa = float(qs_a.split('m_F=')[1])
+        mjb = float(qs_b.split('m_J=')[1])
+        arc = cache.atom.getDipoleMatrixElementHFStoFS(
+            6, 1, 1.5, Fa, mFa, 60, 0, 0.5, mjb, q) ** 2
+        ch.close(f'{qs_a} → {qs_b} q={q:+d}', ours, arc, atol=1e-14)
+
+
+def t11():
+    print('T11 双频移后端：direct（对角化）vs legacy（解析/微扰）')
+    cache = core.ArcCache(Rubidium87())
+    ch.check('SHIFT_BACKEND 默认 = direct', core.SHIFT_BACKEND == 'direct',
+             core.SHIFT_BACKEND)
+    groups = [dict(n=60, l=0, j=0.5, label='60S', color='r'),
+              dict(n=60, l=1, j=0.5, label='60P1/2', color='b')]
+    base = core.transition_frequency_hz(cache.atom, 60, 0, 0.5, 60, 1, 0.5)
+    maxdev, n_pairs = 0.0, 0
+    for det in (-200.0, 200.0):
+        cfg = dict(enabled=True, intensity=1e-4,
+                   frequency_hz=base + det * 1e6, polarization='π')
+        rows_d = core.build_level_rows(cache, 0.0, groups, cfg, groups,
+                                       backend='direct')
+        rows_l = core.build_level_rows(cache, 0.0, groups, cfg, groups,
+                                       backend='legacy')
+        for rd, rl in zip(rows_d, rows_l):
+            if rd['qstr'] == rl['qstr']:
+                maxdev = max(maxdev, abs(rd['ac'] - rl['ac']))
+                n_pairs += 1
+    ch.check(f'direct/legacy 位移一致（{n_pairs} 对，亚 MHz）', maxdev < 0.2,
+             f'maxdev={maxdev:.4f} MHz')
+
+
+# ----------------------------------------------------------------------
+def main():
+    print('=' * 64)
+    print('core.py 精简自检（手写算法 vs ARC 官方函数）')
+    print('=' * 64)
+    for fn in (t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11):
+        fn()
+    ok = ch.summary()
+    sys.exit(0 if ok else 1)
+
+
+if __name__ == '__main__':
+    main()

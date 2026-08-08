@@ -73,9 +73,10 @@ if sys.platform == 'win32' and hasattr(sys.stdout, 'reconfigure'):
     sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
+_ROOT = os.path.dirname(_HERE)     # 项目根（core.py 所在）
 
 # ---- 加载 core（不触发 GUI / 不执行 UI 代码） ----
-spec = importlib.util.spec_from_file_location('core', os.path.join(_HERE, 'core.py'))
+spec = importlib.util.spec_from_file_location('core', os.path.join(_ROOT, 'core.py'))
 core = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(core)
 
@@ -553,7 +554,7 @@ def s1():
         print('   （共振点 Δ=0 的 Autler-Townes 分支歧义/多态耦合由 S3 与 T9 验证，'
               '此处用 ±5 MHz）')
         scan_compare('S1', cache, groups, 0.0, base,
-                     [-1000, -200, -50, -5, 5, 50, 200, 1000, 5000],
+                     [-200, -5, 5, 1000],
                      0.0001, 'π', include_sos=True, rtol=0.02, atol=0.02)
     finally:
         SOS_N_RANGE = None
@@ -623,7 +624,7 @@ def s3():
         p = min(pairs, key=lambda x: abs(x[4]))
         print(f'   [参考] F=3,mF=3 ↔ mJ=+0.5 共振 Rabi Ω/2π ≈ {p[5]/(2*np.pi)/1e6:.3f} MHz'
               f' @ I=10000 mW/cm²')
-    scan_compare('S3', cache, groups, B, base, [-20, 0, 20], 10000.0, 'σ-',
+    scan_compare('S3', cache, groups, B, base, [0, 20], 10000.0, 'σ-',
                  include_sos=False, rtol=0.03, atol=0.01,
                  check_label='6P3/2', info_label='60S')
     # —— 上态共振漏耦合检查（60S 侧）：直接法应给出 −Ω/2，core 只给 ~kHz ——

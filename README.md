@@ -6,6 +6,19 @@
 
 ---
 
+## 项目结构
+
+```
+Energy Level/
+├── core.py / 能级.py / pair_core.py   软件代码（单原子核心 / GUI / 两体核心）
+├── checks/                           检查代码（selftest_all.py 一键全跑）
+│    core_selfcheck / core_ac_directcheck / pair_selfcheck / checklib
+├── scripts/                          辅助/校验脚本（compare_pairinteraction、ac_shift_curve）
+└── _misc/                            探索原型与杂物（两体脚本、设计文档、VS Code 主题）
+```
+
+---
+
 ## 一、功能总览
 
 | 能力 | 说明 |
@@ -30,14 +43,14 @@ numpy  scipy  matplotlib  PyQt5  arc
 
 （`arc` 为 [ARC — Alkaline Rydberg Calculator](https://arc-alkali-rydberg-calculator.readthedocs.io/) 库，提供碱金属量子亏损、波函数、偶极矩阵元等。）
 
-**运行**：
+**运行**（**在 single_atom/ 目录内**）：
 
 ```bash
 python 能级.py          # 启动 GUI
 python core_selfcheck.py  # 运行回归自检（44 项，全过退出码 0）
 ```
 
-> Windows 环境如 `python` 解析异常，用绝对路径：`& "D:\python310\python.exe" 能级.py`
+> Windows 环境如 `python` 解析异常，用绝对路径：`& "D:\python310\python.exe" single_atom\能级.py`
 
 **文件结构**：
 
