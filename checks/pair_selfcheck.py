@@ -26,8 +26,8 @@ sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(_HERE))     # 项目根（core.py / pair_core.py）
 import numpy as np
-import core
-import pair_core
+from src import core
+from src import pair_core
 from checklib import Checker
 
 c = Checker('pair_selfcheck')

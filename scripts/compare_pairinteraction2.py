@@ -8,9 +8,11 @@ AC↔DC 交叉验证原理：本项目远失谐 SOS 项 = −(E0²/4ħ)Σ|d|²·
 """
 import sys
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np
 import pairinteraction as pi
-import core
+from src import core
 from arc.alkali_atom_data import Rubidium87
 
 cache = core.ArcCache(Rubidium87())

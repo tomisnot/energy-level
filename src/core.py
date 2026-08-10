@@ -476,6 +476,51 @@ def pair_contribution_mhz(cache, n, l, j, m, n1, l1, j1, coeffs,
     return total
 
 
+def dc_stark_shift_mhz(cache, n, l, j, m, groups, E_vpcm, B_gauss=0.0):
+    """子能级 DC-Stark 位移 (MHz)：ΔE_i = Σ_k |⟨k|d|i⟩|²E²/(E_i−E_k)。
+
+    二阶 SOS（第一性原理）：静电场无旋转波，所有偶极中间态都贡献。
+    遍历全部偶极伙伴（已添加组 + dipole_partners 未添加的），全部 mJ 通道
+    （吸收 m+q / 发射 m−q 两方向，dme 参数相应交换）与核自旋平均权重。
+    E_vpcm: 静电场强度 (V/cm)。
+
+    量纲推导：ΔE(J) = Σ d_cm²·E²/(E_i−E_k)；E_i−E_k 为 J；换算 MHz 除以
+    h²·1e12（h=2πħ），(E_i−E_k) 以 MHz 代入。
+    """
+    E = E_vpcm * 100.0                     # V/cm → V/m
+    E2 = E * E
+    total = 0.0
+    E_i = _sublevel_energy(cache, n, l, j, m, B_gauss)
+    added = {(g['n'], g['l'], g['j']) for g in groups}
+    targets = [(g['n'], g['l'], g['j']) for g in groups]
+    for p in dipole_partners(n, l, j):
+        if p not in added:
+            targets.append(p)
+    h2 = (2.0 * np.pi * hbar) ** 2 * 1e12   # h²·1e12（MHz 分母换算因子）
+
+    def add_contrib(m2, d_au):
+        nonlocal total
+        if abs(d_au) < 1e-12:
+            return
+        d_cm2 = (abs(d_au) * E_CHARGE * A0) ** 2
+        for E_k, weight in _partner_sublevels(cache, n1, l1, j1, m2, B_gauss):
+            if abs(E_k - E_i) < 1e-9:
+                continue
+            total += E2 * weight * d_cm2 / (h2 * (E_i - E_k))
+
+    for (n1, l1, j1) in targets:
+        if (n1, l1, j1) == (n, l, j):
+            continue
+        for q in (-1, 0, 1):
+            m2 = m + q                       # 吸收方向
+            if abs(m2) <= j1 + 1e-9:
+                add_contrib(m2, cache.dme(n, l, j, m, n1, l1, j1, m2, q))
+            m2 = m - q                       # 发射方向（dme 参数交换）
+            if abs(m2) <= j1 + 1e-9:
+                add_contrib(m2, cache.dme(n1, l1, j1, m2, n, l, j, m, q))
+    return total
+
+
 def ac_stark_shift_mhz(cache, group, m, groups, address_cfg, B_gauss=0.0, E_sub=None):
     """子能级总 AC-Stark 位移 (MHz) = 近共振 dressed 精确解 + 远失谐 SOS 背景。
 

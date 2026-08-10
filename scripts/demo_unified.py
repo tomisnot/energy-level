@@ -11,7 +11,7 @@ sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np
 from arc import Rubidium87
-import core, driver
+from src import core, driver
 
 cache = core.ArcCache(Rubidium87())
 groups = [dict(n=5, l=0, j=0.5, label='5S'), dict(n=6, l=1, j=1.5, label='6P3/2'),

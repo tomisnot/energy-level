@@ -27,7 +27,7 @@ sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 import numpy as np
 from scipy.constants import physical_constants as pc
 import scipy.sparse as sp
-import core
+from . import core
 
 # ---------------- 单位换算 ----------------
 _HARTREE_HZ = pc['hartree-hertz relationship'][0]   # 6.5797e15 Hz

@@ -12,13 +12,14 @@
 import os
 import sys
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import time
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from arc import Rubidium87
-import core
+from src import core
 _DIR = os.path.dirname(os.path.abspath(__file__))  # 输出到脚本所在目录
 
 FREQ_HZ = 295724.048e9      # 寻址光频率 (Hz)

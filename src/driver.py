@@ -16,8 +16,8 @@ sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 import numpy as np
 from scipy.integrate import solve_ivp
 from scipy.constants import epsilon_0, c as C_LIGHT, hbar
-import core
-import pair_core
+from . import core
+from . import pair_core
 
 _CONV = 2 * np.pi * 1e-3            # MHz·ns → 弧度
 
@@ -134,7 +134,16 @@ def _mw_operator(cache, single, pairs, cfg):
                                          q)) > 1e-12:
                 A[ia, ib] = 1.0
                 A[ib, ia] = 1.0
-    D = np.kron(A, np.eye(N)) + np.kron(np.eye(N), A)
+    # 作用范围：both=两原子都打；atom1/atom2=单原子寻址（局域驱动）
+    scope = cfg.get('scope', 'both')
+    if scope == 'both':
+        D = np.kron(A, np.eye(N)) + np.kron(np.eye(N), A)
+    elif scope == 'atom1':
+        D = np.kron(A, np.eye(N))
+    elif scope == 'atom2':
+        D = np.kron(np.eye(N), A)
+    else:
+        raise ValueError(f'未知 scope: {scope}')
     sel = np.array([i * N + j for i, j in pairs], dtype=int)
     D = D[np.ix_(sel, sel)]
     om = _rabi_mhz(cache, single, idx_a, idx_b, cfg, q)
@@ -338,8 +347,42 @@ def build_system(cache, groups, n_body=1, R_um=None, B_gauss=0.0,
     if n_body == 1:
         single = core._direct_basis(cache, groups, B_gauss, n_window)
         H = np.diag([s['E_mhz'] for s in single]).astype(complex)
-        ac = static_cfg.get('ac_stark') if static_cfg else None
-        if ac:
+        shifts = _static_shifts(cache, single, groups, static_cfg, B_gauss)
+        if shifts is not None:
+            H = H + np.diag(shifts)
+        sys0.update(states=single, H=H, single=single)
+        return sys0
+    if n_body == 2:
+        res = pair_core.pair_hamiltonian(
+            cache, groups, R_um, theta_deg, phi_deg, B_gauss, n_window,
+            m_total, energy_window_mhz, ref_energy_mhz)
+        H = res['H']
+        shifts = _static_shifts(cache, res['single'], groups, static_cfg,
+                                B_gauss)
+        if shifts is not None:
+            # 能移是单原子性质：pair 态 (i,j) 的能移 = shift_i + shift_j
+            for k, (i, j) in enumerate(res['pairs']):
+                H[k, k] += shifts[i] + shifts[j]
+        sys0.update(states=res['pairs'], H=H, single=res['single'])
+        return sys0
+    raise ValueError(f'n_body 须为 1 或 2，got {n_body}')
+
+
+def _static_shifts(cache, single, groups, static_cfg, B_gauss):
+    """每单原子态的总静态能移（MHz 数组）；无返回 None。
+
+    static_cfg['ac_stark']：AC 能移光（单份 dict 或多份列表，全部作能移）；
+    static_cfg['dc_stark']：静电场强度 E (V/cm)。均线性叠加。
+    """
+    if not static_cfg:
+        return None
+    shifts = np.zeros(len(single))
+    # AC 光能移
+    ac_list = static_cfg.get('ac_stark')
+    if ac_list:
+        if isinstance(ac_list, dict):
+            ac_list = [ac_list]
+        for ac in ac_list:
             ac = dict(ac)
             ac.setdefault('enabled', True)   # 传入即视为启用
             for i, s in enumerate(single):
@@ -349,17 +392,24 @@ def build_system(cache, groups, n_body=1, R_um=None, B_gauss=0.0,
                 if g is None:
                     continue
                 m = s['mj'] if s['kind'] == 'mJ' else s['mF']
-                H[i, i] += core.ac_stark_shift_mhz(cache, g, m, groups, ac,
-                                                   B_gauss)
-        sys0.update(states=single, H=H, single=single)
-        return sys0
-    if n_body == 2:
-        res = pair_core.pair_hamiltonian(
-            cache, groups, R_um, theta_deg, phi_deg, B_gauss, n_window,
-            m_total, energy_window_mhz, ref_energy_mhz)
-        sys0.update(states=res['pairs'], H=res['H'], single=res['single'])
-        return sys0
-    raise ValueError(f'n_body 须为 1 或 2，got {n_body}')
+                shifts[i] += core.ac_stark_shift_mhz(cache, g, m, groups, ac,
+                                                     B_gauss)
+    # 静电场能移（DC-Stark，二阶 SOS）
+    e_vpcm = static_cfg.get('dc_stark')
+    if e_vpcm:
+        for i, s in enumerate(single):
+            g = next((g for g in groups
+                      if (g['n'], g['l'], g['j']) == (s['n'], s['l'], s['j'])),
+                     None)
+            if g is None:
+                continue
+            m = s['mj'] if s['kind'] == 'mJ' else s['mF']
+            shifts[i] += core.dc_stark_shift_mhz(
+                cache, g['n'], g['l'], g['j'], m, groups, float(e_vpcm),
+                B_gauss)
+    if np.all(shifts == 0.0):
+        return None
+    return shifts
 
 
 def _single_operator(cache, single, driver_cfg):
@@ -431,3 +481,94 @@ def response_spectrum(system, driver_cfg, freq_scan_hz, t_ns=None,
         res = drive(system, cfg, t_ns=t_ns, psi0_ket=psi0_ket)
         out.append(1.0 - float(res['pops'][0][-1]))   # 初态末布居流失
     return np.asarray(freq_scan_hz), np.asarray(out)
+
+
+def _single_dipole_matrix(cache, single, driver_cfg):
+    """单原子驱动算符（**真实偶极矩阵元模**）：A[i,j] = |⟨j|d_q|i⟩|（a.u.）。
+
+    与 `_single_operator` 的拓扑 0/1 不同：线性响应谱需要真实相对强度。
+    """
+    N = len(single)
+    ga = driver_cfg.get('group_a', dict(n=6, l=1, j=1.5))
+    gb = driver_cfg.get('group_b', dict(n=60, l=0, j=0.5))
+    idx_a = [i for i, s in enumerate(single)
+             if (s['n'], s['l'], s['j']) == (ga['n'], ga['l'], ga['j'])]
+    idx_b = [i for i, s in enumerate(single)
+             if (s['n'], s['l'], s['j']) == (gb['n'], gb['l'], gb['j'])]
+    q = core.POLARIZATION_Q.get(driver_cfg.get('pol', 'π'), 0)
+    A = np.zeros((N, N), complex)
+    for ia in idx_a:
+        for ib in idx_b:
+            d = core.dipole_amplitude(cache, single[ia], single[ib], q)
+            if abs(d) > 1e-12:
+                A[ia, ib] = abs(d)
+                A[ib, ia] = abs(d)
+    return A
+
+
+def response_spectrum_linear(system, driver_cfg, psi0_ket=None):
+    """线性响应谱（黄金规则，第一性原理）：**一次静态对角化**提取全部共振。
+
+        S(ω) = Σ_k |⟨k|D|i⟩|² δ(ω - (E_k - E_i))
+
+    静态 H（含 vdW/交换/AC-Stark 能移）对角化一次 → 全部本征能级 E_k 与
+    本征态 |k⟩；驱动算符 D（**真实偶极矩阵元**，含 scope 单原子寻址）投影
+    到本征基，初态 |i⟩ 的所有共振频率与相对强度一次算出（O(N²)）。
+    比逐频率含时演化快 ~N_freq 倍，峰位严格、强度反映真实相对矩阵元。
+
+    返回 dict(freq_hz, strength, om_mhz, i0)：
+      freq_hz  : 共振频率 (E_k-E_i)，Hz（排除近零频弹性散射）
+      strength : 相对强度 |⟨k|D|i⟩|²（D 为真实矩阵元，a.u.）
+      om_mhz   : 驱动 Rabi（MHz），供 UI 标度绝对强度
+      i0       : 初态在基组索引
+    psi0_ket: (n,l,j,m)；None → driver group_a 的 m_a。
+    """
+    cache = system['cache']
+    single = system['single']
+    A = _single_dipole_matrix(cache, single, driver_cfg)
+    ga = driver_cfg.get('group_a', dict(n=6, l=1, j=1.5))
+    gb = driver_cfg.get('group_b', dict(n=60, l=0, j=0.5))
+    q = core.POLARIZATION_Q.get(driver_cfg.get('pol', 'π'), 0)
+    idx_a = [i for i, s in enumerate(single)
+             if (s['n'], s['l'], s['j']) == (ga['n'], ga['l'], ga['j'])]
+    idx_b = [i for i, s in enumerate(single)
+             if (s['n'], s['l'], s['j']) == (gb['n'], gb['l'], gb['j'])]
+    om = _rabi_mhz(cache, single, idx_a, idx_b, driver_cfg, q)
+    if system['n_body'] == 1:
+        D = A
+        if psi0_ket is None:
+            psi0_ket = (ga['n'], ga['l'], ga['j'],
+                        driver_cfg.get('m_a', 0.5))
+        i0 = pair_core.find_sublevel(single, *psi0_ket)
+        if i0 is None:
+            raise ValueError(f'初始态 {psi0_ket} 不在基中')
+    else:
+        N = len(single)
+        scope = driver_cfg.get('scope', 'both')
+        if scope == 'both':
+            D = np.kron(A, np.eye(N)) + np.kron(np.eye(N), A)
+        elif scope == 'atom1':
+            D = np.kron(A, np.eye(N))
+        elif scope == 'atom2':
+            D = np.kron(np.eye(N), A)
+        else:
+            raise ValueError(f'未知 scope: {scope}')
+        sel = np.array([i * N + j for i, j in system['states']], dtype=int)
+        D = D[np.ix_(sel, sel)]
+        if psi0_ket is None:
+            psi0_ket = (ga['n'], ga['l'], ga['j'],
+                        driver_cfg.get('m_a', 0.5))
+        ia = pair_core.find_sublevel(single, *psi0_ket)
+        if ia is None:
+            raise ValueError(f'初始态 {psi0_ket} 不在基中')
+        i0 = {k: v for v, k in enumerate(sel)}[ia * N + ia]
+    H = np.asarray(system['H'], complex)
+    evals, evecs = np.linalg.eigh(H)
+    Di = evecs.conj().T @ D[:, i0]           # D|i⟩ 投影到本征基
+    # 初态能量 = 本征展开期望（evals 是升序本征值，不能按基组索引 i0 取）
+    E_i = np.dot(np.abs(evecs[i0, :]) ** 2, evals)
+    f0 = (evals - E_i) * 1e6                 # MHz → Hz
+    strength = np.abs(Di) ** 2
+    mask = np.abs(f0) > 1e-3                 # 排除初态自身（近零频）
+    return dict(freq_hz=f0[mask], strength=strength[mask], om_mhz=om,
+                i0=i0)

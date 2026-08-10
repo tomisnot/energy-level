@@ -15,9 +15,9 @@ sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(_HERE))
 import numpy as np
-import core
-import driver
-import pair_core
+from src import core
+from src import driver
+from src import pair_core
 from checklib import Checker
 
 ch = Checker('unified_selfcheck')
@@ -177,6 +177,91 @@ def u_independent_rabi_limit():
              f'max|Δ|={err:.2e}')
 
 
+def u_single_atom_addressing():
+    """U7: 单原子寻址（scope='atom1'）：只驱动原子1，原子2 不动。"""
+    cache = _cache()
+    groups = [dict(n=60, l=0, j=0.5), dict(n=60, l=1, j=0.5)]
+    om = 8.0
+    mw = dict(kind='mw', group_a=dict(n=60, l=0, j=0.5),
+              group_b=dict(n=60, l=1, j=0.5), pol='π', m_a=0.5, om_mhz=om,
+              scope='atom1', omega_rad_ns=2 * np.pi * 1e-3 *
+              (core.transition_frequency_hz(cache.atom, 60, 0, 0.5,
+                                            60, 1, 0.5) / 1e6))
+    t_ns = np.linspace(0, 200.0, 401)
+    R = 100.0
+    sys2 = driver.build_system(cache, groups, 2, R_um=R, m_total=1.0)
+    res = driver.drive(sys2, mw, t_ns=t_ns, psi0_ket=(60, 0, 0.5, 0.5))
+    single = res['single']
+    is_ = next(k for k, s in enumerate(single)
+               if s['n'] == 60 and s['l'] == 0 and s['qstr'] == 'm_J=+0.5')
+    ip = next(k for k, s in enumerate(single)
+              if s['n'] == 60 and s['l'] == 1 and s['qstr'] == 'm_J=+0.5')
+    idx = {k: (i, j) for k, (i, j) in enumerate(res['pairs'])}
+    p1p = sum(res['pops'][k] for k, (i, j) in idx.items() if i == ip)
+    p2p = sum(res['pops'][k] for k, (i, j) in idx.items() if j == ip)
+    ch.check('U7 原子1 被完全驱动（P1P→1）', np.max(p1p) > 0.99,
+             np.max(p1p))
+    # 原子2 不动的残差：dressed 投影 + eigh 数值噪声（R=100 时 vdW/交换
+    # ~1e-3 MHz，投影残差 ~1e-6 量级），阈值 1e-4 为物理不动
+    ch.check('U7b 原子2 不动（P2P≈0）', np.max(p2p) < 1e-4,
+             np.max(p2p))
+    # 原子1 的 Rabi 周期 == 单原子（首个 P 峰在 π/Ω）
+    t_pi = t_ns[np.argmax(p1p)]
+    ch.close('U7c 原子1 Rabi 周期 == π/Ω', t_pi, 62.5, rtol=0.02)
+
+
+def u_linear_spectrum_main_peak():
+    """U8: 单体线性响应谱主峰 = 寻址光共振 f_ad，强度 == 真实 |d|²。"""
+    cache = _cache()
+    groups = [dict(n=6, l=1, j=1.5), dict(n=60, l=0, j=0.5),
+              dict(n=60, l=1, j=0.5)]
+    rows_6p = core._group_sublevel_rows(cache, 6, 1, 1.5, 0.0)
+    rows_60s = core._group_sublevel_rows(cache, 60, 0, 0.5, 0.0)
+    b63 = next(r for r in rows_6p if r['qstr'] == 'F=3.0, m_F=+3.0')
+    a60 = next(r for r in rows_60s if r['qstr'] == 'm_J=+0.5')
+    f_ad = (a60['E_mhz'] - b63['E_mhz']) * 1e6
+    ad = dict(kind='ad', group_a=dict(n=6, l=1, j=1.5),
+              group_b=dict(n=60, l=0, j=0.5), pol='σ-', om_mhz=8.0)
+    sys0 = driver.build_system(cache, groups, 1)
+    lin = driver.response_spectrum_linear(sys0, ad,
+                                          psi0_ket=(6, 1, 1.5, 3.0))
+    imax = int(np.argmax(lin['strength']))
+    ch.close('U8 线性谱主峰 == f_ad', lin['freq_hz'][imax], f_ad, rtol=0.02)
+    # 强度 == 真实 |⟨60S+0.5|d_{-1}|F3mF3⟩|²
+    d2 = abs(core.dipole_amplitude(cache, b63, a60, -1)) ** 2
+    ch.close('U8b 主峰强度 == |d|²', lin['strength'][imax], d2, rtol=0.02)
+    # 主峰显著强于次峰（物理：σ- 从 F3mF3 主要只到 60S+0.5）
+    second = np.sort(lin['strength'])[-2]
+    ch.check('U8c 主峰强度 ≫ 次峰', lin['strength'][imax] > 20 * second,
+             (lin['strength'][imax], second))
+
+
+def u_linear_vs_time_evolution():
+    """U9: 线性谱主峰 vs 逐频率含时演化共振峰位一致（两种方法交叉）。"""
+    cache = _cache()
+    groups = [dict(n=6, l=1, j=1.5), dict(n=60, l=0, j=0.5),
+              dict(n=60, l=1, j=0.5)]
+    rows_6p = core._group_sublevel_rows(cache, 6, 1, 1.5, 0.0)
+    rows_60s = core._group_sublevel_rows(cache, 60, 0, 0.5, 0.0)
+    b63 = next(r for r in rows_6p if r['qstr'] == 'F=3.0, m_F=+3.0')
+    a60 = next(r for r in rows_60s if r['qstr'] == 'm_J=+0.5')
+    f_ad = (a60['E_mhz'] - b63['E_mhz']) * 1e6
+    om = 8.0
+    ad = dict(kind='ad', group_a=dict(n=6, l=1, j=1.5),
+              group_b=dict(n=60, l=0, j=0.5), pol='σ-', om_mhz=om)
+    sys0 = driver.build_system(cache, groups, 1)
+    lin = driver.response_spectrum_linear(sys0, ad,
+                                          psi0_ket=(6, 1, 1.5, 3.0))
+    f_lin = lin['freq_hz'][int(np.argmax(lin['strength']))]
+    # 逐频率含时（π/2 处初态流失，11 点粗扫即可）
+    t_ns = np.linspace(0, 62.5, 201)
+    scan = f_ad + np.linspace(-3.0, 3.0, 11) * 1e6
+    freqs, resp = driver.response_spectrum(sys0, ad, scan, t_ns=t_ns,
+                                           psi0_ket=(6, 1, 1.5, 3.0))
+    f_te = freqs[int(np.argmax(resp))]
+    ch.close('U9 线性谱 vs 含时演化峰位一致', f_lin, f_te, rtol=0.03)
+
+
 def main():
     u_single_drive()
     u_ac_stark_into_H()
@@ -184,6 +269,9 @@ def main():
     u_pair_drive_vs_dressed()
     u_response_spectrum()
     u_independent_rabi_limit()
+    u_single_atom_addressing()
+    u_linear_spectrum_main_peak()
+    u_linear_vs_time_evolution()
     ok = ch.summary()
     sys.exit(0 if ok else 1)
 
