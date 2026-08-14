@@ -66,6 +66,7 @@ DEFAULT_NUCLEAR_SPIN_I = 1.5                  # 兜底默认：仅当 ARC 原子
                                               # （正常情况下从 atom.I 读取，换原子无需改）
 RYDBERG_N_MIN = 20                            # n >= 20 视为里德堡态（超精细可忽略）
 AC_FAR_DETUNE_CUTOFF_HZ = 5e9                # |Δ| >= max(此值, Rabi) 视为远失谐 → SOS 背景
+AC_NEAR_CUTOFF_MHZ = AC_FAR_DETUNE_CUTOFF_HZ / 1e6   # 同上，MHz（动态引擎复用）
 SOS_BASIS_N_MIN = 5                           # 远失谐 SOS 基组的 n 下限
 SOS_BASIS_N_MAX = 100                         # 远失谐 SOS 基组的 n 上限
 
@@ -415,6 +416,49 @@ def _partner_sublevels(cache, n1, l1, j1, m2, B_gauss):
         if am is not None and abs(am) > 1e-12:
             out.append((cache.E_mhz(n1, l1, j1) + e_hf, abs(am) ** 2 / norm))
     return out
+
+
+# ---------------- 真实光场换算（动态引擎复用：光强 → Rabi / 远失谐 AC） ----------------
+def field_e0_sq(intensity_mwcm2):
+    """光强 (mW/cm²) → 电场幅度平方 E0² (V²/m²)。"""
+    return 2.0 * intensity_mwcm2 * MW_PER_CM2_TO_W_PER_M2 / (epsilon_0 * c)
+
+
+def rabi_mhz(d_au, E0_sq, pol_frac=1.0):
+    """偶极矩阵元 |d|（a.u.）在光强下的 Rabi 频率 (MHz，Ω/2π)。
+
+    E0_sq: E0² (V²/m²)；pol_frac: 偏振分量系数（该 q 分量的振幅占比）。
+    """
+    d_cm = abs(d_au) * E_CHARGE * A0
+    omega_rads = pol_frac * np.sqrt(max(E0_sq, 0.0)) * d_cm / hbar
+    return omega_rads / (2.0 * np.pi) / 1e6        # MHz
+
+
+def intensity_mwcm2_from_rabi(d_au, om_mhz, pol_frac=1.0):
+    """给定偶极矩阵元 |d|（a.u.）要达到的 Rabi (MHz, Ω/2π) → 光强 (mW/cm²)。"""
+    d_cm = abs(d_au) * E_CHARGE * A0
+    if d_cm <= 0:
+        return 0.0
+    omega_rads = om_mhz * 1e6 * 2.0 * np.pi
+    E0_sq = (omega_rads / (pol_frac * d_cm) * hbar) ** 2
+    return E0_sq * epsilon_0 * c / (2.0 * 10.0)   # mW/cm²
+
+
+def far_sos_shift_mhz(d_au, E0_sq, omega_rad, nu_rad):
+    """单对远失谐非 RWA 二阶 AC 位移 (MHz)，对「源态」的贡献。
+
+    nu_rad: 能级差角频率（带符号，rad/s，= 伙伴−源）；
+    omega_rad: 光角频率。源低（nu>0）→ 负位移（下移），源高 → 正。
+    """
+    d_cm = abs(d_au) * E_CHARGE * A0
+    w_ki = nu_rad
+    denom = w_ki ** 2 - omega_rad ** 2
+    if abs(denom) < 1e-6 * max(w_ki ** 2, omega_rad ** 2, 1.0):
+        # 近共振（SOS 二阶公式发散）：该对应由 real_field 走 dressed 分支；
+        # 兜底返回 0 防除零（位移应来自 dressed 精确解）。
+        return 0.0
+    dE = -(E0_sq / (4.0 * hbar)) * (d_cm ** 2) * (2.0 * w_ki) / denom
+    return dE / (2.0 * np.pi * hbar) / 1e6          # MHz
 
 
 def pair_contribution_mhz(cache, n, l, j, m, n1, l1, j1, coeffs,
@@ -855,7 +899,6 @@ def direct_ac_stark_sweep(cache, groups, address_cfg, B_gauss, intensities,
         for k in keys:
             shifts[k][t] = sh[k]
     return keys, shifts
-
 
 # ============================================================
 # 子能级行（UI 直接渲染）

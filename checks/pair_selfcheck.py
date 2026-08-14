@@ -91,7 +91,7 @@ def p_static():
 # ================= D 系列：driver（TDD，未实现则 SKIP） =================
 def d_driver():
     try:
-        import driver
+        from src import driver
     except Exception as e:
         c.skip('D1-D7 驱动引擎', f'driver.py 未实现（{type(e).__name__}）→ 检查先行')
         return

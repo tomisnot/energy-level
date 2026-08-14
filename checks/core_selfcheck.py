@@ -17,6 +17,11 @@ if sys.platform == 'win32' and hasattr(sys.stdout, 'reconfigure'):
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(_HERE)     # 项目根（core.py 所在）
 
+# ---- 应用 ARC 数据目录补丁（src/__init__ 把 AlkaliAtom.dataFolder
+#      指向项目内 .arcdata/，Rubidium87() 实例化才无需外部写权限） ----
+sys.path.insert(0, _ROOT)
+import src            # noqa: F401
+
 # ---- 加载 core（不触发 GUI / 不执行 UI 代码） ----
 spec = importlib.util.spec_from_file_location('core', os.path.join(_ROOT, 'src', 'core.py'))
 core = importlib.util.module_from_spec(spec)

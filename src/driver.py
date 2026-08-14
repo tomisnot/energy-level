@@ -24,8 +24,11 @@ _CONV = 2 * np.pi * 1e-3            # MHz·ns → 弧度
 
 # ================= 演化层（通用，与物理无关） =================
 def rwa_evolve(diag_mhz, couplings, psi0, t_ns):
-    """多能级 RWA 演化：H = diag(diag_mhz) + Σ (i<j, om)(|i⟩⟨j|+h.c.)（MHz）。
+    """多能级 RWA 演化：H = diag(diag_mhz) + Σ (i<j, Ω/2)(|i⟩⟨j|+h.c.)（MHz）。
 
+    couplings: [(i, j, Ω)]——**Ω 为完整 Rabi 频率（MHz）**，内部取 Ω/2
+    （RWA 旋转波项），与 rwa_hamiltonian 的 (Ω/2)·D 约定一致。
+    ⚠ 不要把"半耦合 Ω/2"传进来：内部会再 ×0.5 → Rabi 减半（常见坑）。
     返回 (t_ns, pops)：pops[k] 为第 k 态布居数组。
     """
     n = len(diag_mhz)

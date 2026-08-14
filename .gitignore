@@ -1,2 +1,5 @@
 *.pyc
 __pycache__/
+.arcdata/
+save_state/
+tempsimu/
