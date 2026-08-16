@@ -14,8 +14,8 @@ from PyQt5.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QIcon, QPixmap
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                              QPushButton, QSpinBox, QDoubleSpinBox, QComboBox,
-                             QListWidgetItem, QMessageBox, QDialog,
-                             QProgressBar)
+                             QListWidget, QListWidgetItem, QMessageBox,
+                             QDialog, QProgressBar)
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.colors import LogNorm
@@ -31,7 +31,7 @@ class _EvolveWorker(QThread):
     log_msg = pyqtSignal(str)               # 算法提示/警告 → 主窗口状态栏
 
     def __init__(self, states, fields, psi0, t_grid, method, backend,
-                 progress_arr, parent=None):
+                 progress_arr, decays=None, parent=None):
         super().__init__(parent)
         self.states = states
         self.fields = fields
@@ -40,6 +40,7 @@ class _EvolveWorker(QThread):
         self.method = method
         self.backend = backend
         self.progress_arr = progress_arr
+        self.decays = list(decays or [])
 
     def run(self):
         try:
@@ -48,7 +49,8 @@ class _EvolveWorker(QThread):
                                 self.t_grid, method=self.method,
                                 backend=self.backend,
                                 progress_arr=self.progress_arr,
-                                log=self.log_msg.emit)
+                                log=self.log_msg.emit,
+                                decays=self.decays)
             self.done.emit(res, None)
         except RuntimeError as e:
             # 用户取消：progress_arr[1]≠0 → 不算错误，静默
@@ -71,6 +73,7 @@ class DynamicPanel(QWidget):
         self.editor = None            # ttl_pulse.TimingPulseWindow
         self.main_groups = []         # 同步自主程序的 (n,l,j) 组
         self.wave_data = []           # 导入的波形数据 [(name, t, env, freq), ...]（主程序管理）
+        self.decay_cfgs = []          # 衰变通道 [{'from': label, 'to': label|None, 'gamma_mhz': f}]
         # 能级组增删由主程序事件驱动刷新（统一机制，不散布同步调用）
         main.groups_changed.connect(self.refresh_groups)
         self._build_canvases()
@@ -87,17 +90,21 @@ class DynamicPanel(QWidget):
     def _build_canvases(self):
         self.fig_top = Figure(figsize=(7, 3.2), dpi=100)
         self.ax_top = self.fig_top.add_subplot(111)
-        self.fig_top.subplots_adjust(left=0.09, right=0.97, top=0.90, bottom=0.15)
+        self.fig_top.subplots_adjust(left=0.07, right=0.97, top=0.93,
+                                     bottom=0.10)
         self.canvas_top = FigureCanvas(self.fig_top)
         self.fig_bot = Figure(figsize=(7, 3.6), dpi=100)
         self.ax_bot = self.fig_bot.add_subplot(111)
-        self.fig_bot.subplots_adjust(left=0.09, right=0.97, top=0.90, bottom=0.15)
+        self.fig_bot.subplots_adjust(left=0.07, right=0.97, top=0.93,
+                                     bottom=0.10)
         self.canvas_bot = FigureCanvas(self.fig_bot)
-        self.ax_top.set_title('光场包络 E(t)（各波形通道，颜色=频率）')
+        self.ax_top.set_title('光场光强 I(t)（各波形通道，颜色=频率）')
         self.ax_bot.set_title('态布居 P(t)')
         for ax in (self.ax_top, self.ax_bot):
             ax.set_xlabel('t (ns)'); ax.grid(alpha=0.3)
-        self.ax_top.set_ylabel('包络')
+            ax.spines['right'].set_visible(False)
+            ax.spines['top'].set_visible(False)
+        self.ax_top.set_ylabel('光强 (mW/cm²)')
         self.ax_bot.set_ylabel('布居')
 
     # ---------- 布局 ----------
@@ -133,6 +140,57 @@ class DynamicPanel(QWidget):
         rowp.addWidget(self.topn_sb)
         p.addLayout(rowp)
 
+        # ---- 自发辐射：自动（ARC 寿命）/ 禁用 / 自定义 ----
+        rowdm = QHBoxLayout()
+        rowdm.addWidget(QLabel('自发辐射'))
+        self.decay_mode_cb = QComboBox()
+        self.decay_mode_cb.addItems(['自动（ARC 寿命）', '禁用', '自定义'])
+        self.decay_mode_cb.setToolTip(
+            '自动：按 ARC 权威能级寿命自动配置 Γ=1/τ'
+            '（仅 τ≤100 µs 的低激发态，落点=丢失，运行后状态栏显示通道数）；'
+            '自定义：手动配置衰变通道（从态/Γ/落点/纯退相）')
+        self.decay_mode_cb.currentIndexChanged.connect(self._on_decay_mode)
+        rowdm.addWidget(self.decay_mode_cb, 1)
+        p.addLayout(rowdm)
+        self.decay_auto_label = QLabel(
+            '自动：Γ=1/τ(ARC)，仅 τ≤100 µs 的低激发态，落点=丢失；'
+            '里德堡慢衰变/黑体辐射请用 自定义 手动加')
+        self.decay_auto_label.setWordWrap(True)
+        p.addWidget(self.decay_auto_label)
+        # 自定义配置区（仅 自定义 档显示；自动/禁用 隐藏）
+        self.decay_custom_box = QWidget()
+        dcb = QVBoxLayout(self.decay_custom_box)
+        dcb.setContentsMargins(0, 0, 0, 0)
+        dcb.setSpacing(4)
+        dcb.addWidget(QLabel('从态 → Γ(MHz) → 落点'))
+        rowd1 = QHBoxLayout()
+        self.decay_from_cb = QComboBox()
+        self.decay_gamma_sb = QDoubleSpinBox()
+        self.decay_gamma_sb.setRange(0.0, 1e6)
+        self.decay_gamma_sb.setDecimals(3)
+        self.decay_gamma_sb.setValue(4.35)
+        self.decay_gamma_sb.setToolTip('衰变率 Γ（MHz）；落点选"丢失"时'
+                                       '布居离开建模空间，画布叠加 loss 曲线')
+        self.decay_to_cb = QComboBox()
+        rowd1.addWidget(self.decay_from_cb, 1)
+        rowd1.addWidget(self.decay_gamma_sb)
+        rowd1.addWidget(self.decay_to_cb, 1)
+        dcb.addLayout(rowd1)
+        rowd2 = QHBoxLayout()
+        self.decay_add_btn = QPushButton('添加通道')
+        self.decay_add_btn.clicked.connect(self._add_decay)
+        self.decay_del_btn = QPushButton('删除选中')
+        self.decay_del_btn.clicked.connect(self._del_decay)
+        rowd2.addWidget(self.decay_add_btn)
+        rowd2.addWidget(self.decay_del_btn)
+        dcb.addLayout(rowd2)
+        self.decay_list = QListWidget()
+        self.decay_list.setFixedHeight(56)
+        self.decay_list.setSelectionMode(QListWidget.SingleSelection)
+        dcb.addWidget(self.decay_list)
+        p.addWidget(self.decay_custom_box)
+        self.decay_custom_box.setVisible(False)     # 默认自动档
+
         # ---- 时间 / 方法 ----
         rowt = QHBoxLayout()
         rowt.addWidget(QLabel('t_max'))
@@ -155,6 +213,18 @@ class DynamicPanel(QWidget):
         self.backend_cb.addItems(['auto', 'cpu', 'gpu'])
         rowm.addWidget(self.backend_cb)
         p.addLayout(rowm)
+        rowcut = QHBoxLayout()
+        rowcut.addWidget(QLabel('近共振截断(MHz)'))
+        self.near_cutoff_sb = QDoubleSpinBox()
+        self.near_cutoff_sb.setRange(1.0, 1e6)
+        self.near_cutoff_sb.setDecimals(0)
+        self.near_cutoff_sb.setValue(5000.0)
+        self.near_cutoff_sb.setToolTip(
+            'real_field 近/远分流边界：缺省 5 GHz 保守地板（相干包含整个'
+            '超精细/精细流形）；协议场景（STIRAP/拉曼想只相干驱动目标对）'
+            '可调小（如 50 MHz）——流形其余态作远失谐 AC 位移（二阶，Ω/Δ≪1 时准确）')
+        rowcut.addWidget(self.near_cutoff_sb)
+        p.addLayout(rowcut)
 
         self.run_btn = QPushButton('运行演化')
         self.run_btn.clicked.connect(self._run)
@@ -182,6 +252,98 @@ class DynamicPanel(QWidget):
                 self.psi_combo.setCurrentIndex(idx)
         if self.editor is not None:
             self.editor.set_states(states, self.cache)
+        self._refresh_decay_combos(states)
+
+    # ---------- 自发辐射（Lindblad）通道配置 ----------
+    def _on_decay_mode(self, *_):
+        """三档：自动（ARC 寿命）/ 禁用 / 自定义——只显示需要的控件。"""
+        mode = self.decay_mode_cb.currentIndex()      # 0 自动 / 1 禁用 / 2 自定义
+        self.decay_custom_box.setVisible(mode == 2)
+        self.decay_auto_label.setVisible(mode == 0)
+
+    def _decay_mode(self):
+        """当前档位：'auto' / 'off' / 'custom'。"""
+        return ('auto', 'off', 'custom')[self.decay_mode_cb.currentIndex()]
+
+    def _refresh_decay_combos(self, states):
+        """刷新从态/落点下拉（保留当前选择）。states 为空时清空。"""
+        if not hasattr(self, 'decay_from_cb'):
+            return                                    # 控件未建（信号早到）防御
+        cur_from = self.decay_from_cb.currentText()
+        cur_to = self.decay_to_cb.currentText()
+        self.decay_from_cb.clear()
+        self.decay_to_cb.clear()
+        for s in states:
+            self.decay_from_cb.addItem(s['label'])
+            self.decay_to_cb.addItem(s['label'])
+        self.decay_to_cb.addItem('（丢失）')
+        if states:
+            if cur_from:
+                i = self.decay_from_cb.findText(cur_from)
+                if i >= 0:
+                    self.decay_from_cb.setCurrentIndex(i)
+            if cur_to:
+                i = self.decay_to_cb.findText(cur_to)
+                if i >= 0:
+                    self.decay_to_cb.setCurrentIndex(i)
+
+    def _update_decay_list(self):
+        self.decay_list.clear()
+        for c in self.decay_cfgs:
+            to = c['to'] if c['to'] else '丢失'
+            self.decay_list.addItem(
+                f"{c['from']} → {to}   Γ={c['gamma_mhz']:g} MHz")
+
+    def _add_decay(self):
+        """从当前下拉配置添加衰变通道（落点=末尾'（丢失）'项 → None）。"""
+        n_states = self.decay_from_cb.count()
+        if n_states == 0:
+            return
+        fi = self.decay_from_cb.currentIndex()
+        ti = self.decay_to_cb.currentIndex()
+        gamma = self.decay_gamma_sb.value()
+        if gamma <= 0:
+            QMessageBox.information(self, '提示', '衰变率 Γ 需 > 0。')
+            return
+        if ti >= n_states:
+            to_label = None
+        else:
+            to_label = self.decay_to_cb.itemText(ti)
+            if to_label == self.decay_from_cb.itemText(fi):
+                QMessageBox.information(
+                    self, '提示', '衰变态与落点相同 = 纯退相通道（不转移布居，'
+                    '只衰减相干）。如需丢布居请选"（丢失）"。')
+        self.decay_cfgs.append(
+            {'from': self.decay_from_cb.itemText(fi), 'to': to_label,
+             'gamma_mhz': float(gamma)})
+        self._update_decay_list()
+        self.decay_list.setCurrentRow(len(self.decay_cfgs) - 1)   # 选中新通道
+
+    def _del_decay(self):
+        row = self.decay_list.currentRow()
+        if row >= 0 and row < len(self.decay_cfgs):
+            del self.decay_cfgs[row]
+            self._update_decay_list()
+
+    def _has_decays(self):
+        """是否已配置至少一个衰变通道。"""
+        return bool(self.decay_cfgs)
+
+    def _resolve_decay_cfgs(self, states):
+        """decay_cfgs（按 label）→ evolve.decay 列表（解析为当前态索引）。
+        找不到的 label（能级组已变）跳过并提示。"""
+        labels = [s['label'] for s in states]
+        out = []
+        for c in self.decay_cfgs:
+            fi = labels.index(c['from']) if c['from'] in labels else None
+            ti = labels.index(c['to']) if (c['to'] and c['to'] in labels) \
+                else None
+            if fi is None:
+                self.main.log(f'[动态] 衰变态 {c["from"]!r} 已不在能级列表中，'
+                              '该通道被跳过')
+                continue
+            out.append(evolve.decay(fi, c['gamma_mhz'], ti))
+        return out
 
     # ---------- 布居图：内部筛选（前 N 个平均布居最大的态） ----------
     def _top_pop_rows(self, states, res):
@@ -276,15 +438,19 @@ class DynamicPanel(QWidget):
                 'method': self.method_cb.currentText(),
                 'backend': self.backend_cb.currentText(),
                 'topn': self.topn_sb.value(),
+                'decay_mode': self.decay_mode_cb.currentIndex(),
+                'near_cutoff': self.near_cutoff_sb.value(),
             },
             'editor': (ttl_pulse.serialize_editor(self.editor)
                        if self.editor is not None else None),
+            'decays': [dict(c) for c in self.decay_cfgs],
             'wave_data': [
                 {'name': nm,
                  't': np.asarray(th).tolist(),
                  'env': np.asarray(env).tolist(),
-                 'freq': float(f)}
-                for nm, th, env, f in self.wave_data],
+                 'freq': float(f),
+                 'intensity': float(I)}
+                for nm, th, env, f, I in self.wave_data],
         }
 
     def _restore_dynamic(self, state):
@@ -312,19 +478,30 @@ class DynamicPanel(QWidget):
         self.backend_cb.setCurrentText(dyn.get('backend', 'auto'))
         self.psi_combo.setCurrentIndex(int(dyn.get('psi', 0)))
         self.topn_sb.setValue(int(dyn.get('topn', 8)))
+        # 自发辐射档位（0 自动 / 1 禁用 / 2 自定义；旧存档缺省自动）
+        self.decay_mode_cb.setCurrentIndex(int(dyn.get('decay_mode', 0)))
+        # 近共振截断（旧存档缺省 5 GHz 地板）
+        self.near_cutoff_sb.setValue(float(dyn.get('near_cutoff', 5000.0)))
         # 4) 编辑器（TTL + 波形）——静默创建（不弹窗），恢复配置
         ed_state = state.get('editor')
         if ed_state is not None:
             self._ensure_editor(show=False)
             ttl_pulse.restore_editor(self.editor, ed_state)
             self.editor.set_states(self._current_states(), self.cache)
-        # 5) 波形数据 + 顶部图（兼容旧存档：旧字段 E=载波，env 缺省时退回 E）
+        # 4b) 衰变通道（按 label 恢复；能级组/B 已先恢复 → 下拉已重建）
+        self.decay_cfgs = [dict(c) for c in state.get('decays', [])]
+        self._update_decay_list()
+        # 5) 波形数据 + 顶部图（兼容旧存档：旧字段 E=载波，env 缺省时退回 E；
+        #    无 intensity（旧存档）→ 4 元组 → _draw_top 退回画包络）
         wd = state.get('wave_data', [])
-        self.wave_data = [
-            (d['name'], np.array(d['t']),
-             np.array(d.get('env', d.get('E', 0.0))),
-             float(d.get('freq', 0.0)))
-            for d in wd]
+        self.wave_data = []
+        for d in wd:
+            row = (d['name'], np.array(d['t']),
+                   np.array(d.get('env', d.get('E', 0.0))),
+                   float(d.get('freq', 0.0)))
+            if 'intensity' in d:
+                row = row + (float(d['intensity']),)
+            self.wave_data.append(row)
         self._draw_top(self.wave_data)
         self.main.groups_changed.emit()
 
@@ -338,18 +515,43 @@ class DynamicPanel(QWidget):
         if not self.main_groups:
             QMessageBox.information(self, '提示', '请先在主程序添加能级组。')
             return
-        # 未配置脉冲 → 明确提示并打开编辑器，不静默跑空演化
-        if not self._has_pulses():
+        states = self._current_states()
+        # 无脉冲时须有实际耗散/自动通道，否则就是空演化 → 提示并打开编辑器
+        has_effect = self._has_pulses()
+        if not has_effect:
+            mode = self._decay_mode()
+            if mode == 'custom':
+                has_effect = bool(self.decay_cfgs)
+            elif mode == 'auto':
+                # 门槛只做廉价判断（基组是否含低激发态），不触发 ARC 寿命计算：
+                # 此处的 auto_decays 曾致 Qt 原生堆损坏（0xC0000005，tab 切换后
+                # 确定性复现；与百度网盘无关，网盘关闭后依然崩）。
+                # auto_decays 仅在真正运行时计算一次。
+                has_effect = any(s['n'] <= 15 for s in states)
+        if not has_effect:
             QMessageBox.information(
                 self, '提示',
                 '请先在 时序/波形 编辑器中配置光脉冲（频率/光强/包络），'
+                '或开启/配置自发辐射（自动档需基组含 6P 等低激发态），'
                 '再运行演化。\n已为你打开编辑器。')
             self._open_editor()
             return
-        states = self._current_states()
-        fields, _ = ttl_pulse.build_fields(self.editor, states, self.cache)
+        mode = self._decay_mode()
+        if mode == 'custom':
+            decays = self._resolve_decay_cfgs(states)
+        elif mode == 'auto':
+            decays = evolve.auto_decays(self.cache, states)
+            if decays:
+                self.main.log(f'[动态] 自动自发辐射：{len(decays)} 通道'
+                              '（Γ=1/τ(ARC)，τ≤100µs，落点=丢失）')
+        else:
+            decays = []
+        fields = (ttl_pulse.build_fields(self.editor, states, self.cache,
+                                         near_cutoff_mhz=self.near_cutoff_sb.value())[0]
+                  if self.editor is not None else [])
         t = np.linspace(0, self.tmax_sb.value(), self.npts_sb.value())
-        self.wave_data = ttl_pulse.field_waveforms(self.editor, t)   # 取最新波形
+        if self.editor is not None:
+            self.wave_data = ttl_pulse.field_waveforms(self.editor, t)
         psi0 = self.psi_combo.currentIndex()
         self._run_states = states            # 供完成后绘图（与计算一致）
 
@@ -369,7 +571,7 @@ class DynamicPanel(QWidget):
         self._worker = _EvolveWorker(states, fields, psi0, t,
                                      self.method_cb.currentText(),
                                      self.backend_cb.currentText(),
-                                     self.progress_arr)
+                                     self.progress_arr, decays=decays)
         self._worker.done.connect(self._on_evolve_done)
         self._worker.log_msg.connect(self.main.log)
         self._worker.start()
@@ -428,29 +630,65 @@ class DynamicPanel(QWidget):
             self._draw_bot(states, res)             # 自动按平均布居取前 N 个态画
 
     def _draw_top(self, E_list):
-        """顶部：各通道**包络**（不画载波）——颜色按频率 log 映射（半透明下面积）。
+        """顶部：各通道**光强曲线**（I = 峰值光强×包络）——颜色按频率 log 映射；
+        每个通道独立 y 轴标度（twin axes 外移避让），防止光强差异过大压扁曲线。
 
-        E_list: [(name, t, env, freq_mhz), ...]（field_waveforms 输出）。
+        E_list: [(name, t, env, freq_mhz[, intensity_mwcm2]), ...]
+        （旧存档缺 intensity → 退回画无量纲包络，单 y 轴。）
         """
-        ax = self.ax_top; ax.clear()
-        ax.set_title('光场包络 E(t)（颜色=频率，对数尺度）')
-        ax.set_xlabel('t (ns)'); ax.set_ylabel('包络'); ax.grid(alpha=0.3)
-        if E_list:
-            freqs = np.array([f for _, _, _, f in E_list], float)
-            fmin, fmax = max(freqs.min(), 1e-3), max(freqs.max(), 1e-3)
-            if fmax <= fmin:
-                fmax = fmin + 1.0
-            norm = LogNorm(vmin=fmin, vmax=fmax)
-            cmap = colormaps['plasma']
-            for (name, t, env, f), c in zip(
-                    E_list, cmap(norm(freqs))):
-                ax.plot(t, env, lw=1.5, color=c, label=name)
-                ax.fill_between(t, env, 0.0, color=c, alpha=0.25)
-            ax.legend(fontsize=8)
+        # 重置：移除旧 twin 轴，只留主轴
+        for ax in list(self.fig_top.axes):
+            if ax is not self.ax_top:
+                self.fig_top.delaxes(ax)
+        ax = self.ax_top
+        ax.clear()
+        ax.set_title('光场光强 I(t)（颜色=频率，对数尺度；每通道独立 y 轴）')
+        ax.set_xlabel('t (ns)')
+        ax.spines['right'].set_visible(False)
+        ax.spines['top'].set_visible(False)
+        ax.grid(alpha=0.3)
+        if not E_list:
+            ax.set_ylabel('光强 (mW/cm²)')
+            self.canvas_top.draw_idle()
+            return
+        has_I = len(E_list[0]) >= 5
+        n = len(E_list)
+        freqs = np.array([e[3] for e in E_list], float)
+        fmin, fmax = max(freqs.min(), 1e-3), max(freqs.max(), 1e-3)
+        if fmax <= fmin:
+            fmax = fmin + 1.0
+        norm = LogNorm(vmin=fmin, vmax=fmax)
+        cmap = colormaps['plasma']
+        colors = cmap(norm(freqs))
+        # 右侧 twin y 轴空间（每额外通道一条，外移 45px 避让）
+        right = max(0.78, 0.97 - 0.09 * (n - 1))
+        self.fig_top.subplots_adjust(left=0.07, right=right, top=0.93,
+                                     bottom=0.10)
+        unit = '光强 (mW/cm²)' if has_I else '包络'
+        for k, (e, c) in enumerate(zip(E_list, colors)):
+            name, t, env, f = e[0], e[1], e[2], e[3]
+            I = float(e[4]) if has_I else 1.0
+            y = I * np.asarray(env, float)
+            if k == 0:
+                target = ax
+                target.set_ylabel(f'{name}  {unit}', color=c)
+            else:
+                target = ax.twinx()
+                target.spines['right'].set_position(('outward',
+                                                      45.0 * (k - 1)))
+                target.spines['top'].set_visible(False)
+                target.yaxis.label.set_color(c)
+                target.tick_params(axis='y', colors=c, labelsize=8)
+                target.set_ylabel(f'{name}  {unit}', color=c, fontsize=8)
+            target.plot(t, y, lw=1.5, color=c,
+                        label=(name if k == 0 else None))
+            target.fill_between(t, y, 0.0, color=c, alpha=0.22)
+            target.set_ylim(bottom=0.0)
+        ax.legend(fontsize=8, loc='upper right')
         self.canvas_top.draw_idle()
 
     def _draw_bot(self, states, res):
-        """底部：态布居（只画前 N 个平均布居最大的态，N=topn_sb）。"""
+        """底部：态布居（只画前 N 个平均布居最大的态，N=topn_sb）+ loss 曲线。"""
         ax = self.ax_bot; ax.clear()
         ax.set_title(f'态布居 P(t)（按平均布居取前 '
                      f'{min(self.topn_sb.value(), len(states))} 个态）')
@@ -461,5 +699,9 @@ class DynamicPanel(QWidget):
             if i not in sel:
                 continue
             ax.plot(res['t'], pops[:, i], lw=1.2, label=s['label'])
+        loss = np.asarray(res.get('loss', np.zeros(len(res['t']))))
+        if loss.max() > 1e-12:
+            ax.plot(res['t'], loss, lw=1.6, ls='--', color='#333333',
+                    label='loss（离场）')
         ax.legend(fontsize=8)
         self.canvas_bot.draw_idle()

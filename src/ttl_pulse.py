@@ -242,29 +242,26 @@ class TimingPulseWindow(QMainWindow):
 
 # ================= 动态分析数据源 =================
 def field_waveforms(win, t_grid):
-    """各波形通道的实际电磁场**包络**（主页面只画包络，不再画载波）。
+    """各波形通道**每个脉冲**的光强曲线数据（主页面画光强，不画载波）。
 
-    E(t) = Σ_k env_k(t)（多脉冲同通道叠加，包络归一版；载波振荡不返回，
-    因为高频载波画出来只会糊成一片，颜色/频率信息见返回的 freq_mhz）。
-    采样直接用输出网格 t_grid（包络慢变，无需高采样；载波采样已废弃）。
-    返回 [(通道名, t, env, freq_mhz), ...]——freq_mhz 取通道内第一个脉冲
-    频率（颜色映射用；同通道多脉冲不同频时以首脉冲为代表）。
+    返回 [(label, t, env, freq_mhz, intensity_mwcm2), ...]——每脉冲一条：
+    env 为 0~1 包络，光强曲线 = intensity × env（物理光强）；多脉冲通道
+    各自频率/光强独立（颜色=频率映射）。曾整通道只取首脉冲频率 → 颜色错误
+    （已修）。采样直接用输出网格 t_grid（包络慢变，无需高采样）。
     """
     t = np.asarray(t_grid, float)
     bind_triggers(win.ttl.model, win.wave.channels)
     out = []
     for wc in win.wave.channels:
-        env = np.zeros(len(t))
-        freq = 0.0
-        for pu in wc.pulses:
-            env = env + np.asarray(pu.waveform(t), float)
-            if freq == 0.0:
-                freq = float(pu.freq_mhz)
-        out.append((wc.name, t, env, freq))
+        single = len(wc.pulses) == 1
+        for k, pu in enumerate(wc.pulses):
+            label = wc.name if single else f'{wc.name}#{k + 1}'
+            out.append((label, t, np.asarray(pu.waveform(t), float),
+                        float(pu.freq_mhz), float(pu.intensity_mwcm2)))
     return out
 
 
-def build_fields(win, states, cache):
+def build_fields(win, states, cache, near_cutoff_mhz=None):
     """由编辑器脉冲的「真实光场参数」生成演化输入。
 
     每脉冲 (freq_mhz, intensity_mwcm2, pol, waveform) → evolve.real_field：
@@ -273,6 +270,7 @@ def build_fields(win, states, cache):
     - 近共振对进各 field 的驱动矩阵（RWA 演化自动产生 dressed 频移）；
     - 远失谐 AC 位移内嵌 field['ac_shift']，随该场包络**时变**（不返回到
       常数向量——常数 ac 全时段生效会破坏其他时段的驱动）。
+    near_cutoff_mhz：透传 real_field 的近/远分流边界（协议场景可调小）。
     调用方直接 evolve.evolve(states, fields, ...) 即可，无需 ac_shift_mhz。
     """
     from . import evolve
@@ -282,7 +280,7 @@ def build_fields(win, states, cache):
         for pu in wc.pulses:
             fld, a = evolve.real_field(
                 cache, states, pu.freq_mhz, pu.intensity_mwcm2, pu.pol,
-                waveform=pu.waveform)
+                waveform=pu.waveform, near_cutoff_mhz=near_cutoff_mhz)
             if fld is not None:
                 fields.append(fld)          # 每脉冲一个多对驱动场（含时变 ac）
             elif np.any(np.asarray(a, float) != 0.0):

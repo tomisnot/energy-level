@@ -2,7 +2,9 @@
 """pulse.py 独立模块自检：两种包络形状 + TTL 触发定位 + evolve.field 集成。"""
 import os, sys
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_CHECKS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(_CHECKS))    # 项目根（src/）
+sys.path.insert(0, _CHECKS)                     # checks/（checklib）
 
 import numpy as np
 from src import pulse, evolve

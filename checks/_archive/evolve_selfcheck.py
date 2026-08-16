@@ -5,7 +5,9 @@
 - 大基组性能（CPU vs GPU）"""
 import os, sys, time
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_CHECKS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(_CHECKS))    # 项目根（src/）
+sys.path.insert(0, _CHECKS)                     # checks/（checklib）
 
 import numpy as np
 from scipy.integrate import solve_ivp

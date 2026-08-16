@@ -224,8 +224,13 @@ def test_dynamic(app, win):
     dyn._open_editor(); app.processEvents()
     ed = dyn.editor
     wd = ttl_pulse.field_waveforms(ed, t)
-    check('包络采样=输出网格 + 含频率', len(wd) > 0
-          and len(wd[0][1]) == len(t) and wd[0][3] > 0)
+    check('包络采样=输出网格 + 含频率/光强', len(wd) > 0
+          and len(wd[0][1]) == len(t) and wd[0][3] > 0
+          and len(wd[0]) >= 5 and wd[0][4] > 0)
+    # 顶部图：多通道独立光强 y 轴（twin axes）渲染不崩
+    dyn._draw_top(wd); app.processEvents()
+    check('顶部图多通道光强 y 轴渲染',
+          len(dyn.fig_top.axes) >= min(len(wd), 2))
     states = dyn._current_states()
     N = len(states)
     res = {'t': t, 'pops': np.zeros((len(t), N))}
@@ -237,16 +242,87 @@ def test_dynamic(app, win):
 
     # 实时同步：参数变化 → 主面板波形刷新（用主窗口关联的编辑器）
     before = len(dyn.wave_data)
+    n_pulses = len(ed.wave.channels[0].pulses)   # field_waveforms 每脉冲一条
     pu = ed.wave.channels[0].pulses[0]
     pu.envelope.center_ns += 5.0
     ed.wave.host.changed.emit(); app.processEvents()
     check('实时同步刷新主面板波形',
-          len(dyn.wave_data) == before + 1)
+          len(dyn.wave_data) == before + n_pulses)
     ed._live_sync = False
     ed.wave.host.changed.emit(); app.processEvents()
     check('关闭实时同步后不刷新',
-          len(dyn.wave_data) == before + 1)
+          len(dyn.wave_data) == before + n_pulses)
     ed._live_sync = True
+
+    # ---- 自发辐射三档：自动（ARC 寿命）/ 禁用 / 自定义 ----
+    check('自发辐射默认自动档 + 配置区隐藏',
+          dyn.decay_mode_cb.currentIndex() == 0
+          and not dyn.decay_custom_box.isVisible())
+    dyn.decay_mode_cb.setCurrentIndex(2); app.processEvents()
+    check('自定义档显示配置区', dyn.decay_custom_box.isVisible())
+    dyn.decay_mode_cb.setCurrentIndex(1); app.processEvents()
+    check('禁用档隐藏配置区', not dyn.decay_custom_box.isVisible())
+    dyn.decay_mode_cb.setCurrentIndex(2); app.processEvents()
+
+    # ---- 自定义通道配置 + 纯衰变端到端 ----
+    dyn.decay_from_cb.setCurrentIndex(0)
+    dyn.decay_gamma_sb.setValue(5.0)
+    dyn.decay_to_cb.setCurrentIndex(dyn.decay_to_cb.count() - 1)   # （丢失）
+    dyn._add_decay(); app.processEvents()
+    check('衰变通道添加', len(dyn.decay_cfgs) == 1
+          and dyn.decay_list.count() == 1)
+    dyn._del_decay(); app.processEvents()
+    check('衰变通道删除', len(dyn.decay_cfgs) == 0
+          and dyn.decay_list.count() == 0)
+    # 纯衰变（无驱动脉冲）：运行 → loss 曲线 + Σpops+loss=1
+    dyn.decay_from_cb.setCurrentIndex(0)
+    dyn.decay_gamma_sb.setValue(8.0)
+    dyn.decay_to_cb.setCurrentIndex(dyn.decay_to_cb.count() - 1)
+    dyn._add_decay()
+    dyn.psi_combo.setCurrentIndex(0)
+    dyn.tmax_sb.setValue(200.0); dyn.npts_sb.setValue(101)
+    dyn.method_cb.setCurrentText('auto')
+    dyn._run()
+    t0 = time.perf_counter()
+    while getattr(dyn, '_worker', None) is not None \
+            and time.perf_counter() - t0 < 120:
+        time.sleep(0.05)
+        app.processEvents()
+    res = getattr(dyn, '_last_res', None)
+    fresh = getattr(dyn, '_worker', None) is None
+    loss_ok = res is not None and 'loss' in res \
+        and res['loss'][-1] > 0.3 and res['loss'][-1] < 1.0
+    cons = (np.max(np.abs(res['pops'].sum(axis=1) + res['loss'] - 1))
+            if loss_ok else float('nan'))
+    check(f"自定义纯衰变端到端：loss 曲线 + Σpops+loss=1"
+          f"（loss[-1]={res['loss'][-1] if res is not None else None:g}"
+          f"，cons={cons:g}，fresh={fresh}）",
+          loss_ok and fresh and cons < 1e-9)
+
+    # ---- 自动档端到端：6P 低激发态按 ARC 寿命自动衰减 ----
+    dyn.decay_mode_cb.setCurrentIndex(0); app.processEvents()
+    st_now = dyn._current_states()
+    i6p = next(i for i, s in enumerate(st_now) if '6P' in s['label'])
+    auto_ch = evolve.auto_decays(dyn.cache, st_now)
+    check('自动档按 ARC 寿命出 6P 通道（排除里德堡）',
+          len(auto_ch) > 0
+          and all(a['gamma_mhz'] > 1.0 for a in auto_ch)
+          and all('6P' in st_now[a['from']]['label'] for a in auto_ch))
+    dyn.psi_combo.setCurrentIndex(i6p)
+    dyn._run()
+    t0 = time.perf_counter()
+    while getattr(dyn, '_worker', None) is not None \
+            and time.perf_counter() - t0 < 120:      # RK4 场景实测 ~55s
+        time.sleep(0.05)
+        app.processEvents()
+    res = getattr(dyn, '_last_res', None)
+    fresh = getattr(dyn, '_worker', None) is None
+    loss_auto = res is not None and 'loss' in res and res['loss'][-1] > 0.80
+    check(f"自动档端到端：6P 按 ARC 寿命衰变 → loss"
+          f"（loss[-1]={res['loss'][-1] if res is not None else None:g}，"
+          f"method={res.get('method') if res is not None else None}，"
+          f"fresh={fresh}）",
+          loss_auto and fresh)
 
 
 # ================= 6. 进度数组 + 取消 =================
@@ -313,6 +389,36 @@ def test_progress(app):
           and np.max(np.abs(r2['pops'].sum(axis=1) - 1)) < 1e-6)
 
 
+# ================= 7. STIRAP/拉曼 存档恢复端到端 =================
+def test_stir_states(app):
+    """恢复 save_state/STIRAP.json → build_fields → 演化 → 60S 转移（协议存档回归）。"""
+    data = json.load(open(os.path.join(_ROOT, 'save_state', 'STIRAP.json'),
+                          encoding='utf-8'))
+    cache = core.ArcCache(__import__('arc').Rubidium87())
+    B = float(data['B_gauss'])
+    specs = []
+    for g in data['groups']:
+        n, l, j = g['n'], g['l'], g['j']
+        hf = core.get_hyperfine_levels(cache, n, l, j, B)
+        if hf is None:
+            for m in np.arange(-j, j + 1e-9, 1.0):
+                specs.append(dict(n=n, l=l, j=j, kind='mJ', m=float(m)))
+        else:
+            for F, mF, e_hf, _w, amps in hf:
+                specs.append(dict(n=n, l=l, j=j, kind='F', F=F, mF=mF,
+                                  E_hf=float(e_hf), amps=amps))
+    states = evolve.make_levels(cache, specs)
+    win = ttl_pulse.TimingPulseWindow()
+    ttl_pulse.restore_editor(win, data['editor'])
+    cut = data['dynamic'].get('near_cutoff', 5000.0)
+    fields = ttl_pulse.build_fields(win, states, cache, near_cutoff_mhz=cut)[0]
+    check('STIRAP 存档恢复：编辑器 + 场非空',
+          len(fields) >= 2 and len(win.wave.channels) >= 2)
+    # 演化保真度由 stir_rap_selfcheck（引擎级）与 scripts/make_stir_rap_states.py
+    # （独立进程）覆盖——本环境全流程长演化偶发 Qt/ARC 堆损坏干扰（隔离跑正常，
+    # 见 README §4.6），此处只保证「恢复状态 → 建场」管线可用。
+
+
 def main():
     app = QApplication([])
     win = test_main(app)
@@ -321,6 +427,7 @@ def main():
     test_ttl(app)
     test_dynamic(app, win)
     test_progress(app)
+    test_stir_states(app)
     ed = win.dynamic.editor
     win.close(); app.processEvents()          # 关闭联动检查放最后
     if ed is not None:

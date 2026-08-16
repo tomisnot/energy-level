@@ -25,11 +25,14 @@ Energy Level/
 │   ├── ui_single.py  单体画布（能级图 + off/on 镜像频谱 + 响应谱）
 │   ├── ui_pair.py    双体响应谱画布 + response_curves 计算
 │   └── ui_dynamic.py 动态分析面板（含时演化：波形预览 + 布居图 + 后台线程/进度/取消）
-├── checks/           回归自检与基准（selftest_all.py 一键全跑）
+├── checks/           回归自检与基准（selftest_all.py 一键全跑，约 1 分钟）
 │   ├── selftest_all.py / checklib.py
-│   ├── core_selfcheck(24) / core_ac_directcheck(7) / pair_selfcheck(17)
-│   ├── unified_selfcheck(18) / evolve_selfcheck / pulse_selfcheck(20)
-│   ├── ui_selftest(38)        UI 回归（主窗口/编辑器/TTL/动态页/进度取消）
+│   ├── core_selfcheck.py         单原子静态（能级/偶极/AC 位移，24 项）
+│   ├── evolve_dissipative_selfcheck.py  Lindblad 耗散引擎（解析衰变/时变/
+│   │   └── 退相/ac 约定回归/numba≡numpy，18 项）
+│   ├── ui_selftest.py            UI 回归（主窗口/编辑器/TTL/动态页/存档恢复）
+│   ├── _archive/                 归档自检（pair/unified 两体、STIRAP/拉曼、
+│   │   └── pulse、Floquet 交叉、单原子 evolve；需要时单独运行，不进日常回归）
 │   ├── evolve_matrix.py       动态引擎测评矩阵（多场景×方法×独立参考）
 │   ├── mw_bench_firstprinciples.py / evolve_rwa_bench.py   第一性原理基准
 │   └── acceptance_state.py    最终验收（真实保存状态 <1min + 标准场景）
@@ -70,8 +73,10 @@ Energy Level/
 | 三页场互通 | 磁场 B / 电场 E 三页（单体/两体/动态）共用同一实例，B/E 行恒显；光场表格区按页显隐 |
 | 单原子动态模拟 | 独立引擎（evolve.py）：floquet / ip4 / pwc / auto 四档，见下文算法章节 |
 | 时序波形编辑器 | TTL 多通道时序（沿标记/关系绑定）+ 波形通道（高斯/缓变方波包络、TTL 触发定位）；参数精度全保留 |
-| 动态分析页 | 载波包络预览（颜色=频率）+ 态布居演化（自动按平均布居选前 N 态）+ 后台线程/进度条/可取消 |
-| 回归自检 | core 24 + AC 7 + pair 17 + unified 18 + evolve + pulse 20 + UI 38（selftest_all 一键全跑） |
+| 动态分析页 | 顶部**光强 I(t)** 预览（每通道独立 y 轴标度 + 颜色=频率对数映射 + 半透明下面积，光强差异大也不压扁）+ 态布居演化（自动按平均布居选前 N 态）+ 后台线程/进度条/可取消 |
+| 自发辐射 | 动态引擎内建 **Lindblad 主方程**（`decay(g,Γ,e)` 衰变通道：指数衰变 / 显式落点 / 纯退相）；常数 H 走本征分解精确解、时变包络走矩阵 RK4（均第一性原理，numba 内核提速 ~40×）；GUI 动态页**三档**：自动（ARC 权威寿命 Γ=1/τ，τ≤100 µs 低激发态）/ 禁用 / 自定义（手动通道），loss（离场）曲线随布居图叠加 |
+| 协议验证与存档 | **STIRAP / 拉曼** 验证（checks/_archive/stir_rap_selfcheck.py，按需单独跑）+ 可直接「文件→恢复状态」载入的存档（save_state/STIRAP.json、拉曼.json）；STIRAP 反直觉时序保真 1.0（6P 暗态真空、抗自发辐射） |
+| 回归自检 | **3 个核心脚本一键全跑**（约 1 分钟）：core 24（单原子静态）+ 耗散 18（Lindblad 引擎）+ UI 38；其余自检（两体 pair/unified、STIRAP/拉曼、pulse、Floquet 交叉、单原子 evolve）归档在 `checks/_archive/`，需要时单独运行 |
 | 测评矩阵 | checks/evolve_matrix.py：五场景 × 方法 × 独立参考（solve_ivp / 高 frac 收敛），量化精度与耗时 |
 
 ---
@@ -118,9 +123,48 @@ H(t) = H0 + Σ_k env_k(t)·M_k
 - `progress_arr` 共享进度数组：主线程轮询进度、请求取消（抛 RuntimeError）
 
 **第一性原理验证**（`checks/`）：
-- `evolve_selfcheck`：vs `solve_ivp` 直接积分 H(t)（独立参考）
+- `evolve_dissipative_selfcheck`（D 系列）：解析衰变 e^{−Γt}、CW/时变/交换耦合
+  + 衰变 vs 独立 Liouvillian 本征参考与 solve_ivp 向量化主方程、纯退相 e^{−Γt/2}、
+  **multi 场 ac 约定回归**（ip4/lindblad vs 第一性原理全额 ac）、取消、无耗散一致性
+- `_archive/evolve_selfcheck`：单原子动态 vs `solve_ivp` 直接积分 H(t)（独立参考）
 - `mw_bench_firstprinciples` / `evolve_matrix`：vs 独立 RK4-IP、floquet 精确解、高 frac 收敛
 - 实测精度：S1 floquet 5e-13、S2 ip4 7e-07、S3 阶梯 2e-07、S4 制备阻塞 2.5e-09、S5 时变AC 5.4e-10
+
+**Lindblad 主方程（自发辐射等马尔可夫耗散，算法 4）**：动态引擎在纯幺正
+TDSE 之外提供耗散的第一性原理描述：
+
+```
+dρ/dt = −i[H(t),ρ] + Σ_k ( L_k ρ L_k† − ½{L_k†L_k, ρ} )
+L_k = √Γ_k |to_k⟩⟨from_k|        （decay(g, Γ, e) 工厂；Γ 单位 MHz）
+```
+
+- `method='lindblad'`：矩阵 RK4（ρ 为 N×N；rank-1 跳变按 O(N²) 快速路径），
+  任意时变包络，含非 RWA 载波；步长三重约束同 ip4（载波/精度/稳定 + 500 步下限）。
+  **numba 内核**（稀疏 H + ρ 厄米对易子一次点乘、S 预计算到 dt/2 子网格、
+  RK4 阶段精确采样、输出部分步线性插值、nogil 可取消）——非 RWA 微波场景
+  （如初态制备 S4，~103 万步）从 numpy 纯循环的 ~40 分钟降到 ~1 分钟（42×，
+  与 numpy 回退机器精度一致）；`backend='cpu'` 强制纯 numpy 回退（无 numba 时
+  自动回退）
+- `method='lindblad_eig'`：旋转系下 H 恒定（全 RWA + 包络恒常 + 无残留拍频）→
+  **Liouvillian 本征分解精确解**（机器精度，成本与时长无关，同 tempsimu 参考实现）
+- `auto` 含耗散时自动调度；显式纯幺正方法（floquet/ip4/pwc）配耗散自动切换并提示
+- **旋转系下跳变算符时不变**（LρL† 与 L†L 中相位自动抵消）→ 耗散项与旋转参考
+  选择无关，精确；结果新增 `loss`（离场布居，Σpops + loss = 1），GUI 画布叠加
+- 单位约定：Γ MHz → 速率 Γ×1e-3 /ns（跳变算符**不乘 2π**——曾误乘致衰减快 6.28×）
+- 设计对齐成熟开源（Pulser/qutip 噪声模型）：自发辐射 = 每通道一个跳变算符
+  √Γ|g⟩⟨e|，主方程精确求解（等价 qutip `mesolve` 的 Lindblad 项；Pulser
+  SPAM/NoiseModel 同款跳变算符范式），不引入任何唯象衰减因子
+
+**自动档（ARC 权威寿命，默认）**：`evolve.auto_decays(cache, states)` 直接查 ARC
+`getStateLifetime(n,l,j,temperature=0)`——由偶极矩阵元对全部下能级求和得到的
+权威寿命，比逐通道算 A 系数更精准便捷；Γ = 1/τ。只含 τ ≤ 100 µs 的低激发态
+（5P/6S/6P/4D 等，排除里德堡 ~0.1 ms+ 的慢自发衰变；需要里德堡/黑体辐射请用
+自定义）。GUI 动态页"自发辐射"三档：**自动**（默认，按上表配置，落点=丢失，
+运行后状态栏显示通道数）/ **禁用** / **自定义**（手动从态→Γ→落点，仅此档显示
+配置区）。实测：6P3/2 τ=118 ns → Γ=8.46 MHz（ARC 权威值）。
+
+> 2025-02 修复：ip4 曾把 multi 场（`real_field`）的对角 AC 位移随 M 一起 ×1/2，
+> 使远失谐位移减半；已拆分为 Rabi 半耦合 + ac 全位移，D5 第一性原理回归钉死。
 
 ### 2.2 静态能移（`src/core.py`）
 
@@ -155,7 +199,7 @@ numpy  scipy  matplotlib  PyQt5  arc   (可选: numba 加速, torch GPU)
 
 ```bash
 python 能级.py            # 启动 GUI
-python checks\selftest_all.py   # 一键跑全部回归自检
+python checks\selftest_all.py   # 一键跑全部回归自检（3 个核心脚本，约 1 分钟）
 python checks\evolve_matrix.py  # 动态引擎测评矩阵
 ```
 
@@ -170,7 +214,7 @@ python checks\evolve_matrix.py  # 动态引擎测评矩阵
 - **左侧画布**（QTab 切换）：
   - **单体页**：响应谱（黄金规则线性响应谱 + 峰表联动）与能级图（off/on 两能谱镜像对比）
   - **双体页**：两体响应谱（含 vdW/交换相互作用，peak 点击高亮）
-  - **动态分析页**：上 = 光场包络预览（颜色=频率，半透明下面积），下 = 态布居演化 P(t)（自动按平均布居选前 N 态）
+  - **动态分析页**：上 = 光场**光强** I(t)（每通道独立 y 轴标度，颜色=频率对数映射，半透明下面积），下 = 态布居演化 P(t)（自动按平均布居选前 N 态）
 - **右侧共用面板**：
   - **磁场 B (G)** / **电场 E (V/cm)** / **添加光** 同一行（B/E 三页共用，恒显）
   - **光场表格**（单体/双体页）：序号 / 频率 (GHz) / 光强 (mW/cm²) / 偏振 / 作用范围；单击即编辑；右键菜单按列不同
@@ -181,8 +225,14 @@ python checks\evolve_matrix.py  # 动态引擎测评矩阵
 
 1. **打开时序/波形编辑器**：配置 TTL 多通道时序（上升沿 ▲ / 下降沿 ▼，拖动/关系绑定）+ 波形通道（高斯 / 缓变方波包络，TTL 触发定位，频率/光强/偏振）
 2. **辅助驱动对**：选 g/e 态 + 目标 Ω/Δ → "定光强"/"定频率"写回（内部全精度）
-3. **运行演化**：选初态（三页共用能级组）、t_max/点数、方法（auto/floquet/ip4/pwc）→ 后台线程计算，进度条可取消
-4. **观察**：上图画各通道包络（颜色=频率），下图画前 N 个平均布居最大的态
+3. **（可选）自发辐射**：动态页"自发辐射"三档——
+   - **自动（默认）**：按 ARC 权威能级寿命自动配置 Γ=1/τ（仅 τ≤100 µs 低激发态，
+     落点=丢失；运行后状态栏显示通道数，画布叠加 loss 曲线）；
+   - **禁用**：无耗散（纯幺正）；
+   - **自定义**：手动加通道——从态 → Γ(MHz) → 落点（选"（丢失）"则布居离场；
+     g==e 为纯退相）；常数 H 自动走精确本征解，时变包络走矩阵 RK4（第一性原理）
+4. **运行演化**：选初态（三页共用能级组）、t_max/点数、方法（auto/floquet/ip4/pwc）→ 后台线程计算，进度条可取消
+5. **观察**：上图画各通道光强 I(t)（每通道独立 y 轴，颜色=频率），下图画前 N 个平均布居最大的态（含 loss 虚线）
 
 ### 4.3 光场表格的右键操作（重要）
 
@@ -212,3 +262,15 @@ python checks\evolve_matrix.py  # 动态引擎测评矩阵
 - 共振光若同时作能移会把自己 dressed 推走（0 峰）——只对"关注跃迁"光作驱动，其余作能移。
 - **光场做"频移阻塞"须远失谐**（Δ≫Ω）：近失谐光场会真实转移布居（Ω²/(Δ²+Ω²) 量级），动态演化如实反映——6P 等低激发态布居会损失，方案设计时注意。
 - 频率输入精度：编辑器单位切换纯显示层，内部 MHz 全精度；"定频率"给出逐位精确的共振频率，避免 THz/GHz 档小数位丢精度。
+
+### 4.6 已知环境问题与规避（2025-02 排查记录）
+
+- **Qt 原生堆损坏崩溃（0xC0000005）**：在 GUI 主线程事件流里（tab 切换 / matplotlib
+  渲染之后、窗口创建前后）调用 ARC `getStateLifetime`（`evolve.auto_decays`）会在
+  **稍后无关的 Qt 控件操作**处崩溃（堆损坏延迟显现，崩溃点与改动点无关）。已通过
+  "门槛只做廉价判断（`any(s['n']<=15)`）、寿命计算只在真正运行时执行一次"规避
+  （见 `src/ui_dynamic.py` `_run` 注释）。**规避原则**：① 不在 GUI 门槛/准备路径做
+  批量 ARC 计算；② ARC 计算与 Qt 控件操作不穿插；③ 重计算放 worker 线程（运行时
+  路径实测安全）；④ 新增 GUI 流程的 ARC 调用后必须跑 `checks/ui_selftest.py` 回归。
+- **QMessageBox + offscreen 崩溃**：离屏（无显示）环境下真实弹窗会崩——ui_selftest
+  已 monkeypatch 规避；手写离屏测试脚本时同样处理（不要真弹窗）。

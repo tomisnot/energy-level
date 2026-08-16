@@ -25,6 +25,7 @@ C3/C6 不硬编码：由 ARC 偶极矩阵元（core.ArcCache）直接算出，�
 import sys
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 import numpy as np
+from collections import OrderedDict
 from scipy.constants import physical_constants as pc
 import scipy.sparse as sp
 from . import core
@@ -37,6 +38,70 @@ _DD_CONV = _HARTREE_HZ / 1e6 / (1e-6 / _A0_M) ** 3   # MHz·μm³/(a.u.)²
 # V_dd 的球基系数 c_q（见 docstring）
 VDD_QCOEFF = {1: -1.0, -1: -1.0, 0: -2.0}
 
+# ---------------- 计算缓存（LRU，容量上限） ----------------
+# 同一 (groups, B, n_window, R, θ, φ, 截断) 的 pair 系统构建/对角化只做一次；
+# 物理上结果只依赖这些参数（ARC 数据与 cache 实例无关），故 key 不含 cache。
+# 返回一律给拷贝：build_system 会原地改 H[k,k]（加能移），污染缓存会导致错误。
+_CACHE_LIMIT = 64
+
+
+class _LRU:
+    def __init__(self, limit):
+        self._d = OrderedDict()
+        self._limit = limit
+
+    def get(self, key):
+        v = self._d.get(key)
+        if v is not None:
+            self._d.move_to_end(key)
+        return v
+
+    def put(self, key, val):
+        self._d[key] = val
+        self._d.move_to_end(key)
+        while len(self._d) > self._limit:
+            self._d.popitem(last=False)
+
+
+def _r(x, nd=6):
+    return None if x is None else round(float(x), nd)
+
+
+def _groups_fp(groups):
+    """groups 指纹（顺序敏感：_direct_basis 按 groups 顺序扩展基）。"""
+    return tuple((g['n'], g['l'], g['j']) for g in groups)
+
+
+def _single_fp(single):
+    """single 内容指纹：含 B 敏感的 E_mhz 与 F 态 amps（Zeeman 混合）。"""
+    fp = []
+    for s in single:
+        amps = s.get('amps')
+        fp.append((s['n'], s['l'], s['j'], s['kind'], s.get('mj'),
+                   s.get('mF'), round(s['E_mhz'], 6),
+                   None if amps is None else
+                   tuple(sorted(amps.items(), key=lambda kv: float(kv[0])))))
+    return tuple(fp)
+
+
+def _copy_single(single):
+    """行浅拷贝（amps 引用共享；无写入路径，安全）。"""
+    return [dict(s) for s in single]
+
+
+_BASIS_CACHE = _LRU(32)
+_DIPOLE_CACHE = _LRU(64)
+_VDD_CACHE = _LRU(64)
+_HAM_CACHE = _LRU(32)
+_EIGEN_CACHE = _LRU(32)
+
+
+def _clear_pair_cache():
+    """清空全部 pair 计算缓存（测试隔离用）。"""
+    for c in (_BASIS_CACHE, _DIPOLE_CACHE, _VDD_CACHE,
+              _HAM_CACHE, _EIGEN_CACHE):
+        c._d.clear()
+
 
 # ---------------- 基组 ----------------
 def single_atom_basis(cache, groups, B_gauss=0.0, n_window=3):
@@ -44,7 +109,13 @@ def single_atom_basis(cache, groups, B_gauss=0.0, n_window=3):
 
     行字段：n,l,j,kind('mJ'/'F'),mj,mF,amps,E_mhz(MHz),qstr。
     """
-    return core._direct_basis(cache, groups, B_gauss, n_window)
+    key = (_groups_fp(groups), _r(B_gauss), n_window)
+    hit = _BASIS_CACHE.get(key)
+    if hit is not None:
+        return _copy_single(hit)
+    states = core._direct_basis(cache, groups, B_gauss, n_window)
+    _BASIS_CACHE.put(key, states)
+    return _copy_single(states)
 
 
 def _mag(s):
@@ -88,6 +159,10 @@ def pair_indices(single, m_total=None, energy_window_mhz=None,
 # ---------------- 偶极-偶极相互作用 ----------------
 def _dipole_sparse(cache, single, q):
     """单原子偶极矩阵 D_q（N×N，CSR）：D_q[i,i2] = ⟨i2|d_q|i⟩（a.u.）。"""
+    key = (_single_fp(single), int(q))
+    hit = _DIPOLE_CACHE.get(key)
+    if hit is not None:
+        return hit
     N = len(single)
     rows, cols, vals = [], [], []
     for i in range(N):
@@ -101,7 +176,9 @@ def _dipole_sparse(cache, single, q):
             d = core.dipole_amplitude(cache, si, s2, q)
             if abs(d) > 1e-12:
                 rows.append(i); cols.append(i2); vals.append(d)
-    return sp.csr_matrix((vals, (rows, cols)), shape=(N, N))
+    D = sp.csr_matrix((vals, (rows, cols)), shape=(N, N))
+    _DIPOLE_CACHE.put(key, D)
+    return D
 
 
 def _vdd_tensor(theta_deg, phi_deg):
@@ -130,6 +207,10 @@ def vdd_sparse(cache, single, R_um, theta_deg=0.0, phi_deg=0.0):
     几何：间距 R，两原子连线方向 n=(θ,φ)（θ=0 → 沿 z 轴）。
     V[k,k2] = (1/R³) Σ_qq' T_qq' ⟨i2|d_q|i⟩⟨j2|d_q'|j⟩  （k=(i,j), k2=(i2,j2)）
     """
+    key = (_single_fp(single), _r(R_um), _r(theta_deg), _r(phi_deg))
+    hit = _VDD_CACHE.get(key)
+    if hit is not None:
+        return hit
     N = len(single)
     D = {q: _dipole_sparse(cache, single, q) for q in (-1, 0, 1)}
     T = _vdd_tensor(theta_deg, phi_deg)
@@ -140,7 +221,9 @@ def vdd_sparse(cache, single, R_um, theta_deg=0.0, phi_deg=0.0):
             if abs(T[a, b]) > 1e-12:
                 term = T[a, b] * sp.kron(D[qs[a]], D[qs[b]])
                 V = term if V is None else V + term
-    return V * (_DD_CONV / R_um ** 3)
+    V = V * (_DD_CONV / R_um ** 3)
+    _VDD_CACHE.put(key, V)
+    return V
 
 
 # ---------------- pair 哈密顿与对角化 ----------------
@@ -155,6 +238,14 @@ def pair_hamiltonian(cache, groups, R_um, theta_deg=0.0, phi_deg=0.0,
       E_pair   : 对角能 E_a+E_b（MHz）
       H        : H_pair = diag(E_pair) + V_dd(R,θ,φ)（子空间稠密复矩阵）
     """
+    key = (_groups_fp(groups), _r(R_um), _r(theta_deg), _r(phi_deg),
+           _r(B_gauss), n_window, _r(m_total), _r(energy_window_mhz),
+           _r(ref_energy_mhz))
+    hit = _HAM_CACHE.get(key)
+    if hit is not None:
+        return dict(single=_copy_single(hit['single']),
+                    pairs=hit['pairs'].copy(), E_pair=hit['E_pair'].copy(),
+                    H=hit['H'].copy())
     single = single_atom_basis(cache, groups, B_gauss, n_window)
     N = len(single)
     pairs, E_pair = pair_indices(single, m_total, energy_window_mhz,
@@ -163,7 +254,10 @@ def pair_hamiltonian(cache, groups, R_um, theta_deg=0.0, phi_deg=0.0,
     sel = np.array([i * N + j for i, j in pairs], dtype=int)
     H = V.tocsr()[sel][:, sel].toarray()
     H[np.diag_indices(len(sel))] += E_pair
-    return dict(single=single, pairs=pairs, E_pair=E_pair, H=H)
+    res = dict(single=single, pairs=pairs, E_pair=E_pair, H=H)
+    _HAM_CACHE.put(key, res)
+    return dict(single=_copy_single(single), pairs=pairs.copy(),
+                E_pair=E_pair.copy(), H=H.copy())
 
 
 def pair_eigen(cache, groups, R_um, theta_deg=0.0, phi_deg=0.0,
@@ -173,13 +267,25 @@ def pair_eigen(cache, groups, R_um, theta_deg=0.0, phi_deg=0.0,
 
     返回 dict：single/pairs/E_pair + evals(升序 MHz) + evecs(列=本征态)。
     """
+    key = (_groups_fp(groups), _r(R_um), _r(theta_deg), _r(phi_deg),
+           _r(B_gauss), n_window, _r(m_total), _r(energy_window_mhz),
+           _r(ref_energy_mhz))
+    hit = _EIGEN_CACHE.get(key)
+    if hit is not None:
+        return dict(single=_copy_single(hit['single']),
+                    pairs=hit['pairs'].copy(), E_pair=hit['E_pair'].copy(),
+                    H=hit['H'].copy(), evals=hit['evals'].copy(),
+                    evecs=hit['evecs'].copy())
     res = pair_hamiltonian(cache, groups, R_um, theta_deg, phi_deg,
                            B_gauss, n_window, m_total, energy_window_mhz,
                            ref_energy_mhz)
     evals, evecs = np.linalg.eigh(res['H'])
     res['evals'] = evals
     res['evecs'] = evecs
-    return res
+    _EIGEN_CACHE.put(key, res)
+    return dict(single=res['single'], pairs=res['pairs'].copy(),
+                E_pair=res['E_pair'].copy(), H=res['H'].copy(),
+                evals=evals.copy(), evecs=evecs.copy())
 
 
 def pair_component(res, a_row, b_row):

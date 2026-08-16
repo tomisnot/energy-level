@@ -72,8 +72,8 @@ if sys.platform == 'win32' and hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_ROOT = os.path.dirname(_HERE)     # 项目根（core.py 所在）
+_CHECKS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_ROOT = os.path.dirname(_CHECKS)     # 项目根（core.py 所在）
 
 # ---- 应用 ARC 数据目录补丁（src/__init__ 把 AlkaliAtom.dataFolder
 #      指向项目内 .arcdata/，Rubidium87() 实例化才无需外部写权限） ----

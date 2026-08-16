@@ -23,8 +23,9 @@ driver.py 接口约定（driver 实现须遵守）：
 import os
 import sys
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
-_HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.dirname(_HERE))     # 项目根（core.py / pair_core.py）
+_CHECKS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(_CHECKS))    # 项目根（core.py / pair_core.py）
+sys.path.insert(0, _CHECKS)                     # checks/（checklib）
 import numpy as np
 from src import core
 from src import pair_core

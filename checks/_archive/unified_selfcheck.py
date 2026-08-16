@@ -12,8 +12,9 @@
 import os
 import sys
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
-_HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.dirname(_HERE))
+_CHECKS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(_CHECKS))    # 项目根（src/）
+sys.path.insert(0, _CHECKS)                     # checks/（checklib）
 import numpy as np
 from src import core
 from src import driver
