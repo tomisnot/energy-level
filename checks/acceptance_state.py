@@ -8,7 +8,7 @@ os.environ['QT_QPA_PLATFORM'] = 'offscreen'
 import numpy as np
 from PyQt5.QtWidgets import QApplication
 from arc import Rubidium87
-from src import core, evolve, ttl_pulse
+from src import core, evolve, waveforms
 import mw_bench_firstprinciples as mb
 
 cache = core.ArcCache(Rubidium87())
@@ -18,8 +18,6 @@ ok = True
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 data = json.load(open(os.path.join(ROOT, 'save_state', 'rb87_state.json'), encoding='utf-8'))
 app = QApplication.instance() or QApplication([])
-win = ttl_pulse.TimingPulseWindow()
-ttl_pulse.restore_editor(win, data['editor'])
 B = float(data['B_gauss'])
 specs = []
 for g in data['groups']:
@@ -33,20 +31,19 @@ for g in data['groups']:
             specs.append(dict(n=n, l=l, j=j, kind='F', F=F, mF=mF,
                               E_hf=float(e_hf), amps=amps))
 states = evolve.make_levels(cache, specs)
-fields, ac = ttl_pulse.build_fields(win, states, cache)
+waves = waveforms.restore_waves(data.get('waves', []))
+fields = waveforms.build_fields(waves, states, cache)
 t = np.linspace(0, float(data['dynamic']['t_max']), int(data['dynamic']['npts']))
 psi0 = int(data['dynamic']['psi'])
 print(f'===== 验收 1：真实保存状态（N={len(states)}，光场 {len(fields)}，'
       f't_max={t[-1]:.0f} ns，auto）=====')
 t0 = time.perf_counter()
-r = evolve.evolve(states, fields, psi0, t, method='auto', backend='auto',
-                  ac_shift_mhz=ac)
+r = evolve.evolve(states, fields, psi0, t, method='auto', backend='auto')
 dt_auto = time.perf_counter() - t0
 norm_err = np.max(np.abs(r['pops'].sum(axis=1) - 1.0))
 print(f'[auto → {r["method"]}] 耗时 {dt_auto:.1f}s；归一误差 {norm_err:.2e}')
 # 收敛参考：ip4 frac=80
-r80 = evolve.evolve(states, fields, psi0, t, method='ip4', ip4_frac=80.0,
-                    ac_shift_mhz=ac)
+r80 = evolve.evolve(states, fields, psi0, t, method='ip4', ip4_frac=80.0)
 diff = np.max(np.abs(r['pops'] - r80['pops']))
 print(f'[ip4 frac=80 参考] 耗时 {time.perf_counter()-t0-dt_auto:.0f}s；'
       f'auto vs 参考 max|Δpops| = {diff:.3e}')

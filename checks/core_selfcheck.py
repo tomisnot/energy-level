@@ -22,10 +22,8 @@ _ROOT = os.path.dirname(_HERE)     # 项目根（core.py 所在）
 sys.path.insert(0, _ROOT)
 import src            # noqa: F401
 
-# ---- 加载 core（不触发 GUI / 不执行 UI 代码） ----
-spec = importlib.util.spec_from_file_location('core', os.path.join(_ROOT, 'src', 'core.py'))
-core = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(core)
+# ---- 加载 core（src.core 包无 UI 依赖，import 即安全） ----
+from src.core import core
 
 from arc.alkali_atom_data import Rubidium87, Caesium
 from arc.calculations_atom_single import DynamicPolarizability

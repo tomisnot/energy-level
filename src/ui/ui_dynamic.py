@@ -1,16 +1,16 @@
 # -*- coding: utf-8 -*-
-"""动态分析面板（能级.py 新增 tab）：TTL 触发光脉冲 → 实际电磁场 → 态演化。
+"""动态分析面板（能级.py 新增 tab）：波形列表 → 实际电磁场 → 态演化。
 
 画布（主程序窗口内，上下）：
-  上：各波形通道实际电磁场包络 E_i(t)（ttl_pulse 合成编辑器 + TTL 上升沿触发）
+  上：各波形实际电磁场包络 E_i(t)（waveforms 波形包络，无通道无 TTL）
   下：态布居演化 P(t)（evolve.evolve）
 
 参数面板（借鉴时序/波形编辑器 + 按 evolve 需要）：
-  初态 · 时间范围/点数 · 演化方法/后端 · 运行
-  脉冲驱动（g/e 态、Ω、Δ）在波形编辑器里配置，主程序读取生成演化场
+  波形管理（WavePanel：频率/光强/偏振/包络/偏移）· 初态 · 时间范围/点数 ·
+  演化方法/后端 · 自发辐射 · 运行
 """
 import numpy as np
-from PyQt5.QtCore import Qt, QThread, QTimer, pyqtSignal
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QIcon, QPixmap
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                              QPushButton, QSpinBox, QDoubleSpinBox, QComboBox,
@@ -21,45 +21,10 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.colors import LogNorm
 from matplotlib import colormaps
 
-from . import core, evolve, ttl_pulse
-
-
-class _EvolveWorker(QThread):
-    """演化计算线程：阻塞式 evolve 放后台，主线程轮询进度/可取消。"""
-
-    done = pyqtSignal(object, object)       # (result_dict, error_str 或 None)
-    log_msg = pyqtSignal(str)               # 算法提示/警告 → 主窗口状态栏
-
-    def __init__(self, states, fields, psi0, t_grid, method, backend,
-                 progress_arr, decays=None, parent=None):
-        super().__init__(parent)
-        self.states = states
-        self.fields = fields
-        self.psi0 = psi0
-        self.t_grid = t_grid
-        self.method = method
-        self.backend = backend
-        self.progress_arr = progress_arr
-        self.decays = list(decays or [])
-
-    def run(self):
-        try:
-            # ac_shift 已内嵌各 field（随包络时变），无需另传
-            res = evolve.evolve(self.states, self.fields, self.psi0,
-                                self.t_grid, method=self.method,
-                                backend=self.backend,
-                                progress_arr=self.progress_arr,
-                                log=self.log_msg.emit,
-                                decays=self.decays)
-            self.done.emit(res, None)
-        except RuntimeError as e:
-            # 用户取消：progress_arr[1]≠0 → 不算错误，静默
-            if self.progress_arr[1] != 0.0:
-                self.done.emit(None, 'cancelled')
-            else:
-                self.done.emit(None, str(e))
-        except Exception as e:
-            self.done.emit(None, str(e))
+from ..core import core, evolve
+from . import ui_waves
+from ..core import waveforms
+from .evolve_worker import EvolveWorker
 
 
 class DynamicPanel(QWidget):
@@ -70,15 +35,14 @@ class DynamicPanel(QWidget):
         super().__init__(parent)
         self.main = main              # 主程序 MainWindow（读 groups 共用能级组）
         self.cache = main.cache
-        self.editor = None            # ttl_pulse.TimingPulseWindow
         self.main_groups = []         # 同步自主程序的 (n,l,j) 组
-        self.wave_data = []           # 导入的波形数据 [(name, t, env, freq), ...]（主程序管理）
+        self.wave_data = []           # 最近一次波形光强曲线（画图用）
         self.decay_cfgs = []          # 衰变通道 [{'from': label, 'to': label|None, 'gamma_mhz': f}]
         # 能级组增删由主程序事件驱动刷新（统一机制，不散布同步调用）
         main.groups_changed.connect(self.refresh_groups)
         self._build_canvases()
         self.dynamic_widget = self._build_controls()
-        # DynamicPanel 只含画布（上光场、下演化）；特有参数区由主程序放入右侧面板（与单体/两体同级）
+        # DynamicPanel 只含画布（上光场、下演化）；特有参数区由主程序放入右侧面板（与静态页同级）
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(2)
@@ -114,33 +78,60 @@ class DynamicPanel(QWidget):
         p = QVBoxLayout(panel)
         p.setSpacing(6)
 
-        self.open_btn = QPushButton('打开 时序/波形 编辑器')
-        self.open_btn.clicked.connect(self._open_editor)
-        p.addWidget(self.open_btn)
+        # ---- 波形管理（无通道、无独立窗口：右侧面板直接配置；占剩余空间）----
+        self.wave_panel = ui_waves.WavePanel()
+        self.wave_panel.changed.connect(self._on_waves_changed)
+        p.addWidget(self.wave_panel, 1)      # 波形组滚动区吃满动态页右侧高度
 
         # ---- 能级：共用主程序"能级管理表"（日常数值 + m 选择），这里只选初态 ----
         row2 = QHBoxLayout()
-        row2.addWidget(QLabel('初态（能级/m 见右侧共用表）：'))
+        row2.addWidget(QLabel('初态'))
         self.psi_combo = QComboBox()
         row2.addWidget(self.psi_combo, 1)
-        p.addLayout(row2)
-
-        # ---- 光场驱动配置（已移入波形编辑器：每脉冲 g/e 态、Ω、Δ）----
-        p.addWidget(QLabel('脉冲驱动（g/e 态、Ω、Δ）在波形编辑器里配置；'
-                           '主程序读取编辑器驱动生成演化场'))
-
-        # ---- 布居图：只设"显示几个态"，具体哪些态内部按平均布居自动筛选 ----
-        rowp = QHBoxLayout()
-        rowp.addWidget(QLabel('布居图显示态数'))
+        row2.addWidget(QLabel('显示态数'))
         self.topn_sb = QSpinBox()
         self.topn_sb.setRange(1, 40)
         self.topn_sb.setValue(8)
         self.topn_sb.setToolTip('按最近一次结果的平均布居取前 N 个态绘制'
                                 '（无需手动勾选，内部自动筛选）')
-        rowp.addWidget(self.topn_sb)
-        p.addLayout(rowp)
+        row2.addWidget(self.topn_sb)
+        p.addLayout(row2)
 
-        # ---- 自发辐射：自动（ARC 寿命）/ 禁用 / 自定义 ----
+        # ---- 时间 / 方法 / 截断 一行 ----
+        rowt = QHBoxLayout()
+        rowt.addWidget(QLabel('t_max'))
+        self.tmax_sb = QDoubleSpinBox()
+        self.tmax_sb.setRange(10, 1e6); self.tmax_sb.setValue(1500.0)
+        self.tmax_sb.setDecimals(0)
+        rowt.addWidget(self.tmax_sb)
+        rowt.addWidget(QLabel('点数'))
+        self.npts_sb = QSpinBox()
+        self.npts_sb.setRange(10, 50000); self.npts_sb.setValue(1501)
+        rowt.addWidget(self.npts_sb)
+        rowt.addWidget(QLabel('方法'))
+        self.method_cb = QComboBox()
+        self.method_cb.addItems(['auto', 'floquet', 'ip4', 'pwc'])
+        rowt.addWidget(self.method_cb)
+        rowt.addWidget(QLabel('后端'))
+        self.backend_cb = QComboBox()
+        self.backend_cb.addItems(['auto', 'cpu', 'gpu'])
+        rowt.addWidget(self.backend_cb)
+        p.addLayout(rowt)
+        rowcut = QHBoxLayout()
+        rowcut.addWidget(QLabel('近共振截断(MHz)'))
+        self.near_cutoff_sb = QDoubleSpinBox()
+        self.near_cutoff_sb.setRange(1.0, 1e6)
+        self.near_cutoff_sb.setDecimals(0)
+        self.near_cutoff_sb.setValue(5000.0)
+        self.near_cutoff_sb.setToolTip(
+            'real_field 近/远分流边界：缺省 5 GHz 保守地板（相干包含整个'
+            '超精细/精细流形）；协议场景（STIRAP/拉曼想只相干驱动目标对）'
+            '可调小（如 50 MHz）——流形其余态作远失谐 AC 位移（二阶，Ω/Δ≪1 时准确）')
+        rowcut.addWidget(self.near_cutoff_sb)
+        rowcut.addStretch(1)
+        p.addLayout(rowcut)
+
+        # ---- 自发辐射：自动（ARC 寿命）/ 禁用 / 自定义（一行选择 + 可折叠自定义区）----
         rowdm = QHBoxLayout()
         rowdm.addWidget(QLabel('自发辐射'))
         self.decay_mode_cb = QComboBox()
@@ -153,9 +144,10 @@ class DynamicPanel(QWidget):
         rowdm.addWidget(self.decay_mode_cb, 1)
         p.addLayout(rowdm)
         self.decay_auto_label = QLabel(
-            '自动：Γ=1/τ(ARC)，仅 τ≤100 µs 的低激发态，落点=丢失；'
-            '里德堡慢衰变/黑体辐射请用 自定义 手动加')
+            '自动：Γ=1/τ(ARC)，仅 τ≤100 µs 低激发态，落点=丢失；'
+            '里德堡慢衰变/黑体辐射请用 自定义')
         self.decay_auto_label.setWordWrap(True)
+        self.decay_auto_label.setFixedHeight(16)
         p.addWidget(self.decay_auto_label)
         # 自定义配置区（仅 自定义 档显示；自动/禁用 隐藏）
         self.decay_custom_box = QWidget()
@@ -191,56 +183,20 @@ class DynamicPanel(QWidget):
         p.addWidget(self.decay_custom_box)
         self.decay_custom_box.setVisible(False)     # 默认自动档
 
-        # ---- 时间 / 方法 ----
-        rowt = QHBoxLayout()
-        rowt.addWidget(QLabel('t_max'))
-        self.tmax_sb = QDoubleSpinBox()
-        self.tmax_sb.setRange(10, 1e6); self.tmax_sb.setValue(1500.0)
-        self.tmax_sb.setDecimals(0)
-        rowt.addWidget(self.tmax_sb)
-        rowt.addWidget(QLabel('点数'))
-        self.npts_sb = QSpinBox()
-        self.npts_sb.setRange(10, 50000); self.npts_sb.setValue(1501)
-        rowt.addWidget(self.npts_sb)
-        p.addLayout(rowt)
-        rowm = QHBoxLayout()
-        rowm.addWidget(QLabel('方法'))
-        self.method_cb = QComboBox()
-        self.method_cb.addItems(['auto', 'floquet', 'ip4', 'pwc'])
-        rowm.addWidget(self.method_cb)
-        rowm.addWidget(QLabel('后端'))
-        self.backend_cb = QComboBox()
-        self.backend_cb.addItems(['auto', 'cpu', 'gpu'])
-        rowm.addWidget(self.backend_cb)
-        p.addLayout(rowm)
-        rowcut = QHBoxLayout()
-        rowcut.addWidget(QLabel('近共振截断(MHz)'))
-        self.near_cutoff_sb = QDoubleSpinBox()
-        self.near_cutoff_sb.setRange(1.0, 1e6)
-        self.near_cutoff_sb.setDecimals(0)
-        self.near_cutoff_sb.setValue(5000.0)
-        self.near_cutoff_sb.setToolTip(
-            'real_field 近/远分流边界：缺省 5 GHz 保守地板（相干包含整个'
-            '超精细/精细流形）；协议场景（STIRAP/拉曼想只相干驱动目标对）'
-            '可调小（如 50 MHz）——流形其余态作远失谐 AC 位移（二阶，Ω/Δ≪1 时准确）')
-        rowcut.addWidget(self.near_cutoff_sb)
-        p.addLayout(rowcut)
-
         self.run_btn = QPushButton('运行演化')
         self.run_btn.clicked.connect(self._run)
         p.addWidget(self.run_btn)
-        p.addStretch(1)
         # 直接作为主程序右侧面板的普通区块（无独立滚动区，融入同一层级）
         return panel
 
     # ---------- 能级：从共用能级组生成（切页/运行时刷新，数据共享不散布同步） ----------
     def refresh_groups(self):
         """能级组与 m 选择共用主程序"能级管理表"（单一数据源），这里只刷新初态/驱动。"""
-        self.main_groups = list(self.main.groups)
+        self.main_groups = list(self.main.static.groups)
         self._on_m_changed()
 
     def _on_m_changed(self, *_):
-        """基组变化 → 刷新初态下拉（保留当前选择）+ 布居态列表 + 编辑器驱动下拉。"""
+        """基组变化 → 刷新初态下拉（保留当前选择）+ 布居态列表 + 波形辅助 g/e 下拉。"""
         states = self._current_states()
         cur = self.psi_combo.currentText()          # 记录选择，避免运行后刷回第一个
         self.psi_combo.clear()
@@ -250,9 +206,12 @@ class DynamicPanel(QWidget):
             idx = self.psi_combo.findText(cur)
             if idx >= 0:
                 self.psi_combo.setCurrentIndex(idx)
-        if self.editor is not None:
-            self.editor.set_states(states, self.cache)
         self._refresh_decay_combos(states)
+        # 基组变化 → 波形面板辅助 g/e 下拉数据源同步（内部只在 states 变化时重建；
+        # 构造期 wave_panel 可能未就绪，防御）
+        wp = getattr(self, 'wave_panel', None)
+        if wp is not None:
+            wp.set_states(states, self.cache)
 
     # ---------- 自发辐射（Lindblad）通道配置 ----------
     def _on_decay_mode(self, *_):
@@ -389,49 +348,25 @@ class DynamicPanel(QWidget):
                                       amps=amps))
         return evolve.make_levels(self.cache, specs)
 
-    # ---------- 编辑器 ----------
-    def _ensure_editor(self, show=False):
-        """创建（若未创建）时序/波形编辑器；show=True 才显示窗口。"""
-        if self.editor is None:
-            self.editor = ttl_pulse.TimingPulseWindow(self.main)
-            self.editor.import_requested.connect(self.import_wave)
-        if show:
-            self.editor.show(); self.editor.raise_()
-        return self.editor
+    # ---------- 波形数据 ----------
+    def _has_waves(self):
+        """是否已配置至少一个波形（波形列表非空即算有效驱动源）。"""
+        return len(self.wave_panel.waves) > 0
 
-    def _open_editor(self):
-        """打开时序/波形编辑器（独立窗口，父窗口 = 主窗口 → 生命周期联动；
-        位置/大小由编辑器自身 QSettings 记忆）。"""
-        self._ensure_editor(show=True)
-        self.editor.set_states(self._current_states(), self.cache)
-
-    def _has_pulses(self):
-        """是否已配置至少一个**带驱动对（g/e）**的光脉冲。
-        （编辑器自带的示例脉冲 drive=None，不算用户配置。）"""
-        if self.editor is None:
-            return False
-        for wc in self.editor.wave.channels:
-            for pu in wc.pulses:
-                if pu.drive is not None:
-                    return True
-        return False
-
-    def import_wave(self):
-        """导入编辑器波形到主程序并立即画图（不等运行演化）。
-        数据存 self.wave_data（主程序管理：导入/运行都会更新，画图用它）。"""
-        if self.editor is None:
-            return
+    def _on_waves_changed(self):
+        """波形增删/参数变化 → 立即刷新顶部光强预览（不等待运行）。"""
         t = np.linspace(0, self.tmax_sb.value(), self.npts_sb.value())
-        self.wave_data = ttl_pulse.field_waveforms(self.editor, t)
+        self.wave_data = waveforms.waveforms_to_env(self.wave_panel.waves, t)
         self._draw_top(self.wave_data)
 
     # ---------- 状态管理（序列化/恢复；文件 IO 与菜单入口在主程序） ----------
     def _serialize_dynamic(self):
-        """动态页全部参数与数据 → dict（含共用能级组、场 B、编辑器、波形数据）。"""
-        return {
-            'groups': [dict(g) for g in self.main.groups],
-            'B_gauss': self.main.field.b_gauss(),
-            'dynamic': {
+        """动态页全部参数与数据 → dict（数据组装在 serialization 模块）。"""
+        from . import serialization
+        return serialization.serialize_dynamic(
+            self.main.static.groups,
+            self.main.field.b_gauss(),
+            {
                 'psi': self.psi_combo.currentIndex(),
                 't_max': self.tmax_sb.value(),
                 'npts': self.npts_sb.value(),
@@ -441,32 +376,26 @@ class DynamicPanel(QWidget):
                 'decay_mode': self.decay_mode_cb.currentIndex(),
                 'near_cutoff': self.near_cutoff_sb.value(),
             },
-            'editor': (ttl_pulse.serialize_editor(self.editor)
-                       if self.editor is not None else None),
-            'decays': [dict(c) for c in self.decay_cfgs],
-            'wave_data': [
-                {'name': nm,
-                 't': np.asarray(th).tolist(),
-                 'env': np.asarray(env).tolist(),
-                 'freq': float(f),
-                 'intensity': float(I)}
-                for nm, th, env, f, I in self.wave_data],
-        }
+            self.wave_panel.waves,
+            self.decay_cfgs,
+            [(nm, np.asarray(th), np.asarray(env), f, I)
+             for nm, th, env, f, I in self.wave_data])
 
     def _restore_dynamic(self, state):
         """按 _serialize_dynamic 输出恢复动态页。"""
-        # 1) 能级组（共用区列表 + 画布 + 共用能级表）
-        self.main.groups = []
-        self.main.group_list.clear()
-        for g in state.get('groups', []):
-            self.main.groups.append(dict(g))
+        from . import serialization
+        st = self.main.static
+        store = self.main.groups_store
+        # 1) 能级组（store 单一数据源 + 静态页共用区列表 + 画布 + 共用能级表）
+        store.groups = [dict(g) for g in state.get('groups', [])]
+        st.group_list.clear()
+        for g in store.groups:
             pix = QPixmap(12, 12)
             pix.fill(QColor(g['color']))
-            self.main.group_list.addItem(QListWidgetItem(
+            st.group_list.addItem(QListWidgetItem(
                 QIcon(pix),
                 f"{g['label']}  (n={g['n']}, l={g['l']}, j={g['j']})"))
-        self.main._rebuild_y_combos()
-        self.main.refresh_plot()
+        store.changed.emit()        # → st._on_store_groups_changed（重建+刷新+转发）
         # 2) 磁场 B（超精细基组依赖；设值会触发 on_light → refresh_groups）
         self.main.field.b_spin.setValue(float(state.get('B_gauss', 0.0)))
         self.refresh_groups()
@@ -482,26 +411,16 @@ class DynamicPanel(QWidget):
         self.decay_mode_cb.setCurrentIndex(int(dyn.get('decay_mode', 0)))
         # 近共振截断（旧存档缺省 5 GHz 地板）
         self.near_cutoff_sb.setValue(float(dyn.get('near_cutoff', 5000.0)))
-        # 4) 编辑器（TTL + 波形）——静默创建（不弹窗），恢复配置
-        ed_state = state.get('editor')
-        if ed_state is not None:
-            self._ensure_editor(show=False)
-            ttl_pulse.restore_editor(self.editor, ed_state)
-            self.editor.set_states(self._current_states(), self.cache)
+        # 4) 波形（新格式 'waves'；旧存档 'editor' 不再支持——旧编辑器已归档，
+        #    旧存档只恢复能级组/B/动态参数/衰变，波形留空）
+        wv = state.get('waves')
+        if wv:
+            self.wave_panel.set_waves(waveforms.restore_waves(wv))
         # 4b) 衰变通道（按 label 恢复；能级组/B 已先恢复 → 下拉已重建）
         self.decay_cfgs = [dict(c) for c in state.get('decays', [])]
         self._update_decay_list()
-        # 5) 波形数据 + 顶部图（兼容旧存档：旧字段 E=载波，env 缺省时退回 E；
-        #    无 intensity（旧存档）→ 4 元组 → _draw_top 退回画包络）
-        wd = state.get('wave_data', [])
-        self.wave_data = []
-        for d in wd:
-            row = (d['name'], np.array(d['t']),
-                   np.array(d.get('env', d.get('E', 0.0))),
-                   float(d.get('freq', 0.0)))
-            if 'intensity' in d:
-                row = row + (float(d['intensity']),)
-            self.wave_data.append(row)
+        # 5) 波形数据 + 顶部图（解析在 serialization 模块）
+        self.wave_data = serialization.restore_wave_data(state.get('wave_data', []))
         self._draw_top(self.wave_data)
         self.main.groups_changed.emit()
 
@@ -516,8 +435,8 @@ class DynamicPanel(QWidget):
             QMessageBox.information(self, '提示', '请先在主程序添加能级组。')
             return
         states = self._current_states()
-        # 无脉冲时须有实际耗散/自动通道，否则就是空演化 → 提示并打开编辑器
-        has_effect = self._has_pulses()
+        # 无波形时须有实际耗散/自动通道，否则就是空演化 → 提示
+        has_effect = self._has_waves()
         if not has_effect:
             mode = self._decay_mode()
             if mode == 'custom':
@@ -531,10 +450,9 @@ class DynamicPanel(QWidget):
         if not has_effect:
             QMessageBox.information(
                 self, '提示',
-                '请先在 时序/波形 编辑器中配置光脉冲（频率/光强/包络），'
+                '请先在下方波形区添加光波形（频率/光强/包络），'
                 '或开启/配置自发辐射（自动档需基组含 6P 等低激发态），'
-                '再运行演化。\n已为你打开编辑器。')
-            self._open_editor()
+                '再运行演化。')
             return
         mode = self._decay_mode()
         if mode == 'custom':
@@ -546,12 +464,12 @@ class DynamicPanel(QWidget):
                               '（Γ=1/τ(ARC)，τ≤100µs，落点=丢失）')
         else:
             decays = []
-        fields = (ttl_pulse.build_fields(self.editor, states, self.cache,
-                                         near_cutoff_mhz=self.near_cutoff_sb.value())[0]
-                  if self.editor is not None else [])
+        waves = list(self.wave_panel.waves)
+        fields = waveforms.build_fields(
+            waves, states, self.cache,
+            near_cutoff_mhz=self.near_cutoff_sb.value())
         t = np.linspace(0, self.tmax_sb.value(), self.npts_sb.value())
-        if self.editor is not None:
-            self.wave_data = ttl_pulse.field_waveforms(self.editor, t)
+        self.wave_data = waveforms.waveforms_to_env(waves, t)
         psi0 = self.psi_combo.currentIndex()
         self._run_states = states            # 供完成后绘图（与计算一致）
 
@@ -568,7 +486,7 @@ class DynamicPanel(QWidget):
         self._timer.timeout.connect(self._poll_progress)
         self._timer.start(100)
 
-        self._worker = _EvolveWorker(states, fields, psi0, t,
+        self._worker = EvolveWorker(states, fields, psi0, t,
                                      self.method_cb.currentText(),
                                      self.backend_cb.currentText(),
                                      self.progress_arr, decays=decays)

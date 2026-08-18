@@ -13,7 +13,7 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.lines import Line2D
 
-from . import core
+from ..core import core
 
 # 每个能级组按添加顺序绑定一个固定颜色（tab10 + tab20 色板，20 色）
 COLOR_CYCLE = [

@@ -56,7 +56,7 @@ QTableWidget, QTableView {{
 QTableWidget::item, QTableView::item {{ padding: 2px 4px; }}
 QHeaderView::section {{ background: {COL_HEAD}; color: {COL_TEXT}; border: none;
     border-bottom: 1px solid {COL_BORDER}; border-right: 1px solid {COL_BORDER};
-    padding: 5px 6px; font-weight: 600; }}
+    padding: 5px 6px; font-weight: 400; }}
 QListWidget {{ background: {COL_PANEL}; border: 1px solid {COL_BORDER}; border-radius: 5px; }}
 QListWidget::item {{ padding: 3px 6px; }}
 QListWidget::item:selected {{ background: #d4dbe3; color: {COL_TEXT}; }}

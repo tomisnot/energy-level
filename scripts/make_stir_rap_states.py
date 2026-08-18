@@ -2,9 +2,9 @@
 """生成 STIRAP / 拉曼 的 GUI 存档 JSON（可直接「文件 → 恢复状态」载入）。
 
 纯 Python 实现（无 Qt/离屏依赖，规避环境 Qt 偶发崩溃）：
-  - editor dict 按 ttl_pulse.serialize_editor 的 schema 手构（TTL 空 + 波形通道）
-  - wave_data 用 pulse.GaussianEnv/SmoothSquareEnv 直接算包络
-  - 验证 = 解析脉冲 → real_field(near_cutoff) → evolve（含 auto 衰减）→ 保真度
+  - waves 用 waveforms.serialize_waves 的 schema（纯波形列表，无通道无 TTL）
+  - wave_data 用 waveforms 包络直接算
+  - 验证 = 波形 → real_field(near_cutoff) → evolve（含 auto 衰减）→ 保真度
 
 运行：D:\\python310\\python.exe -u scripts\\make_stir_rap_states.py
 产出：save_state/STIRAP.json（B=300G，近共振截断 50 MHz）
@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np
 from arc import Rubidium87
 
-from src import core, evolve, pulse
+from src import core, evolve, waveforms
 
 cache = core.ArcCache(Rubidium87())
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -45,18 +45,17 @@ def gui_states(groups, B):
 
 def env_to_callable(env):
     if env[0] == 'gauss':
-        return pulse.GaussianEnv(env[1], env[2], env[3])
-    return pulse.SmoothSquareEnv(env[1], env[2], env[3], env[4])
+        return waveforms.GaussianEnv(env[1], env[2], env[3])
+    return waveforms.SquareEnv(env[1], env[2], env[3], env[4])
 
 
-def editor_dict(pulses):
-    """pulses: [(freq_mhz, intensity, pol, env_tuple)] → serialize_editor schema。"""
-    chans = []
+def waves_dict(pulses):
+    """pulses: [(freq_mhz, intensity, pol, env_tuple)] → waveforms 序列化 schema。"""
+    out = []
     for k, (freq, I, pol, env) in enumerate(pulses):
-        chans.append({'name': f'光{k + 1}',
-                      'pulses': [{'freq_mhz': freq, 'intensity': I, 'pol': pol,
-                                  'offset_ns': 0.0, 'env': env, 'drive': None}]})
-    return {'ttl': {'channels': [], 'wf_channels': []}, 'channels': chans}
+        out.append({'name': f'光{k + 1}', 'freq_mhz': freq, 'intensity': I,
+                    'pol': pol, 'offset_ns': 0.0, 'env': env, 'drive': None})
+    return out
 
 
 def make_json(name, groups, B, pulses, psi, t_max, npts, near_cutoff,
@@ -74,7 +73,7 @@ def make_json(name, groups, B, pulses, psi, t_max, npts, near_cutoff,
         'dynamic': {'psi': psi, 't_max': t_max, 'npts': npts,
                     'method': 'auto', 'backend': 'auto', 'topn': 8,
                     'decay_mode': decay_mode, 'near_cutoff': near_cutoff},
-        'editor': editor_dict(pulses),
+        'waves': waves_dict(pulses),
         'decays': [],
         'wave_data': wave,
     }
@@ -85,20 +84,13 @@ def make_json(name, groups, B, pulses, psi, t_max, npts, near_cutoff,
 
 
 def verify(state, target_fid, note, use_max=False):
-    """解析 JSON 的脉冲 → real_field(near_cutoff) → evolve（auto 衰减）。"""
+    """解析 JSON 的波形 → real_field(near_cutoff) → evolve（auto 衰减）。"""
     st = gui_states(state['groups'], state['B_gauss'])
     i0 = state['dynamic']['psi']
     t = np.linspace(0, state['dynamic']['t_max'], state['dynamic']['npts'])
     cut = state['dynamic'].get('near_cutoff', 5000.0)
-    fields = []
-    for ch in state['editor']['channels']:
-        for ps in ch['pulses']:
-            fld, _ = evolve.real_field(cache, st, ps['freq_mhz'],
-                                       ps['intensity'], ps['pol'],
-                                       waveform=env_to_callable(ps['env']),
-                                       near_cutoff_mhz=cut)
-            if fld is not None:
-                fields.append(fld)
+    waves = waveforms.restore_waves(state.get('waves', []))
+    fields = waveforms.build_fields(waves, st, cache, near_cutoff_mhz=cut)
     r = evolve.evolve(st, fields, i0, t, method='auto',
                       decays=evolve.auto_decays(cache, st))
     p = r['pops'][:, -1]

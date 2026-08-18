@@ -11,7 +11,7 @@ from PyQt5.QtWidgets import *
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 
-from . import driver
+from ..core import driver
 
 COLOR_CYCLE = [
     '#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd',

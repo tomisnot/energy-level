@@ -337,6 +337,85 @@ def vdw_shift(cache, groups, R_um, theta_deg=0.0, phi_deg=0.0,
     return float(res['evals'][im] - 2 * E_ref), float(2 * E_ref)
 
 
+def coupling_strength_map(cache, groups, R_grid, theta_grid, phi_deg=0.0,
+                          trans1=None, trans2=None, B_gauss=0.0,
+                          n_window=3):
+    """两体耦合强度雷达图数据：固定 φ，扫描 R × θ → |V_c(R,θ,φ)|。
+
+    语义：用户选两个原子的跃迁对
+        trans1 = (src1, tgt1)  原子1 的跃迁 |src1⟩ → |tgt1⟩
+        trans2 = (src2, tgt2)  原子2 的跃迁 |src2⟩ → |tgt2⟩
+    耦合 = |⟨tgt1⊗tgt2| V_dd |src1⊗src2⟩|（一阶偶极-偶极矩阵元）：
+        V_c = (1/R³) Σ_ab T_ab(θ,φ) · d_a(src1→tgt1) · d_b(src2→tgt2)
+    源/目标标识："label qstr"（如 '60S_{1/2} m_J=+0.5' / 裸 qstr / (n,l,j,m)）；
+    缺省 trans1=(60S+0.5→60P+0.5)、trans2=(60P+0.5→60S+0.5)（交换耦合）。
+    交换对只在里德堡态之间（两原子 4 个态均 n≥RYDBERG_N_MIN）才有物理意义：
+    任一态非里德堡 → 返回全零 Z（不报错）。基组缺少源/目标态返回 None。
+
+    返回 (R_grid, theta_grid, Z)：Z[r, t] = |耦合强度| (MHz)，
+    Z 行=R（outer R_grid）、列=theta_grid。
+    """
+    single = single_atom_basis(cache, groups, B_gauss, n_window)
+    label2nlj = {(g['label']): (g['n'], g['l'], g['j']) for g in groups}
+
+    def _row(key):
+        """按 "label qstr" / 裸 qstr / (n,l,j,m) 在 single 中找行；找不到 None。"""
+        if key is None:
+            return None
+        if isinstance(key, str):
+            if ' ' in key:
+                label, qstr = key.split(' ', 1)
+                nlj = label2nlj.get(label)
+                if nlj is None:
+                    return None
+                for s in single:
+                    if (s['n'], s['l'], s['j']) == nlj and s['qstr'] == qstr:
+                        return s
+            else:
+                for s in single:
+                    if s['qstr'] == key:
+                        return s
+            return None
+        # (n,l,j,m) 四元组
+        return find_sublevel(single, *key)
+
+    if trans1 is None or trans2 is None:
+        # 缺省 60S↔60P 交换对（兼容直接调用方）
+        ia = find_sublevel(single, 60, 0, 0.5, 0.5)
+        ib = find_sublevel(single, 60, 1, 0.5, 0.5)
+        if ia is None or ib is None:
+            return None
+        r1_src, r1_tgt = single[ia], single[ib]     # 60S → 60P
+        r2_src, r2_tgt = single[ib], single[ia]     # 60P → 60S
+    else:
+        r1_src = _row(trans1[0])
+        r1_tgt = _row(trans1[1])
+        r2_src = _row(trans2[0])
+        r2_tgt = _row(trans2[1])
+        if None in (r1_src, r1_tgt, r2_src, r2_tgt):
+            return None
+    R = np.asarray(R_grid, dtype=float)
+    theta = np.asarray(theta_grid, dtype=float)
+    # 交换对只发生在里德堡态之间：任一态 n < 阈值 → 全零（物理无意义）
+    if any(s['n'] < core.RYDBERG_N_MIN
+           for s in (r1_src, r1_tgt, r2_src, r2_tgt)):
+        return R, theta, np.zeros((len(R), len(theta)))
+    Z = np.empty((len(R), len(theta)))
+    qs = (1, 0, -1)
+    # 两原子各自跃迁的偶极向量：d_a(src→tgt)=⟨tgt|d_q|src⟩
+    da = np.array([core.dipole_amplitude(cache, r1_src, r1_tgt, q)
+                   for q in qs])                 # [3]（原子1 跃迁）
+    db = np.array([core.dipole_amplitude(cache, r2_src, r2_tgt, q)
+                   for q in qs])                 # [3]（原子2 跃迁）
+    r3 = R ** 3
+    for t, th in enumerate(theta):
+        T = _vdd_tensor(float(th), float(phi_deg))
+        # V_c @ R=1（a.u.）：Σ_ab T_ab · d_a(src1→tgt1) · d_b(src2→tgt2)
+        v = np.abs(np.sum(T * np.outer(da, db)))
+        Z[:, t] = v * _DD_CONV / r3              # a.u. → MHz
+    return R, theta, Z
+
+
 def pair_potential(cache, groups, R_scan, B_gauss=0.0, n_window=3,
                    m_total=None):
     """扫 R → (R 数组, 能级数组 [n_R, n_levels])。"""

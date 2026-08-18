@@ -27,7 +27,7 @@ import numpy as np
 from scipy.integrate import solve_ivp
 from arc import Rubidium87
 
-from src import core, evolve, pulse
+from src import core, evolve, waveforms
 from src import pair_core as pc
 from checklib import Checker
 
@@ -169,7 +169,7 @@ for (n, l, j) in [(60, 0, 0.5), (60, 1, 1.5)]:
 states5 = evolve.make_levels(cache, specs5)
 N5 = len(states5)
 t5 = np.linspace(0, 150.0, 151)
-opt5 = pulse.SmoothSquareEnv(60.0, 25.0, height=1.0, fall_start_ns=110.0)
+opt5 = waveforms.SquareEnv(60.0, 25.0, height=1.0, fall_start_ns=110.0)
 acv5 = np.array([70.0, -46.0, 30.0, -20.0])
 mw5 = evolve.field(0, 1, omega0_mhz=10.0, waveform=evolve.gaussian(80.0, 30.0))
 ac5 = {'kind': 'multi', 'M': np.diag(acv5), 'A': np.zeros((N5, N5)),

@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
-"""Energy Level 软件核心与 UI 组件包（入口为顶层 能级.py）。
+"""Energy Level 软件包（入口为顶层 能级.py）。
 
-- core.py       ：单原子物理核心（能级/AC-Stark/DC-Stark/频谱）
-- pair_core.py  ：两体静态（偶极-偶极相互作用/pair 哈密顿）
-- driver.py     ：统一驱动引擎（build_system/drive/线性响应谱）
-- ui_pair.py    ：响应谱画布 + 统一响应谱计算
-- fields.py     ：场定义面板 + 光场上层处理（磁场/电场/光场表格/关注跃迁/初态/扫描光强/导出频率）
+包结构：
+- src.core/   核心计算（无 UI 依赖）：core / pair_core / driver / evolve / waveforms
+- src.ui/     界面：fields / ui_theme / ui_single / ui_radar / ui_pair /
+              ui_waves / ui_dynamic / evolve_worker / app_state / serialization / pages
+
+兼容导出：`from src import core, evolve, ...` 继续工作（委托到 src.core.* / src.ui.*），
+历史脚本（checks/scripts）无需改动。
 
 导入本包即自动把 ARC（Alkali Rydberg Calculator）的数据目录重定向到项目内
 .arcdata/（见 _patch_arc_datafolder）：ARC 的 Rubidium87() 实例化会在其数据
@@ -39,3 +41,21 @@ def _patch_arc_datafolder():
 
 
 _patch_arc_datafolder()
+
+# ---------------- 兼容导出（from src import X 委托到 core./ui.） ----------------
+from .core import core            # noqa: E402,F401
+from .core import pair_core       # noqa: E402,F401
+from .core import driver          # noqa: E402,F401
+from .core import evolve          # noqa: E402,F401
+from .core import waveforms       # noqa: E402,F401
+from .ui import fields            # noqa: E402,F401
+from .ui import ui_theme          # noqa: E402,F401
+from .ui import ui_single         # noqa: E402,F401
+from .ui import ui_radar          # noqa: E402,F401
+from .ui import ui_pair           # noqa: E402,F401
+from .ui import ui_waves          # noqa: E402,F401
+from .ui import ui_dynamic        # noqa: E402,F401
+from .ui import evolve_worker     # noqa: E402,F401
+from .ui import app_state         # noqa: E402,F401
+from .ui import serialization     # noqa: E402,F401
+from .ui import pages             # noqa: E402,F401

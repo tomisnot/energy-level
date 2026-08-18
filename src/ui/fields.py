@@ -16,7 +16,7 @@ import numpy as np
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import *
 
-from . import core
+from ..core import core
 
 
 class FieldPanel(QWidget):
@@ -31,6 +31,7 @@ class FieldPanel(QWidget):
         self.page = page
         self._ellip = {}        # 光场行 → 椭圆偏振参数 dict(alpha_deg, theta_deg, eps_deg)
         self._ellip_dlg = None  # 非模态椭圆参数弹窗引用（防 GC）
+        self._focus_exchange = False
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(4)
@@ -82,15 +83,19 @@ class FieldPanel(QWidget):
         self.table.setColumnWidth(0, 32)
         self.table.setColumnWidth(3, 56)
         self.table.setColumnWidth(4, 100)
-        self.table.verticalHeader().setDefaultSectionSize(22)
-        self.table.setMinimumHeight(150)       # 可随窗口拉伸
+        self.table.verticalHeader().setDefaultSectionSize(18)  # 与谱表格同行高
+        self.table.horizontalHeader().setFixedHeight(36)       # 表头 > 行高
+        self.table.setMinimumHeight(70)        # 空表紧凑；数据多时随内容撑高
         self.table.itemChanged.connect(self._table_changed)
-        self.table.itemSelectionChanged.connect(self._changed)
+        # 光场“选中/取消选中”只是在 UI 上改变高亮，不应触发整页物理重算；
+        # 真正需要重算的是编辑/增删/切换偏振/作用范围等数据变更。
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._table_menu)
         lb.addWidget(self.table)
-        # ---- 关注跃迁（独立一行：下拉自然宽度，不再与量子数抢空间）----
-        row = QHBoxLayout()
+        # ---- 关注跃迁（暂时隐藏：响应谱逻辑未实现，省垂直空间）----
+        self.focus_row = QWidget()
+        row = QHBoxLayout(self.focus_row)
+        row.setContentsMargins(0, 0, 0, 0)
         row.addWidget(QLabel('关注跃迁'))
         self.focus_box = QComboBox()
         self.focus_box.setToolTip(
@@ -98,9 +103,11 @@ class FieldPanel(QWidget):
             '单体页的 exchange → 旧版两能谱对比（不画响应谱）')
         self.focus_box.currentIndexChanged.connect(self._changed)
         row.addWidget(self.focus_box, 1)
-        lb.addLayout(row)
-        # ---- 初态（n/l/j/m 一行，固定宽紧凑对齐，不被下拉挤压）----
-        row = QHBoxLayout()
+        lb.addWidget(self.focus_row)
+        # ---- 初态（暂时隐藏：响应谱逻辑未实现，省垂直空间）----
+        self.psi_row = QWidget()
+        row = QHBoxLayout(self.psi_row)
+        row.setContentsMargins(0, 0, 0, 0)
         row.addWidget(QLabel('初态'))
         self.psi_n = QSpinBox(); self.psi_n.setRange(1, 200); self.psi_n.setValue(60)
         self.psi_l = QSpinBox(); self.psi_l.setRange(0, 199); self.psi_l.setValue(0)
@@ -114,9 +121,12 @@ class FieldPanel(QWidget):
             row.addWidget(QLabel(lab))
             row.addWidget(w)
         row.addStretch(1)
-        lb.addLayout(row)
+        lb.addWidget(self.psi_row)
         for w in (self.psi_n, self.psi_l, self.psi_j, self.psi_m):
             w.editingFinished.connect(self._changed)
+        # 默认隐藏关注跃迁/初态（响应谱暂不实现）
+        self.focus_row.setVisible(False)
+        self.psi_row.setVisible(False)
         lay.addWidget(self.lights_box)
 
     def set_lights_visible(self, show):
@@ -128,7 +138,8 @@ class FieldPanel(QWidget):
         self.changed.emit()
 
     def _table_changed(self, *_):
-        self.rebuild_focus(self._focus_exchange)
+        show_exchange = getattr(self, '_focus_exchange', False)
+        self.rebuild_focus(show_exchange)
         self.changed.emit()
 
     def b_gauss(self):
@@ -524,11 +535,12 @@ class FreqFromTransitionDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle('从跃迁对导出频率')
         cfg = page.field._row_cfg(row)
+        groups = page.groups_store.groups
         if cfg is None:
             self._lines = []
         else:
             self._lines = _candidate_pairs(
-                page.cache, page.groups, page.field.b_gauss(), cfg)
+                page.cache, groups, page.field.b_gauss(), cfg)
         lay = QVBoxLayout(self)
         form = QFormLayout()
         self.pair_combo = QComboBox()
@@ -583,8 +595,9 @@ class IntensityScanDialog(QDialog):
         self.setWindowTitle('扫描光强导出强度')
         self.page = page
         self.cfg = dict(cfg)
+        groups = page.groups_store.groups
         self._levels = _candidate_levels(
-            page.cache, page.groups, page.field.b_gauss(), self.cfg)
+            page.cache, groups, page.field.b_gauss(), self.cfg)
         self._I_best = None
         lay = QVBoxLayout(self)
         form = QFormLayout()
@@ -640,7 +653,7 @@ class IntensityScanDialog(QDialog):
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
             I_best, actual, status = scan_intensity_for_level(
-                self.page.cache, self.page.groups, self.cfg,
+                self.page.cache, self.page.groups_store.groups, self.cfg,
                 self.page.field.b_gauss(), level, target, progress=self._log)
         finally:
             QApplication.restoreOverrideCursor()
