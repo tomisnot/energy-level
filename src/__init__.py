@@ -58,4 +58,4 @@ from .ui import ui_dynamic        # noqa: E402,F401
 from .ui import evolve_worker     # noqa: E402,F401
 from .ui import app_state         # noqa: E402,F401
 from .ui import serialization     # noqa: E402,F401
-from .ui import pages             # noqa: E402,F401
+#from .ui import pages             # noqa: E402,F401

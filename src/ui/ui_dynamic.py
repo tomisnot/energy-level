@@ -42,12 +42,21 @@ class DynamicPanel(QWidget):
         main.groups_changed.connect(self.refresh_groups)
         self._build_canvases()
         self.dynamic_widget = self._build_controls()
-        # DynamicPanel 只含画布（上光场、下演化）；特有参数区由主程序放入右侧面板（与静态页同级）
+        self._build_module()
+        self.refresh_groups()
+
+    def _build_module(self):
+        """模块层接口：动态页仅作为一个自包含模块，不再额外套一层 page 抽象。"""
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(2)
         root.addWidget(self.canvas_top, 5)
         root.addWidget(self.canvas_bot, 5)
+
+    def show(self):
+        self.refresh_groups()
+
+    def on_light(self):
         self.refresh_groups()
 
     # ---------- 画布：上光场、下演化 ----------
@@ -192,7 +201,7 @@ class DynamicPanel(QWidget):
     # ---------- 能级：从共用能级组生成（切页/运行时刷新，数据共享不散布同步） ----------
     def refresh_groups(self):
         """能级组与 m 选择共用主程序"能级管理表"（单一数据源），这里只刷新初态/驱动。"""
-        self.main_groups = list(self.main.static.groups)
+        self.main_groups = list(self.main.groups)
         self._on_m_changed()
 
     def _on_m_changed(self, *_):
@@ -360,13 +369,11 @@ class DynamicPanel(QWidget):
         self._draw_top(self.wave_data)
 
     # ---------- 状态管理（序列化/恢复；文件 IO 与菜单入口在主程序） ----------
-    def _serialize_dynamic(self):
-        """动态页全部参数与数据 → dict（数据组装在 serialization 模块）。"""
+    def serialize_state(self):
+        """本模块负责导出动态页自己的状态快照。"""
         from . import serialization
-        return serialization.serialize_dynamic(
-            self.main.static.groups,
-            self.main.field.b_gauss(),
-            {
+        return {
+            'dynamic': {
                 'psi': self.psi_combo.currentIndex(),
                 't_max': self.tmax_sb.value(),
                 'npts': self.npts_sb.value(),
@@ -376,30 +383,23 @@ class DynamicPanel(QWidget):
                 'decay_mode': self.decay_mode_cb.currentIndex(),
                 'near_cutoff': self.near_cutoff_sb.value(),
             },
-            self.wave_panel.waves,
-            self.decay_cfgs,
-            [(nm, np.asarray(th), np.asarray(env), f, I)
-             for nm, th, env, f, I in self.wave_data])
+            'waves': waveforms.serialize_waves(self.wave_panel.waves),
+            'decays': [dict(c) for c in self.decay_cfgs],
+            'wave_data': [
+                {'name': nm, 't': list(th), 'env': list(env), 'freq': float(f), 'intensity': float(I)}
+                for nm, th, env, f, I in self.wave_data
+            ],
+        }
 
-    def _restore_dynamic(self, state):
-        """按 _serialize_dynamic 输出恢复动态页。"""
+    def _serialize_dynamic(self):
+        """兼容旧接口：由本模块导出自己的状态快照。"""
+        return self.serialize_state()
+
+    def restore_state(self, state):
+        """按本模块状态快照恢复。"""
         from . import serialization
-        st = self.main.static
-        store = self.main.groups_store
-        # 1) 能级组（store 单一数据源 + 静态页共用区列表 + 画布 + 共用能级表）
-        store.groups = [dict(g) for g in state.get('groups', [])]
-        st.group_list.clear()
-        for g in store.groups:
-            pix = QPixmap(12, 12)
-            pix.fill(QColor(g['color']))
-            st.group_list.addItem(QListWidgetItem(
-                QIcon(pix),
-                f"{g['label']}  (n={g['n']}, l={g['l']}, j={g['j']})"))
-        store.changed.emit()        # → st._on_store_groups_changed（重建+刷新+转发）
-        # 2) 磁场 B（超精细基组依赖；设值会触发 on_light → refresh_groups）
-        self.main.field.b_spin.setValue(float(state.get('B_gauss', 0.0)))
-        self.refresh_groups()
-        # 3) 动态参数
+        if not isinstance(state, dict):
+            return
         dyn = state.get('dynamic', {})
         self.tmax_sb.setValue(float(dyn.get('t_max', 1500.0)))
         self.npts_sb.setValue(int(dyn.get('npts', 1501)))
@@ -407,22 +407,20 @@ class DynamicPanel(QWidget):
         self.backend_cb.setCurrentText(dyn.get('backend', 'auto'))
         self.psi_combo.setCurrentIndex(int(dyn.get('psi', 0)))
         self.topn_sb.setValue(int(dyn.get('topn', 8)))
-        # 自发辐射档位（0 自动 / 1 禁用 / 2 自定义；旧存档缺省自动）
         self.decay_mode_cb.setCurrentIndex(int(dyn.get('decay_mode', 0)))
-        # 近共振截断（旧存档缺省 5 GHz 地板）
         self.near_cutoff_sb.setValue(float(dyn.get('near_cutoff', 5000.0)))
-        # 4) 波形（新格式 'waves'；旧存档 'editor' 不再支持——旧编辑器已归档，
-        #    旧存档只恢复能级组/B/动态参数/衰变，波形留空）
         wv = state.get('waves')
         if wv:
             self.wave_panel.set_waves(waveforms.restore_waves(wv))
-        # 4b) 衰变通道（按 label 恢复；能级组/B 已先恢复 → 下拉已重建）
         self.decay_cfgs = [dict(c) for c in state.get('decays', [])]
         self._update_decay_list()
-        # 5) 波形数据 + 顶部图（解析在 serialization 模块）
         self.wave_data = serialization.restore_wave_data(state.get('wave_data', []))
         self._draw_top(self.wave_data)
         self.main.groups_changed.emit()
+
+    def _restore_dynamic(self, state):
+        """兼容旧接口：按本模块快照恢复。"""
+        self.restore_state(state)
 
     # ---------- 运行演化（后台线程 + 进度条 + 可取消） ----------
     def _run(self):

@@ -11,5 +11,5 @@
 - evolve_worker.py  演化后台线程
 - app_state.py      共享状态层（LevelGroupStore / FieldState）
 - serialization.py  存档序列化（纯数据）
-- pages/            页面组件（static_page 等）
+- pages/            组件页面目录（保留通用布局结构）
 """

@@ -240,14 +240,8 @@ class CouplingRadarPlot(QWidget):
             R_grid = np.geomspace(max(self._plot_r_min, 1e-3), self._plot_r_max, N_R)
             theta_grid = np.linspace(0.0, 180.0, N_THETA)
             res = pair_core.coupling_strength_map(
-                self.page.cache,
-                groups,
-                R_grid,
-                theta_grid,
-                phi_deg=phi,
-                trans1=self._trans1,
-                trans2=self._trans2,
-                B_gauss=B,
+                self.page.cache,groups,R_grid,theta_grid,
+                phi_deg=phi,trans1=self._trans1,trans2=self._trans2,B_gauss=B,
             )
         except Exception as e:
             import traceback

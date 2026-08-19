@@ -20,9 +20,17 @@ from ..core import core
 
 
 class FieldPanel(QWidget):
-    """静磁场 B + 静电场 E + 光场表格 + 关注跃迁 + 初态。"""
+    """静磁场 B + 静电场 E + 光场表格 + 关注跃迁 + 初态。
 
-    changed = pyqtSignal()
+    设计边界：
+    - selection_changed：仅 UI 选中状态改变（不触发全局重算）
+    - data_changed：真实数据变更（编辑、增删、偏振/作用域变化）
+    - changed：兼容旧调用，保持兼容别名到 data_changed
+    """
+
+    selection_changed = pyqtSignal()
+    data_changed = pyqtSignal()
+    changed = pyqtSignal()  # 兼容历史调用：等价于 data_changed
     POLS = ['σ+', 'π', 'σ-', '椭圆偏']
 
     def __init__(self, page, parent=None):
@@ -87,6 +95,7 @@ class FieldPanel(QWidget):
         self.table.horizontalHeader().setFixedHeight(36)       # 表头 > 行高
         self.table.setMinimumHeight(70)        # 空表紧凑；数据多时随内容撑高
         self.table.itemChanged.connect(self._table_changed)
+        self.table.itemSelectionChanged.connect(self._selection_changed)
         # 光场“选中/取消选中”只是在 UI 上改变高亮，不应触发整页物理重算；
         # 真正需要重算的是编辑/增删/切换偏振/作用范围等数据变更。
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -133,14 +142,90 @@ class FieldPanel(QWidget):
         """控制光场表格/关注跃迁/初态区显隐（B/E 行恒显，三页共用）。"""
         self.lights_box.setVisible(show)
 
+    def serialize_state(self):
+        """只导出本模块真实的业务状态，不含纯显示状态。"""
+        rows = []
+        for r in range(self.table.rowCount()):
+            freq_item = self.table.item(r, 1)
+            inten_item = self.table.item(r, 2)
+            scope_w = self.table.cellWidget(r, 4)
+            pol_w = self.table.cellWidget(r, 3)
+            rows.append({
+                'frequency_ghz': float(freq_item.text()) if freq_item is not None and freq_item.text() else 0.0,
+                'intensity': float(inten_item.text()) if inten_item is not None and inten_item.text() else 0.0,
+                'polarization': pol_w.currentText() if isinstance(pol_w, QComboBox) else self._pol_text(r),
+                'scope': scope_w.currentText() if isinstance(scope_w, QComboBox) else 'both',
+                'elliptical': dict(self._ellip.get(r, {})),
+            })
+        return {
+            'B_gauss': self.b_gauss(),
+            'E_vpcm': self.e_vpcm(),
+            'lights': rows,
+            'focus_index': int(self.focus_box.currentIndex()),
+            'psi': {
+                'n': int(self.psi_n.value()),
+                'l': int(self.psi_l.value()),
+                'j': float(self.psi_j.value()),
+                'm': float(self.psi_m.value()),
+            },
+        }
+
+    def restore_state(self, state):
+        """恢复本模块状态。"""
+        if not isinstance(state, dict):
+            return
+        self.b_spin.setValue(float(state.get('B_gauss', self.b_gauss())))
+        self.e_spin.setValue(float(state.get('E_vpcm', self.e_vpcm())))
+        self.table.blockSignals(True)
+        self.table.setRowCount(0)
+        self._ellip.clear()
+        for row in state.get('lights', []):
+            self.add_light()
+            rr = self.table.rowCount() - 1
+            if self.table.item(rr, 1) is not None:
+                self.table.item(rr, 1).setText(str(row.get('frequency_ghz', 0.0)))
+            if self.table.item(rr, 2) is not None:
+                self.table.item(rr, 2).setText(str(row.get('intensity', 0.0)))
+            pol_w = self.table.cellWidget(rr, 3)
+            if isinstance(pol_w, QComboBox):
+                pol = row.get('polarization', 'π')
+                if pol in pol_w.items:
+                    pol_w.setCurrentText(pol)
+            scope_w = self.table.cellWidget(rr, 4)
+            if isinstance(scope_w, QComboBox):
+                val = row.get('scope', 'both')
+                if val in [scope_w.itemText(i) for i in range(scope_w.count())]:
+                    scope_w.setCurrentText(val)
+            ell = row.get('elliptical') or {}
+            if ell:
+                self._ellip[rr] = dict(ell)
+        self.table.blockSignals(False)
+        focus_index = int(state.get('focus_index', 0))
+        if self.focus_box.count() > 0:
+            self.focus_box.setCurrentIndex(max(0, min(focus_index, self.focus_box.count() - 1)))
+        psi = state.get('psi', {})
+        if isinstance(psi, dict):
+            self.psi_n.setValue(int(psi.get('n', self.psi_n.value())))
+            self.psi_l.setValue(int(psi.get('l', self.psi_l.value())))
+            self.psi_j.setValue(float(psi.get('j', self.psi_j.value())))
+            self.psi_m.setValue(float(psi.get('m', self.psi_m.value())))
+        self.rebuild_focus(getattr(self, '_focus_exchange', False))
+        self._changed()
+
     # ---------------- 值接口 ----------------
+    def _selection_changed(self, *_):
+        """仅 UI 选择状态变更，保持本地高亮；不冒泡到全局物理刷新。"""
+        self.selection_changed.emit()
+
     def _changed(self, *_):
+        """兼容旧代码：真正的数据更新才触发全局重算。"""
+        self.data_changed.emit()
         self.changed.emit()
 
     def _table_changed(self, *_):
         show_exchange = getattr(self, '_focus_exchange', False)
         self.rebuild_focus(show_exchange)
-        self.changed.emit()
+        self._changed()
 
     def b_gauss(self):
         return float(self.b_spin.value())

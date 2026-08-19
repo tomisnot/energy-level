@@ -53,11 +53,11 @@ def test_main(app):
         win.canvas_tabs.setCurrentIndex(idx); app.processEvents()
     check('两页切换（页面栈）', win.page_stack.currentIndex() == 1)
     for n, l, j in ((60, 0, 0.5), (60, 1, 0.5)):
-        win.static.n_spin.setValue(n); win.static.l_spin.setValue(l)
-        win.static.j_spin.setValue(j)
-        win.static.add_group()
+        win.group_panel.n_spin.setValue(n); win.group_panel.l_spin.setValue(l)
+        win.group_panel.j_spin.setValue(j)
+        win.group_panel.add_group()
     app.processEvents()
-    check('添加能级组', len(win.static.groups) == 2)
+    check('添加能级组', len(win.groups) == 2)
     win.log('测试日志消息')
     check('状态栏日志', '测试日志消息' in win.statusBar().currentMessage())
     return win
@@ -100,9 +100,9 @@ def test_wave_panel(app):
 def test_dynamic(app, win):
     dyn = win.dynamic
     for n, l, j in ((60, 1, 1.5), (6, 1, 1.5)):
-        win.static.n_spin.setValue(n); win.static.l_spin.setValue(l)
-        win.static.j_spin.setValue(j)
-        win.static.add_group()
+        win.group_panel.n_spin.setValue(n); win.group_panel.l_spin.setValue(l)
+        win.group_panel.j_spin.setValue(j)
+        win.group_panel.add_group()
     app.processEvents()
     dyn.psi_combo.setCurrentIndex(2)
     sel = dyn.psi_combo.currentIndex()

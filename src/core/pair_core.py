@@ -403,10 +403,8 @@ def coupling_strength_map(cache, groups, R_grid, theta_grid, phi_deg=0.0,
     Z = np.empty((len(R), len(theta)))
     qs = (1, 0, -1)
     # 两原子各自跃迁的偶极向量：d_a(src→tgt)=⟨tgt|d_q|src⟩
-    da = np.array([core.dipole_amplitude(cache, r1_src, r1_tgt, q)
-                   for q in qs])                 # [3]（原子1 跃迁）
-    db = np.array([core.dipole_amplitude(cache, r2_src, r2_tgt, q)
-                   for q in qs])                 # [3]（原子2 跃迁）
+    da = np.array([core.dipole_amplitude(cache, r1_src, r1_tgt, q)for q in qs])# [3]（原子1 跃迁）
+    db = np.array([core.dipole_amplitude(cache, r2_src, r2_tgt, q)for q in qs])# [3]（原子2 跃迁）
     r3 = R ** 3
     for t, th in enumerate(theta):
         T = _vdd_tensor(float(th), float(phi_deg))
@@ -416,14 +414,10 @@ def coupling_strength_map(cache, groups, R_grid, theta_grid, phi_deg=0.0,
     return R, theta, Z
 
 
-def pair_potential(cache, groups, R_scan, B_gauss=0.0, n_window=3,
-                   m_total=None):
+def pair_potential(cache, groups, R_scan, B_gauss=0.0, n_window=3,m_total=None):
     """扫 R → (R 数组, 能级数组 [n_R, n_levels])。"""
     evals_list = []
     for R in R_scan:
         res = pair_eigen(cache, groups, R, B_gauss, n_window, m_total=m_total)
         evals_list.append(res['evals'])
     return np.asarray(R_scan), np.asarray(evals_list)
-
-
-# 自检已移至 pair_selfcheck.py（P 系列），本模块保持纯计算（无检查逻辑）。
