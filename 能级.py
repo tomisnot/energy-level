@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """Rb-87 能级计算软件 UI（物理核心见 core.py，可单独审查）。
 
 本文件只负责装配与编排：
@@ -216,7 +216,8 @@ class MainWindow(QMainWindow):
         if not path:
             return
         snapshot = {
-            'meta': {'version': 1},
+            'meta': {'version': 2},   # v2：只存科学数据/参数（去 topn/wave_data），
+                                     # 新增双原子 mode/pair 几何/A·B 波形/A·B 初态
             'groups': self.group_panel.serialize_state(),
             'field': self.field.serialize_state(),
             'dynamic': self.dynamic.serialize_state(),

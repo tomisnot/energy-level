@@ -236,6 +236,59 @@ def test_wave_serde(app):
     check('波形 → real_field 场（近共振驱动对）', len(fields) >= 2)
 
 
+# ================= 5. 状态保存：只存科学参数，双原子完整，往返一致 =================
+def test_state_save(app):
+    """serialize/restore：不存显示参数（topn/wave_data）；双原子科学参数
+    （mode/pair 几何/A·B 波形/A·B 初态）完整；旧档兼容。"""
+    win = main_mod.MainWindow()
+    for n, l, j in ((60, 0, 0.5), (60, 1, 0.5)):
+        win.group_panel.n_spin.setValue(n)
+        win.group_panel.l_spin.setValue(l)
+        win.group_panel.j_spin.setValue(j)
+        win.group_panel.add_group()
+    app.processEvents()
+    dyn = win.dynamic
+    dyn._on_mode_changed(1)          # 双原子
+    app.processEvents()
+    dyn.vdd_R_sb.setValue(7.3)
+    dyn.vdd_theta_sb.setValue(45.0)
+    dyn.vdd_phi_sb.setValue(90.0)
+    dyn.wave_panel_A._add('gauss')
+    dyn.wave_panel_B._add('square')
+    dyn.psi_combo_A.setCurrentIndex(1)
+    dyn.psi_combo_B.setCurrentIndex(2)
+    dyn.topn_sb.setValue(12)         # 显示参数：不应保存
+    app.processEvents()
+    snap = dyn.serialize_state()
+    check('存档：不含显示参数（topn/wave_data）',
+          'topn' not in snap['dynamic'] and 'wave_data' not in snap)
+    check('存档：双原子科学参数完整（mode/pair/A·B 波形/A·B 初态）',
+          snap['dynamic']['mode'] == 1
+          and snap['pair'] == {'R_um': 7.3, 'theta_deg': 45.0, 'phi_deg': 90.0}
+          and len(snap['waves_A']) == 1 and len(snap['waves_B']) == 1
+          and snap['dynamic']['psi_A'] == 1
+          and snap['dynamic']['psi_B'] == 2)
+    # 往返
+    dyn.vdd_R_sb.setValue(1.0)
+    dyn.wave_panel_A.waves.clear()
+    dyn.restore_state(snap)
+    app.processEvents()
+    check('恢复：双原子模式 + 科学参数一致（显示参数保持当前值）',
+          dyn._is_two_body
+          and abs(dyn.vdd_R_sb.value() - 7.3) < 1e-9
+          and len(dyn.wave_panel_A.waves) == 1
+          and dyn.psi_combo_A.currentIndex() == 1
+          and dyn.topn_sb.value() == 12)
+    # 旧档兼容（STIRAP.json：顶层旧格式，无 mode/pair/waves_A/B）
+    data = json.load(open(os.path.join(_ROOT, 'save_state', 'STIRAP.json'),
+                          encoding='utf-8'))
+    dyn.restore_state(data)
+    app.processEvents()
+    check('旧档兼容：无 mode/pair → 单原子 + 波形恢复',
+          not dyn._is_two_body and len(dyn.wave_panel.waves) >= 2)
+    win.close(); app.processEvents()
+
+
 # ================= 5. 进度数组 + 取消 =================
 def test_progress(app):
     data = json.load(open(os.path.join(_ROOT, 'save_state',
@@ -336,6 +389,7 @@ def main():
     test_wave_panel(app)
     test_dynamic(app, win)
     test_wave_serde(app)
+    test_state_save(app)
     test_progress(app)
     test_stir_states(app)
     win.close(); app.processEvents()

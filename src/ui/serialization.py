@@ -1,9 +1,14 @@
 # -*- coding: utf-8 -*-
-"""存档序列化（纯数据，无 UI 依赖）。
+"""存档序列化（纯数据，无 UI 依赖）——**仅保留旧档兼容助手**。
 
-serialize 从"页面状态快照"（dict）生成 JSON 可序列化 dict；
-restore 把 dict 写回"页面状态快照"。UI 控件读写由调用方（DynamicPanel）
-负责，本模块只做数据组装/解析——解耦存档格式与 Qt 控件。
+序列化/反序列化已按模块自治：每个页面组件（ui_group / fields /
+ui_dynamic）各自实现 serialize_state / restore_state，主程序只负责
+装配调用（见 能级.py _save_state / _load_state）。
+
+本模块的函数是旧集中式序列化遗留：
+  - restore_wave_data：读取 v2 之前存档里的 wave_data（波形预览曲线，
+    派生显示数据，v2 起不再保存）——供外部工具/脚本转换旧档用；
+  - serialize_dynamic：旧接口，已无调用方（保留以防外部脚本引用）。
 """
 from ..core import waveforms
 

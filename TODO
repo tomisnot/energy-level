@@ -1,4 +1,9 @@
-整理UI管理，权责分明，更好控制尺寸（static_page可能删掉更好）
-开发任意脉冲模拟，实现外部脉冲文件载入
-完善实用化两体模拟
-动态模拟加入两体效应
+1. 整理UI管理，权责分明，更好控制尺寸（static_page可能删掉更好）
+2. 开发任意脉冲模拟，实现外部脉冲文件载入
+3. 两体含时演化（pair_evolve）已修复并接入 pairinteraction 权威检测
+   （checks/pair_evolve_selfcheck.py，5 项）——secular 判据/步长/对角化
+   路径/cache 传递已回归钉死；剩余事项：
+   a. 两体 Lindblad 衰变（当前显式拒绝，decays_A/B 须为空）
+   b. 二阶 vdW 能移进入演化哈密顿（当前 secular RWA 模型丢弃远失谐元素）
+   c. GUI 双原子模式把自发辐射档位真正启用（需 a 完成）
+4. 动态模拟加入两体效应（GUI 双原子模式已通：cache 传入 → V_dd 生效）
