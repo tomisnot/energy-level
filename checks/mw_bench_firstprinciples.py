@@ -4,9 +4,10 @@
 同一物理场景、同一初态/时间网格下对比：
 
 现有生产方法（evolve.py）:
-  pwc       RWA 分段常数 + eigh（快；RWA 误差 ~Ω/ω_L）
+  ip4      相互作用绘景 RK4（光频 RWA + 微波非 RWA，第一性原理，默认）
   full      solve_ivp 实验室系非 RWA（第一性原理；Python 回调 + 自适应步长，慢）
   full_fast solve_ivp 混合（光频 RWA + 微波非 RWA）
+  （pwc/floquet 已封存至 src/_archive/evolve_floquet_pwc.py，2025-08）
 
 候选新方法（第一性原理，误差可收敛到机器精度）:
   fstep     固定步长中点法（实验室系非 RWA；cos/包络预计算为标量数组，
@@ -417,13 +418,6 @@ def run_scenario_s1(cache, envelope, name, dt_list):
               f'{dt_chk:7.2f} s   vs 参考 max|Δpops| = '
               f'{maxdiff(np.abs(sol.y).T ** 2, ref_v):.3e}')
 
-    # 生产：pwc（RWA）
-    t0 = time.perf_counter()
-    r = evolve.evolve(states, fields, i0, t, method='pwc', ac_shift_mhz=acs)
-    dt_p = time.perf_counter() - t0
-    print(f'[生产] pwc  RWA   : {dt_p:7.2f} s   vs 参考 max|Δpops| = '
-          f'{maxdiff(r["pops"], ref):.3e}')
-
     # 生产：full（solve_ivp 非 RWA，旧第一性原理参考）——仅在方波（S1）跑，
     # 高斯（S2）由 RK4 收敛表验证（积分器一致性已在 S1 与 Floquet 交叉验证）
     if envelope is None:
@@ -479,18 +473,20 @@ def run_scenario_s3(cache):
     print(f'[内置] ip4（默认 frac=40）: {dt_ip:7.2f} s   '
           f'vs 参考 max|Δpops| = {maxdiff(r["pops"], pops_ref):.3e}')
 
-    # 内置 floquet（应不适用：双频 → 自动会走 ip4；显式调用应报错说明）
+    # 内置 floquet/pwc：2025-08 起已从 evolve.py 封存（动态分析只用 ip4）——
+    # 显式调用应报错并指向封存模块；需要时用封存模块 evolve_floquet/evolve_pwc
+    from src._archive.evolve_floquet_pwc import evolve_pwc as _evolve_pwc_arch
     try:
         evolve.evolve(states, fields, i0, t, method='floquet')
-        print('[内置] floquet：意外成功（多频应拒绝）')
+        print('[内置] floquet：意外成功（应报错指向封存模块）')
     except ValueError as e:
-        print(f'[内置] floquet 显式调用正确拒绝：{e}')
+        print(f'[内置] floquet 显式调用正确拒绝（封存）：{str(e)[:60]}…')
 
-    # 内置 pwc（RWA 对比）
+    # 封存 pwc（RWA 对比，仅展示误差量级）
     t0 = time.perf_counter()
-    r2 = evolve.evolve(states, fields, i0, t, method='pwc')
+    r2 = _evolve_pwc_arch(states, fields, i0, t)
     dt_p = time.perf_counter() - t0
-    print(f'[内置] pwc RWA       : {dt_p:7.2f} s   '
+    print(f'[封存] pwc RWA      : {dt_p:7.2f} s   '
           f'vs 参考 max|Δpops| = {maxdiff(r2["pops"], pops_ref):.3e}')
 
 

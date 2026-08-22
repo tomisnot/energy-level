@@ -26,7 +26,6 @@ import src            # noqa: F401
 from src.core import core
 
 from arc.alkali_atom_data import Rubidium87, Caesium
-from arc.calculations_atom_single import DynamicPolarizability
 from scipy.constants import c, epsilon_0, hbar
 from checklib import Checker
 
@@ -143,20 +142,21 @@ def t6():
 
 
 def t7():
-    print('T7 基本功能回归（行/谱线/collect_transitions）')
+    print('T7 基本功能回归（行/谱线/collect_transitions，direct 后端）')
     cache = core.ArcCache(Rubidium87())
     cfg = {'enabled': True, 'intensity': 10000.0,
            'frequency_hz': 295723722000000.0, 'polarization': 'π'}
     groups = [dict(n=60, l=0, j=0.5, label='60S', color='r'),
               dict(n=60, l=1, j=0.5, label='60P1/2', color='b')]
-    rows = core.build_level_rows(cache, 0.0, groups, cfg, groups, backend='legacy')
+    rows = core.build_level_rows(cache, 0.0, groups, cfg, groups)
     off = core.spectrum_lines(cache, rows, False)
     on = core.spectrum_lines(cache, rows, True)
     ch.check('行数=4 且 off/on 线数=4/4',
              len(rows) == 4 and len(off) == 4 and len(on) == 4,
              (len(rows), len(off), len(on)))
-    a_ = core.ac_stark_shift_mhz(cache, groups[0], -0.5, groups, cfg)
-    b_ = core.ac_stark_shift_mhz(cache, groups[0], 0.5, groups, cfg)
+    # 60S 两 m 子能级 π 偏振位移对称（direct 一次对角化结果）
+    a_ = rows[0]['ac']
+    b_ = rows[1]['ac']
     ch.close('60S m=±0.5 位移相等（π）', a_, b_, atol=1e-12)
     nu = sorted(set(round(ln[0] / 1e9, 4) for ln in off))
     ch.check('谱线频率 ≈ 16.8267 GHz', abs(nu[0] - 16.8267) < 1e-3, nu)
@@ -173,22 +173,20 @@ def t7():
 
 
 def t8():
-    print('T8 远失谐 SOS vs DynamicPolarizability（比值=-0.5）')
+    print('T8 far_sos_shift_mhz（非 RWA SOS）ω→0 == DC-Stark/2（单对解析）')
     cache = core.ArcCache(Rubidium87())
     n, l, j, m = 6, 0, 0.5, 0.5
-    I_mw = 1.0
-    E0_sq = 2.0 * (I_mw * core.MW_PER_CM2_TO_W_PER_M2) / (epsilon_0 * c)
-    dp = DynamicPolarizability(cache.atom, n, l, j)
-    dp.defineBasis(5, 19)
-    nu0 = core.transition_frequency_hz(cache.atom, 6, 0, 0.5, 6, 1, 0.5)
-    freq_hz = nu0 + 500.0 * 1e9
-    cfg = {'enabled': True, 'intensity': I_mw,
-           'frequency_hz': freq_hz, 'polarization': 'π'}
-    ours = core.ac_stark_shift_mhz(cache, dict(n=n, l=l, j=j, label='6S', color='r'),
-                                   m, [], cfg)
-    alpha0 = dp.getPolarizability(c / freq_hz, units='SI', mj=m)[0]
-    dp_mhz = 0.5 * alpha0 * E0_sq / 1e6
-    ch.close('6S det=500GHz 比值=-0.5', ours / dp_mhz, -0.5, rtol=0.02)
+    d_au = cache.dme(n, l, j, m, 6, 1, 0.5, m, 0)        # π：6S m → 6P1/2 m
+    E0_sq = 2.0 * (1.0 * core.MW_PER_CM2_TO_W_PER_M2) / (epsilon_0 * c)
+    nu_hz = (cache.E_mhz(6, 1, 0.5) - cache.E_mhz(6, 0, 0.5)) * 1e6
+    nu_rad = 2.0 * np.pi * nu_hz
+    omega = nu_rad * 1e-6                                 # ω→0（远低于跃迁）
+    sos = core.far_sos_shift_mhz(d_au, E0_sq, omega, nu_rad)
+    # DC 单对解析：ΔE = −d²E0²/(2ħν)（J）→ MHz；far_sos(ω→0) 应与其相等
+    d_cm = abs(d_au) * core.E_CHARGE * core.A0
+    dc_single = -(d_cm ** 2 * E0_sq) / (2.0 * hbar * nu_rad) / (2.0 * np.pi * hbar) / 1e6
+    ch.close('far_sos(ω→0) == DC 单对（ω→0 极限，比值=1）',
+             sos / dc_single, 1.0, rtol=1e-6)
 
 
 def t9():
@@ -203,13 +201,15 @@ def t9():
                if r['qstr'] == 'm_J=+0.5')
     cfg = {'enabled': True, 'intensity': 10000.0,
            'frequency_hz': (a60['E_mhz'] - b63['E_mhz']) * 1e6, 'polarization': 'σ-'}
-    rows = core.build_level_rows(cache, B, groups, cfg, groups, backend='legacy')
+    rows = core.build_level_rows(cache, B, groups, cfg, groups)
     r63 = next(r for r in rows if r['label'] == '6P_{3/2}'
                and r['qstr'] == 'F=3.0, m_F=+3.0')
     ch.check('共振位移 > 100 kHz（≈Ω/2，非 kHz 微扰）', abs(r63['ac']) > 0.1, r63['ac'])
     p = min(core.collect_transitions(cache, groups, cfg, B), key=lambda x: abs(x[4]))
-    ch.close('ac ≈ +Ω/2（Rabi 自 collect_transitions）',
-             r63['ac'], p[5] / (2.0 * np.pi) / 1e6 / 2.0, rtol=0.05)
+    # direct 完整对角化（含超精细多态/反旋项）→ 位移 ≈ −Ω/2（源态共振下移，
+    # 与 legacy 两能级 +Ω/2 符号约定不同，2025-08 起只保留 direct）
+    ch.close('|ac| ≈ Ω/2（direct 自洽，rtol 10%）',
+             abs(r63['ac']), p[5] / (2.0 * np.pi) / 1e6 / 2.0, rtol=0.10)
 
 
 def t10():
@@ -230,36 +230,14 @@ def t10():
         ch.close(f'{qs_a} → {qs_b} q={q:+d}', ours, arc, atol=1e-14)
 
 
-def t11():
-    print('T11 双频移后端：direct（对角化）vs legacy（解析/微扰）')
-    cache = core.ArcCache(Rubidium87())
-    ch.check('SHIFT_BACKEND 默认 = direct', core.SHIFT_BACKEND == 'direct',
-             core.SHIFT_BACKEND)
-    groups = [dict(n=60, l=0, j=0.5, label='60S', color='r'),
-              dict(n=60, l=1, j=0.5, label='60P1/2', color='b')]
-    base = core.transition_frequency_hz(cache.atom, 60, 0, 0.5, 60, 1, 0.5)
-    maxdev, n_pairs = 0.0, 0
-    for det in (-200.0, 200.0):
-        cfg = dict(enabled=True, intensity=1e-4,
-                   frequency_hz=base + det * 1e6, polarization='π')
-        rows_d = core.build_level_rows(cache, 0.0, groups, cfg, groups,
-                                       backend='direct')
-        rows_l = core.build_level_rows(cache, 0.0, groups, cfg, groups,
-                                       backend='legacy')
-        for rd, rl in zip(rows_d, rows_l):
-            if rd['qstr'] == rl['qstr']:
-                maxdev = max(maxdev, abs(rd['ac'] - rl['ac']))
-                n_pairs += 1
-    ch.check(f'direct/legacy 位移一致（{n_pairs} 对，亚 MHz）', maxdev < 0.2,
-             f'maxdev={maxdev:.4f} MHz')
-
-
 # ----------------------------------------------------------------------
 def main():
     print('=' * 64)
     print('core.py 精简自检（手写算法 vs ARC 官方函数）')
     print('=' * 64)
-    for fn in (t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11):
+    # T11（direct vs legacy 双后端对比）已于 2025-08 删除：
+    # legacy 后端移除，AC-Stark 唯一后端 = direct（第一性原理）。
+    for fn in (t1, t2, t3, t4, t5, t6, t7, t8, t9, t10):
         fn()
     ok = ch.summary()
     sys.exit(0 if ok else 1)

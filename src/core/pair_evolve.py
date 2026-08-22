@@ -6,10 +6,9 @@
 
 V_dd 在旋转系下做缓变近似（secular RWA）：仅保留旋转系振荡频率
 |E_rot_β − E_rot_α| ≪ |V_dd| 的矩阵元（对角位移 + 近简并交换耦合），
-其余高振荡项（∝光频/微波频/大失谐）平均为零。
-**判据必须用旋转系能量差（含 V_dd 对角位移），而非旋转参考之差**——
-旧实现误用 ref 差：无光场时 ref≡0 → 全部元素被当"secular"保留，且步长
-估计不解析其振荡 → 动力学错误（详见 _secular_filter 注释）。
+其余高振荡项平均为零。
+**判据必须用旋转系能量差（含 V_dd 对角位移），而非旋转参考之差**
+（后者无光场时恒 0 → 全保留，见 _secular_filter）。
 
 核心设计：
   1. 两体基组 = 单体 states 的笛卡尔积 |i⟩⊗|j⟩（N² 维）
@@ -22,8 +21,6 @@ V_dd 在旋转系下做缓变近似（secular RWA）：仅保留旋转系振荡�
   - RWA 场步长只计旋转系失谐 |ΔE|；非 RWA 场加载波 ω_L；ω_L=0 常数场
     （V_dd secular）计 |ΔE|（保留项振荡必须被步长解析）
   - 全 RWA + 常数包络 + 无振荡非 RWA 场 → 一次对角化精确解
-    （非 RWA 微波驱动即使包络恒常也含 cos(ω_L t) 载波，哈密顿量时变，
-    不能走对角化路径）
   - 旁观态 E_rot 归零、耦合态减公共参考（同 evolve._e_rot，防相位爆炸）
 
 单位：与 evolve.py 一致（MHz, ns, rad/ns）。
@@ -142,12 +139,13 @@ def tensor_fields(fields_A, fields_B, states, N):
 
 
 # ============================================================
-# V_dd 旋转系 secular RWA
+# V_dd 旋转系 secular RWA（含二阶 vdW 并入对角）
 # ============================================================
 
 # secular 判据比例：|旋转系失谐| < SECULAR_RATIO × |V| 的矩阵元保留
-# （保留项的振荡频率 ≤ ~10|V|，RK4 步长约束 dt_acc 可解析；远失谐项
-# 振荡平均为零 → 丢弃，即 RWA）
+# （保留项振荡频率 ≤ ~10|V|，RK4 步长约束 dt_acc 可解析）；
+# 被丢弃的远失谐项（|Δ| ≥ 10|V|，微扰安全区 |V/Δ| ≤ 0.1）不再平均为零——
+# 其二阶净效应 |V|²/Δ（∝1/R⁶ 的 vdW 能移）并入对角位移。
 SECULAR_RATIO = 10.0
 
 
@@ -155,29 +153,34 @@ def _secular_filter(V_dense, E_rot_2d, ratio=SECULAR_RATIO):
     """V_dd 的旋转系 secular 筛选（唯一判据，两处调用共用）。
 
     判据：V_{αβ} 在相互作用绘景（旋转系）中的振荡频率 =
-    |E_rot_β − E_rot_α|，其中 E_rot 含 V_dd 对角位移（与演化用的
-    u(t)=e^{iE_rot t} 相位自洽）。|Δ| < ratio·|V| → 保留（缓变，RWA）；
-    否则高振荡项平均为零 → 丢弃。
-
-    **修复说明**：旧实现误用旋转参考之差（ref_β−ref_α）作判据——无光场
-    时 ref≡0，判据恒成立 → 全部 V_dd 元素（含 33 GHz 级失谐的 vdW/Förster
-    耦合）被当作"secular"保留，且步长估计不解析其振荡 → 动力学既非精确
-    也非 RWA，物理错误。现在用真实旋转系失谐。
+    |E_rot_β − E_rot_α|（E_rot 含裸 V_dd 对角，与演化 u(t)=e^{iE_rot t}
+    相位自洽）。|Δ| < ratio·|V| → 保留（缓变，RWA 相干耦合）；
+    否则 → 丢弃，但其**二阶 vdW 位移 |V|²/Δ 并入对角**（近简并通道保留、
+    远失谐通道贡献位移，两者正交——缺此则 ∝1/R⁶ 的 vdW 能移完全丢失）。
+    注意：判据须用旋转系能量差而非旋转参考之差（后者无光场时恒 0）。
 
     输入可为稠密 ndarray 或 scipy 稀疏矩阵（稀疏时只遍历非零元，大基组
-    不会因 toarray 爆内存）。
+    不因 toarray 爆内存）。
 
-    返回 (V_diag, V_sec, n_kept)：V_diag 为对角位移，V_sec 为保留的
-    非对角稀疏矩阵，n_kept 为保留的非对角元数。
+    返回 (V_diag, V_sec, n_kept)：V_diag 为对角位移（裸对角 + 二阶 vdW），
+    V_sec 为保留的非对角稀疏矩阵，n_kept 为保留的非对角元数。
     """
     N2 = len(E_rot_2d)
     E_rot_full = np.asarray(E_rot_2d, float)
     V_sec = sp.lil_matrix((N2, N2), dtype=complex)
     n_kept = 0
 
+    def _drop(a, b, v):
+        """远失谐元：二阶 vdW 并入对角（反对称：α 与 β 位移一正一负）。"""
+        delta = E_rot_full[a] - E_rot_full[b]
+        if abs(delta) > 1e-12:
+            shift = abs(v) ** 2 / delta
+            V_diag[a] += shift
+            V_diag[b] -= shift
+
     if sp.issparse(V_dense):
         V_c = V_dense.tocsr()
-        V_diag = np.real(np.asarray(V_c.diagonal()))
+        V_diag = np.real(np.asarray(V_c.diagonal())).copy()
         E_rot_full = E_rot_full + V_diag
         coo = V_c.tocoo()
         for a, b, v in zip(coo.row, coo.col, coo.data):
@@ -187,10 +190,12 @@ def _secular_filter(V_dense, E_rot_2d, ratio=SECULAR_RATIO):
                 V_sec[a, b] = v
                 V_sec[b, a] = np.conj(v)
                 n_kept += 1
+            else:
+                _drop(a, b, v)
         return V_diag, V_sec.tocsr(), n_kept
 
     V_dense = np.asarray(V_dense, complex)
-    V_diag = np.real(np.diag(V_dense))
+    V_diag = np.real(np.diag(V_dense)).copy()
     E_rot_full = E_rot_full + V_diag
     for alpha in range(N2):
         for beta in range(alpha + 1, N2):
@@ -201,6 +206,8 @@ def _secular_filter(V_dense, E_rot_2d, ratio=SECULAR_RATIO):
                 V_sec[alpha, beta] = v
                 V_sec[beta, alpha] = np.conj(v)
                 n_kept += 1
+            else:
+                _drop(alpha, beta, v)
     return V_diag, V_sec.tocsr(), n_kept
 
 
@@ -295,9 +302,8 @@ def _pair_ip4(E_rot_2d, fields_2d, psi0, t, frac=20.0,
         return wL > 0 and ratio < evolve.IP4_RWA_THRESH
 
     # ---- 全 RWA 且包络恒常且无振荡非 RWA 场 → 对角化精确解 ----
-    # 注意：非 RWA 场（微波等）即使包络恒常也含 cos(ω_L t) 载波，
-    # 哈密顿量仍时变，不能走对角化路径（旧实现漏掉此条件 → 错误地把
-    # 微波驱动当静态 → 动力学错误）。
+    # 非 RWA 场（微波）即使包络恒常也含 cos(ω_L t) 载波，哈密顿量时变，
+    # 不能走对角化路径。
     all_const = all(evolve._env_samples(f['waveform'], t_out[-1])[1]
                     for f in fields_2d)
     has_osc = any(f['omega_L_mhz'] > 0 and not _is_rwa(f)
@@ -314,7 +320,8 @@ def _pair_ip4(E_rot_2d, fields_2d, psi0, t, frac=20.0,
                 if np.any(ac != 0.0):
                     H0 += c_val * np.diag(ac)
             else:
-                H0 += f['omega0_mhz'] * f['M']
+                M = f['M']
+                H0 = H0 + f['omega0_mhz'] * (M.toarray() if sp.issparse(M) else M)
         evals, evecs = np.linalg.eigh(H0)
         coef = evecs.T.conj() @ psi0
         ph = np.exp(-1j * _CONV * evals[:, None] * t_out[None, :])
@@ -326,19 +333,25 @@ def _pair_ip4(E_rot_2d, fields_2d, psi0, t, frac=20.0,
     # 步长：Ṽ(t) 内最快真实振荡频率。
     #   RWA 场   ：|E_rot_i − E_rot_j|（旋转系失谐）
     #   非 RWA 场：|E_rot_i − E_rot_j| + ω_L（载波）
-    #   ω_L=0 常数场（V_dd secular）：|E_rot_i − E_rot_j|——保留项的
-    #     振荡频率必须解析（旧实现跳过 ω_L≤0 场 → 保留的非共振元振荡
-    #     未被步长覆盖 → 混叠，动力学错误）。
+    #   ω_L=0 常数场（V_dd secular）：|E_rot_i − E_rot_j|（保留项振荡须解析）
+    # 稀疏矩阵只遍历非零元（避免 O(N⁴) 全对扫描）。
     w_max = 0.0
     cmax = 0.0
     for f in fields_2d:
-        A_abs = np.abs(f['M'])
-        cmax = max(cmax, f['omega0_mhz'] * A_abs.max())
+        M = f['M']
+        cmax = max(cmax, f['omega0_mhz'] * np.abs(M).max())
         wL = abs(f['omega_L_mhz']) if not _is_rwa(f) else 0.0
-        for i in range(N2):
-            for j in range(i + 1, N2):
-                if A_abs[i, j] > 1e-12:
+        if sp.issparse(M):
+            coo = M.tocoo()
+            for i, j, a in zip(coo.row, coo.col, coo.data):
+                if i < j and abs(a) > 1e-12:
                     w_max = max(w_max, abs(Ec[i] - Ec[j]) / _CONV + wL)
+        else:
+            A_abs = np.abs(M)
+            for i in range(N2):
+                for j in range(i + 1, N2):
+                    if A_abs[i, j] > 1e-12:
+                        w_max = max(w_max, abs(Ec[i] - Ec[j]) / _CONV + wL)
 
     if w_max > 0:
         dt_carrier = 2.0 * np.pi / (_CONV * w_max) / frac
@@ -368,7 +381,8 @@ def _pair_ip4(E_rot_2d, fields_2d, psi0, t, frac=20.0,
                               float(np.asarray(field['waveform'](
                                   np.atleast_1d(tt))).flat[0])))
         else:
-            terms.append((np.asarray(f['M'], complex),
+            M = f['M']
+            terms.append(((M if sp.issparse(M) else np.asarray(M, complex)),
                           lambda tt, field=f:
                           field['omega0_mhz']
                           * float(np.asarray(field['waveform'](
@@ -377,20 +391,31 @@ def _pair_ip4(E_rot_2d, fields_2d, psi0, t, frac=20.0,
 
     c = -1j * _CONV
 
-    def rk4_step(state, t0, h):
-        """在 [t0, t0+h] 上执行一次 RK4，支持输出时刻的部分步。"""
-        def interaction(state_value, time_value):
-            u = np.exp(1j * Ec * time_value)
+    # ---- u 相位增量：全步只做向量逐元乘，不再每阶段现算 exp ----
+    # u(t) = e^{iEc·t}；步进 u0 *= w1_full；RK4 阶段时刻的 u 由
+    # u0（步首）乘预计算 w05_full/w1_full 得到。部分步（h≠dt）现算。
+    w05_full = np.exp(1j * Ec * (dt / 2.0))
+    w1_full = np.exp(1j * Ec * dt)
+
+    def rk4_step(state, t0, h, ua):
+        """在 [t0, t0+h] 上执行一次 RK4（ua = e^{iEc·t0}，步首相位）。"""
+        if abs(h - dt) < 1e-15:
+            ub, uc = ua * w05_full, ua * w1_full
+        else:
+            ub = ua * np.exp(1j * Ec * (h / 2.0))
+            uc = ua * np.exp(1j * Ec * h)
+
+        def Ht(ps, uu, tt):
             out = np.zeros(N2, complex)
             for matrix, coefficient in terms:
-                out += coefficient(time_value) * (
-                    u * (matrix @ (u.conj() * state_value)))
-            return c * out
+                # 稀疏矩阵（V_dd secular）走稀疏 matvec，O(nnz) 而非 O(N⁴)
+                out += coefficient(tt) * (uu * (matrix @ (uu.conj() * ps)))
+            return out
 
-        k1 = interaction(state, t0)
-        k2 = interaction(state + h / 2.0 * k1, t0 + h / 2.0)
-        k3 = interaction(state + h / 2.0 * k2, t0 + h / 2.0)
-        k4 = interaction(state + h * k3, t0 + h)
+        k1 = c * Ht(state, ua, t0)
+        k2 = c * Ht(state + h / 2.0 * k1, ub, t0 + h / 2.0)
+        k3 = c * Ht(state + h / 2.0 * k2, ub, t0 + h / 2.0)
+        k4 = c * Ht(state + h * k3, uc, t0 + h)
         return state + h / 6.0 * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
 
     psi = np.array(psi0, complex)
@@ -398,6 +423,7 @@ def _pair_ip4(E_rot_2d, fields_2d, psi0, t, frac=20.0,
     pops[0] = np.abs(psi) ** 2
     rec = 1
     eps = max(1e-12, abs(dt) * 1e-10)
+    u0 = np.ones(N2, complex)               # e^{iEc·0} = 1
     for m in range(M_steps):
         t0 = m * dt
         t1 = min((m + 1) * dt, t_out[-1])
@@ -407,15 +433,16 @@ def _pair_ip4(E_rot_2d, fields_2d, psi0, t, frac=20.0,
             h = max(0.0, float(t_out[rec] - t0))
             if h >= dt - eps:
                 if full_state is None:
-                    full_state = rk4_step(step_state, t0, dt)
+                    full_state = rk4_step(step_state, t0, dt, u0)
                 sample = full_state
             else:
-                sample = rk4_step(step_state, t0, h)
+                sample = rk4_step(step_state, t0, h, u0)
             pops[rec] = np.abs(sample) ** 2
             rec += 1
         if full_state is None:
-            full_state = rk4_step(step_state, t0, t1 - t0)
+            full_state = rk4_step(step_state, t0, t1 - t0, u0)
         psi = full_state
+        u0 = u0 * w1_full                    # 步进相位（逐元乘）
         if not np.isfinite(psi).all() or np.abs(psi).max() > 100.0:
             raise RuntimeError('pair_evolve 数值发散')
         if (m & 511) == 0:
@@ -506,8 +533,6 @@ def pair_evolve(states, fields_A, fields_B, psi0_A, psi0_B,
     if backend not in ('auto', 'cpu', 'numpy'):
         raise ValueError("两体演化当前只支持 numpy backend")
     if decays_A or decays_B:
-        # 旧实现静默丢弃衰变通道（_build_two_body_decays 计算后从未使用），
-        # 会造成"开了衰变但实际无耗散"的假象——宁可显式拒绝。
         raise NotImplementedError(
             '两体演化暂不支持 Lindblad 衰变（decays_A/decays_B 须为空）。'
             '单原子耗散请用 evolve.evolve(method="lindblad")。')
@@ -540,10 +565,8 @@ def pair_evolve(states, fields_A, fields_B, psi0_A, psi0_B,
             raise ValueError(
                 '两体演化需要 cache（core.ArcCache 实例）来计算 V_dd；'
                 '请传入 cache，或显式提供 vdd_matrix。'
-                '（缺失 cache 时旧实现会静默以 V_dd=0 演化——两体退化为'
-                '两独立单体，物理错误。）')
-        # 动态页的 states 已经是实际演化所用的单体基组；V_dd 必须在
-        # 同一顺序、同一维度的基组上构造，否则矩阵元会错位到别的态。
+                '（缺 cache 时 V_dd 会静默为零，两体退化为两独立单体。）')
+        # V_dd 须在实际演化所用 states 的顺序/维度上构造，否则矩阵元错位。
         single = [dict(s) for s in states]
         V_diag, V_sec, n_kept_vdd = vdd_secular(
             cache, single, R_um, theta_deg, phi_deg, ref_A, ref_B, N,
@@ -559,13 +582,12 @@ def pair_evolve(states, fields_A, fields_B, psi0_A, psi0_B,
     # ---- 构建两体场 ----
     fields_2d = tensor_fields(fields_A, fields_B, states, N)
 
-    # ---- V_dd 非对角 secular → 常数场（omega_L=0） ----
+    # ---- V_dd 非对角 secular → 常数场（omega_L=0，保持稀疏：RK4 稀疏 matvec） ----
     if V_sec.nnz > 0:
-        V_sec_dense = V_sec.toarray() if sp.issparse(V_sec) else np.asarray(V_sec)
         V_field = {
             'kind': 'multi',
-            'M': V_sec_dense,
-            'A': np.zeros((N2, N2)),
+            'M': V_sec.tocsr(),          # 稀疏（近简并元极少，matvec O(nnz)）
+            'A': sp.csr_matrix((N2, N2)),
             'ac_shift': np.zeros(N2),
             'g_idx': [],
             'e_idx': [],

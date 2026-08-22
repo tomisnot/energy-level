@@ -53,15 +53,16 @@ print(f'  验收1：{"PASS" if (dt_auto<=60 and norm_err<1e-4 and diff<1e-4) els
 
 # ================= 2) 标准场景回归 =================
 print('\n===== 验收 2：标准场景回归 =====')
-# S1 方波 floquet
+# S1 方波 ip4（floquet 已封存至 src/_archive/evolve_floquet_pwc.py，用其交叉验证）
+from src._archive.evolve_floquet_pwc import evolve_floquet  # noqa: E402
 st1, i01, E1, fld1, _, om1, w1, _, _, _ = mb.build_s1(cache, 22.0)
 t1 = np.linspace(0, 400.0, 2001)
 ac1 = E1 - np.array([s['E_mhz'] for s in st1])
 ref1 = mb.floquet_evolve_w(np.diag(E1).astype(float), fld1['A'].astype(float),
                            w1, evolve._as_vector(st1, i01), t1, n_sub=4000)
-r1 = evolve.evolve(st1, [fld1], i01, t1, method='floquet', ac_shift_mhz=ac1)
+r1 = evolve_floquet(st1, [fld1], i01, t1, ac_shift_mhz=ac1)
 d1 = mb.maxdiff(r1['pops'], ref1)
-print(f'  S1 floquet: {d1:.2e}  {"PASS" if d1<1e-4 else "FAIL"}')
+print(f'  S1 floquet(封存): {d1:.2e}  {"PASS" if d1<1e-4 else "FAIL"}')
 ok &= d1 < 1e-4
 # S2 高斯 ip4
 env = evolve.gaussian(200.0, 100.0)

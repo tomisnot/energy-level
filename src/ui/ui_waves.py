@@ -43,6 +43,56 @@ def _smart_unit(value, units):
     return 0 if value > 0 else len(units) - 1
 
 
+# ---------------- 子能级唯一身份键（跨模块共用） ----------------
+def state_key(s):
+    """子能级身份键：(kind, n, l, j, m, energy_rounded)。
+
+    - kind='F' 时 m = m_F；kind='mJ' 时 m = m_J
+    - 末位能量（MHz，6 位小数）使键跨 B 稳定、与 F 标号无关、天然无重复；
+      旧存档（无能量位）经 find_state_index 前缀回退兼容。
+    """
+    en = round(float(s['E_mhz']), 6)
+    if s.get('kind') == 'F':
+        return ('F', int(s['n']), int(s['l']), float(s['j']),
+                float(s['mF']), en)
+    return ('mJ', int(s['n']), int(s['l']), float(s['j']),
+            float(s['m']), en)
+
+
+def find_state_index(states, spec):
+    """states 中匹配身份键 spec 的第一个索引（0 基）；找不到返回 -1。
+
+    匹配顺序：① 完整键（含能量）精确；② 前 5 元 (kind,n,l,j,m) 精确
+    （兼容旧存档无能量位 / 能量微漂）；③ (kind,n,l,j,m) 组内能量最近
+    （B 漂移后 F 标号/能量变化）。
+    """
+    if not spec:
+        return -1
+    spec = tuple(spec)
+    keys = [state_key(s) for s in states]
+    # ① 完整键精确（含能量）
+    for i, k in enumerate(keys):
+        if k == spec:
+            return i
+    # ② 前 5 元精确（旧存档 / 同 (n,l,j,m) 能量微漂）
+    if len(spec) >= 5:
+        base = spec[:5]
+        for i, k in enumerate(keys):
+            if k[:5] == base:
+                return i
+    # ③ (kind,n,l,j,m) 组内能量最近
+    base = spec[:5]
+    best, bd = -1, None
+    ref_e = spec[5] if len(spec) > 5 else None
+    for i, k in enumerate(keys):
+        if k[:5] != base:
+            continue
+        d = abs(k[5] - ref_e) if ref_e is not None else 0.0
+        if bd is None or d < bd:
+            best, bd = i, d
+    return best
+
+
 class WavePanel(QWidget):
     """波形管理：垂直堆叠可折叠波形组（＋高斯/＋方波 添加，组内 ✕ 删除）。"""
 
@@ -344,9 +394,7 @@ class WavePanel(QWidget):
         bg.setColumnStretch(3, 1)
 
         def _spec_of(s):
-            if s.get('kind') == 'F':
-                return ('F', s['n'], s['l'], s['j'], s['F'], s['mF'])
-            return ('mJ', s['n'], s['l'], s['j'], s['m'])
+            return state_key(s)
 
         def _drow(s):
             return dict(n=s['n'], l=s['l'], j=s['j'], kind=s['kind'],
@@ -401,10 +449,8 @@ class WavePanel(QWidget):
         drive_head.toggled.connect(_toggle_drive)
 
         def _find_state(spec):
-            for i, s in enumerate(self.states):
-                if _spec_of(s) == spec:
-                    return i + 1
-            return 0
+            i = find_state_index(self.states, spec)
+            return i + 1 if i >= 0 else 0
 
         if w.drive is not None:
             g_combo.setCurrentIndex(_find_state(w.drive['g']))
@@ -430,8 +476,10 @@ class WavePanel(QWidget):
             g_spec, e_spec = g_combo.currentData(), e_combo.currentData()
             if not g_spec or not e_spec:
                 return None
-            gs = next((s for s in self.states if _spec_of(s) == g_spec), None)
-            es = next((s for s in self.states if _spec_of(s) == e_spec), None)
+            gi = find_state_index(self.states, g_spec)
+            ei = find_state_index(self.states, e_spec)
+            gs = self.states[gi] if gi >= 0 else None
+            es = self.states[ei] if ei >= 0 else None
             if gs is None or es is None:
                 return None
             return (gs, es) if gs['E_mhz'] <= es['E_mhz'] else (es, gs)

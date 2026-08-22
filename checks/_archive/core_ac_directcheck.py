@@ -3,6 +3,11 @@
 AC-Stark 位移：直接哈密顿量对角化交叉验证（独立于 core.py 的解析/微扰路径）
 ============================================================================
 
+【2025-08 失效标注】legacy「逐伙伴解析/微扰」后端（ac_stark_shift_mhz）已从
+core.py 删除——AC-Stark 唯一后端 = direct（Floquet 矩阵对角化，第一性原理），
+本脚本的对照对象（legacy）不复存在，**整组失效**，保留仅作历史参考。
+若需验证 direct 后端本身，请运行 checks/core_selfcheck.py（T7/T9 等）。
+
 背景
 ----
 core.py 的 AC-Stark（ac_stark_shift_mhz）采用"逐伙伴分流"的解析/微扰路径：
@@ -79,6 +84,15 @@ _ROOT = os.path.dirname(_CHECKS)     # 项目根（core.py 所在）
 #      指向项目内 .arcdata/，Rubidium87() 实例化才无需外部写权限） ----
 sys.path.insert(0, _ROOT)
 import src            # noqa: F401
+
+# ---- 失效守卫（2025-08，必须早于加载 core）：legacy 后端已删除，本脚本
+#      对照对象（ac_stark_shift_mhz / build_level_rows(backend='legacy')）
+#      不存在，直接退出；保留仅作历史参考。 ----
+from src.core import core as _core_new  # noqa: E402
+if not hasattr(_core_new, 'ac_stark_shift_mhz'):
+    print('[core_ac_directcheck] legacy 后端已于 2025-08 删除，本脚本失效'
+          '（保留历史参考）。验证 direct 后端请运行 checks/core_selfcheck.py')
+    sys.exit(0)
 
 # ---- 加载 core（不触发 GUI / 不执行 UI 代码） ----
 spec = importlib.util.spec_from_file_location('core', os.path.join(_ROOT, 'src', 'core.py'))

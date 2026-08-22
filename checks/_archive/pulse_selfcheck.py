@@ -99,7 +99,9 @@ def main():
                          trigger=FakeEdge(0.0))
         fields = [ps.to_field(1, 0, omega0_mhz=15.0)]
         tg = np.linspace(0, 700, 701)
-        r = evolve.evolve(states, fields, 0, tg, method='pwc')
+        # pwc 已封存至 src/_archive/evolve_floquet_pwc.py（2025-08）
+        from src._archive.evolve_floquet_pwc import evolve_pwc  # noqa: E402
+        r = evolve_pwc(states, fields, 0, tg)
         norm = np.max(np.abs(r['pops'].sum(axis=1) - 1.0))
         ck.check('Pulse演化布居归一', norm < 1e-6, f'norm_err={norm:.2e}')
     except Exception as ex:

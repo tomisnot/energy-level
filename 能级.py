@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """Rb-87 能级计算软件 UI（物理核心见 core.py，可单独审查）。
 
 本文件只负责装配与编排：
@@ -18,10 +18,7 @@ from PyQt5.QtGui import QColor, QIcon, QPixmap
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QTabWidget, QStackedWidget,
                              QScrollArea, QSizePolicy, QFileDialog,
-                             QMessageBox, QLabel, QSpinBox, QDoubleSpinBox,
-                             QComboBox, QPushButton, QListWidget,
-                             QListWidgetItem, QTableWidget, QTableWidgetItem,
-                             QHeaderView, QLineEdit, QMenu, QAbstractItemView)
+                             QMessageBox, QTableWidgetItem,)
 
 from arc import Rubidium87
 from src import core

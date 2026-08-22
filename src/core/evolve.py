@@ -21,18 +21,9 @@
 - ω_{L,k}  ：光频率 = (E_e − E_g) + Δ_k；Δ_k 失谐，正 = 蓝失谐
 
 ============================================================
-演化算法（三个各有特色，精度/时间实测见 checks/mw_bench_firstprinciples.py）：
+演化算法（精度/耗时实测见 checks/mw_bench_firstprinciples.py）：
 ------------------------------------------------------------
-1) method='floquet'（默认 auto 首选）：精确 Floquet 传播子。
-   适用：**常数包络 + 单一频率**（CW / 方波脉冲 / real_field 多对驱动）。
-   只精确积分**一个周期**（中点法 n_sub 步）→ U(T) 本征分解（准能量 ε_k）
-   → 任意时刻 ψ(t)=U(τ)·W·diag(e^{-iεnT})·W†·ψ0。
-   对周期驱动是 **TDSE 精确解**（无 RWA、无光子块截断，反旋转项/Bloch–
-   Siegert 全部自动包含），**成本不随模拟时长增长**。
-   实测：N=20、ω=16.8 GHz、400 ns → 0.26 s，机器精度
-   （对比：solve_ivp 非 RWA 334 s 且误差 5.6e-4）。
-
-2) method='ip4'：相互作用绘景 RK4（第一性原理，任意时变包络）。
+1) method='ip4'（默认；auto 无耗散恒走此路）：相互作用绘景 RK4。
    光频（Ω/ωL < 1e-4）→ RWA（旋转系耦合，反旋转项误差 ~1e-7 忽略）；
    微波等强驱动（Ω/ωL ≥ 1e-4）→ **非 RWA**（保留 cos(ω t) 反旋转项）。
    旋转参考：RWA 场级联传播；非 RWA 场 e 跟随 g 共享参考（同 full_fast）。
@@ -42,32 +33,29 @@
    全 RWA 且包络恒常 → 一次对角化精确解（秒出）。
    实测：N=20 高斯脉冲 400 ns → 29 s（T/20）/ 54 s（T/40），误差 3e-5 / 1e-6。
 
-3) method='pwc'：RWA 分段常数（**最快预览**，精度 ~Ω/ωL）。
-   每段 [t_m,t_{m+1}] H 取中点 → exp(−iHΔt)（eigh），CPU 逐段 /
-   torch GPU 批量（pops 全程 GPU 累积，仅一次同步）。
-   微波强驱动下 RWA 误差可达 ~3%（实测），交互预览够用，精算用 floquet/ip4。
+2) method='lindblad' / 'lindblad_eig'（decays 非空时 auto 自动选）：
+   耗散扩展（自发辐射等马尔可夫耗散，Lindblad 主方程，第一性原理）：
+       dρ/dt = −i[H(t),ρ] + Σ_k (L_k ρ L_k† − ½{L_k†L_k, ρ})
+       L_k = √Γ_k |to_k⟩⟨from_k|（Γ 单位 MHz → 速率 Γ×1e-3 /ns；
+       跳变算符在旋转系下**时不变**——LρL† 与 L†L 中相位自动抵消，
+       故耗散项与旋转参考选择无关，第一性原理精确）。
+   - 'lindblad'    ：矩阵 RK4（ρ 为 N×N），任意时变包络，含非 RWA 载波；
+       **numba 内核**（dt/2 子网格预计算 + RK4 阶段精确采样 + 输出部分步线性
+       插值，nogil 可取消）——非 RWA 微波等大步数场景提速 ~100×；
+       backend='cpu' 强制纯 numpy 回退（无 numba 时自动回退）
+   - 'lindblad_eig'：常数 H（全 RWA + 包络恒常 + 无残留拍频）→
+       Liouvillian 本征分解，机器精度，成本与时长无关
+   decays 参数：decay(g, Γ, e) 列表；e=None → 布居丢失（累积为结果 loss）。
 
-method='auto'（默认）：常数包络 + 单频 → 'floquet'；否则 → 'ip4'。
-   （pwc 是唯一 RWA 方法，供显式快速预览 / 对比用，不自动选。）
+**2025-08 清理**：method='floquet'（精确 Floquet 传播子）与 'pwc'（RWA
+分段常数）已从本模块移除——动态分析实际只用 ip4（单体 RK4 足够快），
+Floquet 没有适用场景。需要时用封存模块
+src/_archive/evolve_floquet_pwc.py（evolve_floquet / evolve_pwc）。
 
 参考积分器（内部保留，仅 checks 交叉验证用，不作为可选 method）：
   _evolve_full / _evolve_full_hybrid —— solve_ivp 非 RWA 第一性原理（慢）。
 
 单位：能级/耦合 MHz，时间 ns，角频率 rad/ns。
-
-耗散扩展（自发辐射等马尔可夫耗散，Lindblad 主方程，第一性原理）：
-    method='lindblad' / 'lindblad_eig'（decays 非空时 auto 自动选）：
-        dρ/dt = −i[H(t),ρ] + Σ_k (L_k ρ L_k† − ½{L_k†L_k, ρ})
-        L_k = √Γ_k |to_k⟩⟨from_k|（Γ 单位 MHz → 速率 Γ×1e-3 /ns；
-        跳变算符在旋转系下**时不变**——LρL† 与 L†L 中相位自动抵消，
-        故耗散项与旋转参考选择无关，第一性原理精确）。
-    - 'lindblad'    ：矩阵 RK4（ρ 为 N×N），任意时变包络，含非 RWA 载波；
-        **numba 内核**（dt/2 子网格预计算 + RK4 阶段精确采样 + 输出部分步线性
-        插值，nogil 可取消）——非 RWA 微波等大步数场景提速 ~100×；
-        backend='cpu' 强制纯 numpy 回退（无 numba 时自动回退）
-    - 'lindblad_eig'：常数 H（全 RWA + 包络恒常 + 无残留拍频）→
-        Liouvillian 本征分解，机器精度，成本与时长无关
-    decays 参数：decay(g, Γ, e) 列表；e=None → 布居丢失（累积为结果 loss）。
 """
 
 
@@ -391,85 +379,6 @@ def hamiltonian(states, fields, t_ns, bs=False):
     return H
 
 
-# ---------------- 后端选择（仅 pwc 用） ----------------
-def _pick_backend(backend):
-    """返回是否用 torch。'auto' → numpy（实测 torch 导入 ~4 s 且小矩阵批量
-    eigh 无优势；pwc 的 numpy 路径对典型 N≤30 仅 0.1~0.3 s）。大基组/GPU
-    用户显式选 'gpu'（torch 批量 eigh）。"""
-    if backend == 'cpu':
-        return False
-    if backend == 'gpu':
-        try:
-            import torch        # noqa: F401
-        except ImportError:
-            raise RuntimeError('GPU 后端需要 torch（pip install torch）')
-        return True
-    return False
-
-
-# ============================================================
-# 算法 1：精确 Floquet 传播子（常数包络 + 单频，第一性原理，成本不随时长增长）
-# ============================================================
-def _evolve_floquet(E, mats, omega_mhz, psi0, t, n_sub=2000, record_amp=False,
-                    progress_arr=None):
-    """H(t) = diag(E) + cos(_CONV·ω·t)·Σ_k mats_k（单频 ω、常数包络）。
-
-    精确积分一个周期 T=2π/(_CONV·ω)（中点法 n_sub 步，存 U(τ) 网格）
-    → U(T) 本征分解（准能量 ε_k = −arg(λ_k)/T）
-    → 任意 t = nT + τ：ψ(t) = U(τ)·W·diag(e^{−iεnT})·W†·ψ0。
-
-    对周期驱动 = TDSE 精确解（无 RWA、无光子块截断）；误差仅来自单周期
-    数值积分（2 阶收敛，n_sub 加密到机器精度）。成本 = 一个周期积分 +
-    一次对角化 + 每输出时刻 O(N²)，**不随模拟时长增长**。
-    progress_arr（可选）：np.float64[2]，[0]=进度 0..1，[1]≠0 请求取消。
-    """
-    w = _CONV * omega_mhz
-    T = 2.0 * np.pi / w
-    N = len(psi0)
-    # 内存自适应：n_sub 过大时降档（(n_sub+1)·N²·16B ≤ ~256 MB）
-    n_sub = max(200, min(int(n_sub), int(256e6 / (N * N * 16.0))))
-    dt = T / n_sub
-    H0 = np.diag(E).astype(float)
-    Asum = np.sum(mats, axis=0).astype(float)          # 单频：Σ_k cos·A_k
-    # 单周期积分（中点法），存 U 于子步网格
-    Us = np.empty((n_sub + 1, N, N), complex)
-    Us[0] = np.eye(N)
-    U = np.eye(N, dtype=complex)
-    cw = np.cos(w * ((np.arange(n_sub) + 0.5) * dt))
-    for j in range(n_sub):
-        H = H0 + cw[j] * Asum
-        e, Ue = np.linalg.eigh(H)
-        D = np.exp(-1j * _CONV * dt * e)
-        U = Ue @ (D[:, None] * (Ue.T @ U))
-        Us[j + 1] = U
-        if progress_arr is not None and (j & 127) == 0:
-            progress_arr[0] = 0.9 * (j + 1) / n_sub
-            if progress_arr[1] != 0.0:
-                raise RuntimeError('用户取消')
-    UT = Us[-1]
-    ev, evec = np.linalg.eig(UT)
-    eps = -np.angle(ev) / T
-    a = evec.conj().T @ psi0
-    t_out = np.asarray(t, float)
-    pops = np.zeros((len(t_out), N))
-    pops[0] = np.abs(psi0) ** 2
-
-    def _psi_at(tt):
-        n = int(np.floor(tt / T))
-        tau = tt - n * T
-        j = min(int(round(tau / dt)), n_sub)
-        return Us[j] @ (evec @ (a * np.exp(-1j * eps * n * T)))
-
-    for m in range(1, len(t_out)):
-        pops[m] = np.abs(_psi_at(t_out[m])) ** 2
-        if progress_arr is not None and (m & 127) == 0:
-            progress_arr[0] = 0.9 + 0.1 * m / len(t_out)
-    psi_f = _psi_at(t_out[-1]) if record_amp else None
-    if progress_arr is not None:
-        progress_arr[0] = 1.0
-    return t_out, pops, psi_f
-
-
 # ============================================================
 # 算法 2：相互作用绘景 RK4（第一性原理，任意时变包络；光频 RWA + 微波非 RWA）
 # ============================================================
@@ -493,10 +402,9 @@ def _ip4_reference(states, fields):
     Emin = min(s['E_mhz'] for s in states)
     start = next(_key(i) for i, s in enumerate(states) if s['E_mhz'] == Emin)
     ref = {start: 0.0}
-    # 纯位移场（无驱动对 g_idx 空）不参与参考传播。**全部**耦合对都要取边
-    # ——multi 场可耦合多个 e 组（如光场 6P↔60S 耦合全部 6P F 态），若只按
-    # g_idx[0] 传播，其余 6P 态 ref 留 0 → E_rot 伪劈裂 ~2.96e8 MHz → u 相位
-    # 爆炸（曾致含 6P 组的多场场景微波驱动完全失效）。
+    # 纯位移场（无 g_idx）不参与参考传播。**全部**耦合对都要取边——
+    # multi 场可耦合多个 e 组，只按 g_idx[0] 传播会让其余组 ref 留 0 →
+    # E_rot 伪劈裂 → u 相位爆炸。
     edges = [(_key(gi), _key(ei), g['omega_L_mhz'])
              for g in rwa_g if g.get('g_idx')
              for gi, ei in zip(g['g_idx'], g['e_idx'])]
@@ -508,10 +416,8 @@ def _ip4_reference(states, fields):
                 changed = True
         if not changed:
             break
-    # 非 RWA 场：**全部**耦合组共享同一参考（e 跟随 g）。
-    # 注意：multi 场可耦合多个 e 组（如 60S↔60P1/2 与 60S↔60P3/2），
-    # 若只按第一对传播，其余 e 组 ref 留 0 → E_rot 出现 ~2.96e8 MHz 伪劈裂
-    # → w_max 爆炸 → dt 被压到 ~1e-7 ns（内存/时间灾难）。必须逐对传播。
+    # 非 RWA 场：**全部**耦合组共享同一参考（e 跟随 g）——multi 场耦合多个
+    # e 组必须逐对传播，否则其余组 ref 留 0 → E_rot 伪劈裂 → 步长灾难。
     for g in non_g:
         if not g.get('g_idx'):
             continue                     # 纯位移场：无驱动对，跳过
@@ -814,10 +720,8 @@ def _evolve_ip4(E, states, fields, psi0, t, frac=40.0, record_amp=False,
     tg = np.arange(ng) * (dt / 4.0)
     sgrid = []                          # 每项 (M, s 数组(ng,))
     for g in rwa_g:
-        # 统一场算符 M = A + diag(ac)：Rabi 耦合取半（RWA (Ω/2)env·A，
-        # 与 pair/group 场同约定）；对角 AC 位移取**全值** env·diag(ac)。
-        # （曾随 M 整体 ×1/2 → 位移减半；已用第一性原理 solve_ivp 定标修复，
-        # 见 checks/evolve_dissipative_selfcheck.py D5）
+        # 统一场算符 M = A + diag(ac)：Rabi 耦合取半（RWA (Ω/2)env·A），
+        # 对角 AC 位移取**全值** env·diag(ac)（D5 回归钉死）。
         sgrid.append((g['A'],
                       (g['omega0_mhz'] / 2.0)
                       * np.asarray(g['waveform'](tg), float)))
@@ -901,8 +805,7 @@ def _evolve_ip4(E, states, fields, psi0, t, frac=40.0, record_amp=False,
         raise RuntimeError(
             f'ip4 数值发散（dt={dt:.3g} ns）。可能原因：驱动频率过低'
             '（ω_L ≲ Ω，如 MHz 级超精细/Zeeman 驱动）或耦合过强。'
-            '可尝试：减小 ip4_frac（如 5）、降低光强，或先用 '
-            "method='pwc' 预览。")
+            '可尝试：减小 ip4_frac（如 5）或降低光强。')
     if div == 2:
         raise RuntimeError('用户取消')
     # 输出记录：从各输出时刻所在步的步首做精确部分步进
@@ -928,76 +831,7 @@ def _evolve_ip4(E, states, fields, psi0, t, frac=40.0, record_amp=False,
 
 
 # ============================================================
-# 算法 3：RWA 分段常数（最快预览；torch GPU 批量，pops 全程 GPU 累积）
-# ============================================================
-def _evolve_pwc(H0, geoms, psi0, t, use_torch, record_amp, progress_arr=None):
-    N = len(psi0)
-    dt = np.diff(t)
-    M = len(dt)
-    H0 = np.array(H0, dtype=float)
-    H0 = H0 - np.min(np.diag(H0)) * np.eye(N)   # 减共同参考（不影响布居）
-    const = H0.copy()
-    for g in geoms:
-        bs = g.get('bs_shift', 0.0)
-        for i in g['g_idx']:
-            const[i, i] -= bs
-        for i in g['e_idx']:
-            const[i, i] += bs
-    # 每段 H_m（中点采样波形）
-    tm = (t[:-1] + t[1:]) / 2.0
-    Hm = np.repeat(const[None], M, axis=0)
-    for g in geoms:
-        env = np.asarray(g['waveform'](tm), float)
-        Hm = Hm + (g['omega0_mhz'] * env / 2.0)[:, None, None] * g['A'][None]
-        # 时变 AC 位移（远失谐对）：随包络开关加 H0 对角（pwc 同 ip4 语义）
-        a = g.get('ac_shift')
-        if a is not None and np.any(np.asarray(a, float) != 0.0):
-            Hm = Hm + env[:, None, None] * np.diag(np.asarray(a, float))[None]
-
-    n_t = len(t)
-    psi = np.array(psi0, complex)
-    if progress_arr is None:
-        progress_arr = np.zeros(2)
-
-    def _tick(m):
-        if (m & 127) == 0:
-            progress_arr[0] = m / M
-            if progress_arr[1] != 0.0:
-                raise RuntimeError('用户取消')
-
-    if use_torch:
-        import torch
-        Ht = torch.from_numpy(Hm)
-        ev, U = torch.linalg.eigh(Ht)       # (M,N), (M,N,N) 实
-        U = U.to(torch.complex128)
-        psit = torch.from_numpy(psi)
-        dts = torch.from_numpy(dt)
-        pops_t = torch.zeros((n_t, N), dtype=torch.float64)
-        pops_t[0] = psit.abs() ** 2
-        for m in range(M):
-            _tick(m)
-            ph = torch.exp(-1j * _CONV * dts[m] * ev[m])
-            psit = U[m] @ (ph * (U[m].conj().T @ psit))
-            pops_t[m + 1] = psit.abs() ** 2
-        pops = pops_t.numpy()               # 仅一次 GPU→CPU 同步
-        psi = psit.numpy()
-    else:
-        pops = np.zeros((n_t, N))
-        pops[0] = np.abs(psi0) ** 2
-        for m in range(M):
-            _tick(m)
-            e, U = np.linalg.eigh(Hm[m])
-            ph = np.exp(-1j * _CONV * dt[m] * e)
-            psi = U @ (ph * (U.T @ psi))
-            pops[m + 1] = np.abs(psi) ** 2
-    progress_arr[0] = 1.0
-    if record_amp:
-        return t, pops, psi
-    return t, pops, None
-
-
-# ============================================================
-# 算法 4：Lindblad 主方程（自发辐射等马尔可夫耗散，第一性原理）
+# 算法 3：Lindblad 主方程（自发辐射等马尔可夫耗散，第一性原理）
 # ============================================================
 def decay(g, gamma_mhz, e=None):
     """衰变通道工厂 → {'from': g, 'to': e, 'gamma_mhz': Γ}。
@@ -1624,21 +1458,9 @@ def _as_vector(states, psi0):
     raise ValueError(f'无法解析初态 psi0: {psi0}')
 
 
-def _auto_pick(states, fields, t_end):
-    """auto 调度：常数包络 + 单频 → 'floquet'；否则 → 'ip4'。"""
-    if not fields:
-        return 'ip4'
-    geoms = [_field_geometry(states, f) for f in fields]
-    w0 = geoms[0]['omega_L_mhz']
-    single = all(abs(g['omega_L_mhz'] - w0)
-                 <= 1e-6 * max(abs(w0), 1.0) for g in geoms)
-    const = all(_env_samples(g['waveform'], t_end)[1] for g in geoms)
-    return 'floquet' if (single and const) else 'ip4'
-
-
 def evolve(states, fields, psi0, t_grid, method='auto', backend='auto',
-           record_amp=False, bs=False, ac_shift_mhz=None, ip4_frac=20.0,
-           floquet_n_sub=2000, progress_arr=None, log=None, decays=None):
+           record_amp=False, ac_shift_mhz=None, ip4_frac=20.0,
+           progress_arr=None, log=None, decays=None):
     """单原子含时演化（独立模块，不含任何静态能移计算）。
 
     states : make_levels 输出（全部考虑的能级）
@@ -1646,26 +1468,23 @@ def evolve(states, fields, psi0, t_grid, method='auto', backend='auto',
     psi0   : 初态——states 索引 | (n,l,j,m) | dict(n,l,j,m) | 复向量
     t_grid : 时间数组（ns）
     method : 'auto'（默认）自动调度
-               → 无耗散：常数包络 + 单频 → 'floquet'（精确，机器精度，秒级）
-                         否则            → 'ip4'（第一性原理，~20-30 s）
+               → 无耗散：恒 'ip4'（相互作用绘景 RK4，第一性原理）
                → 有耗散：旋转系 H 恒定 → 'lindblad_eig'（本征分解，机器精度）
                          否则            → 'lindblad'（矩阵 RK4，第一性原理）
-             'floquet'：精确 Floquet 传播子（仅限常数包络 + 单频；越界报错）
-             'ip4'    ：相互作用绘景 RK4（任意包络；光频 RWA + 微波非 RWA）
-             'pwc'    ：RWA 分段常数（最快预览，精度 ~Ω/ωL；微波可差 ~3%）
+             'ip4'         ：相互作用绘景 RK4（任意包络；光频 RWA + 微波非 RWA）
              'lindblad'    ：Lindblad 主方程矩阵 RK4（任意时变包络 + 耗散）
              'lindblad_eig'：常数 H + 耗散 → Liouvillian 本征分解（精确）
-             （显式 'floquet'/'ip4'/'pwc' 搭配 decays 时自动切换 Lindblad
-              路径并 log 提示——这些是纯幺正方法，不能含耗散）
+             （显式 'ip4' 搭配 decays 时自动切换 Lindblad 路径并 log 提示——
+               它是纯幺正方法，不能含耗散）
+             **2025-08 清理**：'floquet'/'pwc' 已从本模块移除（动态分析
+             实际只用 ip4；RK4 足够快）。需要精确 Floquet / RWA 分段常数时
+             用封存模块 src/_archive/evolve_floquet_pwc.py。
     decays   : decay() 输出列表（自发辐射等马尔可夫耗散；空 = 纯幺正）
-    backend: 'auto'（默认）/ 'cpu' / 'gpu'（pwc 用 torch；floquet/ip4 恒 numpy；
-              lindblad 用 numba 内核，'cpu' 强制纯 numpy 回退）
+    backend: 'auto'（默认）/ 'cpu'（lindblad 用 numba 内核，'cpu' 强制纯
+              numpy 回退；ip4 恒 numpy）
     record_amp: 是否保留末态复振幅（纯幺正 → psi_amp；lindblad → rho 末密度阵）
-    bs     : Bloch–Siegert 一阶修正（仅 pwc 有意义；floquet/ip4 非 RWA
-             已自动包含，传入忽略）
-    ip4_frac / floquet_n_sub：ip4 步长 = 最快非 RWA 载波周期/ip4_frac
-             （默认 20 → ~3e-5 误差、~20-30 s；40 → ~1e-6、~50-60 s）；
-             floquet 单周期子步数（默认 2000）。
+    ip4_frac: ip4 步长 = 最快非 RWA 载波周期/ip4_frac
+             （默认 20 → ~3e-5 误差、~20-30 s；40 → ~1e-6、~50-60 s）
     progress_arr: 可选 np.float64[2] 共享进度数组——[0]=进度 0..1（计算中
              定期写入），[1]≠0 请求取消（抛 RuntimeError('用户取消')）。
              适合放在工作线程里由 UI 轮询（numba 内核 nogil，主线程可读）。
@@ -1694,6 +1513,15 @@ def evolve(states, fields, psi0, t_grid, method='auto', backend='auto',
         progress_arr = np.zeros(2)
     log = log or (lambda *a: None)                   # 可选信息回调（GUI 转发状态栏）
 
+    if method == 'floquet' or method == 'pwc':
+        # 2025-08 清理：两种算法已封存（动态分析只用 ip4，RK4 足够快）
+        raise ValueError(
+            f"method={method!r} 已从 evolve.py 移除（动态分析只用 ip4，"
+            'RK4 足够快）。需要精确 Floquet 传播子 / RWA 分段常数（pwc）时，'
+            '请用封存模块：'
+            'from src._archive.evolve_floquet_pwc import '
+            'evolve_floquet, evolve_pwc')
+
     if method == 'auto':
         if decays:
             method = ('lindblad_eig' if _lindblad_eligible(states, fields,
@@ -1702,54 +1530,14 @@ def evolve(states, fields, psi0, t_grid, method='auto', backend='auto',
             log(f'[evolve] auto → {method}（含 {len(decays)} 个衰变通道，'
                 'Lindblad 主方程，第一性原理）')
         else:
-            method = _auto_pick(states, fields, t[-1])
-            log(f'[evolve] auto → {method}'
-                + ('（常数包络+单频，精确 Floquet）' if method == 'floquet'
-                   else '（相互作用绘景 RK4，第一性原理）'))
-    elif decays and method in ('floquet', 'ip4', 'pwc'):
+            method = 'ip4'
+            log('[evolve] auto → ip4（相互作用绘景 RK4，第一性原理）')
+    elif decays and method == 'ip4':
         # 纯幺正方法不能含耗散：自动切换 Lindblad 路径（保兼容，不静默改行为）
-        log(f'[evolve] 检测到 {len(decays)} 个衰变通道：{method} 为纯幺正'
+        log(f'[evolve] 检测到 {len(decays)} 个衰变通道：ip4 为纯幺正'
             '方法，已自动切换 Lindblad 路径')
         method = ('lindblad_eig' if _lindblad_eligible(states, fields, t[-1])
                   else 'lindblad')
-
-    if method == 'floquet':
-        geoms = [_field_geometry(states, f) for f in fields]
-        if not geoms:
-            t, pops, _ = _evolve_ip4(E, states, fields, psi0v, t,
-                                     progress_arr=progress_arr)
-            return dict(t=t, pops=pops, states=states, om_mhz=[],
-                        method='ip4', backend='numpy',
-                        loss=np.zeros(len(t)))
-        w0 = geoms[0]['omega_L_mhz']
-        ok_freq = all(abs(g['omega_L_mhz'] - w0)
-                      <= 1e-6 * max(abs(w0), 1.0) for g in geoms)
-        ok_env = all(_env_samples(g['waveform'], t[-1])[1] for g in geoms)
-        if not (ok_freq and ok_env):
-            raise ValueError(
-                'method=floquet 要求全部光场常数包络且单一频率'
-                f'（单频={ok_freq}，常数包络={ok_env}）；'
-                "时变包络/多频请用 method='ip4' 或 'auto'")
-        mats = []
-        E_f = np.array(E, float)
-        for g in geoms:
-            c = _env_samples(g['waveform'], t[-1])[0]
-            mats.append(g['omega0_mhz'] * c * g['A'])
-            # floquet 仅常数包络：ac·env = ac·常数 → 并入 H0 对角
-            a = g.get('ac_shift')
-            if a is not None and np.any(np.asarray(a, float) != 0.0):
-                E_f = E_f + c * np.asarray(a, float)
-        t, pops, psi = _evolve_floquet(E_f, mats, w0, psi0v, t,
-                                       n_sub=floquet_n_sub,
-                                       record_amp=record_amp,
-                                       progress_arr=progress_arr)
-        out = dict(t=t, pops=pops, states=states,
-                   om_mhz=[g['omega0_mhz'] for g in geoms],
-                   method='floquet', backend='numpy',
-                   loss=np.zeros(len(t)))
-        if record_amp:
-            out['psi_amp'] = psi
-        return out
 
     if method == 'ip4':
         t, pops, psi = _evolve_ip4(E, states, fields, psi0v, t,
@@ -1759,35 +1547,6 @@ def evolve(states, fields, psi0, t_grid, method='auto', backend='auto',
                    om_mhz=[g['omega0_mhz']
                            for g in [_field_geometry(states, f) for f in fields]],
                    method='ip4', backend='numpy',
-                   loss=np.zeros(len(t)))
-        if record_amp:
-            out['psi_amp'] = psi
-        return out
-
-    if method == 'pwc':
-        ref, deltas = _assign_reference(states, fields)
-        H0 = np.diag(E - ref).astype(float)
-        geoms = [_field_geometry(states, f) for f in fields]
-        for g, d in zip(geoms, deltas):
-            wL = g['omega_L_mhz']
-            g['residual_mhz'] = d
-            if abs(d) > 1e-6:
-                log(f'[evolve] 警告：光场驱动对残留拍频 {d:.3g} MHz'
-                    '（驱动图闭环不一致），按 RWA 丢弃该项（误差 ~Ω/|δ|）。')
-            g['bs_shift'] = (g['omega0_mhz'] ** 2 / (4.0 * wL)
-                             if (bs and wL > 1e-6) else 0.0)
-            r0 = g.get('real_omega0_mhz', g['omega0_mhz'])
-            ratio = r0 / max(wL, 1e-9)
-            if ratio >= 0.005:
-                log(f'[evolve] 提示：驱动 Ω/ωL={ratio:.3%}（>=0.5%），'
-                    f'RWA 误差估计 ~{0.25 * ratio:.1e}；'
-                    "精算请用 method='auto'（floquet/ip4，非 RWA 精确）。")
-        use_torch = _pick_backend(backend)
-        t, pops, psi = _evolve_pwc(H0, geoms, psi0v, t, use_torch,
-                                   record_amp, progress_arr)
-        out = dict(t=t, pops=pops, states=states,
-                   om_mhz=[g['omega0_mhz'] for g in geoms],
-                   method='pwc', backend='torch' if use_torch else 'numpy',
                    loss=np.zeros(len(t)))
         if record_amp:
             out['psi_amp'] = psi
@@ -1834,7 +1593,8 @@ def evolve(states, fields, psi0, t_grid, method='auto', backend='auto',
 
     raise ValueError(
         f"未知 method: {method}"
-        "（可选 'auto'/'floquet'/'ip4'/'pwc'/'lindblad'/'lindblad_eig'）")
+        "（可选 'auto'/'ip4'/'lindblad'/'lindblad_eig'；'floquet'/'pwc' "
+        '已封存至 src/_archive/evolve_floquet_pwc.py）')
 
 
 # ---------------- 观测辅助 ----------------

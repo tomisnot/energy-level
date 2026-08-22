@@ -16,6 +16,9 @@
 用法：D:\\python310\\python.exe -u checks\\evolve_rwa_bench.py [T_A_ns] [T_B_ns]
 默认 T_A=20（纯微波参考 ~2-8s/场景），T_B=20（阶梯参考用 full_fast 混合
 参考：光频 RWA（误差 ~1e-7）+ 微波非 RWA，只受微波步长限制，~1s/ns）。
+
+**2025-08**：pwc（RWA 分段常数）已从 evolve.py 封存，本基准改用封存模块
+src/_archive/evolve_floquet_pwc.py 的 evolve_pwc（等价旧 method='pwc'）。
 """
 import os
 import sys
@@ -26,6 +29,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np
 from arc import Rubidium87
 from src import core, evolve
+from src._archive.evolve_floquet_pwc import _evolve_pwc, evolve_pwc
 
 T_A = float(sys.argv[1]) if len(sys.argv) > 1 else 20.0
 T_B = float(sys.argv[2]) if len(sys.argv) > 2 else 20.0
@@ -41,7 +45,7 @@ def old_rwa_evolve(states, fields, psi0, t):
         for i in g['e_idx']:
             H0[i, i] -= g['omega_L_mhz']
     psi0v = evolve._as_vector(states, psi0)
-    _, pops, _ = evolve._evolve_pwc(H0, geoms, psi0v, t, False, False)
+    _, pops, _ = _evolve_pwc(H0, geoms, psi0v, t, False, False)
     return pops
 
 
@@ -65,8 +69,8 @@ for om in (30.0, 100.0, 300.0):
     _, ref, _ = evolve._evolve_full(EA, geoms, psiA, tA, False)
     dt_ref = time.time() - t0
     t0 = time.time()
-    r_rwa = evolve.evolve(statesA, fields, 0, tA, method='pwc', bs=False)
-    r_bs = evolve.evolve(statesA, fields, 0, tA, method='pwc', bs=True)
+    r_rwa = evolve_pwc(statesA, fields, 0, tA, bs=False)
+    r_bs = evolve_pwc(statesA, fields, 0, tA, bs=True)
     dt_alg = time.time() - t0
     e_rwa = np.max(np.abs(r_rwa['pops'] - ref))
     e_bs = np.max(np.abs(r_bs['pops'] - ref))
@@ -95,8 +99,8 @@ for om_mw, det_mw in ((30.0, 0.0), (100.0, 0.0), (300.0, 0.0)):
     _, ref, _ = evolve._evolve_full_hybrid(EB, statesB, fields, psiB, tB, False)
     dt_ref = time.time() - t0
     t0 = time.time()
-    r_new = evolve.evolve(statesB, fields, 1, tB, method='pwc', bs=False)
-    r_bs = evolve.evolve(statesB, fields, 1, tB, method='pwc', bs=True)
+    r_new = evolve_pwc(statesB, fields, 1, tB, bs=False)
+    r_bs = evolve_pwc(statesB, fields, 1, tB, bs=True)
     r_old = old_rwa_evolve(statesB, fields, 1, tB)
     dt_alg = time.time() - t0
     e_old = np.max(np.abs(r_old - ref))

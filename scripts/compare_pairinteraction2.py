@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
-"""对比第二部分：Zeeman（mJ 级）、DC-Stark ↔ AC-SOS 交叉验证。
+"""对比第二部分：Zeeman（mJ 级）、DC-Stark ↔ AC(ω→0) 交叉验证。
 
 pairinteraction 的 Rb SQDT 模型忽略超精细 → 全部在 fine 结构 (n,l,j,mJ) 级对比。
-AC↔DC 交叉验证原理：本项目远失谐 SOS 项 = −(E0²/4ħ)Σ|d|²·2ω_ki/(ω_ki²−ω²)，
+AC↔DC 交叉验证原理：本项目 AC 的远失谐项 = −(E0²/4ħ)Σ|d|²·2ω_ki/(ω_ki²−ω²)，
 当激光频率 ω→0（远低于所有跃迁）时退化为 −(E0²/2ħ)Σ|d|²/ω_ki = ½·DC Stark。
 故本项目 AC(ω→0) 应 ≈ pairinteraction DC Stark(同 E0)/2。
+（2025-08：AC-Stark 唯一后端 = direct Floquet 对角化，legacy 已删。）
 """
 import sys
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -59,13 +60,15 @@ I_wm2 = I_mw * core.MW_PER_CM2_TO_W_PER_M2
 E0 = (2.0 * I_wm2 / (core.epsilon_0 * core.c)) ** 0.5  # V/m
 print(f'  E0 = {E0:.4f} V/m (I={I_mw} mW/cm²)')
 
-# 本项目：legacy AC @ 极低频率（ω→0，纯 SOS 区）
+# 本项目：direct AC @ 极低频率（ω→0，准静态极限；legacy 后端已于
+# 2025-08 删除，AC-Stark 唯一后端 = direct Floquet 对角化）
 groups = [dict(n=60, l=0, j=0.5, label='60S', color='r')]
 for f_ghz in (0.1, 1.0):
     cfg = dict(enabled=True, intensity=I_mw,
                frequency_hz=f_ghz * 1e9, polarization='π')
-    ac = core.ac_stark_shift_mhz(cache, groups[0], 0.5, groups, cfg, B_gauss=0.0)
-    print(f'  本项目 AC @ ω={f_ghz} GHz = {ac*1e3:+.4f} kHz')
+    shifts = core.direct_ac_stark_shifts(cache, groups, cfg, B_gauss=0.0)
+    ac = shifts[(60, 0, 0.5, 'm_J=+0.5', 0)]
+    print(f'  本项目 direct AC @ ω={f_ghz} GHz = {ac*1e3:+.4f} kHz')
 
 # pairinteraction DC Stark：60S 基组（含近邻 Rydberg 态）
 basis = pi.BasisAtom("Rb", n=(58, 62), l=(0, 3), m=(0.5, 0.5))
@@ -74,4 +77,4 @@ sysdc = pi.SystemAtom(basis).set_electric_field([0, 0, E0], unit="V/m").diagonal
 ket = pi.KetAtom("Rb", n=60, l=0, j=0.5, m=0.5)
 e_shift = sysdc.get_corresponding_energy(ket, unit="MHz") - ket.get_energy(unit="MHz")
 print(f'  PI DC-Stark 位移(60S mJ+0.5) = {e_shift*1e3:+.4f} kHz')
-print(f'  PI DC/2 = {e_shift*1e3/2:+.4f} kHz  ← 应与本项目 AC(ω→0) 接近')
+print(f'  PI DC/2 = {e_shift*1e3/2:+.4f} kHz  ← 与本项目 AC(ω→0) 同量级比较')

@@ -43,11 +43,14 @@ pops_ref = np.abs(sol.y).T ** 2          # (n_t, N)
 
 print(f'\n恒定方波（Ω=20MHz, Δ=0）演化 400ns：')
 ok = True
-for method in ('pwc', 'ip4'):
+# pwc 已封存至 src/_archive/evolve_floquet_pwc.py（2025-08）
+from src._archive.evolve_floquet_pwc import evolve_pwc  # noqa: E402
+for method, caller in (('pwc', evolve_pwc), ('ip4', evolve.evolve)):
     for backend in ('cpu', 'auto'):
         t0 = time.time()
-        r = evolve.evolve(states, fields, psi0, t, method=method,
-                          backend=backend)
+        kw = dict(backend=backend) if method == 'pwc' else dict(method='ip4',
+                                                                backend=backend)
+        r = caller(states, fields, psi0, t, **kw)
         dt = time.time() - t0
         err = np.max(np.abs(r['pops'] - pops_ref))
         norm = np.max(np.abs(r['pops'].sum(axis=1) - 1.0))
@@ -56,9 +59,9 @@ for method in ('pwc', 'ip4'):
         ok &= (err < 1e-5 and norm < 1e-9)
 
 # ---- 多光场（共享下态 60S） ----
-r3 = evolve.evolve(states, [evolve.field(2, 1, omega0_mhz=10.0),
-                            evolve.field(2, 0, omega0_mhz=10.0)],
-                   2, t, method='pwc')
+r3 = evolve_pwc(states, [evolve.field(2, 1, omega0_mhz=10.0),
+                         evolve.field(2, 0, omega0_mhz=10.0)],
+                2, t)
 norm3 = np.max(np.abs(r3['pops'].sum(axis=1) - 1.0))
 print(f'多光场（两 π 驱动共享下态）：归一误差 {norm3:.2e}')
 ok &= (norm3 < 1e-9)
@@ -66,7 +69,7 @@ ok &= (norm3 < 1e-9)
 # ---- 组驱动（复用 core 偶极矩阵元） ----
 fg = evolve.group_field(cache, states, dict(n=6, l=1, j=1.5),
                         dict(n=60, l=0, j=0.5), pol='π', omega0_mhz=20.0)
-r4 = evolve.evolve(states, [fg], 2, t, method='pwc')
+r4 = evolve_pwc(states, [fg], 2, t)
 norm4 = np.max(np.abs(r4['pops'].sum(axis=1) - 1.0))
 print(f'组驱动（core 偶极 π）：归一误差 {norm4:.2e}')
 ok &= (norm4 < 1e-9)
@@ -76,7 +79,7 @@ t2 = np.linspace(0, 800.0, 4001)
 fields2 = [evolve.field(1, 2, omega0_mhz=30.0,
                         waveform=evolve.gaussian(400.0, 60.0))]
 t0 = time.time()
-r2 = evolve.evolve(states, fields2, psi0, t2, method='pwc')
+r2 = evolve_pwc(states, fields2, psi0, t2)
 dt2 = time.time() - t0
 gp = evolve.group_pops(states, r2['pops'],
                        [dict(n=6, l=1, j=1.5), dict(n=60, l=0, j=0.5)])
@@ -104,8 +107,8 @@ ib = big.index({'n': 6, 'l': 1, 'j': 1.5, 'm': 0.5})
 ie = big.index({'n': 60, 'l': 0, 'j': 0.5, 'm': 0.5})
 t_big = np.linspace(0, 400.0, 2001)
 t0 = time.time()
-r5 = evolve.evolve(states_big, [evolve.field(ib, ie, omega0_mhz=20.0)],
-                   ie, t_big, method='pwc')
+r5 = evolve_pwc(states_big, [evolve.field(ib, ie, omega0_mhz=20.0)],
+                ie, t_big)
 dt5 = time.time() - t0
 norm5 = np.max(np.abs(r5['pops'].sum(axis=1) - 1.0))
 print(f'\n大基组 N={len(states_big)}（含高能旁观态）：耗时 {dt5:.2f}s，'

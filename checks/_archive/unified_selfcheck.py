@@ -1,9 +1,13 @@
 # -*- coding: utf-8 -*-
 """统一计算层 selfcheck（U 系列）：build_system + drive + response_spectrum。
 
+【2025-08 失效标注】U2 对照 legacy ac_stark_shift_mhz（已删除）；U2 已失效
+（build_system 的 static_cfg['ac_stark'] 能移现走 core.direct_ac_stark_shifts）。
+其余项（U1/U3-U6）仍有效。本脚本保留历史参考，不再进日常回归。
+
 核心命题：单体/两体共用同一引擎，仅影响因素不同。U 系列逐项验证统一接口：
     U1  单体寻址光驱动 vs 解析两能级 Rabi（6P3/2 F=3 mF=3 ↔ 60S mJ=+0.5）
-    U2  单体微波能移进 H == ac_stark_shift_mhz 逐态
+    U2  单体微波能移进 H == ac_stark_shift_mhz 逐态（失效，见上）
     U3  build_system(n_body=2).single/H == pair_core.pair_hamiltonian 直接调用
     U4  两体 drive == pair_drive_dressed 直接调用
     U5  response_spectrum 扫频在共振处初态流失最大
@@ -65,23 +69,23 @@ def u_single_drive():
 
 
 def u_ac_stark_into_H():
-    """U2: 单体微波能移进 H == ac_stark_shift_mhz 逐态。"""
+    """U2: 单体微波能移进 H == direct_ac_stark_shifts（legacy 已删，2025-08 改用 direct）。"""
     cache = _cache()
     groups = [dict(n=60, l=0, j=0.5), dict(n=60, l=1, j=0.5)]
     f_mw0 = core.transition_frequency_hz(cache.atom, 60, 0, 0.5, 60, 1, 0.5)
-    # 远失谐 20GHz（≫ 60S↔60P Rabi ~GHz），保证纯二阶能移区
-    mw = dict(frequency_hz=f_mw0 + 20e9, intensity=200.0, polarization='π',
+    # 远失谐 20GHz；I=1 mW/cm² → 60S↔60P Rabi ≈ 1.4 GHz ≪ Δ（纯二阶能移区）
+    mw = dict(frequency_hz=f_mw0 + 20e9, intensity=1.0, polarization='π',
               enabled=True)
     s1 = driver.build_system(cache, groups, 1, static_cfg=dict(ac_stark=mw))
     s0 = driver.build_system(cache, groups, 1)
     d0 = s1['H'].diagonal().real - s0['H'].diagonal().real
-    # 对 60S mJ=+0.5 对照直接 ac_stark_shift_mhz（同一 cfg，含 enabled）
+    # 对 60S mJ=+0.5 对照 direct 位移（direct_ac_stark_shifts，同一 cfg）
+    ref = core.direct_ac_stark_shifts(cache, groups, mw, 0.0)
     s = next(x for x in s1['single']
              if x['n'] == 60 and x['l'] == 0 and x['qstr'] == 'm_J=+0.5')
-    g = next(g for g in groups if (g['n'], g['l'], g['j']) == (60, 0, 0.5))
-    ref = core.ac_stark_shift_mhz(cache, g, 0.5, groups, mw, 0.0)
     i = next(k for k, x in enumerate(s1['single']) if x is s)
-    ch.close('U2 微波能移入 H == ac_stark_shift_mhz', d0[i], ref,
+    ref_i = ref[(60, 0, 0.5, 'm_J=+0.5', 0)]
+    ch.close('U2 微波能移入 H == direct 位移', d0[i], ref_i,
              rtol=1e-9, atol=1e-6)
     # 位移应显著且远小于失谐（纯远失谐能移 ≈ Ω²/4Δ）
     ch.check('U2b 位移显著且 ≪ 失谐（纯远失谐能移）',

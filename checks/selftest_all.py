@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """精简回归入口：核心自检（约 1.5 分钟）。
 
-    core_selfcheck.py              单原子静态（能级/偶极/AC 位移，24 项）
+    core_selfcheck.py              单原子静态（能级/偶极/AC 位移，22 项）
     evolve_dissipative_selfcheck.py  Lindblad 耗散引擎（解析衰变/时变/退相/
                                      ac 约定回归/numba≡numpy，18 项）
     ui_selftest.py                 UI 回归（主窗口/编辑器/TTL/动态页/存档恢复）
@@ -10,6 +10,10 @@
 
 其余自检（两体 pair/unified、STIRAP/拉曼、pulse 模块、Floquet 交叉验证、
 单原子 evolve）已归档到 checks/_archive/，需要时单独运行，不进日常回归。
+（2025-08：floquet/pwc 算法已从 evolve.py 封存至
+src/_archive/evolve_floquet_pwc.py——动态分析只用 ip4；相关基准
+evolve_matrix.py / mw_bench_firstprinciples.py / evolve_rwa_bench.py /
+acceptance_state.py 均已改引封存模块。）
 
 用法：
   python checks\\selftest_all.py       # 全量（约 1.5 分钟）

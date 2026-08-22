@@ -26,6 +26,7 @@ from ..core import core, evolve, pair_core
 from . import ui_waves
 from ..core import waveforms
 from .evolve_worker import EvolveWorker
+from .ui_waves import state_key, find_state_index
 
 
 class DynamicPanel(QWidget):
@@ -198,7 +199,9 @@ class DynamicPanel(QWidget):
         rowt.addWidget(self.near_cutoff_sb)
         rowt.addWidget(QLabel('方法'))
         self.method_cb = QComboBox()
-        self.method_cb.addItems(['auto', 'floquet', 'ip4', 'pwc'])
+        # 动态分析只用相互作用绘景 RK4（auto 无耗散恒走 ip4；有耗散走
+        # lindblad）。floquet/pwc 已封存至 src/_archive/evolve_floquet_pwc.py。
+        self.method_cb.addItems(['auto', 'ip4'])
         rowt.addWidget(self.method_cb)
         p.addLayout(rowt)
 
@@ -286,27 +289,38 @@ class DynamicPanel(QWidget):
         self._on_m_changed()
 
     def _on_m_changed(self, *_):
-        """基组变化 → 刷新初态下拉（保留当前选择）+ 布居态列表 + 波形辅助 g/e 下拉。"""
+        """基组变化 → 刷新初态下拉（保留当前选择）+ 波形辅助 g/e 下拉。"""
         states = self._current_states()
-        # 单原子初态
-        cur = self.psi_combo.currentText()
-        self.psi_combo.clear()
-        for s in states:
-            self.psi_combo.addItem(s['label'])
-        if cur:
-            idx = self.psi_combo.findText(cur)
-            if idx >= 0:
-                self.psi_combo.setCurrentIndex(idx)
-        # 双原子初态（A/B 各自独立选择）
-        for combo in (self.psi_combo_A, self.psi_combo_B):
-            cur_t = combo.currentText()
+        self._states = list(states)      # 供 serialize_state 把初态索引映射为身份键
+        pending = getattr(self, '_pending_psi_keys', None)
+
+        def _fill(combo, pending_key, fallback_text):
             combo.clear()
             for s in states:
                 combo.addItem(s['label'])
-            if cur_t:
-                idx = combo.findText(cur_t)
+            if pending_key:
+                i = find_state_index(states, pending_key)
+                if i >= 0:
+                    combo.setCurrentIndex(i)
+                    return
+            if fallback_text:
+                idx = combo.findText(fallback_text)
                 if idx >= 0:
                     combo.setCurrentIndex(idx)
+            elif combo.count():
+                combo.setCurrentIndex(0)
+
+        # 单原子初态
+        cur = self.psi_combo.currentText()
+        _fill(self.psi_combo,
+              pending.get('single') if pending else None, cur)
+        # 双原子初态（A/B 各自独立选择）
+        cur_t = [c.currentText() for c in (self.psi_combo_A, self.psi_combo_B)]
+        for k, combo in enumerate((self.psi_combo_A, self.psi_combo_B)):
+            _fill(combo,
+                  pending.get('A' if k == 0 else 'B') if pending else None,
+                  cur_t[k])
+        self._pending_psi_keys = None
         self._refresh_decay_combos(states)
         # 基组变化 → 波形面板辅助 g/e 下拉数据源同步
         for wp in (self.wave_panel, self.wave_panel_A, self.wave_panel_B):
@@ -485,6 +499,10 @@ class DynamicPanel(QWidget):
                 'psi': self.psi_combo.currentIndex(),
                 'psi_A': self.psi_combo_A.currentIndex(),
                 'psi_B': self.psi_combo_B.currentIndex(),
+                # 身份键（跨 B 稳定，恢复按最近能量匹配；旧档无此字段时回退索引）
+                'psi_key': self._psi_key_for(self.psi_combo),
+                'psi_key_A': self._psi_key_for(self.psi_combo_A),
+                'psi_key_B': self._psi_key_for(self.psi_combo_B),
                 't_max': self.tmax_sb.value(),
                 'npts': self.npts_sb.value(),
                 'method': self.method_cb.currentText(),
@@ -501,6 +519,14 @@ class DynamicPanel(QWidget):
             'waves_B': waveforms.serialize_waves(self.wave_panel_B.waves),
             'decays': [dict(c) for c in self.decay_cfgs],
         }
+
+    def _psi_key_for(self, combo):
+        """组合框当前选中态的身份键（JSON 友好 list）；无可用时返回 None。"""
+        i = combo.currentIndex()
+        st = getattr(self, '_states', None)
+        if st and 0 <= i < len(st):
+            return list(state_key(st[i]))
+        return None
 
     def _serialize_dynamic(self):
         """兼容旧接口：由本模块导出自己的状态快照。"""
@@ -546,10 +572,16 @@ class DynamicPanel(QWidget):
             self.wave_panel_B.set_waves(waveforms.restore_waves(wvB))
         self.decay_cfgs = [dict(c) for c in state.get('decays', [])]
         self._update_decay_list()
-        # 初态（基组下拉由 groups_changed 刷新填充；先设索引再触发刷新）
-        self.psi_combo.setCurrentIndex(int(dyn.get('psi', 0)))
-        self.psi_combo_A.setCurrentIndex(int(dyn.get('psi_A', 0)))
-        self.psi_combo_B.setCurrentIndex(int(dyn.get('psi_B', 0)))
+        # 初态（基组下拉由 groups_changed 刷新填充；优先身份键，旧档回退索引）
+        pkeys = {'single': dyn.get('psi_key'),
+                 'A': dyn.get('psi_key_A'),
+                 'B': dyn.get('psi_key_B')}
+        self._pending_psi_keys = pkeys if any(
+            k for k in pkeys.values() if k) else None
+        if self._pending_psi_keys is None:
+            self.psi_combo.setCurrentIndex(int(dyn.get('psi', 0)))
+            self.psi_combo_A.setCurrentIndex(int(dyn.get('psi_A', 0)))
+            self.psi_combo_B.setCurrentIndex(int(dyn.get('psi_B', 0)))
         self.main.groups_changed.emit()
         # 显示预览由波形重算（wave_data 不再存档）
         self._on_waves_changed()
@@ -732,8 +764,8 @@ class DynamicPanel(QWidget):
         if error is not None:
             QMessageBox.warning(
                 self, '演化失败',
-                f'{error}\n\n可尝试：改用 pwc（快速预览）、降低光强、'
-                '或调整驱动频率/失谐。')
+                f'{error}\n\n可尝试：降低光强、调整驱动频率/失谐，'
+                '或减小 t_max/点数。')
             return
         self._last_res = res
         self._draw_top(self.wave_data)

@@ -7,3 +7,19 @@
    b. 二阶 vdW 能移进入演化哈密顿（当前 secular RWA 模型丢弃远失谐元素）
    c. GUI 双原子模式把自发辐射档位真正启用（需 a 完成）
 4. 动态模拟加入两体效应（GUI 双原子模式已通：cache 传入 → V_dd 生效）
+5.已核查并修复（2025-08）：ARC breitRabi 的标号 bug（标签冻结于 1e-4 T 且能量列按
+  B 重排）对本项目无直接影响——src/ 从不调用 ARC 任何磁场相关函数（仅有零场
+  getEnergy/getLandegjExact/getHFSCoefficients/getDipoleMatrixElement），
+  磁场物理全部走自研 get_hyperfine_levels 数值对角化（独立实现验证能量与
+  mJ 振幅一致至 1e-12 MHz）。
+  自研 F 标号原来的逐态 argmax 在 j=3/2 且 Zeeman~HFS 处会碰撞：6P3/2 在
+  B≳20 G（含默认 21.7 G）、5P3/2 在 B≳55 G 起出现重复 (F,mF) 标签（如
+  F=1,mF=0 被标成 F=0，两态能量差 ~77 MHz）。已修复：
+  a. core.get_hyperfine_levels 改为块内双射指派（linear_sum_assignment，
+     绝热约定/Breit–Rabi 图惯例）——全 B 范围无重复标签，能量与振幅不变；
+  b. fields.py 右键扫描光强 / ui_waves 辅助定参 g/e 改用带能量位或 occ 的
+     唯一身份键（state_key/find_state_index，旧存档前缀回退）；
+  c. ui_dynamic 初态存档新增 psi_key/psi_key_A/B（(kind,n,l,j,m,energy)，
+     恢复按最近能量匹配），旧档仍回退索引。
+  全套回归 checks/selftest_all.py 通过（core 22 + 耗散 18 + UI 35 + pair 12）。
+  复现脚本：tempsimu/check_breitrabi_concern{1..4}.py

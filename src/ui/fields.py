@@ -454,31 +454,46 @@ class FieldPanel(QWidget):
 # 光场上层处理：能级对频移求解 + 扫描光强 + 右键对话框
 # ============================================================
 
+def _occ_of(rows, label, qstr, occ=0):
+    """rows 中第 occ 个 (label, qstr) 匹配行（缺省 occ=0 = 首个）；找不到 None。
+
+    2025-08 起 get_hyperfine_levels 双射指派后同组不再有重复 (F,mF)，
+    occ 防御性保留（万一其它路径引入重复时仍可精确定位）。"""
+    k = 0
+    for r in rows:
+        if r['label'] == label and r['qstr'] == qstr:
+            if k == occ:
+                return r
+            k += 1
+    return None
+
+
 def level_shift_at_intensity(cache, groups, cfg, B_gauss, level, I_mw):
-    """给定光强下，单一能级 (label, qstr) 的 AC 位移 (MHz)。
+    """给定光强下，单一能级 (label, qstr[, occ]) 的 AC 位移 (MHz)。
 
     扫描目标 = 该能级自己的 AC 位移（与"失谐定频率"的能级对语义区分）。
     统一 direct 后端。能级不在可见组返回 None。
     """
-    label, qstr = level
+    label, qstr = level[0], level[1]
+    occ = int(level[2]) if len(level) > 2 else 0
     cfg = dict(cfg)
     cfg['enabled'] = True
     cfg['intensity'] = I_mw
-    rows = core.build_level_rows(cache, B_gauss, groups, cfg, groups,
-                                 backend='direct')
-    for r in rows:
-        if r['label'] == label and r['qstr'] == qstr:
-            return r['ac']
-    return None
+    rows = core.build_level_rows(cache, B_gauss, groups, cfg, groups)
+    r = _occ_of(rows, label, qstr, occ)
+    return r['ac'] if r is not None else None
 
 
 def _sweep_level_shifts(keys, shifts, level):
     """从 direct_ac_stark_sweep 结果提取单一能级位移数组 (MHz)；缺失返回 None。"""
-    label, qstr = level
-    for k in keys:
-        n, l, j, q, occ = k
+    label, qstr = level[0], level[1]
+    occ = int(level[2]) if len(level) > 2 else 0
+    k = 0
+    for n, l, j, q, oc in keys:
         if core.auto_label(n, l, j) == label and q == qstr:
-            return shifts[k]      # 重复 qstr 取第一个
+            if k == occ:
+                return shifts[(n, l, j, q, oc)]
+            k += 1
     return None
 
 
@@ -602,14 +617,21 @@ def _candidate_pairs(cache, groups, B_gauss, cfg):
 def _candidate_levels(cache, groups, B_gauss, cfg):
     """全部子能级，按当前光下 |AC 位移| 降序。
 
-    返回 [(label, qstr, ac_mhz)]：受该光影响的能级排前面
+    返回 [(label, qstr, occ, ac_mhz)]：受该光影响的能级排前面
     （扫描目标是单一能级，选受影响者才有意义）。
-    """
+    occ = 同 (label, qstr) 组内的出现序号（2025-08 起双射指派后恒为 0，
+    防御性保留：万一重复仍可精确定位）。"""
     on = dict(cfg)
     on['enabled'] = True
     rows = core.build_level_rows(cache, B_gauss, groups, on, groups)
-    lv = [(r['label'], r['qstr'], r['ac']) for r in rows]
-    lv.sort(key=lambda t: -abs(t[2]))
+    seen = {}
+    lv = []
+    for r in rows:
+        base = (r['label'], r['qstr'])
+        occ = seen.get(base, 0)
+        seen[base] = occ + 1
+        lv.append((r['label'], r['qstr'], occ, r['ac']))
+    lv.sort(key=lambda t: -abs(t[3]))
     return lv
 
 
@@ -687,10 +709,11 @@ class IntensityScanDialog(QDialog):
         lay = QVBoxLayout(self)
         form = QFormLayout()
         self.level_combo = QComboBox()
-        for (label, qstr, ac) in self._levels:
+        for (label, qstr, occ, ac) in self._levels:
+            tag = f' #{occ + 1}' if occ else ''
             self.level_combo.addItem(
-                f'{label} {qstr}   (当前位移 {ac:+.3f} MHz)',
-                (label, qstr))
+                f'{label} {qstr}{tag}   (当前位移 {ac:+.3f} MHz)',
+                (label, qstr, occ))
         form.addRow('目标能级', self.level_combo)
         self.target_spin = QDoubleSpinBox()
         self.target_spin.setRange(-1e6, 1e6)

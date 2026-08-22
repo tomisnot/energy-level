@@ -376,11 +376,13 @@ def _static_shifts(cache, single, groups, static_cfg, B_gauss):
 
     static_cfg['ac_stark']：AC 能移光（单份 dict 或多份列表，全部作能移）；
     static_cfg['dc_stark']：静电场强度 E (V/cm)。均线性叠加。
+    AC 能移走 core.direct_ac_stark_shifts（Floquet 矩阵对角化，第一性原理；
+    legacy 逐态 ac_stark_shift_mhz 已于 2025-08 删除）。
     """
     if not static_cfg:
         return None
     shifts = np.zeros(len(single))
-    # AC 光能移
+    # AC 光能移（direct 一次对角化得全部子能级位移，按 (n,l,j,qstr,occ) 填回）
     ac_list = static_cfg.get('ac_stark')
     if ac_list:
         if isinstance(ac_list, dict):
@@ -388,15 +390,12 @@ def _static_shifts(cache, single, groups, static_cfg, B_gauss):
         for ac in ac_list:
             ac = dict(ac)
             ac.setdefault('enabled', True)   # 传入即视为启用
+            ac_shifts = core.direct_ac_stark_shifts(cache, groups, ac, B_gauss)
+            if not ac_shifts:
+                continue
+            keys = core._occ_keys_direct(single)
             for i, s in enumerate(single):
-                g = next((g for g in groups
-                          if (g['n'], g['l'], g['j']) == (s['n'], s['l'], s['j'])),
-                         None)
-                if g is None:
-                    continue
-                m = s['mj'] if s['kind'] == 'mJ' else s['mF']
-                shifts[i] += core.ac_stark_shift_mhz(cache, g, m, groups, ac,
-                                                     B_gauss)
+                shifts[i] += ac_shifts.get(keys[i], 0.0)
     # 静电场能移（DC-Stark，二阶 SOS）
     e_vpcm = static_cfg.get('dc_stark')
     if e_vpcm:

@@ -298,6 +298,21 @@ def t5():
     _check('对角位移进入 V_diag',
            abs(V_diag[k_ss] - V_diag[0]) < 1e-9 or abs(V_diag[k_ss]) > 0,
            f'V_diag[|SS⟩]={V_diag[k_ss]:.4f} MHz')
+    # vdW 并入（2025-08）：被丢弃的远失谐元之二阶位移 |V|²/Δ 并入对角——
+    # V_diag[|SS⟩] == 基组内丢弃通道 Σ|V|²/Δ（与 pair_core.vdw_shift 同物理，基组截断）
+    V_full = pair_core.vdd_sparse(cache, [dict(s) for s in states],
+                                  5.0, 0.0, 0.0).toarray()
+    manual = 0.0
+    for b in range(N * N):
+        v = abs(V_full[k_ss, b])
+        if b == k_ss or v < 1e-9:
+            continue
+        delta = E_rot_2d[k_ss] - E_rot_2d[b]
+        if abs(delta) >= 10.0 * v:            # 丢弃通道 → v²/Δ
+            manual += v * v / delta
+    _check('vdW 并入对角 = 基组内 Σ|V|²/Δ',
+           abs(V_diag[k_ss] - manual) < 1e-9,
+           f'V_diag={V_diag[k_ss]:.6f} manual={manual:.6f} MHz')
 
 
 # ==================================================================
