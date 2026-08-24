@@ -9,8 +9,10 @@
   波形管理（WavePanel：频率/光强/偏振/包络/偏移）· 初态 · 时间范围/点数 ·
     演化方法 · 自发辐射 · 运行
 """
+import json
+
 import numpy as np
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QEvent
 from PyQt5.QtGui import QColor, QIcon, QPixmap
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                              QPushButton, QSpinBox, QDoubleSpinBox, QComboBox,
@@ -21,6 +23,7 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.colors import LogNorm
 from matplotlib import colormaps
+from matplotlib.ticker import MaxNLocator
 
 from ..core import core, evolve, pair_core
 from . import ui_waves
@@ -62,26 +65,24 @@ class DynamicPanel(QWidget):
     def on_light(self):
         self.refresh_groups()
 
-    # ---------- 画布：上光场、下演化 ----------
+    # ---------- 画布：上光场（A/B 双子图）、下演化 ----------
     def _build_canvases(self):
+        # 顶部波形图：上下两个子图（单原子只用 A 格并拉满；双原子 A 上 B 下）
         self.fig_top = Figure(figsize=(7, 3.2), dpi=100)
-        self.ax_top = self.fig_top.add_subplot(111)
-        self.fig_top.subplots_adjust(left=0.07, right=0.97, top=0.93,
-                                     bottom=0.10)
+        self.ax_topA = self.fig_top.add_subplot(211)
+        self.ax_topB = self.fig_top.add_subplot(212)
         self.canvas_top = FigureCanvas(self.fig_top)
         self.fig_bot = Figure(figsize=(7, 3.6), dpi=100)
         self.ax_bot = self.fig_bot.add_subplot(111)
-        self.fig_bot.subplots_adjust(left=0.07, right=0.97, top=0.93,
-                                     bottom=0.10)
         self.canvas_bot = FigureCanvas(self.fig_bot)
-        self.ax_top.set_title('光场光强 I(t)（各波形通道，颜色=频率）')
-        self.ax_bot.set_title('态布居 P(t)')
-        for ax in (self.ax_top, self.ax_bot):
+        # 统一边距：left/right 与布居图一致 → 上下时间轴对齐；顶部不设标题省空间
+        for fig in (self.fig_top, self.fig_bot):
+            fig.subplots_adjust(left=0.07, right=0.95, top=0.97, bottom=0.08)
+        for ax in (self.ax_topA, self.ax_topB, self.ax_bot):
             ax.set_xlabel('t (ns)'); ax.grid(alpha=0.3)
             ax.spines['right'].set_visible(False)
             ax.spines['top'].set_visible(False)
-        self.ax_top.set_ylabel('光强 (mW/cm²)')
-        self.ax_bot.set_ylabel('布居')
+        self.ax_topB.set_visible(False)      # 单原子默认只显示 A 格
 
     # ---------- 布局 ----------
     def _build_controls(self):
@@ -130,20 +131,35 @@ class DynamicPanel(QWidget):
         p.addWidget(self._vdd_box)
         self._vdd_box.setVisible(False)
 
-        # ---- 波形管理：单原子 = 单 WavePanel；双原子 = QTabWidget(A/B) ----
-        self.wave_panel = ui_waves.WavePanel()       # 单原子默认波形面板
+        # ---- 波形管理：单原子与双原子「原子A」共用同一面板 ----
+        # 先在单原子模式校准波形 → 切到双原子时原子 A 原样迁移，无需重配。
+        # 实现：wave_panel_A 就是 wave_panel（同一实例），模式切换时把该实例
+        # 在「单原子槽位」与「tab-A 槽位」之间整体迁移（Qt widget 可换 parent）。
+        self.wave_panel = ui_waves.WavePanel()       # 共享面板（单原子 = 原子A）
         self.wave_panel.changed.connect(self._on_waves_changed)
-
-        self._wave_tab = QTabWidget()
-        self.wave_panel_A = ui_waves.WavePanel()
-        self.wave_panel_A.changed.connect(self._on_waves_changed)
+        self.wave_panel_A = self.wave_panel          # 同一实例
         self.wave_panel_B = ui_waves.WavePanel()
         self.wave_panel_B.changed.connect(self._on_waves_changed)
-        self._wave_tab.addTab(self.wave_panel_A, '原子 A')
+
+        self._wave_single_host = QWidget()           # 单原子模式的槽位
+        _wsh = QVBoxLayout(self._wave_single_host)
+        _wsh.setContentsMargins(0, 0, 0, 0)
+        _wsh.addWidget(self.wave_panel)
+
+        self._wave_tab_A_host = QWidget()            # 双原子 tab-A 的槽位
+        _wah = QVBoxLayout(self._wave_tab_A_host)
+        _wah.setContentsMargins(0, 0, 0, 0)
+
+        self._wave_tab = QTabWidget()
+        self._wave_tab.addTab(self._wave_tab_A_host, '原子 A')
         self._wave_tab.addTab(self.wave_panel_B, '原子 B')
         self._wave_tab.setVisible(False)              # 默认隐藏
+        # 页签接受"复制波形"拖放（拖到原子B标签 → 复制一份到B，无需切页）
+        self._tabbar = self._wave_tab.tabBar()
+        self._tabbar.setAcceptDrops(True)
+        self._tabbar.installEventFilter(self)
 
-        p.addWidget(self.wave_panel, 1)               # 单原子波形
+        p.addWidget(self._wave_single_host, 1)        # 单原子波形
         p.addWidget(self._wave_tab, 1)                # 双原子波形（默认隐藏）
 
         # ---- 能级：共用主程序"能级管理表"（日常数值 + m 选择），这里只选初态 ----
@@ -265,22 +281,60 @@ class DynamicPanel(QWidget):
 
     # ---------- 单原子/双原子切换 ----------
     def _on_mode_changed(self, mode_id):
-        """0=单原子, 1=双原子。切换面板可见性。"""
+        """0=单原子, 1=双原子。切换面板可见性 + 共享波形面板迁移。"""
         self._is_two_body = (mode_id == 1)
         # V_dd 参数
         self._vdd_box.setVisible(self._is_two_body)
-        # 波形面板
-        self.wave_panel.setVisible(not self._is_two_body)
+        # 波形面板：共享面板（单原子 = 原子A）在槽位间迁移 + 容器显隐。
+        # 注意：不再 setVisible 共享面板本身——它迁到哪个容器就由哪个容器
+        # 展示（hidden 会让 tab-A"看起来没有波形"，且被布局压成最小高度）。
+        self._place_shared_waves(self._is_two_body)
+        self._wave_single_host.setVisible(not self._is_two_body)
         self._wave_tab.setVisible(self._is_two_body)
         # 初态面板
         self.psi_combo.setVisible(not self._is_two_body)
         self._psi_box.setVisible(self._is_two_body)
-        # 自发辐射在双原子模式下禁用（pair_evolve 尚不支持 Lindblad）
-        self.decay_mode_cb.setEnabled(not self._is_two_body)
-        if self._is_two_body:
-            self.decay_mode_cb.setCurrentIndex(1)  # 切到"禁用"
+        # 自发辐射：双原子模式现已支持（寿命/落点=丢失通道），档位放开
+        self.decay_mode_cb.setEnabled(True)
         # 刷新初态下拉
         self._on_m_changed()
+
+    def _place_shared_waves(self, in_tab):
+        """共享波形面板（wave_panel ≡ wave_panel_A）在单原子槽位 / tab-A 槽位间迁移。"""
+        pan = self.wave_panel
+        target = self._wave_tab_A_host if in_tab else self._wave_single_host
+        if pan.parent() is target:
+            return
+        if pan.parent() is not None:
+            pan.parent().layout().removeWidget(pan)
+        target.layout().addWidget(pan)
+
+    def eventFilter(self, obj, ev):
+        """双原子页签栏的拖放：把波形拖到另一原子的标签（不切页）即复制到该原子。"""
+        if obj is getattr(self, '_tabbar', None):
+            t = ev.type()
+            if t in (QEvent.DragEnter, QEvent.DragMove):
+                if ev.mimeData().hasFormat(ui_waves._WAVE_MIME):
+                    ev.setDropAction(Qt.CopyAction)
+                    ev.accept()
+                    return True
+                return False
+            if t == QEvent.Drop:
+                payload = bytes(ev.mimeData().data(ui_waves._WAVE_MIME))
+                idx = self._tabbar.tabAt(ev.pos())
+                if idx >= 0:
+                    panel = (self.wave_panel_A if idx == 0
+                             else self.wave_panel_B)
+                    try:
+                        if json.loads(payload.decode('utf-8')).get('_src') \
+                                != id(panel):
+                            panel.copy_wave_from(payload)
+                            ev.acceptProposedAction()
+                            return True
+                    except Exception:
+                        pass
+                return False
+        return super().eventFilter(obj, ev)
 
     # ---------- 能级：从共用能级组生成（切页/运行时刷新，数据共享不散布同步） ----------
     def refresh_groups(self):
@@ -322,8 +376,8 @@ class DynamicPanel(QWidget):
                   cur_t[k])
         self._pending_psi_keys = None
         self._refresh_decay_combos(states)
-        # 基组变化 → 波形面板辅助 g/e 下拉数据源同步
-        for wp in (self.wave_panel, self.wave_panel_A, self.wave_panel_B):
+        # 基组变化 → 波形面板辅助 g/e 下拉数据源同步（A ≡ 共享面板，去重）
+        for wp in (self.wave_panel, self.wave_panel_B):
             if wp is not None:
                 wp.set_states(states, self.cache)
 
@@ -478,10 +532,23 @@ class DynamicPanel(QWidget):
         return self.wave_panel
 
     def _on_waves_changed(self):
-        """波形增删/参数变化 → 立即刷新顶部光强预览（不等待运行）。"""
+        """波形增删/参数变化 → 立即刷新顶部光强预览（不等待运行）。
+
+        双原子模式：A/B 两面板**合并**并加 'A:'/'B:' 前缀（与 _run_two_body
+        一致），供顶部双子图分组；单原子直接单面板。
+        """
         t = np.linspace(0, self.tmax_sb.value(), self.npts_sb.value())
-        wp = self._active_wave_panel()
-        self.wave_data = waveforms.waveforms_to_env(wp.waves, t)
+        if self._is_two_body:
+            ea = waveforms.waveforms_to_env(self.wave_panel_A.waves, t)
+            eb = waveforms.waveforms_to_env(self.wave_panel_B.waves, t)
+            self.wave_data = (
+                [(f'A:{nm}', th, env, f, I)
+                 for nm, th, env, f, I in ea]
+                + [(f'B:{nm}', th, env, f, I)
+                   for nm, th, env, f, I in eb])
+        else:
+            wp = self._active_wave_panel()
+            self.wave_data = waveforms.waveforms_to_env(wp.waves, t)
         self._draw_top(self.wave_data)
 
     # ---------- 状态管理（序列化/恢复；文件 IO 与菜单入口在主程序） ----------
@@ -515,7 +582,10 @@ class DynamicPanel(QWidget):
                 'phi_deg': self.vdd_phi_sb.value(),
             },
             'waves': waveforms.serialize_waves(self.wave_panel.waves),
-            'waves_A': waveforms.serialize_waves(self.wave_panel_A.waves),
+            # A ≡ 共享面板：只存一份（waves），避免任意波形采样数组双倍体积
+            'waves_A': ([] if self.wave_panel_A is self.wave_panel
+                        else waveforms.serialize_waves(
+                            self.wave_panel_A.waves)),
             'waves_B': waveforms.serialize_waves(self.wave_panel_B.waves),
             'decays': [dict(c) for c in self.decay_cfgs],
         }
@@ -552,20 +622,18 @@ class DynamicPanel(QWidget):
         self.npts_sb.setValue(int(dyn.get('npts', 1501)))
         self.method_cb.setCurrentText(dyn.get('method', 'auto'))
         self.near_cutoff_sb.setValue(float(dyn.get('near_cutoff', 5000.0)))
-        # 双原子模式下自发辐射被强制"禁用"（pair_evolve 暂不支持 Lindblad），
-        # 只对单原子模式恢复档位
-        if not self._is_two_body:
-            self.decay_mode_cb.setCurrentIndex(int(dyn.get('decay_mode', 0)))
+        # 自发辐射档位（双原子模式现支持寿命/丢失通道，同样恢复）
+        self.decay_mode_cb.setCurrentIndex(int(dyn.get('decay_mode', 0)))
         pair = state.get('pair', {})
         self.vdd_R_sb.setValue(float(pair.get('R_um', 5.0)))
         self.vdd_theta_sb.setValue(float(pair.get('theta_deg', 0.0)))
         self.vdd_phi_sb.setValue(float(pair.get('phi_deg', 0.0)))
-        # 波形（单原子 + 双原子 A/B）
+        # 波形（单原子 + 双原子 A/B；A ≡ 共享面板 → 只恢复一次）
         wv = state.get('waves')
         if wv:
             self.wave_panel.set_waves(waveforms.restore_waves(wv))
         wvA = state.get('waves_A')
-        if wvA:
+        if wvA and self.wave_panel_A is not self.wave_panel:
             self.wave_panel_A.set_waves(waveforms.restore_waves(wvA))
         wvB = state.get('waves_B')
         if wvB:
@@ -639,12 +707,18 @@ class DynamicPanel(QWidget):
         else:
             self._run_single_body(states, t, decays)
 
+    def _field_B(self):
+        """动态演化的磁场（从主窗口场面板取，供 Floquet AC 位移后端）。"""
+        fld = getattr(self.main, 'field', None)
+        return float(fld.b_gauss()) if fld is not None else 0.0
+
     def _run_single_body(self, states, t, decays):
         """单原子演化路径。"""
         waves = list(self.wave_panel.waves)
         fields = waveforms.build_fields(
             waves, states, self.cache,
-            near_cutoff_mhz=self.near_cutoff_sb.value())
+            near_cutoff_mhz=self.near_cutoff_sb.value(),
+            B_gauss=self._field_B())
         self.wave_data = waveforms.waveforms_to_env(waves, t)
         psi0 = self.psi_combo.currentIndex()
 
@@ -672,10 +746,12 @@ class DynamicPanel(QWidget):
         waves_B = list(self.wave_panel_B.waves)
         fields_A = waveforms.build_fields(
             waves_A, states, self.cache,
-            near_cutoff_mhz=self.near_cutoff_sb.value())
+            near_cutoff_mhz=self.near_cutoff_sb.value(),
+            B_gauss=self._field_B())
         fields_B = waveforms.build_fields(
             waves_B, states, self.cache,
-            near_cutoff_mhz=self.near_cutoff_sb.value())
+            near_cutoff_mhz=self.near_cutoff_sb.value(),
+            B_gauss=self._field_B())
         # 波形预览：合并 A+B
         env_A = waveforms.waveforms_to_env(waves_A, t)
         env_B = waveforms.waveforms_to_env(waves_B, t)
@@ -688,6 +764,35 @@ class DynamicPanel(QWidget):
         R_um = self.vdd_R_sb.value()
         theta_deg = self.vdd_theta_sb.value()
         phi_deg = self.vdd_phi_sb.value()
+
+        # ---- 自发辐射（寿命通道 v1：单原子 decay 列表，两原子共用 states）----
+        # 在**主线程**构建：auto 档调 ARC getStateLifetime（SQLite 线程安全约束）。
+        decays_A = decays_B = None
+        mode = self.decay_mode_cb.currentIndex()
+        if mode == 0:                       # 自动（ARC 寿命，落点=丢失）
+            decays_A = evolve.auto_decays(self.cache, states)
+            decays_B = evolve.auto_decays(self.cache, states)
+            if decays_A or decays_B:
+                self.main.log(f'[双原子] 自动寿命：A {len(decays_A)}'
+                              f'/B {len(decays_B)} 条通道（落点=丢失）')
+        elif mode == 2:                     # 自定义（双原子 v1：仅落点=丢失）
+            lab2idx = {s['label']: i for i, s in enumerate(states)}
+            outA, outB = [], []
+            for c in self.decay_cfgs:
+                fi = lab2idx.get(c['from'])
+                if fi is None:
+                    continue
+                if c.get('to'):
+                    raise NotImplementedError(
+                        '双原子自定义衰变 v1 仅支持「丢失」落点'
+                        '（spontaneous radiation 按寿命处理）；'
+                        '显式落点请用单原子模式。')
+                ch = evolve.decay(fi, float(c['gamma_mhz']), None)
+                outA.append(ch)
+                outB.append(ch)
+            decays_A, decays_B = outA, outB
+        # 注意：A/B 共用同一 states → 同一通道集（各自原子的"从态"相同，
+        # 但两体基上原子 A/B 的 from 分别作用——由 pair_evolve 张量化）。
 
         # ---- V_dd 在主线程预计算（复用 self.cache）----
         # ARC 的 SQLite 连接不能跨线程（sqlite3: objects created in a
@@ -715,7 +820,8 @@ class DynamicPanel(QWidget):
         from .evolve_worker import EvolveWorkerPair
         self._worker = EvolveWorkerPair(
             states, fields_A, fields_B, psi0_A, psi0_B,
-            t, self.progress_arr, vdd_matrix=vdd_matrix)
+            t, self.progress_arr, vdd_matrix=vdd_matrix,
+            decays_A=decays_A, decays_B=decays_B)
         self._worker.done.connect(self._on_pair_evolve_done)
         self._worker.log_msg.connect(self.main.log)
         self._worker.start()
@@ -791,68 +897,114 @@ class DynamicPanel(QWidget):
         self._draw_bot_pair(res)
 
     def _draw_top(self, E_list):
-        """顶部：各通道**光强曲线**（I = 峰值光强×包络）——颜色按频率 log 映射；
-        每个通道独立 y 轴标度（twin axes 外移避让），防止光强差异过大压扁曲线。
+        """顶部：各通道**光强曲线**（I = 峰值光强×包络）。
+
+        - 单原子：只用 A 格（拉满整图）；双原子：A 波形上格、B 波形下格；
+        - 每格内各通道独立 y 标度（twinx 外移），ylim 紧贴数据（无空白）；
+        - 上/下格子与布居图共用 left/right 边距 → 时间轴完全对齐；
+        - 无标题（省空间）。
 
         E_list: [(name, t, env, freq_mhz[, intensity_mwcm2]), ...]
-        （旧存档缺 intensity → 退回画无量纲包络，单 y 轴。）
+        双原子模式下 name 带 'A:'/'B:' 前缀（分组绘制）。
         """
-        # 重置：移除旧 twin 轴，只留主轴
+        # 重置：删除先前轮次遗留的全部 twin 轴（只保留两格主轴）
         for ax in list(self.fig_top.axes):
-            if ax is not self.ax_top:
+            if ax not in (self.ax_topA, self.ax_topB):
                 self.fig_top.delaxes(ax)
-        ax = self.ax_top
-        ax.clear()
-        ax.set_title('光场光强 I(t)（颜色=频率，对数尺度；每通道独立 y 轴）')
-        ax.set_xlabel('t (ns)')
-        ax.spines['right'].set_visible(False)
-        ax.spines['top'].set_visible(False)
-        ax.grid(alpha=0.3)
-        if not E_list:
-            ax.set_ylabel('光强 (mW/cm²)')
-            self.canvas_top.draw_idle()
-            return
-        has_I = len(E_list[0]) >= 5
-        n = len(E_list)
-        freqs = np.array([e[3] for e in E_list], float)
-        fmin, fmax = max(freqs.min(), 1e-3), max(freqs.max(), 1e-3)
+
+        # 分组：双原子按前缀拆分；单原子全部进 A
+        if self._is_two_body:
+            grp = {'A': [e for e in E_list if str(e[0]).startswith('A:')],
+                   'B': [e for e in E_list if str(e[0]).startswith('B:')]}
+            if not grp['A'] and len(E_list) and any(
+                    not str(e[0]).startswith(('A:', 'B:')) for e in E_list):
+                grp['A'] = E_list          # 兼容无前缀旧数据 → 全算 A
+            groups = [('A', grp['A']), ('B', grp['B'])]
+        else:
+            groups = [('A', list(E_list))]
+        # 统一颜色映射（A/B 共用同一 log 色标）。注意：任意波形 freq=0，
+        # 不参与 log 映射（log(0)=NaN 会让曲线绘制异常），统一用灰色。
+        all_f = np.array([e[3] for e in E_list], float)
+        ok_f = all_f[all_f > 0]
+        fmin = max(ok_f.min(), 1e-3) if ok_f.size else 1e-3
+        fmax = max(ok_f.max(), 1e-3) if ok_f.size else 1e-3
         if fmax <= fmin:
             fmax = fmin + 1.0
         norm = LogNorm(vmin=fmin, vmax=fmax)
         cmap = colormaps['plasma']
-        colors = cmap(norm(freqs))
-        # 右侧 twin y 轴空间（每额外通道一条，外移 45px 避让）
-        right = max(0.78, 0.97 - 0.09 * (n - 1))
-        self.fig_top.subplots_adjust(left=0.07, right=right, top=0.93,
-                                     bottom=0.10)
-        unit = '光强 (mW/cm²)' if has_I else '包络'
-        for k, (e, c) in enumerate(zip(E_list, colors)):
+        ARB_COLOR = '#8a8a8a'          # 无单频（任意波形）固定灰
+
+        def _color(f):
+            return cmap(norm(f)) if f > 0 else ARB_COLOR
+
+        # 布局（统一 left/right=0.07/0.95 与布居图对齐；无标题）
+        axA = self.ax_topA
+        axB = self.ax_topB
+        if self._is_two_body:
+            axB.set_visible(True)
+            axA.set_position([0.07, 0.53, 0.88, 0.41])
+            axB.set_position([0.07, 0.06, 0.88, 0.41])
+        else:
+            axB.set_visible(False)
+            axA.set_position([0.07, 0.04, 0.88, 0.90])
+
+        for ax, (tag, glist) in zip((axA, axB), groups):
+            self._plot_wave_group(ax, tag, glist, _color)
+        self.canvas_top.draw_idle()
+
+    def _plot_wave_group(self, ax, tag, glist, color_of):
+        """在给定 axes 内画一组波形曲线（twinx 独立标度；无标题）。
+
+        零基线对齐：所有轴 ylim 从 0 起；每轴刻度强制含 0；主轴画贯穿全宽
+        的 0 参考线（所有通道共享同一零基线，多轴零点视觉对齐）。
+        """
+        ax.clear()
+        ax.set_xlabel('t (ns)')
+        ax.spines['right'].set_visible(False)
+        ax.spines['top'].set_visible(False)
+        ax.grid(alpha=0.3)
+        ax.axhline(0.0, color='0.35', lw=0.8, alpha=0.6, zorder=0)  # 零基线
+        if not glist:
+            ax.set_ylabel('光强')
+            return
+        has_I = len(glist[0]) >= 5
+        unit = 'mW/cm²' if has_I else '包络'
+        for k, e in enumerate(glist):
             name, t, env, f = e[0], e[1], e[2], e[3]
             I = float(e[4]) if has_I else 1.0
             y = I * np.asarray(env, float)
+            ymax = float(y.max()) if y.size else 0.0
+            c = color_of(f)
             if k == 0:
                 target = ax
-                target.set_ylabel(f'{name}  {unit}', color=c)
+                ax.set_ylabel(f'{tag}:{name}  {unit}', color=c, fontsize=8)
             else:
                 target = ax.twinx()
-                target.spines['right'].set_position(('outward',
-                                                      45.0 * (k - 1)))
+                # 关键：twin 轴去掉自己的矩形框（left/bottom spine 默认开着
+                # 会叠出"带边界的嵌套小图"，引起各通道零基线视觉错位）；
+                # 只保留外移的 right spine 作为独立刻度轴。
+                target.set_frame_on(False)
+                target.spines['right'].set_position(
+                    ('outward', 42.0 * (k - 1)))
                 target.spines['top'].set_visible(False)
                 target.yaxis.label.set_color(c)
-                target.tick_params(axis='y', colors=c, labelsize=8)
-                target.set_ylabel(f'{name}  {unit}', color=c, fontsize=8)
-            target.plot(t, y, lw=1.5, color=c,
-                        label=(name if k == 0 else None))
+                target.tick_params(axis='y', colors=c, labelsize=7)
+                target.set_ylabel(f'{name}', color=c, fontsize=7)
+            target.plot(t, y, lw=1.5, color=c, label=(name if k == 0 else None))
             target.fill_between(t, y, 0.0, color=c, alpha=0.22)
-            target.set_ylim(bottom=0.0)
-        ax.legend(fontsize=8, loc='upper right')
-        self.canvas_top.draw_idle()
+            top = max(ymax * 1.05, 1e-12)
+            target.set_ylim(0.0, top)                       # 0 起 → 底部对齐
+            loc = MaxNLocator(nbins=4)
+            ticks = np.asarray(loc.tick_values(0.0, top))
+            ticks = ticks[(ticks >= 0.0) & (ticks <= top)]
+            if not np.any(np.isclose(ticks, 0.0)):          # 强制 0 刻度可见
+                ticks = np.unique(np.append(ticks, 0.0))
+            target.set_yticks(ticks)
+        ax.set_xlim(glist[0][1][0], glist[0][1][-1])
 
     def _draw_bot(self, states, res):
         """底部：态布居（只画前 N 个平均布居最大的态，N=topn_sb）+ loss 曲线。"""
         ax = self.ax_bot; ax.clear()
-        ax.set_title(f'态布居 P(t)（按平均布居取前 '
-                     f'{min(self.topn_sb.value(), len(states))} 个态）')
         ax.set_xlabel('t (ns)'); ax.set_ylabel('布居'); ax.grid(alpha=0.3)
         pops = res['pops']
         sel = set(self._top_pop_rows(states, res))
@@ -877,7 +1029,6 @@ class DynamicPanel(QWidget):
         avg = pops_2d.mean(axis=0)
         order = np.argsort(avg)[::-1]
         sel = set(order[:n_show])
-        ax.set_title(f'两体态布居 P(t)（前 {n_show} 个 product 态）')
         ax.set_xlabel('t (ns)'); ax.set_ylabel('布居'); ax.grid(alpha=0.3)
         for i in range(N):
             if i not in sel:

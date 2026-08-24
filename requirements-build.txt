@@ -1,0 +1,6 @@
+# 打包工具（构建 venv 专用，不随软件分发）
+# 用法（在项目根，先建构建 venv 并装 requirements.txt）：
+#   D:\python310\python.exe -m venv build_venv
+#   build_venv\Scripts\python.exe -m pip install -U pip
+#   build_venv\Scripts\python.exe -m pip install -r requirements.txt -r requirements-build.txt
+pyinstaller

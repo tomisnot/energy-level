@@ -122,6 +122,86 @@ class Wave:
                 f'pol={self.pol}, @{self.start():.1f}ns, {self.envelope})')
 
 
+class ArbitraryWave:
+    """任意波形：用户给出的**完整时域信号**（无单一载频概念）。
+
+    - t_ns / amp ：样品数组（ns / 无量纲幅值，载入时峰值归一 |amp|≤1，
+      可负——负幅值即电场反向；任意频谱、啁啾、多频叠加都由此表达）；
+    - intensity_mwcm2：峰值光强（决定场绝对幅度：E(t) = E0·amp(t)）；
+    - pol / offset_ns：偏振 / 波形绝对起点偏移；无单频 → 无辅助定参：
+      drive 恒为 None（频率/失谐概念不适用）。
+
+    结算路径（第一性原理）：build_fields → evolve.arbitrary_field →
+    evolve.evolve（自动选 method='arbitrary'）：实验室系相互作用绘景
+    RK4，无 RWA / 无旋转系 / 无近远失谐分流——信号全部频率成分由数值
+    积分原样还原。代价是慢（步长受信号 Nyquist 约束），属必要。
+    """
+    kind = 'arb'
+
+    def __init__(self, name, t_ns, amp, pol='π', intensity_mwcm2=100.0,
+                 offset_ns=0.0):
+        assert pol in POLS, f'偏振须为 {POLS}'
+        t = np.asarray(t_ns, float)
+        a = np.asarray(amp, float)
+        if t.ndim != 1 or a.ndim != 1 or t.size != a.size or t.size < 2:
+            raise ValueError('任意波形样品须为等长一维数组（至少 2 点）')
+        if np.any(np.diff(t) <= 0):
+            raise ValueError('任意波形时间样品必须严格递增')
+        mx = float(np.max(np.abs(a)))
+        if mx <= 0:
+            raise ValueError('任意波形幅值全零')
+        self.name = name or '任意波形'
+        self.t_ns = t
+        self.amp = a / mx                 # 峰值归一
+        self.pol = pol
+        self.intensity_mwcm2 = float(intensity_mwcm2)
+        self.offset_ns = float(offset_ns)
+        self.drive = None                 # 无单频 → 辅助定参不适用
+
+    # ---- 兼容层（预览/标题/存档共用）----
+    @property
+    def freq_mhz(self):
+        return 0.0
+
+    @property
+    def envelope(self):
+        """返回包络采样函数（t→|amp(t)|），供 waveforms_to_env 预览。"""
+        off = self.offset_ns
+        t_s, a_s = self.t_ns, np.abs(self.amp)
+
+        def _env(tau):
+            tau = np.asarray(tau, float) - off
+            return np.interp(tau, t_s, a_s, left=0.0, right=0.0)
+        return _env
+
+    def start(self):
+        return self.offset_ns
+
+    def end(self):
+        return self.offset_ns + self.t_ns[-1]
+
+    def waveform(self, t):
+        """幅值采样（含符号，第一性原理用）：t→a(t)∈[−1,1]。"""
+        t = np.asarray(t, float)
+        return np.interp(t - self.offset_ns, self.t_ns, self.amp,
+                         left=0.0, right=0.0)
+
+    def dt_min_ns(self):
+        d = np.diff(self.t_ns)
+        d = d[d > 0]
+        return float(d.min()) if d.size else 0.0
+
+    def f_max_mhz(self):
+        """信号 Nyquist 上限（MHz）：0.5/最小采样间隔。"""
+        d = self.dt_min_ns()
+        return 0.0 if d <= 0 else 0.5e3 / d
+
+    def __repr__(self):
+        return (f'ArbitraryWave({self.name!r}, N={len(self.t_ns)}点, '
+                f'dt_min={self.dt_min_ns():.3g}ns, f_max={self.f_max_mhz():.3g}'
+                f'MHz, pol={self.pol}, @{self.offset_ns:.1f}ns)')
+
+
 # ================= 数据源（动态页演化输入） =================
 def waveforms_to_env(waves, t_grid):
     """各波形的光强曲线数据（画光强，不画载波）。
@@ -137,36 +217,59 @@ def waveforms_to_env(waves, t_grid):
     return out
 
 
-def build_fields(waves, states, cache, near_cutoff_mhz=None):
+def build_fields(waves, states, cache, near_cutoff_mhz=None, B_gauss=None,
+                 n_photon=None, sos_n_window=None):
     """由波形列表的「真实光场参数」生成演化输入。
 
     每波形 (freq_mhz, intensity_mwcm2, pol, waveform) → evolve.real_field：
-    自动按自适应失谐判据展开近共振驱动对（Ω 真实、Δ 相对裸差）+
-    远失谐 AC 位移。返回 fields 列表（每波形一个多对驱动场，含时变 ac）。
+    自动按自适应失谐判据展开近共振驱动对（Ω 真实、Δ 相对裸差）；
+    **AC 位移**：B_gauss 提供时统一走静态页同款 Floquet 引擎
+    （core.direct_ac_stark_shifts，含全部偶极伙伴、不分近/远）；B_gauss
+    None（旧调用）回退 far_sos 逐对求和。返回 fields 列表（每波形一个
+    多对驱动场，含时变 ac）。
+
+    ArbitraryWave（任意波形，无单频）→ evolve.arbitrary_field（第一性原理
+    求解，无 RWA/旋转系/近远分流；见 evolve.arbitrary_field docstring）。
     """
     fields = []
     for w in waves:
-        fld, a = evolve.real_field(
+        if isinstance(w, ArbitraryWave):
+            fields.append(evolve.arbitrary_field(
+                cache, states, w.t_ns, w.amp, w.pol,
+                w.intensity_mwcm2, w.offset_ns))
+            continue
+        fld, a, sc = evolve.real_field(
             cache, states, w.freq_mhz, w.intensity_mwcm2, w.pol,
-            waveform=w.waveform, near_cutoff_mhz=near_cutoff_mhz)
+            waveform=w.waveform, near_cutoff_mhz=near_cutoff_mhz,
+            return_scatter=True, B_gauss=B_gauss, n_photon=n_photon,
+            sos_n_window=sos_n_window)
         if fld is not None:
             fields.append(fld)
-        elif np.any(np.asarray(a, float) != 0.0):
+        else:
             acv = np.asarray(a, float)
-            fields.append({
-                'kind': 'multi', 'M': np.diag(acv),
-                'A': np.zeros((len(states), len(states))),
-                'ac_shift': acv,
-                'g_idx': [], 'e_idx': [], 'omega0_mhz': 1.0,
-                'omega_L_mhz': w.freq_mhz, 'waveform': w.waveform})
+            scv = np.asarray(sc, float)
+            if np.any(acv != 0.0) or np.any(scv != 0.0):
+                fields.append({
+                    'kind': 'multi', 'M': np.diag(acv),
+                    'A': np.zeros((len(states), len(states))),
+                    'ac_shift': acv,
+                    'scatter': scv,
+                    'g_idx': [], 'e_idx': [], 'omega0_mhz': 1.0,
+                    'omega_L_mhz': w.freq_mhz, 'waveform': w.waveform})
     return fields
 
 
 # ================= 状态管理（序列化 / 恢复） =================
 def serialize_waves(waves):
-    """Wave 列表 → JSON 可序列化 dict。"""
+    """Wave / ArbitraryWave 列表 → JSON 可序列化 dict。"""
     out = []
     for w in waves:
+        if isinstance(w, ArbitraryWave):
+            out.append({'type': 'arb', 'name': w.name,
+                        't_ns': list(w.t_ns), 'amp': list(w.amp),
+                        'pol': w.pol, 'intensity': w.intensity_mwcm2,
+                        'offset_ns': w.offset_ns})
+            continue
         env = w.envelope
         if isinstance(env, GaussianEnv):
             e = ('gauss', env.center_ns, env.sigma_ns, env.peak)
@@ -181,9 +284,16 @@ def serialize_waves(waves):
 
 
 def restore_waves(data):
-    """serialize_waves 输出 → Wave 列表。"""
+    """serialize_waves 输出 → Wave/ArbitraryWave 列表。"""
     waves = []
     for d in (data or []):
+        if d.get('type') == 'arb':
+            waves.append(ArbitraryWave(
+                d.get('name', '任意波形'), d['t_ns'], d['amp'],
+                pol=d.get('pol', 'π'),
+                intensity_mwcm2=d.get('intensity', 100.0),
+                offset_ns=d.get('offset_ns', 0.0)))
+            continue
         env = d['env']
         if env[0] == 'gauss':
             env_obj = GaussianEnv(env[1], env[2], env[3])

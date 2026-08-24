@@ -60,7 +60,8 @@ class EvolveWorkerPair(QThread):
     log_msg = pyqtSignal(str)
 
     def __init__(self, states, fields_A, fields_B, psi0_A, psi0_B,
-                 t_grid, progress_arr, vdd_matrix=None, parent=None):
+                 t_grid, progress_arr, vdd_matrix=None, parent=None,
+                 decays_A=None, decays_B=None):
         super().__init__(parent)
         self.states = states
         self.fields_A = fields_A
@@ -70,6 +71,8 @@ class EvolveWorkerPair(QThread):
         self.t_grid = t_grid
         self.progress_arr = progress_arr
         self.vdd_matrix = vdd_matrix
+        self.decays_A = decays_A
+        self.decays_B = decays_B
 
     def run(self):
         try:
@@ -79,6 +82,7 @@ class EvolveWorkerPair(QThread):
                 self.psi0_A, self.psi0_B,
                 t_grid=self.t_grid, method='ip4',
                 vdd_matrix=self.vdd_matrix,
+                decays_A=self.decays_A, decays_B=self.decays_B,
                 progress_arr=self.progress_arr,
                 log=self.log_msg.emit)
             self.done.emit(res, None)

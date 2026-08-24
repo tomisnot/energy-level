@@ -510,7 +510,24 @@ def dc_stark_shift_mhz(cache, n, l, j, m, groups, E_vpcm, B_gauss=0.0):
 # ============================================================
 
 _DIRECT_COUPLING_KEY = None
-_DIRECT_COUPLING = None    # (states, E_mhz, C)：耦合只依赖(基组,B,强度,偏振)，不依赖频率
+_DIRECT_COUPLING = None    # (states, E_mhz, C_unit)：单位耦合，只依赖(基组,B,偏振)，不依赖频率/强度
+_DIRECT_SHIFT_CACHE = {}   # 结果缓存：键=(耦合键, n_photon, freq, I) → 位移 dict（同参免重复对角化）
+_DIRECT_SHIFT_CACHE_MAX = 64
+# 面板级 AC-Stark 配置（fields.py 光子块/窗口控件写入；后端缺省读取，静态+动态共用）
+_AC_UI_CFG = dict(n_photon=None, sos_n_window=None)
+
+
+def set_ac_stark_config(n_photon=None, sos_n_window=None):
+    """设置全局 AC-Stark 精度配置（光子块阶数 / 偶极伙伴窗口）。
+
+    供静态页面板控件调用；direct_ac_stark_shifts / direct_ac_stark_sweep
+    在参数缺省（None）时读取此配置 → 静态页与动态页（real_field 经
+    _floquet_ac_static）统一受控。None 表示保持当前值。
+    """
+    if n_photon is not None:
+        _AC_UI_CFG['n_photon'] = int(n_photon)
+    if sos_n_window is not None:
+        _AC_UI_CFG['sos_n_window'] = int(sos_n_window)
 
 
 def _occ_keys_direct(items):
@@ -639,57 +656,59 @@ def _direct_coupling(cache, states, address_cfg):
 
 
 def direct_ac_stark_shifts(cache, groups, address_cfg, B_gauss=0.0,
-                           n_photon=1, sos_n_window=None):
+                           n_photon=None, sos_n_window=None):
     """直接矩阵对角化计算全部已添加组子能级的 AC 位移（MHz）。
 
     基组 = 已添加组子能级 + 各组偶极伙伴（|Δn|≤sos_n_window，默认
     DIRECT_SOS_N_WINDOW）。构造含光子数的 Floquet 哈密顿量并一次对角化：
         H_F = Σ_n (H0 + n·ħω)⊗|n⟩⟨n| + (V/2)⊗(|n+1⟩⟨n| + |n⟩⟨n+1|)
     自洽包含近共振 dressed + 远失谐反旋项 + 多态耦合 + 超精细相干性。
-    耦合矩阵 C 只依赖(基组, B, 强度, 偏振)不依赖频率，已做模块级缓存，
-    频率变化只重建对角块并重新对角化（numpy，无需 GPU）。
 
-    返回 dict[(n,l,j,qstr,occ)] -> shift_mhz；occ 为重复 qstr 的出现序号。
+    **n_photon**：光子块阶数（块数 = 2n_photon+1）。默认 4（9 块）：
+    近共振下 n=1 与 n→∞ 已收敛，但 4 阶显著压低强光/多态场景的
+    截断偏差（实测 60S↔6P 场景 n=1 与 n=4 差 ~6%，n≥4 收敛）。
+
+    **缓存**：耦合结构 C_unit（单位 E0，与频率/强度无关）模块级缓存，
+    只在 (基组, B, 偏振/椭圆, window) 变化时重算偶极矩阵元；完整结果
+    （位移 dict）再按键 (以上 + n_photon + 频率 + 强度) 缓存——同参
+    直接返回，不重复对角化；改频/改强只重标定耦合并重对角化。
     """
     if not address_cfg.get('enabled', False) or not groups:
         return {}
+    if n_photon is None:
+        n_photon = _AC_UI_CFG['n_photon'] or 4          # 面板配置优先，缺省 4
     if sos_n_window is None:
-        sos_n_window = DIRECT_SOS_N_WINDOW
+        sos_n_window = (_AC_UI_CFG['sos_n_window']
+                        or DIRECT_SOS_N_WINDOW)
     global _DIRECT_COUPLING_KEY, _DIRECT_COUPLING
-    key = (tuple(sorted((g['n'], g['l'], g['j']) for g in groups)),
-           round(float(B_gauss), 6),
-           float(address_cfg['intensity']),
-           str(address_cfg.get('elliptical')) + '|' + str(address_cfg['polarization']),
-           sos_n_window)
-    if _DIRECT_COUPLING_KEY != key or _DIRECT_COUPLING is None:
+    ckey = (tuple(sorted((g['n'], g['l'], g['j']) for g in groups)),
+            round(float(B_gauss), 6),
+            str(address_cfg.get('elliptical')) + '|'
+            + str(address_cfg['polarization']),
+            sos_n_window)
+    if _DIRECT_COUPLING_KEY != ckey or _DIRECT_COUPLING is None:
         states = _direct_basis(cache, groups, B_gauss, sos_n_window)
-        E, C = _direct_coupling(cache, states, address_cfg)
-        _DIRECT_COUPLING_KEY = key
-        _DIRECT_COUPLING = (states, E, C)
+        E, C_unit = _direct_coupling(cache, states, address_cfg)
+        _DIRECT_COUPLING_KEY = ckey
+        _DIRECT_COUPLING = (states, E, C_unit)
     states, E, C_unit = _DIRECT_COUPLING
     N = len(states)
-    M = 2 * n_photon + 1
     freq_mhz = address_cfg['frequency_hz'] / 1e6
+    Ival = float(address_cfg['intensity'])
+    # 结果缓存：同参数直接返回（不重对角化）
+    rkey = (ckey, int(n_photon), round(freq_mhz, 6), round(Ival, 6))
+    hit = _DIRECT_SHIFT_CACHE.get(rkey)
+    if hit is not None:
+        return hit
+    M = 2 * n_photon + 1
     # 按强度重标定单位耦合：C = E0·C_unit（E0² = 2I/(ε0·c)）
-    C = (2.0 * address_cfg['intensity'] * MW_PER_CM2_TO_W_PER_M2
+    C = (2.0 * Ival * MW_PER_CM2_TO_W_PER_M2
          / (epsilon_0 * c)) ** 0.5 * C_unit
-    # 屏蔽远失谐里德堡↔里德堡耦合（|ω0−ω|>ω0）：净 AC 位移 ~Ω²ω0/(2ω²)
-    # 可忽略，但有限光子块截断下会残留虚假 ~Ω²/ω 位移并破坏共振；
-    # 近共振对（|ω0−ω|≤ω0）保留真实 dressed/SOS 贡献。
-    freq_hz = float(address_cfg['frequency_hz'])
-    if any(s['n'] >= RYDBERG_N_MIN for s in states):
-        mask = np.ones((N, N), dtype=np.complex128)
-        for i in range(N):
-            if states[i]['n'] < RYDBERG_N_MIN:
-                continue
-            for j in range(i + 1, N):
-                if states[j]['n'] < RYDBERG_N_MIN:
-                    continue
-                w0 = abs(E[i] - E[j]) * 1e6
-                if abs(w0 - freq_hz) > w0:
-                    mask[i, j] = 0.0
-                    mask[j, i] = 0.0
-        C = C * mask
+    # 注：旧版曾屏蔽 |ω0−ω|>ω0 的远失谐里德堡↔里德堡耦合，理由为
+    # "有限光子块截断的虚假 ~Ω²/ω 位移"。实测（2025-09）该伪影在
+    # 二能级与全伙伴基组中均不出现（n=1 即收敛至 0.1%），屏蔽反而把
+    # 真实远失谐位移硬置 0（~6.6 MHz 偏差）——已删除，统一按 n_photon
+    # 管理精度（默认 4；极端强光/近简并流形可调高并加收敛自检）。
     H = np.zeros((N * M, N * M), dtype=np.complex128)
     for p in range(M):
         sl = slice(p * N, (p + 1) * N)
@@ -699,7 +718,11 @@ def direct_ac_stark_shifts(cache, groups, address_cfg, B_gauss=0.0,
         H[(p + 1) * N:(p + 2) * N, p * N:(p + 1) * N] = C.conj().T
     evals, evecs = np.linalg.eigh(H)
     keys = _occ_keys_direct(states)
-    return _floquet_shifts(evals, evecs, E, keys, n_photon)
+    out = _floquet_shifts(evals, evecs, E, keys, n_photon)
+    if len(_DIRECT_SHIFT_CACHE) >= _DIRECT_SHIFT_CACHE_MAX:
+        _DIRECT_SHIFT_CACHE.pop(next(iter(_DIRECT_SHIFT_CACHE)))
+    _DIRECT_SHIFT_CACHE[rkey] = out
+    return out
 
 
 def _floquet_shifts(evals, evecs, E, keys, n_photon, E0mat=None):
@@ -728,7 +751,7 @@ def _floquet_shifts(evals, evecs, E, keys, n_photon, E0mat=None):
 
 
 def direct_ac_stark_sweep(cache, groups, address_cfg, B_gauss, intensities,
-                          n_photon=1, sos_n_window=None):
+                          n_photon=None, sos_n_window=None):
     """一次构建 Floquet 结构，对一系列光强批量计算全部子能级位移（MHz）。
 
     耦合矩阵 C ∝ E0 ∝ sqrt(I)，基组与对角块不随光强变化；本函数只构建
@@ -744,8 +767,11 @@ def direct_ac_stark_sweep(cache, groups, address_cfg, B_gauss, intensities,
     if (not address_cfg.get('enabled', False) or not groups
             or len(intensities) == 0):
         return [], {}
+    if n_photon is None:
+        n_photon = _AC_UI_CFG['n_photon'] or 4
     if sos_n_window is None:
-        sos_n_window = DIRECT_SOS_N_WINDOW
+        sos_n_window = (_AC_UI_CFG['sos_n_window']
+                        or DIRECT_SOS_N_WINDOW)
     states = _direct_basis(cache, groups, B_gauss, sos_n_window)
     N = len(states)
     M = 2 * n_photon + 1
@@ -753,22 +779,8 @@ def direct_ac_stark_sweep(cache, groups, address_cfg, B_gauss, intensities,
     keys = _occ_keys_direct(states)
     freq_mhz = address_cfg['frequency_hz'] / 1e6
     _, C_unit = _direct_coupling(cache, states, address_cfg)
-    # 远失谐里德堡↔里德堡屏蔽（频率相关，与光强无关）
-    freq_hz = float(address_cfg['frequency_hz'])
-    if any(s['n'] >= RYDBERG_N_MIN for s in states):
-        mask = np.ones((N, N), dtype=np.complex128)
-        for i in range(N):
-            if states[i]['n'] < RYDBERG_N_MIN:
-                continue
-            for j in range(i + 1, N):
-                if states[j]['n'] < RYDBERG_N_MIN:
-                    continue
-                w0 = abs(E[i] - E[j]) * 1e6
-                if abs(w0 - freq_hz) > w0:
-                    mask[i, j] = 0.0
-                    mask[j, i] = 0.0
-        C_unit = C_unit * mask
-    # 与光强无关的光子块结构：H(I) = H_diag + E0(I)·H_coup
+    # 与光强无关的光子块结构：H(I) = H_diag + E0(I)·H_coup（无里德堡屏蔽，
+    # 见 direct_ac_stark_shifts —— 实测截断伪影不存在，屏蔽反致真实位移清零）
     NM = N * M
     H_diag = np.zeros((NM, NM), dtype=np.complex128)
     for p in range(M):

@@ -60,6 +60,31 @@ class FieldPanel(QWidget):
         self.e_spin.setFixedWidth(90)
         row.addWidget(self.e_spin)
         row.addStretch(1)
+        # ---- 偶极伙伴窗口 + 光子块阶数（AC-Stark Floquet 精度/成本权衡）----
+        row.addWidget(QLabel('窗口'))
+        self.window_spin = QSpinBox()
+        self.window_spin.setRange(1, 5)
+        self.window_spin.setValue(3)
+        self.window_spin.setToolTip(
+            'AC 能移基组的偶极伙伴窗口（Δn 圈数）。\n'
+            'window=3 全伙伴（N~400，n=4 时 ~13s/次）；\n'
+            'window=1 只最近圈（~60 态，快 ~300×，误差 <0.3% 级）。\n'
+            '两级收敛思路：先 window=1 快速定位，必要时 window=2/3 精化。')
+        self.window_spin.setFixedWidth(52)
+        self.window_spin.valueChanged.connect(self._changed)
+        row.addWidget(self.window_spin)
+        row.addWidget(QLabel('光子块'))
+        self.n_photon_spin = QSpinBox()
+        self.n_photon_spin.setRange(1, 12)
+        self.n_photon_spin.setValue(4)
+        self.n_photon_spin.setToolTip(
+            'AC 能移 Floquet 光子块阶数（块数 = 2n+1）。\n'
+            'n=4（默认）近/远失谐均收敛（n=1 与 n=4 差约 6%）；\n'
+            '阶数越高越精确，但计算量立方增长（n:1/2/4/8 ≈ '
+            '1.5s/4s/13s/61s@406 态）。')
+        self.n_photon_spin.setFixedWidth(56)
+        self.n_photon_spin.valueChanged.connect(self._changed)
+        row.addWidget(self.n_photon_spin)
         self.add_btn = QPushButton('＋添加光')
         self.add_btn.setMinimumWidth(110)
         self.add_btn.setToolTip(
@@ -160,6 +185,8 @@ class FieldPanel(QWidget):
         return {
             'B_gauss': self.b_gauss(),
             'E_vpcm': self.e_vpcm(),
+            'window': int(self.window_spin.value()),
+            'n_photon': int(self.n_photon_spin.value()),
             'lights': rows,
             'focus_index': int(self.focus_box.currentIndex()),
             'psi': {
@@ -176,6 +203,8 @@ class FieldPanel(QWidget):
             return
         self.b_spin.setValue(float(state.get('B_gauss', self.b_gauss())))
         self.e_spin.setValue(float(state.get('E_vpcm', self.e_vpcm())))
+        self.window_spin.setValue(int(state.get('window', 3)))
+        self.n_photon_spin.setValue(int(state.get('n_photon', 4)))
         self.table.blockSignals(True)
         self.table.setRowCount(0)
         self._ellip.clear()
@@ -189,13 +218,20 @@ class FieldPanel(QWidget):
             pol_w = self.table.cellWidget(rr, 3)
             if isinstance(pol_w, QComboBox):
                 pol = row.get('polarization', 'π')
-                if pol in pol_w.items:
+                # blockSignals：恢复期间不触发 _on_pol_selected
+                # （否则"椭圆偏"会弹出非模态参数对话框，且其默认值(0,0,0)
+                # 会在后续重算中经 _apply_ellip 回写覆盖已恢复的参数）
+                pol_w.blockSignals(True)
+                if pol_w.findText(pol) >= 0:
                     pol_w.setCurrentText(pol)
+                pol_w.blockSignals(False)
             scope_w = self.table.cellWidget(rr, 4)
             if isinstance(scope_w, QComboBox):
                 val = row.get('scope', 'both')
+                scope_w.blockSignals(True)
                 if val in [scope_w.itemText(i) for i in range(scope_w.count())]:
                     scope_w.setCurrentText(val)
+                scope_w.blockSignals(False)
             ell = row.get('elliptical') or {}
             if ell:
                 self._ellip[rr] = dict(ell)
@@ -219,6 +255,10 @@ class FieldPanel(QWidget):
 
     def _changed(self, *_):
         """兼容旧代码：真正的数据更新才触发全局重算。"""
+        # 面板 AC-Stark 精度配置 → 全局（静态页 + 动态页共用）
+        core.set_ac_stark_config(
+            n_photon=int(self.n_photon_spin.value()),
+            sos_n_window=int(self.window_spin.value()))
         self.data_changed.emit()
         self.changed.emit()
 

@@ -803,6 +803,26 @@ python checks\evolve_matrix.py  # 动态引擎测评矩阵
 
 > Windows 环境如 `python` 解析异常，用绝对路径：`& "D:\python310\python.exe" 能级.py`
 
+## 7.1 打包为 Windows exe（PyInstaller，onedir 首发版）
+
+依赖锁定在 `requirements.txt`（**numba 必需**，ip4/lindblad 演化内核；
+torch/pairinteraction/qutip 一律不装——软件本体不用，PyInstaller 会沿 import 图
+收集，装了会把巨量无关代码打进 exe。注意 PyPI 上正确的 ARC 发行名是
+`arc_alkali_rydberg_calculator`，`arc` 是另一个无关小库）。
+
+```bash
+# 一次性：建构建环境（用 D:\python310，Python 3.10）
+D:\python310\python.exe -m venv build_venv
+# 之后每次发版只需：
+build.bat                      # 一键安装依赖(清华镜像) + PyInstaller 打包
+```
+
+- 产物：`dist\EnergyLevel\EnergyLevel.exe`（连同整个文件夹一起分发）。
+- 入口：`main.py`（ASCII 名转发 `能级.py`，避开中文脚本名构建问题）。
+- ARC 数据：`src/__init__.py` 打包模式（`sys.frozen`）会把随包 `.arcdata` 种子
+  首次启动复制到 `%LOCALAPPDATA%\EnergyLevel\.arcdata`（可写、持久），
+  避免 onefile/只读目录写缓存崩溃；开发模式行为不变。
+
 ---
 
 # 八、使用手册

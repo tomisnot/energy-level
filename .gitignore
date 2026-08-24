@@ -5,3 +5,8 @@ save_state/
 tempsimu/
 .dsh-vision-toolkit/
 microwave_pulse/
+
+# PyInstaller 构建产物与构建虚拟环境（不入库）
+build_venv/
+build/
+dist/

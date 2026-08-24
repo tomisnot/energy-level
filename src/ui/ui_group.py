@@ -2,7 +2,7 @@
 """能级组管理 UI：定义、列表、数值表。"""
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QColor, QIcon
+from PyQt5.QtGui import QColor, QIcon, QPixmap
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSpinBox, QDoubleSpinBox,
     QPushButton, QListWidget, QListWidgetItem, QTableWidget, QTableWidgetItem,

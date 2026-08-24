@@ -12,7 +12,9 @@
 复用 core（ArcCache/dipole_amplitude/偏振/强度）+ pair_core（pair 基/V_dd/交换）。
 """
 import sys
-sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+if sys.stdout is not None:
+    # PyInstaller windowed 模式下 sys.stdout 为 None（见 pair_core.py 同款说明）
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 import numpy as np
 from scipy.integrate import solve_ivp
 from scipy.constants import epsilon_0, c as C_LIGHT, hbar

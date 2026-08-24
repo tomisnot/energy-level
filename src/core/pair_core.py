@@ -23,7 +23,10 @@ C3/C6 不硬编码：由 ARC 偶极矩阵元（core.ArcCache）直接算出，�
 不同原子/态对（n,l,j）自动给出不同值。
 """
 import sys
-sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+if sys.stdout is not None:
+    # PyInstaller windowed 模式下 sys.stdout 为 None，这里裸调会崩（frozen 时由
+    # app_entry 启动守卫统一兜底，此处双重保险，方便直接 import src.core 的场景）
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 import numpy as np
 from collections import OrderedDict
 from scipy.constants import physical_constants as pc

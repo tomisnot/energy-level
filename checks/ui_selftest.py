@@ -265,7 +265,9 @@ def test_state_save(app):
     check('存档：双原子科学参数完整（mode/pair/A·B 波形/A·B 初态）',
           snap['dynamic']['mode'] == 1
           and snap['pair'] == {'R_um': 7.3, 'theta_deg': 45.0, 'phi_deg': 90.0}
-          and len(snap['waves_A']) == 1 and len(snap['waves_B']) == 1
+          and len(snap['waves']) == 1             # A ≡ 共享面板：波形在 waves
+          and snap['waves_A'] == []               # 共享去重（见 serialize_state）
+          and len(snap['waves_B']) == 1
           and snap['dynamic']['psi_A'] == 1
           and snap['dynamic']['psi_B'] == 2)
     # 往返

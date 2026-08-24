@@ -17,11 +17,14 @@
       通道/列表管理（每个波形组件自带 ✕ 删除）。
 数据：self.waves（waveforms.Wave 列表），changed 信号 → 动态页刷新。
 """
-from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
-                             QFormLayout, QLabel, QDoubleSpinBox, QComboBox,
-                             QPushButton, QToolButton, QScrollArea)
+import json
+
 import numpy as np
+from PyQt5.QtCore import Qt, pyqtSignal, QEvent, QMimeData
+from PyQt5.QtGui import QDrag
+from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout,
+                             QGridLayout, QFormLayout, QLabel, QDoubleSpinBox,
+                             QComboBox, QPushButton, QToolButton, QScrollArea)
 
 from ..core import core
 from ..core import waveforms
@@ -41,6 +44,10 @@ def _smart_unit(value, units):
         if coef <= value < coef * 1000:
             return i
     return 0 if value > 0 else len(units) - 1
+
+
+# 拖拽复制波形（跨原子）的 MIME 类型：JSON 载荷 = serialize_waves([w])[0] + '_src'
+_WAVE_MIME = 'application/x-energy-level-wave'
 
 
 # ---------------- 子能级唯一身份键（跨模块共用） ----------------
@@ -120,6 +127,11 @@ class WavePanel(QWidget):
         b_s.setToolTip('添加方波包络波形')
         b_s.clicked.connect(lambda: self._add('square'))
         row.addWidget(b_s)
+        b_a = QPushButton('＋任意')
+        b_a.setToolTip('添加任意波形（无单载频，第一性原理求解）：\n'
+                       '载入时域信号样品文件（两列：时间ns 幅值；或单列幅值+等间距）')
+        b_a.clicked.connect(lambda: self._add('arb'))
+        row.addWidget(b_a)
         root.addLayout(row)
 
         # 波形组滚动区（可折叠组随波形数增长）
@@ -157,13 +169,73 @@ class WavePanel(QWidget):
     def _add(self, kind):
         if kind == 'gauss':
             env = waveforms.GaussianEnv(200.0, 40.0)
-        else:
+        elif kind == 'square':
             env = waveforms.SquareEnv(50.0, 20.0)
+        else:
+            data = self._load_arb_samples()
+            if data is None:
+                return
+            t, a = data
+            self.waves.append(waveforms.ArbitraryWave(
+                f'任意波形{len(self.waves) + 1}', t, a,
+                intensity_mwcm2=100.0))
+            self._rebuild()
+            self.changed.emit()
+            return
         self.waves.append(waveforms.Wave(
             f'波形{len(self.waves) + 1}', 6.8e6, env,
             offset_ns=0.0, intensity_mwcm2=100.0))
         self._rebuild()
         self.changed.emit()
+
+    def _load_arb_samples(self):
+        """文件 → (t_ns, amp)。两列(时间ns,幅值)；单列(幅值)+QInputDialog 等间距。
+        返回 None = 用户取消/失败。"""
+        from PyQt5.QtWidgets import (QFileDialog, QInputDialog, QMessageBox)
+        path, _ = QFileDialog.getOpenFileName(
+            self, '载入任意波形', '',
+            '波形文件 (*.txt *.csv *.dat *.npy);;所有文件 (*)')
+        if not path:
+            return None
+        try:
+            if path.lower().endswith('.npy'):
+                arr = np.load(path)
+                if arr.ndim == 2:
+                    t, a = arr[:, 0].astype(float), arr[:, 1].astype(float)
+                elif arr.ndim == 1:
+                    dt, ok = QInputDialog.getDouble(
+                        self, '等间距载入', '采样间隔 dt (ns):',
+                        0.02, 1e-6, 1e4, 6)
+                    if not ok:
+                        return None
+                    t = np.arange(arr.size) * dt
+                    a = arr.astype(float)
+                else:
+                    raise ValueError('npy 须为 1D(幅值) 或 2D(时间, 幅值)')
+            else:
+                arr = np.atleast_2d(np.loadtxt(path, comments='#'))
+                if arr.shape[1] == 1:
+                    dt, ok = QInputDialog.getDouble(
+                        self, '等间距载入', '采样间隔 dt (ns):',
+                        0.02, 1e-6, 1e4, 6)
+                    if not ok:
+                        return None
+                    t = np.arange(arr.shape[0]) * dt
+                    a = arr[:, 0]
+                elif arr.shape[1] >= 2:
+                    t, a = arr[:, 0], arr[:, 1]
+                else:
+                    raise ValueError('文件须至少 1 列')
+            t = np.asarray(t, float)
+            a = np.asarray(a, float)
+            if t.size < 2 or a.size != t.size:
+                raise ValueError('样品点过少或时间/幅值长度不一致')
+            if np.any(np.diff(t) <= 0):
+                raise ValueError('时间样品必须严格递增')
+            return t, a
+        except Exception as e:
+            QMessageBox.warning(self, '载入失败', str(e))
+            return None
 
     def _delete(self, idx):
         if 0 <= idx < len(self.waves):
@@ -191,19 +263,78 @@ class WavePanel(QWidget):
 
     # ---------------- 单个波形折叠组 ----------------
     def _wave_title(self, w, idx):
+        if isinstance(w, waveforms.ArbitraryWave):
+            return (f'波形{idx + 1} 任意 · {len(w.t_ns)}点 · '
+                    f'dt={w.dt_min_ns():.3g}ns · {w.pol}')
         e = w.envelope
         kind = '高斯' if isinstance(e, waveforms.GaussianEnv) else '方波'
         return f'波形{idx + 1} {kind} · {w.freq_mhz:.3g}MHz · {w.pol}'
+
+    # ---------------- 拖拽复制（拖到另一原子的页签 = 复制到该原子） ----------------
+    def eventFilter(self, obj, ev):
+        """波形折叠组上的拖动手势：按住标题左键拖动 → QDrag。
+
+        只负责"带出"载荷；放下由 ui_dynamic 的页签 drop 处理（跨原子复制）。
+        返回 False：press/release 仍传给控件，展开/折叠点击不受影响。
+        """
+        wave = getattr(obj, '_drag_wave', None)
+        if wave is None:
+            return super().eventFilter(obj, ev)
+        t = ev.type()
+        if t == QEvent.MouseButtonPress and ev.button() == Qt.LeftButton:
+            self._drag_press = (obj, ev.pos())
+        elif (t == QEvent.MouseMove and ev.buttons() & Qt.LeftButton
+              and getattr(self, '_drag_press', None)
+              and self._drag_press[0] is obj):
+            if (ev.pos() - self._drag_press[1]).manhattanLength() \
+                    > QApplication.startDragDistance():
+                d = waveforms.serialize_waves([wave])[0]
+                d['_src'] = id(self)          # 目标据此忽略"拖回自己"
+                mime = QMimeData()
+                mime.setData(_WAVE_MIME, json.dumps(
+                    d, ensure_ascii=False).encode('utf-8'))
+                drag = QDrag(obj)
+                drag.setMimeData(mime)        # 必须挂载：无 mime 不显示拖拽
+                drag.exec_(Qt.CopyAction)
+                self._drag_press = None
+        elif t == QEvent.MouseButtonRelease:
+            self._drag_press = None
+        return False
+
+    def copy_wave_from(self, payload):
+        """从拖拽载荷复制一个波形到本面板尾部（深拷贝，名字加"(副本)"）。
+
+        payload: _WAVE_MIME 的 bytes（JSON）。失败返回 False。
+        """
+        try:
+            d = json.loads(payload.decode('utf-8'))
+            d.pop('_src', None)
+            w = waveforms.restore_waves([d])[0]
+        except Exception:
+            return False
+        w.name = f'{w.name}(副本)'
+        self.waves.append(w)
+        self._rebuild()
+        self.changed.emit()
+        return True
 
     def _wave_group(self, w, idx, expanded=True):
         """单个波形的可折叠组：标题行（箭头+摘要+✕删除）点击开合。"""
         box = QWidget()
         box._expanded = expanded
+        # 拖动手势绑定：整个组（标题为主要把手）都可作为拖拽源
+        box._drag_wave = w
+        box.installEventFilter(self)
         v = QVBoxLayout(box)
         v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(0)
 
         head = QToolButton()
+        head._drag_wave = w
+        head.installEventFilter(self)
+        head.setToolTip('点击折叠/展开参数；按住左键拖动到另一原子的'
+                        '页签（如「原子 B」）= 复制该波形到那个原子')
+        head.setCursor(Qt.OpenHandCursor)     # 悬停提示"可拖"
         head.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         head.setCheckable(True)
         head.setChecked(expanded)
@@ -241,13 +372,122 @@ class WavePanel(QWidget):
         return box
 
     # ---------------- 波形参数内容 ----------------
+    def _arb_info(self, w):
+        """任意波形摘要行（样品统计 + 求解提示）。"""
+        return (f'{len(w.t_ns)} 点 · dt_min={w.dt_min_ns():.3g} ns · '
+                f'f_max≈{w.f_max_mhz():.3g} MHz · 幅值峰值归一 '
+                '（运行走 arbitrary 第一性原理，无 RWA，较慢）')
+
+    def _arb_content(self, w, idx, head):
+        """任意波形参数区：光强 | 偏振 | 偏移 + 样品信息/重新载入。
+        无频率（无单载频）→ 无辅助定参区。"""
+        from PyQt5.QtWidgets import QMessageBox
+
+        def _label(txt):
+            lb = QLabel(txt)
+            lb.setStyleSheet('color:#4a5568; font-size:9pt;')
+            return lb
+
+        def _spin(lo, hi, dec, val, step=1.0, suffix='', min_w=100):
+            sb = QDoubleSpinBox()
+            sb.setRange(lo, hi); sb.setDecimals(dec)
+            sb.setSingleStep(step); sb.setValue(val)
+            if suffix:
+                sb.setSuffix(suffix)
+            sb.setMinimumWidth(min_w)
+            return sb
+
+        widget = QWidget()
+        outer = QVBoxLayout(widget)
+        outer.setContentsMargins(10, 8, 10, 8)
+        outer.setSpacing(4)
+        row = QGridLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(6)
+
+        _ii = _smart_unit(w.intensity_mwcm2, _INTEN_UNITS)
+        inten = _spin(0, 1e9, _INTEN_UNITS[_ii][2],
+                      w.intensity_mwcm2 / _INTEN_UNITS[_ii][1], 10.0,
+                      min_w=160)
+        inten.setToolTip('峰值光强（决定场绝对幅度：E(t)=E0·amp(t)）')
+        inten_unit = QComboBox()
+        inten_unit.setFixedWidth(64)
+        for name, _, _ in _INTEN_UNITS:
+            inten_unit.addItem(name)
+        inten_unit.setCurrentIndex(_ii)
+        ri = QHBoxLayout()
+        ri.setSpacing(2)
+        ri.addWidget(inten, 1)
+        ri.addWidget(inten_unit)
+        row.addWidget(_label('光强'), 0, 0)
+        row.addLayout(ri, 0, 1)
+
+        pol = QComboBox()
+        pol.addItems(list(waveforms.POLS))
+        pol.setCurrentText(w.pol)
+        pol.setMinimumWidth(110)
+        row.addWidget(_label('偏振'), 0, 2)
+        row.addWidget(pol, 0, 3)
+
+        off = _spin(-1e9, 1e9, 1, w.offset_ns, 10, ' ns', min_w=130)
+        off.setToolTip('波形绝对起点相对演化 t=0 的偏移')
+        row.addWidget(_label('偏移'), 0, 4)
+        row.addWidget(off, 0, 5)
+        outer.addLayout(row)
+
+        info = QLabel(self._arb_info(w))
+        info.setStyleSheet('font-family:Consolas; font-size:9pt; color:#0b5394;')
+        outer.addWidget(info)
+        reload_b = QPushButton('重新载入波形文件…')
+        reload_b.setToolTip('替换样品数据（保留光强/偏振/偏移）')
+        outer.addWidget(reload_b)
+
+        def _upd(*_):
+            w.intensity_mwcm2 = (inten.value()
+                                 * _INTEN_UNITS[inten_unit.currentIndex()][1])
+            w.pol = pol.currentText()
+            w.offset_ns = off.value()
+            head.setText(self._wave_title(w, idx))
+            self.changed.emit()
+
+        def _on_inten_unit(*_):
+            inten.blockSignals(True)
+            inten.setValue(w.intensity_mwcm2
+                           / _INTEN_UNITS[inten_unit.currentIndex()][1])
+            inten.blockSignals(False)
+
+        def _reload(*_):
+            data = self._load_arb_samples()
+            if data is None:
+                return
+            t, a = data
+            try:
+                w.t_ns = t
+                w.amp = a / np.max(np.abs(a))
+            except Exception as e:
+                QMessageBox.warning(widget, '载入失败', str(e))
+                return
+            info.setText(self._arb_info(w))
+            head.setText(self._wave_title(w, idx))
+            self.changed.emit()
+
+        inten_unit.currentIndexChanged.connect(_on_inten_unit)
+        inten.valueChanged.connect(_upd)
+        pol.currentTextChanged.connect(_upd)
+        off.valueChanged.connect(_upd)
+        reload_b.clicked.connect(_reload)
+        return widget
+
     def _wave_content(self, w, idx, head):
         """单个波形的紧凑参数区（网格多列，利用加宽的主面板；编辑即时生效）。
 
         布局（QVBox：参数网格 + 辅助折叠区分离，折叠辅助不影响参数宽度）：
           网格：行0 频率|光强|偏振；行1 包络参数|起点偏移
           下方：[▸辅助]（g/e 态 + 目标Ω「定光强」+ 目标Δ「定频率」）
+        任意波形（ArbitraryWave）走 _arb_content：无频率/无辅助。
         """
+        if isinstance(w, waveforms.ArbitraryWave):
+            return self._arb_content(w, idx, head)
         widget = QWidget()
         outer = QVBoxLayout(widget)
         outer.setContentsMargins(10, 8, 10, 8)

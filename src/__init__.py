@@ -14,29 +14,88 @@
 目录写 sqlite 缓存（rb87_precalculated.db 等），默认位于用户主目录 ~/.arc-data
 （沙箱/受限环境下无写权限会启动即崩）。本项目自带 Rb-87 所需缓存子集，
 重定向后所有读写都落在项目内，无需外部写权限，也保证结果可复现。
+
+打包模式（PyInstaller，sys.frozen）：程序运行在只读/临时目录，不能直接写
+包内 .arcdata —— 首次启动把随包携带的 `.arcdata` 种子复制到
+%LOCALAPPDATA%/EnergyLevel/.arcdata（可写、持久、跨版本复用），再重定向到那里。
 """
 import os
+import shutil
+import sys
 
+_ARC_FROZEN = bool(getattr(sys, 'frozen', False))
 _ARC_DATA_LOCAL = os.path.join(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))), '.arcdata')
 _ARC_PATCHED = False
 
 
+def _copy_missing(src_dir, dst_dir):
+    """把种子 src_dir 中缺失的文件递归复制到 dst_dir（二次启动即跳过，<1 s）。"""
+    if not os.path.isdir(src_dir):
+        return
+    for root, _dirs, files in os.walk(src_dir):
+        rel = os.path.relpath(root, src_dir)
+        tgt = dst_dir if rel == '.' else os.path.join(dst_dir, rel)
+        try:
+            os.makedirs(tgt, exist_ok=True)
+        except OSError:
+            continue
+        for fn in files:
+            s = os.path.join(root, fn)
+            d = os.path.join(tgt, fn)
+            if not os.path.exists(d):
+                try:
+                    shutil.copy2(s, d)
+                except OSError:
+                    pass
+
+
+def _arc_data_target():
+    """ARC 数据目录（确保存在并返回其路径）。
+
+    - 开发模式（非 frozen）：项目根 .arcdata/（沿用现状；不存在时不强制创建，
+      保持 ARC 默认路径行为，见 _patch_arc_datafolder）；
+    - 打包模式（frozen）：把随包种子 `.arcdata` 一次性复制到
+      %LOCALAPPDATA%/EnergyLevel/.arcdata（可写、持久）；
+      复制失败则回退项目内目录，再不行就用种子目录本身。
+    """
+    if not _ARC_FROZEN:
+        return _ARC_DATA_LOCAL
+    seed = os.path.join(
+        getattr(sys, '_MEIPASS', os.path.dirname(sys.executable)), '.arcdata')
+    root = os.environ.get('LOCALAPPDATA') or os.path.expanduser('~')
+    dest = os.path.join(root, 'EnergyLevel', '.arcdata')
+    try:
+        os.makedirs(dest, exist_ok=True)
+        _copy_missing(seed, dest)
+        return dest
+    except OSError:
+        try:
+            os.makedirs(_ARC_DATA_LOCAL, exist_ok=True)
+            _copy_missing(seed, _ARC_DATA_LOCAL)
+            return _ARC_DATA_LOCAL
+        except OSError:
+            return dest if os.path.isdir(dest) else seed
+
+
 def _patch_arc_datafolder():
-    """把 arc.alkali_atom_functions.AlkaliAtom.dataFolder 指向项目 .arcdata/。
+    """把 arc.alkali_atom_functions.AlkaliAtom.dataFolder 指向 ARC 数据目录。
 
     dataFolder 是类属性，实例化（Rubidium87()）时动态查找，故导入 arc 后、
-    实例化前打补丁即可生效；不修改 arc 源码。若 .arcdata/ 不存在（未运行
-    scripts/setup_arcdata.py），保持 arc 默认路径（~/.arc-data）。
+    实例化前打补丁即可生效；不修改 arc 源码。若目标目录不存在（开发模式且
+    未运行 scripts/setup_arcdata.py），保持 arc 默认路径（~/.arc-data）。
     """
     global _ARC_PATCHED
-    if _ARC_PATCHED or not os.path.isdir(_ARC_DATA_LOCAL):
+    if _ARC_PATCHED:
+        return
+    data_dir = _arc_data_target()
+    if not os.path.isdir(data_dir):
         return
     try:
         import arc.alkali_atom_functions as _aaf
     except Exception:
         return
-    _aaf.AlkaliAtom.dataFolder = _ARC_DATA_LOCAL
+    _aaf.AlkaliAtom.dataFolder = data_dir
     _ARC_PATCHED = True
 
 
