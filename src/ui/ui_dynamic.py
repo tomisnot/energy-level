@@ -215,9 +215,10 @@ class DynamicPanel(QWidget):
         rowt.addWidget(self.near_cutoff_sb)
         rowt.addWidget(QLabel('方法'))
         self.method_cb = QComboBox()
-        # 动态分析只用相互作用绘景 RK4（auto 无耗散恒走 ip4；有耗散走
-        # lindblad）。floquet/pwc 已封存至 src/_archive/evolve_floquet_pwc.py。
-        self.method_cb.addItems(['auto', 'ip4'])
+        # auto：无耗散走 ip4 / 有耗散走 lindblad；exact：第一性原理引擎
+        # （实验室系无 RWA/无旋转系/无近远分流，Sambe 光子块 + 包络自适应）。
+        self.method_cb.addItems(['auto', 'ip4', 'exact'])
+        self.method_cb.currentTextChanged.connect(self._on_method_changed)
         rowt.addWidget(self.method_cb)
         p.addLayout(rowt)
 
@@ -712,13 +713,22 @@ class DynamicPanel(QWidget):
         fld = getattr(self.main, 'field', None)
         return float(fld.b_gauss()) if fld is not None else 0.0
 
+    def _on_method_changed(self, method):
+        """方法切换：exact 无近/远分流概念，共振cut 不适用。"""
+        self.near_cutoff_sb.setEnabled(method != 'exact')
+
     def _run_single_body(self, states, t, decays):
         """单原子演化路径。"""
         waves = list(self.wave_panel.waves)
-        fields = waveforms.build_fields(
-            waves, states, self.cache,
-            near_cutoff_mhz=self.near_cutoff_sb.value(),
-            B_gauss=self._field_B())
+        method = self.method_cb.currentText()
+        if method == 'exact':
+            # 第一性原理场：全部偶极对耦合，无近/远分流与静态 AC 注入
+            fields = waveforms.build_fields_exact(self.cache, states, waves)
+        else:
+            fields = waveforms.build_fields(
+                waves, states, self.cache,
+                near_cutoff_mhz=self.near_cutoff_sb.value(),
+                B_gauss=self._field_B())
         self.wave_data = waveforms.waveforms_to_env(waves, t)
         psi0 = self.psi_combo.currentIndex()
 

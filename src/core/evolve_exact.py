@@ -1,0 +1,814 @@
+# -*- coding: utf-8 -*-
+"""第一性原理含时求解引擎（evolve_exact.py）：零模型近似的单原子动态模拟。
+
+物理模型（唯一定义——无 RWA、无旋转系、无近/远失谐分流、无静态 AC 注入）：
+
+    H(t) = H0 + Σ_k Ω_k·env_k(t)·cos(ω_k t)·A_k                （实验室系，MHz）
+
+AC 位移、Bloch–Siegert 位移、远失谐效应全部从精确传播中自然涌现，
+不需要（也不允许）任何外部能移注入。
+
+数值算法（两条互补路径，均第一性原理）：
+
+1) 主力路径 `evolve_exact`：包络自适应分段 + Sambe 光子块扩展空间传播。
+   - 时间轴按包络曲率自适应分段（与载波周期无关——光频载波不产生步数）；
+     段内包络冻结于中点值，Sambe 哈密顿（含块对角载波相位）精确指数传播；
+     链上状态用 Richardson 外推 (4·双子步−单步)/3 提阶至 O(dt⁴)，输出取双子步。
+     误差判据 = 单步 vs 双子步的扩展态差范数（≈ 真误差界，无重构噪声）≤ tol。
+   - 全程在扩展空间连续传播（边界不重嵌入，无微运动泄漏；幺正守恒）。
+   - Sambe (t,t') 扩展空间 K_{n⃗,m⃗} = H_{n⃗−m⃗} − Σ_g n_g ω_g δ（时不变），
+     载波被精确解析，段传播成本与段内载波周期数无关。
+   - 光子块阶数 M：全传播 M vs M+1 对比递增收敛（布居差 ≤ tol）。
+   - 两处误差（包络离散、光子块截断）均收敛可验；Σ|ψ|² 偏差 ≈ 截断误差量级，
+     随结果 error_report 可见。
+   - 全常数包络 → 单次扩展空间对角化，成本与总时长无关。
+
+2) 参考路径 `evolve_reference`：H0 相互作用绘景 + 自适应高精度 ODE
+   （幺正 DOP853 / 含耗散 Radau），rtol/atol 显式暴露，可选双容差验证。
+   角色：回归层权威参考；method='exact' 含耗散时的第一期执行路径
+   （段内耗散超算符留待第二期）。
+
+场格式（kind='exact'，由 build_fields_exact 或手工构造）：
+    {'kind': 'exact', 'A': N×N 实对称（峰值光强下各对真实 Rabi，MHz），
+     'omega_L_mhz': 载频, 'waveform': t→[0,1] 包络 callable, 'label': str}
+
+单位：与 evolve.py 一致（MHz, ns, rad/ns；_CONV = 2π×1e-3）。
+"""
+import numpy as np
+import scipy.sparse as sp
+from scipy.sparse.linalg import expm_multiply
+
+from . import core
+
+_CONV = 2 * np.pi * 1e-3          # MHz·ns → rad
+_POL_Q = {'π': 0, 'σ+': +1, 'σ-': -1}
+
+# 光子块阶数：起始/上限（自适应收敛于两者之间）
+_M_START = 2
+_M_MAX = 8
+# 扩展维 ≤ 此值走稠密 eigh，否则稀疏 expm_multiply
+_DENSE_MAX = 1500
+# 包络采样（活性判断/恒常判断）
+_ENV_PROBE_N = 2001
+# Richardson 递归深度保护
+_DT_MIN_FRAC = 2e5
+# 临时调试日志（非 None 时记录 (ta, dt, rms)）
+_DBG_LOG = None
+
+
+# ============================================================
+# 场构造（无 near_cutoff / 无 AC 注入 / 无 scatter——全部补丁机制切割）
+# ============================================================
+def _sublevel_row(s):
+    """states → core.dipole_amplitude 的子能级行（与 evolve 同款）。"""
+    return dict(n=s['n'], l=s['l'], j=s['j'], kind=s['kind'],
+                mj=s.get('mj'), mF=s.get('mF'), amps=s.get('amps'))
+
+
+def build_fields_exact(cache, states, waves):
+    """波形列表 → 第一性原理场列表（每波形一个全偶极耦合算符）。
+
+    每个波形 (freq, intensity, pol, envelope) → A[i,j] = 峰值光强下该对的
+    Rabi 频率 Ω_ij = core.rabi_mhz（MHz，Ω/2π 周频约定：Sambe 子空间耦合取
+    Ω/2，共振布居振荡 sin²(π·Ω_MHz·t_µs)，π 脉冲 = 1/(2Ω) µs，与实验界
+    面 Rabi 定义一致），含选择定则；**全部**偶极允许对都进耦合矩阵——
+    远失谐对的效应由精确传播自动给出，不存在近/远分流边界，也不注入
+    任何静态能移。
+    """
+    out = []
+    N = len(states)
+    for w in waves:
+        if getattr(w, 'kind', None) == 'arb':
+            raise ValueError(
+                '第一性引擎（method=exact）暂不支持任意波形'
+                '（ArbitraryWave，无单载频概念）；请用 method=auto'
+                '（自动转 arbitrary 路径）。')
+        q = _POL_Q.get(w.pol, 0)
+        E0_sq = core.field_e0_sq(float(w.intensity_mwcm2))
+        A = np.zeros((N, N))
+        for i in range(N):
+            for j in range(i + 1, N):
+                d = core.dipole_amplitude(
+                    cache, _sublevel_row(states[i]), _sublevel_row(states[j]),
+                    q)
+                if abs(d) < 1e-12:
+                    continue
+                A[i, j] = A[j, i] = core.rabi_mhz(abs(d), E0_sq)
+        if not np.any(A != 0.0):
+            continue                       # 该偏振下无任何耦合 → 无效场
+        out.append({'kind': 'exact', 'A': A,
+                    'omega_L_mhz': float(w.freq_mhz),
+                    'waveform': w.waveform,
+                    'label': getattr(w, 'name', '波')})
+    return out
+
+
+def _validate_fields(fields):
+    N = None
+    for f in fields:
+        if (f or {}).get('kind') != 'exact':
+            raise ValueError(
+                "method='exact' 要求场为 kind='exact'（由 "
+                'waveforms.build_fields_exact 构造）——不消费 real_field/'
+                'multi 场（其近/远分流与静态 AC 注入与第一性模型冲突）。')
+        A = np.asarray(f['A'], float)
+        if N is None:
+            N = A.shape[0]
+        if A.shape != (N, N):
+            raise ValueError('exact 场 A 矩阵维度不一致')
+    return N
+
+
+def _group_by_freq(fields):
+    """相异载频分组（相对差 ≤1e-9 视为同频，共享一个光子维）。"""
+    groups = []
+    for f in fields:
+        w = float(f['omega_L_mhz'])
+        hit = None
+        for g in groups:
+            if abs(g['omega_mhz'] - w) <= 1e-9 * max(abs(w), 1.0):
+                hit = g
+                break
+        if hit is None:
+            hit = dict(omega_mhz=w, As=[], envs=[], labels=[])
+            groups.append(hit)
+        hit['As'].append(np.asarray(f['A'], float))
+        hit['envs'].append(f['waveform'])
+        hit['labels'].append(f.get('label', ''))
+    return groups
+
+
+# ============================================================
+# Sambe 扩展空间（结构预计算 + 按段装配）
+# ============================================================
+class _SambeSetup:
+    """光子块扩展空间结构（与段无关的部分只算一次）。
+
+    基组 |i⟩⊗|n_1..n_G⟩，扁平索引 i + N·p，p = Σ_g n_g·stride_g
+    （n_g ∈ 0..2M，对角用中心化量子数 n_g−M——与重构相位中的绝对
+    n_g 恰好抵消各自的 M 偏移，规范自洽）。
+    """
+
+    def __init__(self, E, groups, M):
+        self.E = np.asarray(E, float)
+        self.N = len(E)
+        self.groups = groups
+        self.M = M
+        self.D = 2 * M + 1
+        P = self.D ** len(groups)
+        self.P = P
+        self.dim = self.N * P
+        idx = np.arange(P)
+        self.strides = []
+        self.nvecs = []
+        base = np.zeros(P)
+        stride = 1
+        for g in groups:
+            nvec = (idx // stride) % self.D
+            self.strides.append(stride)
+            self.nvecs.append(nvec)
+            # Sambe 块对角 = E_i − n·ω（与耦合方向 n→n+1 配套：
+            # 吸收共振对 |g,n⟩↔|e,n+1⟩；重构 ψ=Σ c_n e^{−inωt}）
+            base = base - (nvec - M) * g['omega_mhz']
+            stride *= self.D
+        self.diag = np.tile(self.E, P) + np.repeat(base, self.N)
+        # 重构相位系数：θ_p(t) = nphase[p]·t（rad，t 单位 ns）
+        nphase = np.zeros(P)
+        for nvec, g in zip(self.nvecs, groups):
+            nphase = nphase + nvec * (_CONV * g['omega_mhz'])
+        self.nphase = nphase
+        # 中央光子块（各组量子数 n=0，即中心化索引 M）：物理态嵌入位置
+        self.p_center = sum(M * st for st in self.strides)
+        # 耦合结构：每组 (r, c) 索引对 ↔ V_seg[nz_i, nz_j]·0.5
+        self.coup = []
+        for gi, g in enumerate(groups):
+            Vpat = np.zeros((self.N, self.N))
+            for A in g['As']:
+                Vpat = Vpat + (np.abs(A) > 1e-12)
+            # 全部有序对（(a,b) 与 (b,a) 分属不同光子方向，都须正向加）；
+            # 光子数减少方向 = 已加条目的转置，K_at 中统一对称化补齐
+            ii, jj = np.nonzero(Vpat)
+            stride = self.strides[gi]
+            # 光子格点扁平索引与各组量子数（一次性构造）
+            grid = np.meshgrid(*[np.arange(self.D) for _ in groups],
+                               indexing='ij')
+            pflat = np.zeros(self.D ** len(groups), int)
+            for gg in range(len(groups)):
+                pflat = pflat + grid[gg].ravel() * self.strides[gg]
+            ng_g = grid[gi].ravel()
+            rows, cols = [], []
+            for s in range(self.D - 1):
+                p_src = pflat[ng_g == s]       # n_g == s 的全部格点
+                p_dst = p_src + stride
+                for a, b in zip(ii, jj):
+                    # 正向：a 在 n=s → b 在 n+1（转置方向由对称化补齐）
+                    rows.append(a + self.N * p_src)
+                    cols.append(b + self.N * p_dst)
+            rows = np.concatenate(rows) if rows else np.zeros(0, int)
+            cols = np.concatenate(cols) if cols else np.zeros(0, int)
+            # 值序列与行序（s 层 × 有序对 × p_src 格点）对齐：
+            # 每层 = repeat(vals, n_p)，tile D−1 层
+            self.coup.append(dict(r=rows, c=cols, nz_i=ii, nz_j=jj,
+                                  n_p=P // self.D))
+        self.K0 = np.diag(self.diag)
+        self.dense = self.dim <= _DENSE_MAX
+        # 单位包络耦合结构 Kc_g（稠密）——与包络无关，预计算；
+        # 耦合全为实数时用实型 → 段对角化走实对称 eigh（快 ~5×）
+        self.Kc_dense = []
+        for gi, cp in enumerate(self.coup):
+            if cp['r'].size and self.dense:
+                vals = 0.5 * np.sum(
+                    [np.asarray(A[cp['nz_i'], cp['nz_j']])
+                     for A in groups[gi]['As']], axis=0)
+                dtype = float if np.isrealobj(vals) else complex
+                Kc = np.zeros((self.dim, self.dim), dtype)
+                seq = np.tile(np.repeat(vals, cp['n_p']), self.D - 1)
+                Kc[cp['r'], cp['c']] += seq
+                Kc[cp['c'], cp['r']] += np.conj(seq)
+                self.Kc_dense.append(Kc)
+            else:
+                self.Kc_dense.append(None)
+        # 全部耦合实数 → 段哈密顿实对称（eigh 提速）
+        self.real_K = all(Kc is None or np.isrealobj(Kc)
+                          for Kc in self.Kc_dense)
+
+    def V_segs(self, groups, mid):
+        """各组在段中点的冻结耦合矩阵 Σ_w env_w(mid)·A_w。"""
+        Vs = []
+        active = False
+        for g in groups:
+            V = np.zeros((self.N, self.N))
+            for A, wf in zip(g['As'], g['envs']):
+                c = float(np.asarray(wf(np.atleast_1d(mid))).flat[0])
+                if c != 0.0:
+                    V = V + c * A
+            if np.any(V != 0.0):
+                active = True
+            Vs.append(V)
+        return Vs, active
+
+    def K_at(self, Vs):
+        """段哈密顿（稠密或稀疏）。Vs 全零时返回 ('diag', None)。"""
+        if not any(np.any(V != 0.0) for V in Vs):
+            return ('diag', None)
+        if self.dense:
+            K = self.K0.copy()
+            for V, cp in zip(Vs, self.coup):
+                if cp['r'].size:
+                    vals = 0.5 * V[cp['nz_i'], cp['nz_j']]
+                    seq = np.tile(np.repeat(vals, cp['n_p']), self.D - 1)
+                    K[cp['r'], cp['c']] += seq
+                    # 转置方向（光子数减少）：同值厄米补齐，不可对称化（会减半）
+                    K[cp['c'], cp['r']] += np.conj(seq)
+            return ('dense', K)
+        rows = [np.arange(self.dim)]
+        cols = [np.arange(self.dim)]
+        data = [self.diag]
+        for V, cp in zip(Vs, self.coup):
+            if cp['r'].size:
+                rows.append(cp['r'])
+                cols.append(cp['c'])
+                vals = 0.5 * V[cp['nz_i'], cp['nz_j']]
+                data.append(np.tile(np.repeat(vals, cp['n_p']),
+                                    self.D - 1))
+                # 转置方向（光子数减少）同样入 COO（同值，厄米）
+                rows.append(cp['c'])
+                cols.append(cp['r'])
+                data.append(np.tile(np.repeat(np.conj(vals), cp['n_p']),
+                                    self.D - 1))
+        K = sp.coo_matrix((np.concatenate(data),
+                           (np.concatenate(rows), np.concatenate(cols))),
+                          shape=(self.dim, self.dim)).tocsr()
+        return ('sparse', K)
+
+
+def _embed(psi, setup):
+    """物理态 → 扩展空间中央光子块（量子数 n=0；嵌入自由度取单块非零，
+    重构求和 Σ_n c_n e^{−inωt} 在嵌入时刻精确还原 ψ）。"""
+    X = np.zeros(setup.dim, complex)
+    off = setup.N * setup.p_center
+    X[off:off + setup.N] = psi
+    return X
+
+
+def _apply_prop(prop, setup, psi, ta, tq):
+    """段传播 + (t,t') 重构：ψ(ta) → ψ(tq[])（(nq, N) 复矩阵）。
+
+    重构 ψ_i(t) = Σ_p e^{i·nphase[p]·t}·φ_{p,i}(t)——Sambe 展开的物理投影。
+    """
+    tq = np.asarray(tq, float)
+    if prop[0] == 'diag':
+        ph = np.exp(-1j * _CONV * np.outer(tq - ta, setup.E))   # (nq, N)
+        return psi[None, :] * ph
+    if prop[0] == 'dense':
+        evals, evecs = prop[1]
+        a0 = evecs.conj().T @ _embed(psi, setup)
+        dt = tq - ta
+        A = np.exp(-1j * _CONV * np.outer(evals, dt))           # (dim, nq)
+        X = evecs @ (a0[:, None] * A)                           # (dim, nq)
+        Xm = X.reshape(setup.P, setup.N, len(tq))
+        # 重构 ψ_i(t) = Σ_n c_n(t)·e^{−inωt}（Sambe 展开，负相位）
+        PH = np.exp(-1j * np.outer(setup.nphase, tq))           # (P, nq)
+        return np.einsum('pq,piq->iq', PH, Xm).T
+    # 稀疏路径：逐查询 expm_multiply（后备；大基组/多频场景）
+    out = np.zeros((len(tq), setup.N), complex)
+    X0 = _embed(psi, setup)
+    for k, t in enumerate(tq):
+        X = expm_multiply(-1j * _CONV * (t - ta) * prop[1], X0)
+        Xm = X.reshape(setup.P, setup.N)
+        out[k] = (np.exp(-1j * setup.nphase * t) @ Xm)
+    return out
+
+
+def _pops_of(ps):
+    return np.abs(ps) ** 2
+
+
+# ============================================================
+# 光子块阶数：常数包络探针（单次对角化，截断差随时变包络的上界）
+# ============================================================
+def _peak_const_groups(groups, T):
+    """全部包络 → 峰值常数的镜像组（探针用）。"""
+    out = []
+    tg = np.linspace(0.0, T, _ENV_PROBE_N)
+    for g in groups:
+        peaks = [float(np.max(np.abs(np.asarray(wf(tg), float))))
+                 for wf in g['envs']]
+        out.append(dict(
+            omega_mhz=g['omega_mhz'], As=list(g['As']),
+            envs=[(lambda c: (lambda t: np.full_like(
+                np.asarray(t, float), c)))(pk) for pk in peaks],
+            labels=g['labels']))
+    return out
+
+
+def _probe_pops(E, probe_groups, M, psi0, T):
+    """探针场景单次对角化布居（五个采样时刻）。"""
+    st = _SambeSetup(E, probe_groups, M)
+    Vs, active = st.V_segs(probe_groups, 0.5 * T)
+    if not active:
+        return np.tile(_pops_of(np.asarray(psi0, complex)), (5, 1))
+    kind, K = st.K_at(Vs)
+    if kind == 'dense':
+        prop = ('dense', np.linalg.eigh(K))
+    else:
+        prop = ('sparse', K)
+    ps = _apply_prop(prop, st, np.asarray(psi0, complex), 0.0,
+                     T * np.array([0.1, 0.3, 0.5, 0.7, 1.0]))
+    return np.abs(ps) ** 2
+
+
+def _m_analytic(groups, tol):
+    """解析下界：(r/4)^{2(M−1)} ≤ tol（r = 最大 Ω/ω）——探针起点，
+    避免弱驱动场景（光学）从 M=2 逐级起跳。"""
+    rmax = 0.0
+    for g in groups:
+        vmax = max(float(np.abs(A).max()) for A in g['As'])
+        rmax = max(rmax, vmax / max(abs(g['omega_mhz']), 1e-9))
+    M = _M_START
+    if rmax > 0.0:
+        while (rmax / 4.0) ** (2 * (M - 1)) > tol and M < _M_MAX:
+            M += 1
+    return M
+
+
+# ============================================================
+# 包络自适应分段主驱动（冻结中点精确指数 + Richardson 外推 + 减半控制）
+# ============================================================
+# Gauss-Legendre 节点/权重缓存（缺陷修正求积；节点数自适应倍增）
+_GL_CACHE = {}
+
+
+def _gl_nodes(n):
+    """n 点 Gauss-Legendre 节点/权重（[−1,1]，缓存）。"""
+    gl = _GL_CACHE.get(n)
+    if gl is None:
+        from numpy.polynomial.legendre import leggauss
+        gl = leggauss(n)
+        _GL_CACHE[n] = gl
+    return gl
+
+
+def _seg_decomp(setup, groups, ta, tb):
+    """段冻结中点哈密顿 K(c_mid) 的对角分解。
+    返回 ('diag', None) 或 ('dense', evals, evecs, c_mids)。"""
+    mid = 0.5 * (ta + tb)
+    if setup.dense:
+        active = False
+        K = setup.K0.copy()
+        c_mids = []
+        for g, Kc in zip(groups, setup.Kc_dense):
+            if Kc is None:
+                c_mids.append(0.0)
+                continue
+            c = sum(float(np.asarray(wf(np.atleast_1d(mid))).flat[0])
+                    for wf in g['envs'])
+            c_mids.append(c)
+            if c != 0.0:
+                K = K + c * Kc
+                active = True
+        if not active:
+            return ('diag', None)
+        evals, evecs = np.linalg.eigh(K)
+        return ('dense', evals, evecs, c_mids)
+    Vs, active = setup.V_segs(groups, mid)
+    if not active:
+        return ('diag', None)
+    kind, K = setup.K_at(Vs)
+    if kind == 'dense':
+        evals, evecs = np.linalg.eigh(K)
+        return ('dense', evals, evecs, None)
+    return ('sparse', K, None, None)
+
+
+def _frozen_apply(evals, evecs, a0, ta, tq):
+    """冻结传播子作用：e^{−iC K(c_mid)(tq−ta)}·X(ta)。"""
+    return evecs @ (a0 * np.exp(-1j * _CONV * evals * (tq - ta)))
+
+
+def _defect_sweep(setup, groups, ta, nodes, ws, evals, evecs, c_mids,
+                  psi_nodes):
+    """单次缺陷扫描（本征基可分离形式，O(dim·n)）：
+
+    δ(t) = −iC∫_{ta}^{t} U_f(t,s)·ΔK(s)·ψ(s) ds，
+    本征基分量 δ_r(t) = −iC·e^{−iCε_r t}·S_r，
+    S_r = Σ_q w_q·e^{+iCε_r t_q}·(evecs†·ΔK(t_q)·ψ(t_q))_r——对固定节点组
+    一次求和即得任意目标时刻的 δ（无嵌套）；节点级 δ 满足 Volterra 上限
+    （仅用 ≤ 该节点的求积点，累积和实现）。返回 (S, delta_nodes)：
+    S = 全区间和（供目标时刻求值）。
+    """
+    nodes = np.asarray(nodes, float)
+    ws = np.asarray(ws, float)
+    Psi = np.asarray(psi_nodes, complex)                 # (n, dim)
+    V = np.zeros_like(Psi)
+    for g, Kc, c_mid in zip(groups, setup.Kc_dense, c_mids):
+        if Kc is None:
+            continue
+        dc = np.zeros(len(nodes))
+        for wf in g['envs']:
+            dc = dc + np.asarray(wf(nodes), float)
+        dc = dc - c_mid
+        if np.max(np.abs(dc)) > 1e-14:
+            V = V + dc[:, None] * (Psi @ Kc.T)           # v_q = Δc·Kc ψ_q（BLAS）
+    G = V @ evecs.conj()                                 # (n, dim) evecs†·v_q
+    Ph = np.exp(1j * _CONV * np.outer(evals, nodes))     # (dim, n)
+    Csum = np.cumsum(Ph * (G * ws[:, None]).T, axis=1)   # (dim, n) 累积和
+    S = Csum[:, -1]                                      # 全区间和（本征基）
+    Phn = np.exp(-1j * _CONV * np.outer(evals, nodes))   # (dim, n)
+    # 节点级 δ（物理基，满足 Volterra 上限）
+    delta_nodes = (evecs @ (-1j * _CONV * (Phn * Csum))).T   # (n, dim)
+    return S, delta_nodes
+
+
+def _defect_at(setup, S, evals, evecs, tq):
+    """由缺陷扫描结果 S（本征基）求物理基 δ(tq)。"""
+    return evecs @ (-1j * _CONV * np.exp(-1j * _CONV * evals * tq) * S)
+
+
+def _propagate_adaptive(setup, groups, psi0, t_grid, tol, progress_arr, log):
+    """自适应分段演化：全程在 Sambe 扩展空间连续传播（边界不重嵌入，
+    无微运动泄漏；幺正守恒），仅在输出时刻投影物理态。
+
+    段传播 = 冻结中点精确指数 + Duhamel 缺陷修正（真实包络差在段内 Gauss
+    求积，块对角载波相位由冻结指数精确承载）；求积节点数自适应倍增（被积
+    函数含本征拍频振荡，节点须解析），节点加密差即误差估计：≤ tol 接受，
+    否则真中点细分（细分同时降低所需节点数）——可细分到输出网格以下，
+    直到残差 ≤ tol 或触及绝对下限。
+    """
+    T = float(t_grid[-1])
+    t = np.asarray(t_grid, float)
+    N = setup.N
+    psi0 = np.asarray(psi0, complex)
+    pops = np.zeros((len(t), N))
+    pops[0] = _pops_of(psi0)
+    report = dict(n_segments=0, max_richardson_diff=0.0, dt_min_hit=False,
+                  max_norm_dev=0.0)
+    h_floor = max(T / _DT_MIN_FRAC, 1e-9)
+
+    def rec2(ta, tb, X):
+        """自适应传播 X(ta) → X(tb)（无输出；返回修正后链状态）。"""
+        if progress_arr[1] != 0.0:
+            raise RuntimeError('用户取消')
+        dec = _seg_decomp(setup, groups, ta, tb)
+        if dec[0] == 'diag':
+            report['n_segments'] += 1
+            return X * np.exp(-1j * _CONV * (tb - ta) * setup.diag)
+        if dec[0] == 'sparse':
+            _, K, _, _ = dec
+            return expm_multiply(-1j * _CONV * (tb - ta) * K, X)
+        _, evals, evecs, c_mids = dec
+        a0 = evecs.conj().T @ X
+
+        def frozen_at(tq):
+            return _frozen_apply(evals, evecs, a0, ta, tq)
+
+        psi_prev = None
+        psi_out = frozen_at(tb)
+        est = 0.0
+        for n_nodes in (32, 64, 128):
+            glx, glw = _gl_nodes(n_nodes)
+            nodes = ta + 0.5 * (tb - ta) * (glx + 1.0)
+            ws = 0.5 * (tb - ta) * glw
+            # 节点冻结态（批量）
+            F = evecs @ (a0[:, None] * np.exp(
+                -1j * _CONV * np.outer(evals, nodes - ta)))   # (dim, n)
+            psi_nodes = F.T
+            # 两级缺陷扫描：一级用冻结被积态，二级用修正后节点态（Volterra）
+            S1, d_nodes1 = _defect_sweep(
+                setup, groups, ta, nodes, ws, evals, evecs, c_mids,
+                psi_nodes)
+            S2, _ = _defect_sweep(
+                setup, groups, ta, nodes, ws, evals, evecs, c_mids,
+                psi_nodes + d_nodes1)
+            psi_out = frozen_at(tb) + _defect_at(setup, S2, evals, evecs, tb)
+            if psi_prev is not None:
+                est = float(np.linalg.norm(psi_out - psi_prev))
+                if est <= tol:
+                    break
+            psi_prev = psi_out
+        if est > tol and (tb - ta) > h_floor:
+            tm = 0.5 * (ta + tb)
+            Xm = rec2(ta, tm, X)
+            return rec2(tm, tb, Xm)
+        report['max_richardson_diff'] = max(
+            report['max_richardson_diff'], est)
+        report['n_segments'] += 1
+        if est > tol:
+            report['dt_min_hit'] = True
+        if _DBG_LOG is not None:
+            _DBG_LOG.append((ta, tb - ta, est))
+        return psi_out
+
+    X = _embed(psi0, setup)
+    tprev = 0.0
+    for i in range(1, len(t)):
+        progress_arr[0] = min(tprev / T, 0.999)
+        X = rec2(tprev, float(t[i]), X)
+        ps = _reconstruct(setup, X, t[i])
+        p = _pops_of(ps)
+        pops[i] = p
+        report['max_norm_dev'] = max(report['max_norm_dev'],
+                                    float(abs(p.sum() - 1.0)))
+        tprev = float(t[i])
+    psi_f = _reconstruct(setup, X, T)
+    progress_arr[0] = 1.0
+    return pops, psi_f, report
+
+
+def _reconstruct(setup, X, tq):
+    """扩展态 → 物理态（(t,t') 投影 ψ_i = Σ_n X_{n,i} e^{−inω t}）。"""
+    Xm = np.asarray(X, complex).reshape(setup.P, setup.N)
+    return np.exp(-1j * setup.nphase * float(tq)) @ Xm
+
+
+def _env_all_constant(groups, T):
+    for g in groups:
+        for wf in g['envs']:
+            v = np.asarray(wf(np.linspace(0.0, T, 64)), float)
+            if np.ptp(v) > 1e-9:
+                return False
+    return True
+
+
+# ============================================================
+# 单次全传播（给定光子块阶数；供主入口与 M 收敛对比）
+# ============================================================
+def _run_once(E, groups, M, psi0, t, tol, progress_arr, log):
+    """返回 (pops, psi_f, report, setup)。"""
+    setup = _SambeSetup(E, groups, M)
+    T = float(t[-1])
+    if _env_all_constant(groups, T):
+        # 全常数包络 → 单次扩展空间对角化（成本与时长无关）
+        Vs, active = setup.V_segs(groups, 0.5 * T)
+        if active:
+            kind, K = setup.K_at(Vs)      # 常数包络：冻结即精确
+        else:
+            kind = 'diag'
+        if kind == 'dense':
+            prop = ('dense', np.linalg.eigh(K))
+        elif kind == 'sparse':
+            prop = ('sparse', K)
+        else:
+            prop = ('diag', None)
+        ps = _apply_prop(prop, setup, psi0, 0.0, t)
+        pops = np.abs(ps) ** 2
+        report = dict(n_segments=1, max_richardson_diff=0.0,
+                      dt_min_hit=False,
+                      max_norm_dev=float(np.max(
+                          np.abs(pops.sum(axis=1) - 1.0))))
+        return pops, ps[-1], report, setup
+    pops, psi_f, report = _propagate_adaptive(
+        setup, groups, psi0, t, tol, progress_arr, log)
+    return pops, psi_f, report, setup
+
+
+# ============================================================
+# 主入口：method='exact'（无耗散；含耗散转参考路径）
+# ============================================================
+def evolve_exact(states, fields, psi0, t_grid, tol=1e-6, decays=None,
+                 progress_arr=None, log=None, record_amp=False,
+                 E_shift=None):
+    """第一性原理单原子含时演化（无模型近似）。
+
+    fields : kind='exact' 场列表（build_fields_exact 输出或手工同构）
+    tol    : 布居容差（包络冻结 + 光子块截断两处共用）
+    decays : 非空 → 转 evolve_reference（Lindblad，第一期执行路径）
+    返回 dict(t, pops, states, om_mhz, method='exact', backend, loss,
+              error_report, [psi_amp | rho])——与 evolve.evolve 同构。
+    """
+    from . import evolve as _evolve
+    log = log or (lambda *a: None)
+    t = np.asarray(t_grid, float)
+    if progress_arr is None:
+        progress_arr = np.zeros(2)
+    _validate_fields(fields)
+    psi0v = _evolve._as_vector(states, psi0)
+
+    if decays:
+        log(f'[exact] 含 {len(decays)} 个衰变通道 → 转参考路径'
+            '（H0 相互作用绘景 + 自适应主方程积分，同为第一性原理）')
+        return evolve_reference(states, fields, psi0v, t, decays=decays,
+                                progress_arr=progress_arr,
+                                record_amp=record_amp)
+
+    E = np.array([s['E_mhz'] for s in states], float)
+    if E_shift is not None:
+        E = E + np.asarray(E_shift, float)
+    E = E - float(E.min())                    # 公共偏移 = 全局相位（精确等价）
+
+    if not fields:
+        pops = np.zeros((len(t), len(states)))
+        pops[:] = _pops_of(psi0v)
+        out = dict(t=t, pops=pops, states=states, om_mhz=[],
+                   method='exact', backend='none', loss=np.zeros(len(t)),
+                   error_report={'n_segments': 0, 'photon_blocks': {},
+                                 'max_richardson_diff': 0.0})
+        if record_amp:
+            out['psi_amp'] = psi0v.copy()
+        return out
+
+    groups = _group_by_freq(fields)
+    T = float(t[-1])
+    tol = float(tol)
+
+    # ---- 光子块收敛：常数包络探针（单次对角化/阶，探针差上界时变截断）----
+    M = max(_M_START, _m_analytic(groups, tol))
+    probe_groups = _peak_const_groups(groups, T)
+    prev_probe = None
+    while True:
+        cur_probe = _probe_pops(E, probe_groups, M, psi0v, T)
+        if prev_probe is not None:
+            d = float(np.max(np.abs(cur_probe - prev_probe)))
+            if d <= tol:
+                # M−1 与 M 差 ≤ tol → M−1 的截断误差已受控，取 M−1
+                log(f'[exact] 光子块收敛：M={M - 1}（M−1→M 探针差 {d:.2e} ≤ tol）')
+                M -= 1
+                break
+            log(f'[exact] 光子块 M={M - 1}→{M}：探针截断差 {d:.2e}，递增')
+        prev_probe = cur_probe
+        if M >= _M_MAX:
+            log(f'[exact] 警告：光子块达上限 M={_M_MAX}，截断误差可能 > tol')
+            break
+        M += 1
+    pops, psi_f, report, setup = _run_once(E, groups, M, psi0v, t, tol,
+                                           progress_arr, log)
+    log(f'[exact] 完成：{report["n_segments"]} 段，'
+        f'最大 Richardson 差 {report["max_richardson_diff"]:.2e}'
+        f'（tol={tol:.1e}），范数偏差 '
+        f'{report["max_norm_dev"]:.2e}')
+
+    report['photon_blocks'] = {f'{g["omega_mhz"]:.6g}MHz': setup.D
+                               for g in groups}
+    report['tol'] = float(tol)
+    out = dict(t=t, pops=pops, states=states,
+               om_mhz=[float(max(np.abs(A).max() for A in g['As']))
+                       for g in groups],
+               method='exact',
+               backend='sambe-dense' if setup.dense else 'sambe-sparse',
+               loss=np.zeros(len(t)), error_report=report)
+    if record_amp:
+        out['psi_amp'] = psi_f
+    return out
+
+
+# ============================================================
+# 参考路径：H0 相互作用绘景 + 自适应高精度 ODE（权威参考/耗散路径）
+# ============================================================
+def evolve_reference(states, fields, psi0, t_grid, decays=None,
+                     rtol=1e-9, atol=1e-11, verify=False,
+                     progress_arr=None, record_amp=False, log=None):
+    """实验室系第一性原理参考积分器（零模型近似 + 显式容差）。
+
+    - 幺正（decays 空）：H0 相互作用绘景 + DOP853（自适应、嵌入式误差控制）；
+    - 耗散（decays 非空）：同绘景密度矩阵 + Radau（刚性可用）；
+      跳变算符在相互作用绘景下时不变（相位抵消），与实验室系严格等价。
+    verify=True：容差收紧 10× 重跑，结果附 verify_diff（布居最大差）。
+    返回 dict(t, pops, states, om_mhz, method='exact', backend='reference-*',
+              loss, [psi_amp | rho, verify_diff])。
+    """
+    from scipy.integrate import solve_ivp
+    from . import evolve as _evolve
+    log = log or (lambda *a: None)
+    if progress_arr is None:
+        progress_arr = np.zeros(2)
+    t = np.asarray(t_grid, float)
+    T = float(t[-1])
+    _validate_fields(fields)
+    psi0v = _evolve._as_vector(states, psi0)
+    N = len(states)
+    E = np.array([s['E_mhz'] for s in states], float)
+    E = E - float(E.min())
+    terms = [(np.asarray(f['A'], float), float(f['omega_L_mhz']),
+              f['waveform']) for f in fields]
+
+    def V_at(tv):
+        V = np.zeros((N, N))
+        for A, wL, wf in terms:
+            env = float(np.asarray(wf(np.atleast_1d(tv))).flat[0])
+            if env != 0.0:
+                V = V + (env * np.cos(_CONV * wL * tv)) * A
+        return V
+
+    def _run_unitary(rtl, atl):
+        def rhs(tv, y):
+            u = np.exp(1j * _CONV * E * tv)
+            return -1j * _CONV * (u * (V_at(tv) @ (np.conj(u) * y)))
+        sol = solve_ivp(rhs, (0.0, T), psi0v, method='DOP853',
+                        t_eval=t, rtol=rtl, atol=atl)
+        if not sol.success:
+            raise RuntimeError(f'reference 积分失败: {sol.message}')
+        return sol.y                            # 相互作用绘景振幅
+
+    decays = list(decays or [])
+    if not decays:
+        progress_arr[0] = 0.2
+        yI = _run_unitary(rtol, atol)
+        pops = np.abs(yI).T ** 2
+        out = dict(t=t, pops=pops, states=states,
+                   om_mhz=[float(np.abs(A).max()) for A, _, _ in terms],
+                   method='exact', backend='reference-dop853',
+                   loss=np.zeros(len(t)))
+        if record_amp:
+            uT = np.exp(1j * _CONV * E * T)     # 实验室系末态振幅
+            out['psi_amp'] = np.conj(uT) * yI[:, -1]
+        if verify:
+            y2 = _run_unitary(rtol / 10.0, atol / 10.0)
+            out['verify_diff'] = float(np.max(
+                np.abs(np.abs(y2).T ** 2 - pops)))
+            log(f'[reference] 双容差验证：Δpops={out["verify_diff"]:.2e}'
+                f'（rtol={rtol:.1e}）')
+        progress_arr[0] = 1.0
+        return out
+
+    # ---- Lindblad（同绘景密度矩阵；L 时不变） ----
+    Ls, N_eff = _evolve._decay_ops(decays, states)
+    rho0 = np.zeros((N_eff, N_eff), complex)
+    rho0[:N, :N] = np.outer(psi0v, psi0v.conj())
+
+    def rhs_me(tv, rv):
+        rho = rv.reshape((N_eff, N_eff), order='F')
+        u = np.exp(1j * _CONV * E * tv)
+        V = V_at(tv)
+        H = np.zeros((N_eff, N_eff), complex)
+        H[:N, :N] = (u[:, None] * V) * np.conj(u)[None, :]
+        d = -1j * _CONV * (H @ rho - rho @ H)
+        for L in Ls:
+            LdL = L.conj().T @ L
+            d = d + (L @ rho @ L.conj().T
+                     - 0.5 * (LdL @ rho + rho @ LdL))
+        return d.ravel(order='F')
+
+    def _run_me(rtl, atl):
+        # BDF：支持复数 y（Radau 不支持；耗散率可致刚性，隐式多步稳定）
+        sol = solve_ivp(rhs_me, (0.0, T), rho0.ravel(order='F'),
+                        method='BDF', t_eval=t, rtol=rtl, atol=atl)
+        if not sol.success:
+            raise RuntimeError(f'reference(Lindblad) 积分失败: {sol.message}')
+        return sol.y
+
+    rv = _run_me(rtol, atol)
+    pops = np.zeros((len(t), N))
+    loss = np.zeros(len(t))
+    for k in range(len(t)):
+        rho_k = rv[:, k].reshape((N_eff, N_eff), order='F')
+        dg = np.real(np.diag(rho_k))
+        pops[k] = dg[:N]
+        if N_eff > N:
+            loss[k] = dg[N]
+    out = dict(t=t, pops=np.clip(pops, 0.0, None), states=states,
+               om_mhz=[float(np.abs(A).max()) for A, _, _ in terms],
+               method='exact', backend='reference-bdf', loss=loss)
+    if record_amp:
+        out['rho'] = rv[:, -1].reshape((N_eff, N_eff), order='F')
+    if verify:
+        rv2 = _run_me(rtol / 10.0, atol / 10.0)
+        pops2 = np.zeros_like(pops)
+        for k in range(len(t)):
+            pops2[k] = np.real(np.diag(
+                rv2[:, k].reshape((N_eff, N_eff), order='F')))[:N]
+        out['verify_diff'] = float(np.max(np.abs(pops2 - pops)))
+        log(f'[reference] 双容差验证：Δpops={out["verify_diff"]:.2e}'
+            f'（rtol={rtol:.1e}）')
+    progress_arr[0] = 1.0
+    return out
+    return out

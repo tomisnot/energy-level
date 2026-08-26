@@ -106,6 +106,7 @@ from .core import core            # noqa: E402,F401
 from .core import pair_core       # noqa: E402,F401
 from .core import driver          # noqa: E402,F401
 from .core import evolve          # noqa: E402,F401
+from .core import evolve_exact    # noqa: E402,F401
 from .core import waveforms       # noqa: E402,F401
 from .ui import fields            # noqa: E402,F401
 from .ui import ui_theme          # noqa: E402,F401

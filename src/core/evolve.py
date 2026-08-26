@@ -1789,26 +1789,30 @@ def _as_vector(states, psi0):
 
 def evolve(states, fields, psi0, t_grid, method='auto', backend='auto',
            record_amp=False, ac_shift_mhz=None, ip4_frac=20.0,
-           progress_arr=None, log=None, decays=None):
+           progress_arr=None, log=None, decays=None, tol=None):
     """单原子含时演化（独立模块，不含任何静态能移计算）。
 
     states : make_levels 输出（全部考虑的能级）
-    fields : field()/group_field()/real_field() 输出列表（任意多组时变光场）
+    fields : field()/group_field()/real_field() 输出列表（任意多组时变光场）；
+             method='exact' 时为 kind='exact' 场（waveforms.build_fields_exact）
     psi0   : 初态——states 索引 | (n,l,j,m) | dict(n,l,j,m) | 复向量
     t_grid : 时间数组（ns）
     method : 'auto'（默认）自动调度
                → 无耗散：恒 'ip4'（相互作用绘景 RK4，第一性原理）
                → 有耗散：旋转系 H 恒定 → 'lindblad_eig'（本征分解，机器精度）
                          否则            → 'lindblad'（矩阵 RK4，第一性原理）
+             'exact'       ：第一性原理引擎（实验室系无 RWA/无旋转系/无近远分流：
+               Sambe 光子块扩展空间 + 包络自适应分段 + Duhamel 缺陷修正，
+               误差由 tol 控制并随结果 error_report 可见；含耗散时转参考路径）
              'ip4'         ：相互作用绘景 RK4（任意包络；光频 RWA + 微波非 RWA）
              'lindblad'    ：Lindblad 主方程矩阵 RK4（任意时变包络 + 耗散）
              'lindblad_eig'：常数 H + 耗散 → Liouvillian 本征分解（精确）
              （显式 'ip4' 搭配 decays 时自动切换 Lindblad 路径并 log 提示——
                它是纯幺正方法，不能含耗散）
-             **2025-08 清理**：'floquet'/'pwc' 已从本模块移除（动态分析
-             实际只用 ip4；RK4 足够快）。需要精确 Floquet / RWA 分段常数时
-             用封存模块 src/_archive/evolve_floquet_pwc.py。
+             **2025-08 清理**：'floquet'/'pwc' 已从本模块移除（动态分析只用
+             ip4）。需要精确 Floquet / RWA 分段常数时用封存模块。
     decays   : decay() 输出列表（自发辐射等马尔可夫耗散；空 = 纯幺正）
+    tol      : method='exact' 布居容差（默认 1e-6；包络离散 + 光子块截断共用）
     backend: 'auto'（默认）/ 'cpu'（lindblad 用 numba 内核，'cpu' 强制纯
               numpy 回退；ip4 恒 numpy）
     record_amp: 是否保留末态复振幅（纯幺正 → psi_amp；lindblad → rho 末密度阵）
@@ -1830,6 +1834,14 @@ def evolve(states, fields, psi0, t_grid, method='auto', backend='auto',
     decays = list(decays or [])
     if decays:
         _decay_ops(decays, states)                   # 提前校验（解析错误尽早报）
+    if method == 'exact':
+        # 第一性原理引擎：实验室系无 RWA/无旋转系/无近远分流；ac_shift 作为
+        # H0 常数对角修正传入（旧接口兼容）；场须为 kind='exact'
+        from . import evolve_exact as _exact
+        return _exact.evolve_exact(
+            states, fields, psi0v, t, tol=(1e-6 if tol is None else tol),
+            decays=decays, progress_arr=progress_arr, log=log,
+            record_amp=record_amp, E_shift=ac_shift_mhz)
     if ac_shift_mhz is not None:
         # 显式常数 ac（旧接口，测试用）：优先，field 内嵌时变 ac 忽略（防双重）
         E = E + np.asarray(ac_shift_mhz, float)      # H0 对角加远失谐 AC
