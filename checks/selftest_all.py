@@ -6,6 +6,8 @@
                                      ac 约定回归/numba≡numpy，18 项）
     evolve_exact_selfcheck.py      第一性原理含时引擎（Sambe 光子块 + 包络
                                    自适应，解析/参考/封存权威交叉，11 项）
+    evolve_exact_pair_selfcheck.py 两体第一性引擎（完整 V_dd 无 secular，
+                                   交换/直积极限/vdW/耗散/收敛，10 项）
     ui_selftest.py                 UI 回归（主窗口/编辑器/TTL/动态页/存档恢复）
     pair_evolve_selfcheck.py       两体动态（pairinteraction 权威参考 5 项；
                                     未装 pairinteraction 时自动 SKIP）
@@ -29,7 +31,9 @@ sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _SCRIPTS = ['core_selfcheck.py', 'evolve_dissipative_selfcheck.py',
-            'evolve_exact_selfcheck.py', 'ui_selftest.py',
+            'evolve_exact_selfcheck.py', 'evolve_exact_pair_selfcheck.py',
+            'ui_selftest.py',
+            'julia_kernel_selfcheck.py',   # Julia 内核门（无 julia.exe 自动 SKIP）
             'pair_evolve_selfcheck.py']
 
 

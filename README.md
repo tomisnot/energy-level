@@ -50,11 +50,11 @@
 | 光场表格 | 多光管理：频率/光强/偏振/作用范围；右键导出频率/扫描光强；椭圆偏振 |
 | 失谐约定 | **正 = 蓝失谐**（ν_光 > ν_跃迁），全项目统一 |
 | 单原子动态模拟 | 独立引擎：`evolve.py`（**ip4** 相互作用绘景 RK4，默认 / lindblad）+ `evolve_exact.py`（**exact** 第一性原理：实验室系无 RWA/无旋转系/无近远分流，Sambe 光子块 + 包络自适应，误差由 tol 控制，见 §5.3.7）；floquet、pwc 已封存至 `src/_archive/evolve_floquet_pwc.py`（2025-08），见 §5.3 |
-| 双原子动态模拟 | `pair_evolve.py`：H_A(t)⊗I + I⊗H_B(t) + V_dd（secular RWA），见 §5.4 |
+| 双原子动态模拟 | `pair_evolve.py`：H_A(t)⊗I + I⊗H_B(t) + V_dd（ip4：secular RWA）+ `evolve_exact_pair.py`（**exact**：完整 V_dd 无 secular，见 §5.3.8），见 §5.4 |
 | 波形管理面板 | 动态页直接配置可折叠波形组：高斯/方波包络、定光强/定频率辅助 |
 | 自发辐射 | 动态引擎内建 **Lindblad 主方程**（decay 通道：指数衰变/显式落点/纯退相）；**双原子模式亦支持**（寿命/落点=丢失，NonHermitian 确定性演化，2025-09） |
 | 存档 | 「文件→保存/恢复状态」；**只保存科学数据与参数，不保存显示参数**（见 §4.8） |
-| 回归自检 | `checks/selftest_all.py` 一键全跑（约 90–110 s）：core 22 + 耗散 18 + UI 35 + 两体 12（pairinteraction 未装时权威段 SKIP，本地 PASS 6） |
+| 回归自检 | `checks/selftest_all.py` 一键全跑（约 2 分钟）：core 22 + 耗散 18 + 单体 exact 11 + 两体 exact 10 + UI 35 + 两体 12（pairinteraction 未装时权威段 SKIP） |
 
 ## 1.3 两条计算路径的边界
 
@@ -90,6 +90,7 @@
 │  pair_core.py 两体静态：V_dd/pair 哈密顿/vdW/交换/雷达图       │
 │  evolve.py    单原子含时演化：ip4 / lindblad / auto（floquet·pwc 已封存）│
 │  evolve_exact.py 第一性原理含时引擎：method='exact'，无 RWA/旋转系/分流│
+│  evolve_exact_pair.py 第一性两体引擎：完整 V_dd + Krylov 缺陷修正  │
 │  pair_evolve.py 两体含时演化：张量基/ secular RWA / RK4       │
 │  waveforms.py 波形数据层：Wave/包络/build_fields             │
 │  driver.py    统一驱动引擎：静态→驱动→RWA→演化/响应谱          │
@@ -252,6 +253,7 @@ store 变更经 `pyqtSignal` 广播（页面订阅刷新），不散布同步调
 | `pair_core.py` | 两体静态 | core |
 | `evolve.py` | 单原子含时演化 | core（仅偶极矩阵元） |
 | `evolve_exact.py` | 第一性原理含时引擎（method='exact'） | core（偶极矩阵元） |
+| `evolve_exact_pair.py` | 第一性两体引擎（method='exact' 双原子） | evolve_exact + pair_core + pair_evolve（耗散工具） |
 | `pair_evolve.py` | 两体含时演化 | evolve + pair_core |
 | `waveforms.py` | 波形数据层 | evolve |
 | `driver.py` | 统一驱动引擎（响应谱） | core + pair_core |
@@ -674,7 +676,56 @@ H(t) = H0 + Σ_k Ω_k·env_k(t)·cos(ω_k t)·A_k        （实验室系 TDSE）
 封存精确 Floquet、远失谐 AC 位移干涉法、tol 收敛、耗散、STIRAP）。
 
 **与 ip4 的关系**：并行共存，`method` 下拉可选（auto 仍默认 ip4）；关键计算建议用
-exact 交叉验证。两体（V_dd）与强驱动大基组的性能优化（振荡求积/numba）见路线图。
+exact 交叉验证。两体已接入（`evolve_exact_pair.py`，见 §5.3.8）；强驱动大基组的性能优化（振荡求积/numba）见路线图。
+
+### 5.3.8 第一性原理两体引擎 `evolve_exact_pair.py`（method='exact' 双原子，2026-08 新增）
+
+**模型**（无 secular、无 RWA、无旋转系、无近/远分流）：
+
+```
+H_2d(t) = [H_A0 + Σ_f Ω_f env_f(t)cos(ω_f t)·d̂_A] ⊗ I
+        + I ⊗ [H_B0 + Σ_f Ω_f env_f(t)cos(ω_f t)·d̂_B] + V_dd
+```
+
+V_dd **完整保留**（不做 `pair_evolve` 的 `_secular_filter`）：近简并交换、
+远失谐 vdW 通道效应全部由精确传播自然涌现。场约定同 §5.3.7（kind='exact'，
+`build_fields_exact` 构造）；A/B 同频场共享一个光子维。
+
+**数值算法**（§5.3.7 架构的两体扩展）：
+1. **两体 Sambe 扩展空间（稀疏）**：索引 idx = k + N²·p（两体基最快）；
+   `K_static`（E_pair + 光子偏移 + V_dd 块对角 + 寿命 NonHermitian 对角）
+   与逐频组光子邻接耦合一次预计算；扩展维 ≤ 700 自动转稠密存储
+   （避免逐段稀疏加法开销）。
+2. **冻结中点段传播**：稀疏走 `expm_multiply`（Krylov，支持非厄米）；
+   稠密走自动厄米判定的本征分解（**绝对容差**判厄米：能量标度达 1e6 MHz，
+   默认 rtol 会吞掉 NonHermitian 虚部）。
+3. **Krylov Duhamel 缺陷修正**：δ(tb) = −iC∫U_f(tb,s)ΔK(s)ψ_f(s) ds，
+   Gauss 节点阶梯（16/32/64，节点倍增差即误差估计），每节点两次 Krylov
+   指数作用；包络近平坦时跳过缺陷扫描。v1 单级（无 Picard 二级），
+   累计范数漂移 ~ tol·段数量级。
+4. **tol 单旋钮**（默认 1e-6）+ 真中点细分（可细分到输出网格以下）；
+   `error_report` 同契约（段数/最大残差/范数偏差/光子块）。
+5. **寿命耗散**：复用 `pair_evolve._pair_loss_vectors` → NonHermitian 对角
+   （−iΓ_MHz/2，Γ_MHz = gam_ns/_CONV 使幅衰率恰为物理速率）；
+   loss_A/loss_B = 速率×布居梯形积分（同 pair_evolve 语义）；
+   显式落点/纯退相维持拒绝。
+6. **返回契约与 `pair_evolve` 完全同键**（t/pops_2d/pops_A/pops_B/loss_A/
+   loss_B/states_2d/method/backend），GUI 双原子模式直接复用；另附
+   error_report。常数包络快速路径：单次分解 + 全时刻向量化重构。
+
+**实测**：交换场景（60S/60P1/2 mJ=−0.5，R=5 µm，V_ex≈24.3 MHz）首峰
+10.30 ns ≡ π/(2C·|V_ex|)，P_max=1.0000；vdW 远失谐通道（|gg⟩↔|ee⟩ 失谐 2000，
+secular 必丢）≡ 两体实验室系稠密 DOP853（2e-10），相干相位提取位移 −1.2502 vs
+解析 −1.2500 MHz；V_dd=0 ≡ 单原子 exact 直积（1.4e-7）；寿命 ≡ e^{−Γt}（1e-16），
+守恒 3.3e-5（loss 梯形积分 O(dt²)）。
+**大基组现状**：扩展维 ≤ 700 走稠密本征分解路径（快，毫秒级/段）；
+超出走稀疏逐节点 Krylov（expm_multiply）路径——实测 N=20/原子
+（N²·P=3600，微波 400 ns）在 tol=1e-6 下 >25 min 未出结果，
+**实用不可行**；待路线图 6 的性能优化（缺陷扫描 numba 化/振荡解析求积）后回补基准。
+
+**自检**：`checks/evolve_exact_pair_selfcheck.py`（10 项：EP1 直积极限、
+EP2 交换、EP3 vdW 通道捕获、EP4 寿命、EP5 tol 收敛）。
+**限制**：ArbitraryWave 不支持（同 §5.3.7）；大基组（N²·P 大）性能优化见路线图。
 
 ## 5.4 `pair_evolve.py` 两体含时演化
 
@@ -955,7 +1006,7 @@ build.bat                      # 一键安装依赖(清华镜像) + PyInstaller 
 | 内部频率 | 统一 MHz（float64 全精度）；界面 GHz/THz 智能单位纯显示换算 |
 | 失谐符号 | 正 = 蓝失谐（ν_光 > ν_跃迁），全项目统一 |
 | RWA 分界 | Ω/ωL < 1e-4 → RWA；≥ → 非 RWA（ip4 保留 cos 反旋转项，第一性原理） |
-| exact 引擎 | method='exact'：无 RWA/旋转系/分流；tol 单旋钮（默认 1e-6），误差随 error_report 可见；Rabi 周频约定（π 脉冲 = 1/(2Ω) µs）；含耗散转参考路径（§5.3.7） |
+| exact 引擎 | method='exact'：无 RWA/旋转系/分流；单体 §5.3.7 + 两体完整 V_dd 无 secular §5.3.8；tol 单旋钮（默认 1e-6），误差随 error_report 可见；Rabi 周频约定（π 脉冲 = 1/(2Ω) µs）；单体含耗散转参考路径，两体支持寿命 NonHermitian |
 | 衰变约定 | Γ MHz → 速率 Γ×1e-3/ns；跳变算符 √Γ\|to⟩⟨from\| **不乘 2π** |
 | 步长 | dt = min(载波/frac, 0.06/(_CONV·cmax), 2/(_CONV·cmax), t_end/500, 0.05) |
 | secular | \|E_rot 差\| < 10·\|V\| 保留（V_dd 旋转系 RWA） |
@@ -975,7 +1026,8 @@ build.bat                      # 一键安装依赖(清华镜像) + PyInstaller 
    已实现；**显式落点 / 纯退相**（需密度矩阵回写与相干衰减）仍显式拒绝，
    提示改用单原子引擎。
 2. **两体 secular RWA 不含二阶 vdW 能移**：远失谐元素被丢弃；近简并交换/Förster
-   动力学精确。需要 vdW 位移进演化的场景用 `driver.pair_drive_dressed`（静态对角化）。
+   动力学精确。需要 vdW 位移进演化的场景：method='exact' 两体路径（完整 V_dd，
+   §5.3.8）或 `driver.pair_drive_dressed`（静态对角化）。
 3. **双原子模式无波形时不能运行**：UI 门槛要求至少一个波形（纯 V_dd 实验需加占位波形）。
 4. **Qt 原生堆损坏风险**：GUI 主线程事件流里调用 ARC `getStateLifetime`
    （auto_decays）有堆损坏风险——已通过"门槛只做廉价判断、寿命计算只在运行时算一次"
@@ -989,9 +1041,20 @@ build.bat                      # 一键安装依赖(清华镜像) + PyInstaller 
    抵消、差恢复（现象消失）——**属巧合性对称，非物理**。性质待复核（可能需要
    "多参考相互作用绘景"），列此备忘，未改动既有算法。
    **规避**：此类多频混叠场景可直接用 method='exact'（无旋转系，无此问题）。
-7. **exact 引擎范围（第一期）**：仅单原子幺正 + 耗散转参考路径；两体（V_dd）、
-   ArbitraryWave、光频载波强驱动大基组的性能优化（振荡求积/numba 内核）待后续；
+7. **exact 引擎范围**：单体（幺正 + 耗散转参考路径）与两体（幺正 + 寿命
+   NonHermitian，§5.3.8）已实现；ArbitraryWave、段内耗散超算符（两体显式落点/
+   纯退相）、光频载波强驱动大基组的性能优化（振荡求积/numba 内核）待后续；
    强驱动（Ω/ω ≳ 1e-2）场景光子块需求增大，耗时随段数/维度增长，运行前留意日志。
+8. **⚠ ip4/Lindblad 在含远失谐旁观者组的基组上静默失效（P1，2026-08 发现）**：
+   基组含能量远移的旁观者组（如实测案例：60S/60P₃/₂ 之外挂 6P₃/₂ 超精细组，
+   对角能量 −296.7 THz）时，微波驱动**零激发**（π 脉冲处布居不变）、出现非物理
+   布居尖峰与 mJ 泄漏，而**守恒诊断（Σpops+loss）保持 3.8e-9 完美**——引擎自检
+   不可见。与光学场无关（去光学场对照故障依旧）；疑似旋转参考/步长与
+   295.7-THz 级对角跨度的混叠（§10.1-6 多频参考问题的姊妹表现）。机理待诊断
+   （复现：`tempsimu/_real_ip4_ref.py`；对照与数据：`tempsimu/_real_census.py`）。
+   **规避**：此类场景暂用 method='exact'（Julia 内核已可跑，见
+   `docs/Julia引擎交接文档.md`）；GUI 用户在基组含低激发态组且波形含微波时
+   需知晓此风险。
 
 ## 10.2 路线图（TODO）
 
@@ -1001,9 +1064,9 @@ build.bat                      # 一键安装依赖(清华镜像) + PyInstaller 
 4. 复核多频 RWA 参考传播（§10.1 条目 6）：必要时实现"光频场独立旋转系
    （多参考相互作用绘景）"，使"光频+微波同挂一个态"场景稳健。
 5. 动态模拟两体效应（GUI 已通：主线程预计算 V_dd → 工作线程演化）。
-6. exact 引擎扩展：两体 V_dd 接入、段内耗散超算符（替代转参考路径）、
+6. exact 引擎扩展：段内耗散超算符（单体替代转参考路径、两体支持显式落点/纯退相）、
    大基组性能优化（缺陷扫描 numba 化/振荡解析求积）；回归稳定后考虑将
-   auto 默认切到 exact。
+   auto 默认切到 exact。（两体 V_dd 接入已完成，§5.3.8，2026-08）
 
 ---
 
@@ -1012,4 +1075,7 @@ build.bat                      # 一键安装依赖(清华镜像) + PyInstaller 
 判据-演化一致的常数光位移并入、numba 两体内核、回归基线（90–110 s 全绿）。
 2026-08 更新：新增第一性原理含时引擎 `evolve_exact.py`（method='exact'，§5.3.7：
 Sambe 光子块 + 包络自适应 + Duhamel 缺陷修正，无 RWA/旋转系/近远分流，
-误差由 tol 控制并随 error_report 可见；含耗散转参考路径），回归基线新增 11 项。*
+误差由 tol 控制并随 error_report 可见；含耗散转参考路径），回归基线新增 11 项。
+2026-08 更新（两体）：新增 `evolve_exact_pair.py`（method='exact' 双原子，§5.3.8：
+完整 V_dd 无 secular，两体 Sambe 稀疏/Krylov 缺陷修正，寿命 NonHermitian），
+GUI 双原子模式方法下拉可选，回归基线新增 10 项（EP1–EP5）。*

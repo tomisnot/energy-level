@@ -754,14 +754,22 @@ class DynamicPanel(QWidget):
         from src.core import pair_evolve
         waves_A = list(self.wave_panel_A.waves)
         waves_B = list(self.wave_panel_B.waves)
-        fields_A = waveforms.build_fields(
-            waves_A, states, self.cache,
-            near_cutoff_mhz=self.near_cutoff_sb.value(),
-            B_gauss=self._field_B())
-        fields_B = waveforms.build_fields(
-            waves_B, states, self.cache,
-            near_cutoff_mhz=self.near_cutoff_sb.value(),
-            B_gauss=self._field_B())
+        method = self.method_cb.currentText()
+        if method == 'exact':
+            # 第一性两体：全部偶极对耦合，无近/远分流与静态 AC 注入
+            fields_A = waveforms.build_fields_exact(self.cache, states,
+                                                    waves_A)
+            fields_B = waveforms.build_fields_exact(self.cache, states,
+                                                    waves_B)
+        else:
+            fields_A = waveforms.build_fields(
+                waves_A, states, self.cache,
+                near_cutoff_mhz=self.near_cutoff_sb.value(),
+                B_gauss=self._field_B())
+            fields_B = waveforms.build_fields(
+                waves_B, states, self.cache,
+                near_cutoff_mhz=self.near_cutoff_sb.value(),
+                B_gauss=self._field_B())
         # 波形预览：合并 A+B
         env_A = waveforms.waveforms_to_env(waves_A, t)
         env_B = waveforms.waveforms_to_env(waves_B, t)
@@ -828,10 +836,24 @@ class DynamicPanel(QWidget):
         self._timer.start(100)
 
         from .evolve_worker import EvolveWorkerPair
+        from shutil import which as _which
+        _julia_ok = (
+            _which('julia') is not None or
+            os.path.isfile('D:\julia-1.10.10\bin\julia.exe') or
+            os.environ.get('JULIA_EXE'))
+        use_jl = (method == 'exact' and _julia_ok and
+                  waves_A is not None and waves_B is not None)
+        if use_jl:
+            self.main.log('[双原子] method=exact → Julia 后端')
         self._worker = EvolveWorkerPair(
             states, fields_A, fields_B, psi0_A, psi0_B,
-            t, self.progress_arr, vdd_matrix=vdd_matrix,
-            decays_A=decays_A, decays_B=decays_B)
+            t, self.progress_arr,
+            vdd_matrix=vdd_matrix,
+            decays_A=decays_A, decays_B=decays_B,
+            method=method,
+            waves_A=list(waves_A), waves_B=list(waves_B),
+            use_julia=use_jl)
+        self._worker._cache_ref = self.cache
         self._worker.done.connect(self._on_pair_evolve_done)
         self._worker.log_msg.connect(self.main.log)
         self._worker.start()
