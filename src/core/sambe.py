@@ -59,4 +59,4 @@ def photon_geometry(E, groups, Ms):
     p_center = sum(Mg * st for Mg, st in zip(Ms, strides))
     return dict(P=P, dim=N * P, strides=strides, nvecs=nvecs,
                 diag=diag, nphase=nphase, p_center=p_center, Ms=Ms,
-                Ds=Ds)
+                Ds=Ds, _idx=np.arange(P))

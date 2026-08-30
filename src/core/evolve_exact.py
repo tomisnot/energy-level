@@ -39,6 +39,7 @@ import scipy.sparse as sp
 from scipy.sparse.linalg import expm_multiply
 
 from . import core
+from . import sambe
 
 _CONV = 2 * np.pi * 1e-3          # MHz·ns → rad
 _POL_Q = {'π': 0, 'σ+': +1, 'σ-': -1}
@@ -165,47 +166,22 @@ class _SambeSetup:
     """
 
     def __init__(self, E, groups, M):
+        geo = sambe.photon_geometry(E, groups, M)
         self.E = np.asarray(E, float)
         self.N = len(E)
         self.groups = groups
-        G = len(groups)
-        if isinstance(M, (int, np.integer)):
-            self.Ms = [int(M)] * G
-        else:
-            self.Ms = [int(m) for m in M]
-            if len(self.Ms) != G:
-                raise ValueError(f'M 长度 {len(self.Ms)} ≠ 载频组数 {G}')
-        self.Ds = [2 * m + 1 for m in self.Ms]      # 每组块数
-        P = 1
-        for d in self.Ds:
-            P *= d
-        self.P = P
-        self.dim = self.N * P
-        idx = np.arange(P)
-        self.strides = []
-        self.nvecs = []
-        base = np.zeros(P)
-        stride = 1
-        for gi, g in enumerate(groups):
-            Dg = self.Ds[gi]
-            Mg = self.Ms[gi]
-            nvec = (idx // stride) % Dg
-            self.strides.append(stride)
-            self.nvecs.append(nvec)
-            # Sambe 块对角 = E_i − (n_g−M_g)·ω_g（与耦合方向 n→n+1 配套：
-            # 吸收共振对 |g,n⟩↔|e,n+1⟩；重构 ψ=Σ c_n e^{−inωt}）
-            base = base - (nvec - Mg) * g['omega_mhz']
-            stride *= Dg
-        self.diag = np.tile(self.E, P) + np.repeat(base, self.N)
-        # 重构相位系数：θ_p(t) = nphase[p]·t（rad，t 单位 ns）
-        nphase = np.zeros(P)
-        for nvec, g in zip(self.nvecs, groups):
-            nphase = nphase + nvec * (_CONV * g['omega_mhz'])
-        self.nphase = nphase
-        # 中央光子块（各组量子数 n=0，即中心化索引 M_g）：物理态嵌入位置
-        self.p_center = sum(Mg * st for Mg, st in zip(self.Ms, self.strides))
+        self.Ms = geo['Ms']
+        self.Ds = geo['Ds']
+        self.P = geo['P']
+        self.dim = geo['dim']
+        self.strides = geo['strides']
+        self.nvecs = geo['nvecs']
+        self.diag = geo['diag']
+        self.nphase = geo['nphase']
+        self.p_center = geo['p_center']
         # 耦合结构：每组 (r, c) 索引对 ↔ V_seg[nz_i, nz_j]·0.5
         self.coup = []
+        G = len(groups)
         for gi, g in enumerate(groups):
             Dg = self.Ds[gi]
             Mg = self.Ms[gi]
@@ -219,7 +195,7 @@ class _SambeSetup:
             # 光子格点扁平索引与各组量子数（一次性构造，**混合进制**）
             grid = np.meshgrid(*[np.arange(d) for d in self.Ds],
                                indexing='ij')
-            pflat = np.zeros(P, int)
+            pflat = np.zeros(self.P, int)
             for gg in range(G):
                 pflat = pflat + grid[gg].ravel() * self.strides[gg]
             ng_g = grid[gi].ravel()
@@ -236,7 +212,7 @@ class _SambeSetup:
             # 值序列与行序（s 层 × 有序对 × p_src 格点）对齐：
             # 每层 = repeat(vals, n_p)，tile Dg−1 层
             self.coup.append(dict(r=rows, c=cols, nz_i=ii, nz_j=jj,
-                                  n_p=P // Dg))
+                                  n_p=self.P // Dg))
         self.K0 = np.diag(self.diag)
         self.dense = self.dim <= _DENSE_MAX
         # 单位包络耦合结构 Kc_g_wf（稠密）——每波形一个单位矩阵，与包络配对；

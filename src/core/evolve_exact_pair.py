@@ -32,6 +32,8 @@ import scipy.sparse as sp
 from scipy.sparse.linalg import LinearOperator, gmres
 
 from . import evolve
+from . import sambe
+
 from . import evolve_exact as _ex
 from .evolve_exact import _CONV, _gl_nodes
 
@@ -110,62 +112,49 @@ class _PairSambeSetup:
         self.groups = groups
         self.M = M
         self.D = 2 * M + 1
-        P = self.D ** len(groups)
-        self.P = P
-        self.dim = self.N2 * P
-        idx = np.arange(P)
-        self.strides = []
-        self.nvecs = []
-        base = np.zeros(P)
-        stride = 1
-        for g in groups:
-            nvec = (idx // stride) % self.D
-            self.strides.append(stride)
-            self.nvecs.append(nvec)
-            base = base - (nvec - M) * g['omega_mhz']
-            stride *= self.D
-        # 对角：E_pair + 光子偏移 − iΓ/2（Γ 单位 MHz，_CONV 内换算）
-        diag = (np.tile(np.asarray(E_pair, float), P)
-                + np.repeat(base, self.N2))
+        geo = sambe.photon_geometry(E_pair, groups, M)
+        self.P = geo['P']
+        self.dim = geo['dim']
+        self.strides = geo['strides']
+        self.nvecs = geo['nvecs']
+        self.diag = geo['diag']
+        self.nphase = geo['nphase']
+        self.p_center = geo['p_center']
+        _idx = geo['_idx']  # photon grid index (pair Kc_ext construction)
+        # 对角 + Γ/2（寿命 NonHermitian）— V_dd 在调用方处理
         if gamma_pair_mhz is not None and np.any(gamma_pair_mhz):
-            diag = diag.astype(complex)
-            diag = diag - 0.5j * np.tile(
-                np.asarray(gamma_pair_mhz, float), P)
-        self.diag = diag
+            self.diag = self.diag.astype(complex)
+            self.diag = self.diag - 0.5j * np.tile(
+                np.asarray(gamma_pair_mhz, float), self.P)
         # V_dd 块对角嵌入（kron(I_P, V_dd)：k + N²·p 顺序 ✓）
         if vdd_sp is None:
             vdd_ext = None
         elif sp.issparse(vdd_sp):
-            vdd_ext = (sp.kron(sp.eye(P, format='csr'),
+            vdd_ext = (sp.kron(sp.eye(self.P, format='csr'),
                                vdd_sp.tocsr().astype(complex))
                        if vdd_sp.nnz else None)
         else:
             arr = np.asarray(vdd_sp, complex)
-            vdd_ext = (sp.kron(sp.eye(P, format='csr'),
+            vdd_ext = (sp.kron(sp.eye(self.P, format='csr'),
                                sp.csr_matrix(arr))
                        if np.any(arr != 0) else None)
-        K_static = sp.diags(diag, format='csr')
+        K_static = sp.diags(self.diag, format='csr')
         if vdd_ext is not None:
             K_static = (K_static + vdd_ext).tocsr()
         self.K_static = _realify(K_static)
-        # 重构相位系数（物理投影用）
-        nphase = np.zeros(P)
-        for nvec, g in zip(self.nvecs, groups):
-            nphase = nphase + nvec * (_CONV * g['omega_mhz'])
-        self.nphase = nphase
-        self.p_center = sum(M * st for st in self.strides)
         # 逐组逐波形光子邻接耦合：kron(T_g + T_gᵀ, 0.5·K2_w_gf)
         self.Kc_ext = [[] for _ in groups]
         for gi, g in enumerate(groups):
             stride = self.strides[gi]
             rs, cs = [], []
             for s in range(self.D - 1):
-                p_src = idx[(idx // stride) % self.D == s]
+                p_src = _idx[(_idx // stride) % self.D == s]
                 rs.append(p_src + stride)
                 cs.append(p_src)
             T = sp.coo_matrix(
-                (np.ones(len(rs)), (np.concatenate(rs), np.concatenate(cs))),
-                shape=(P, P)).tocsr()
+                (np.ones(np.concatenate(rs).size),
+                 (np.concatenate(rs), np.concatenate(cs))),
+                shape=(self.P, self.P)).tocsr()
             for K2w in g['K2_w']:
                 Kh = 0.5 * K2w.astype(complex)
                 Kcw = _realify(
