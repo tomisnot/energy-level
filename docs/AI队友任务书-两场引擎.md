@@ -196,6 +196,22 @@ _dop853_step_pair、_embed/_embed_pair、_defect_sweep/_defect_pass 均为
 **重构原则**：先保存 git；每层小步提交；回归不破；dead code 顺手删；
 分叉点必须有注解（§4 纪律）。**用户长期不干涉，里程碑式汇报**。
 
+### ✅ 重构完成状态（2026-08-31，阶段 2-4 全部落地）
+
+**核心-调度分层已实现**（消除单体/两体重复）：
+| 层 | 文件 | 内容 | 来源 |
+|---|---|---|---|
+| 核心 | `dop853.py` | DOP853 驱动（rhs 参数化，任意 N） | hard_numba/hard_pair 归一（-220 行） |
+| 核心 | `sambe.py` | 光子块几何（photon_geometry，任意 N） | _SambeSetup/_PairSambeSetup 归一 |
+| 调度 | `tensor.py` | 两体张量化（tensor_states/场镜像/V_dd 注入/约化/丢失） | pair_evolve 归位（-169 行） |
+| 调度 | `hard_numba.py`/`hard_pair.py` | hard 单体/两体瘦壳（RHS + 打包，驱动走核心） | 582→362 / 563→350 |
+| 调度 | `evolve_exact.py`/`evolve_exact_pair.py` | Sambe 单体/两体（几何走核心） | 已接入 |
+
+**回归基线（重构后全部通过）**：evolve_exact 11/11、evolve_exact_pair 12/12+SKIP、
+hard_numba 9/9、smoke[A]=0.5021、combo[1..4]=0.0013、两体 hard×exact 交叉验证
+1.05e-4。**rk4 不强合并**（numpy/numba 分叉是性能驱动，非重复）。
+**额外收获**：t13 交叉验证抓出 _PairSambeSetup COO 长度 bug（单组盲区）。
+
 ## A. 历史教训清单（每次遇到分歧时对照）
 
 1. **范数守恒 ≠ 物理正确**：hard 4.6e-8、exact 2.9e-4 都守恒，却曾给错答案
