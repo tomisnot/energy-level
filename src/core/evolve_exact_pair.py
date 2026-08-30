@@ -256,59 +256,69 @@ def _physical_pops(setup, X, tq):
 
 
 def _dense_decomp(K):
-    """稠密段算符本征分解（自动判厄米/非厄米）。
-    返回 (evals, evecs, left)：left = evecs† （厄米）或 inv(evecs)。
-    厄米判定用绝对容差：能量标度可达 1e6 MHz，默认 rtol·|b| 会吞掉
-    NonHermitian 虚部（~Γ 量级 ≪ 1e-5·|E|），误判后 eigh 丢弃衰减项。"""
-    if np.allclose(K, K.conj().T, rtol=0.0, atol=1e-10):
-        evals, evecs = np.linalg.eigh(K)
+    """稠密段算符本征分解。强制转为 ndarray 避免 numpy.matrix 广播问题。"""
+    K_arr = np.asarray(K)
+    if np.allclose(K_arr, K_arr.conj().T, rtol=0.0, atol=1e-10):
+        evals, evecs = np.linalg.eigh(K_arr)
         return evals, evecs, evecs.conj().T
-    evals, evecs = np.linalg.eig(K)
+    evals, evecs = np.linalg.eig(K_arr)
     return evals, evecs, np.linalg.inv(evecs)
-
 
 def _prop_step(setup, K_seg, ta, tb, X):
     """冻结段传播（稠密路径：本征分解精确指数）。"""
     dt = tb - ta
     evals, evecs, left = _dense_decomp(K_seg[1])
-    a0 = left @ X
-    return evecs @ (a0 * np.exp(-1j * _CONV * dt * evals))
+    a0 = np.asarray(left @ X).ravel()
+    phase = np.asarray(np.exp(-1j * _CONV * dt * evals)).ravel()
+    return np.asarray(evecs) @ (a0 * phase)
 
-
-def _defect_pass(setup, K_seg, ta, tb, X, groups, nodes, ws, c_nodes,
-                 c_mid_list, dense_eig):
-    """本征基 Duhamel 缺陷扫描（稠密路径，单级冻结被积态）。
-
-    δ(tb) = −iC·Σ_q w_q·U_f(tb,t_q)·ΔK(t_q)·ψ_f(t_q)。
-    全程本征基向量运算（无逐节点 expm）。返回 (delta_tb, max_dc)。
-    """
-    dc = c_nodes - np.asarray(c_mid_list)[:, None]     # (G, n)
-    max_dc = float(np.abs(dc).max()) if dc.size else 0.0
+def _defect_pass(setup, K_seg, ta, tb, X, groups, nodes, ws, dense_eig):
+    """本征基 Duhamel 缺陷扫描。统一逐波实现：ΔK = Σ_g Σ_w (env_w(nodes)-env_w(mid))·Kcw_{gw}。"""
+    n = len(nodes)
+    mid = 0.5 * (ta + tb)
+    
+    # Build per-waveform envelope diff arrays: dict((gi,wi) -> (n,) array)
+    dc_wf_dict = {}
+    max_dc = 0.0
+    idx_wf = 0
+    for gi, g in enumerate(groups):
+        Kcw_list = setup.Kc_ext[gi]
+        for wi, wf in enumerate(g['envs_w']):
+            env_vals = np.asarray(wf(nodes), float)
+            env_mid = float(np.asarray(
+                wf(np.atleast_1d(mid)), float).flat[0])
+            dc_wf = env_vals - env_mid
+            dc_wf_dict[(gi, wi)] = dc_wf
+            dmax = float(np.abs(dc_wf).max())
+            if dmax > max_dc:
+                max_dc = dmax
+            idx_wf += 1
     if max_dc < 1e-12:
         return np.zeros(setup.dim, complex), max_dc
-    n = len(nodes)
+    
     evals, evecs, left = dense_eig
-    a0 = left @ X
-    phi_tq = np.exp(-1j * _CONV * np.outer(evals, nodes - ta))  # (dim,n)
-    Psif = evecs @ (a0[:, None] * phi_tq)                        # (dim,n)
+    a0 = np.asarray(left @ X).ravel()
+    phi_tq = np.exp(-1j * _CONV * np.outer(evals, nodes - ta))
+    Psif = np.asarray(evecs) @ (a0[:, None] * phi_tq)
+    
     delta = np.zeros(setup.dim, complex)
-    for q in range(n):
-        v = np.zeros(setup.dim, complex)
-        for gi, Kc in enumerate(setup.Kc_ext):
-            if dc[gi, q] != 0.0:
-                v = v + dc[gi, q] * (Kc @ Psif[:, q])
-        if np.any(v != 0.0):
-            b0 = left @ v
-            up = evecs @ (b0 * np.exp(
-                -1j * _CONV * evals * (tb - nodes[q])))
-            delta = delta + ws[q] * up
+    for gi, g in enumerate(groups):
+        Kcw_list = setup.Kc_ext[gi]
+        if not Kcw_list:
+            continue
+        for q in range(n):
+            v = np.zeros(setup.dim, complex)
+            for wi in range(len(Kcw_list)):
+                dc_w = dc_wf_dict[(gi, wi)]
+                if abs(dc_w[q]) > 1e-14:
+                    Kcw_dense = Kcw_list[wi].toarray() if sp.issparse(Kcw_list[wi]) else Kcw_list[wi]
+                    v = v + dc_w[q] * (Kcw_dense @ Psif[:, q])
+            if np.any(v != 0.0):
+                b0 = np.asarray(left @ v).ravel()
+                up = np.asarray(evecs) @ (b0 * np.exp(
+                    -1j * _CONV * evals * (tb - nodes[q])))
+                delta = delta + ws[q] * up
     return -1j * _CONV * delta, max_dc
-
-
-# ============================================================
-# 稀疏路径：对角相互作用绘景 + Volterra–Picard（见 _subspace_segment）
-# ============================================================
-
 
 def _volterra_rhs(setup, phi, c_nodes_wf, groups=None):
     """R(s_q)·φ_q = (K_static − D)φ + Σ_g Σ_w env_w(s_q)·Kcw_{gw}·φ。
@@ -459,7 +469,7 @@ def _pair_m_probe(E_pair, N, groups, M, vdd_sp, gamma_pair_mhz, psi0_2d,
                 v = np.asarray(wf(np.linspace(0.0, T, _ENV_PROBE_N)), float)
                 pk = max(pk, float(np.max(np.abs(v))))
             c_list.append(pk)
-        K = stp.K_seg(c_list)
+        K = stp.K_seg(T / 2.0 if T > 0 else 1.0, groups)
         X = _embed_pair(psi0_2d, stp)
         if stp.dense:
             X = _prop_step(stp, K, 0.0, T, X)

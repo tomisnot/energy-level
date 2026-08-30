@@ -176,7 +176,6 @@ class _SambeSetup:
             if len(self.Ms) != G:
                 raise ValueError(f'M 长度 {len(self.Ms)} ≠ 载频组数 {G}')
         self.Ds = [2 * m + 1 for m in self.Ms]      # 每组块数
-        self.D = None                               # 组内用 self.Ds[gi]
         P = 1
         for d in self.Ds:
             P *= d
