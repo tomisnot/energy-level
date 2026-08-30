@@ -10,3 +10,5 @@ microwave_pulse/
 build_venv/
 build/
 dist/
+
+# AgentTeams 运行时状态（不入库）.agent-teams/

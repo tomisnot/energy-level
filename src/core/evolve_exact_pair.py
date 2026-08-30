@@ -85,12 +85,11 @@ def _pair_groups(fields_A, fields_B):
                     hit = g
                     break
             if hit is None:
-                hit = dict(omega_mhz=w, K2=K2,
-                           envs=[f['waveform']])
+                hit = dict(omega_mhz=w, K2_w=[K2], envs_w=[f['waveform']])
                 groups.append(hit)
             else:
-                hit['K2'] = (hit['K2'] + K2).tocsr()
-                hit['envs'].append(f['waveform'])
+                hit['K2_w'].append(K2)
+                hit['envs_w'].append(f['waveform'])
     return groups, N
 
 
@@ -155,45 +154,73 @@ class _PairSambeSetup:
             nphase = nphase + nvec * (_CONV * g['omega_mhz'])
         self.nphase = nphase
         self.p_center = sum(M * st for st in self.strides)
-        # 逐组光子邻接耦合：kron(T_g + T_gᵀ, 0.5·K2_g)
-        self.Kc_ext = []
+        # 逐组逐波形光子邻接耦合：kron(T_g + T_gᵀ, 0.5·K2_w_gf)
+        self.Kc_ext = [[] for _ in groups]
         for gi, g in enumerate(groups):
             stride = self.strides[gi]
             rs, cs = [], []
             for s in range(self.D - 1):
                 p_src = idx[(idx // stride) % self.D == s]
-                rs.append(p_src + stride)          # p_dst
+                rs.append(p_src + stride)
                 cs.append(p_src)
             T = sp.coo_matrix(
                 (np.ones(len(rs)), (np.concatenate(rs), np.concatenate(cs))),
                 shape=(P, P)).tocsr()
-            Kh = 0.5 * g['K2'].astype(complex)
-            self.Kc_ext.append(_realify(
-                (sp.kron(T, Kh) + sp.kron(T.T, Kh.T)).tocsr()))
+            for K2w in g['K2_w']:
+                Kh = 0.5 * K2w.astype(complex)
+                Kcw = _realify(
+                    (sp.kron(T, Kh) + sp.kron(T.T, Kh.T)).tocsr())
+                self.Kc_ext[gi].append(Kcw)
         self.dense = self.dim <= _DENSE_MAX
         if self.dense:
-            # 小维度：稠密存储（避免逐段稀疏加法开销）
             self.K_static = K_static.toarray()
-            self.Kc_ext = [Kc.toarray() for Kc in self.Kc_ext]
+            self.Kc_ext = [[Kc.toarray() if not sp.issparse(Kc) else Kc
+                            for Kc in wl]
+                           for wl in self.Kc_ext]
 
-    def c_mids(self, groups, mid):
-        """各组中点包络和。"""
-        return [sum(float(np.asarray(wf(np.atleast_1d(mid))).flat[0])
-                    for wf in g['envs']) for g in groups]
+    def _c_mids_wf(self, groups, mid):
+        """逐波形中点包络和——返回 flat list: [g0w0, g0w1, ..., gNwM]。"""
+        result = []
+        for g in groups:
+            for wf in g['envs_w']:
+                result.append(float(
+                    np.asarray(wf(np.atleast_1d(mid))).flat[0]))
+        return result
 
-    def c_at_nodes(self, groups, nodes):
-        """各组在节点数组上的包络和（(n_groups, n_nodes)）。"""
+    def _c_at_nodes_wf(self, groups, nodes):
+        """逐波形节点包络和——返回 (total_wf, n_nodes)。"""
         nodes = np.asarray(nodes, float)
-        return np.array(
-            [np.sum([np.asarray(wf(nodes), float) for wf in g['envs']],
-                    axis=0) for g in groups], float)
+        rows = []
+        for g in groups:
+            for wf in g['envs_w']:
+                rows.append(np.asarray(wf(nodes), float))
+        return np.array(rows, float)
 
-    def K_seg(self, c_list):
-        """段算符 K_static + Σ_g c_g·Kc_ext_g（稀疏/稠密）。"""
+    def K_seg(self, mid, groups=None):
+        """段算符 K_static + Σ_g Σ_w env_w(mid)·Kcw_{gw}（稀疏/稠密）。
+        
+        统一逐波实现，无分支。单波形组自然退化为等效计算。
+        """
         K = self.K_static
-        for c, Kc in zip(c_list, self.Kc_ext):
-            if c != 0.0:
-                K = K + c * Kc
+        if groups is None:
+            groups = self.groups
+        for gi, g in enumerate(groups):
+            Kcw_list = self.Kc_ext[gi]
+            if not Kcw_list:
+                continue
+            first_Kcw = Kcw_list[0]
+            if isinstance(first_Kcw, np.ndarray):
+                Kc_sum_g = np.zeros_like(first_Kcw)
+            else:
+                Kc_sum_g = sp.csr_matrix(first_Kcw.shape, dtype=complex)
+            active_g = False
+            for wf, Kcw in zip(g['envs_w'], Kcw_list):
+                c_w = float(np.asarray(wf(np.atleast_1d(mid))).flat[0])
+                if c_w != 0.0:
+                    Kc_sum_g = Kc_sum_g + c_w * Kcw
+                    active_g = True
+            if active_g:
+                K = K + Kc_sum_g
         if self.dense:
             return ('dense', K)
         return ('sparse', K.tocsr())
@@ -283,14 +310,26 @@ def _defect_pass(setup, K_seg, ta, tb, X, groups, nodes, ws, c_nodes,
 # ============================================================
 
 
-def _volterra_rhs(setup, phi, c_nodes):
-    """R(s_q)·φ_q = (K_static − D)φ + Σ_g c_g(s_q)·Kc_g·φ（逐节点列）。"""
+def _volterra_rhs(setup, phi, c_nodes_wf, groups=None):
+    """R(s_q)·φ_q = (K_static − D)φ + Σ_g Σ_w env_w(s_q)·Kcw_{gw}·φ。
+    
+    统一逐波实现。c_nodes_wf 形状为 (n_total_wfs, n_nodes)。
+    """
     y = setup.K_static @ phi - setup.diag[:, None] * phi
-    if c_nodes is not None:
-        for gi, Kc in enumerate(setup.Kc_ext):
-            nz = Kc.nnz if sp.issparse(Kc) else np.any(Kc)
-            if nz:
-                y = y + c_nodes[gi][None, :] * (Kc @ phi)
+    if c_nodes_wf is not None:
+        if groups is None:
+            groups = setup.groups
+        idx_wf = 0
+        for gi, g in enumerate(groups):
+            Kcw_list = setup.Kc_ext[gi]
+            if not Kcw_list:
+                continue
+            for wi, Kcw in enumerate(Kcw_list):
+                nz = Kcw.nnz if sp.issparse(Kcw) else np.any(Kcw)
+                if nz:
+                    env_at_nodes = c_nodes_wf[idx_wf]
+                    y = y + env_at_nodes[None, :] * (Kcw @ phi)
+                idx_wf += 1
     return y
 
 
@@ -336,11 +375,16 @@ def _subspace_segment(setup, Ksp, X, ta, tb, tol, groups, m_guess=None,
         ws = 0.5 * h * glw
         Wp = Wpart * (0.5 * h)                 # 映射回 [ta, t_q] 积分
         if const_c is not None:
-            c_nodes = (np.repeat(np.asarray(const_c, float)[:, None],
-                                 n_nodes, axis=1)
-                       if len(const_c) else None)
+            n_total_wfs = sum(len(g.get('envs_w', ['_'])) 
+                              for g in groups) if groups else 0
+            if n_total_wfs > 0 and len(const_c) > 0:
+                base_vals = np.repeat(np.asarray(const_c, float),
+                                      n_nodes // max(n_total_wfs, 1))
+                c_nodes_wf = base_vals.reshape(-1, n_nodes)
+            else:
+                c_nodes_wf = None
         else:
-            c_nodes = setup.c_at_nodes(groups, nodes)
+            c_nodes_wf = setup._c_at_nodes_wf(groups, nodes)
         Pi = np.exp(1j * C * np.outer(setup.diag, nodes - ta))    # (dim,n)
         Pinv = np.exp(-1j * C * np.outer(setup.diag, nodes - ta))
         # 节点配置方程为线性系统 (I−T)φ = b：GMRES 直解（无收缩率约束，
@@ -349,7 +393,7 @@ def _subspace_segment(setup, Ksp, X, ta, tb, tol, groups, m_guess=None,
 
         def _t_full(vec):
             phi = vec.reshape(setup.dim, n_nodes)
-            y = _volterra_rhs(setup, phi, c_nodes)
+            y = _volterra_rhs(setup, phi, c_nodes_wf, groups)
             S = np.einsum('qs,ds->dq', Wp, Pinv * y)
             return ((-1j * C) * (Pi * S)).ravel()
 
@@ -362,7 +406,7 @@ def _subspace_segment(setup, Ksp, X, ta, tb, tol, groups, m_guess=None,
             r = v.reshape(setup.dim, n_nodes)
             phi = np.zeros_like(r)
             for _s in range(_VOLT_PRE_SWEEPS):
-                y = _volterra_rhs(setup, phi, c_nodes)
+                y = _volterra_rhs(setup, phi, c_nodes_wf, groups)
                 S = np.cumsum(Pinv * y * ws[None, :], axis=1)
                 phi = r + (-1j * C) * (Pi * S)
             return phi.ravel()
@@ -382,7 +426,7 @@ def _subspace_segment(setup, Ksp, X, ta, tb, tol, groups, m_guess=None,
         res = max(float(np.linalg.norm((Aop @ sol) - bvec)) /
                   max(float(np.linalg.norm(bvec)), 1.0), 1e-16)
         # 端点：全区间求积（同一节点集，与阶梯自洽）
-        y = _volterra_rhs(setup, phi, c_nodes)
+        y = _volterra_rhs(setup, phi, c_nodes_wf, groups)
         S_tb = (Pinv * y * ws[None, :]).sum(axis=1)
         phi_tb_ip = X + (-1j * C) * np.exp(
             1j * C * setup.diag * h) * S_tb
@@ -411,7 +455,7 @@ def _pair_m_probe(E_pair, N, groups, M, vdd_sp, gamma_pair_mhz, psi0_2d,
         c_list = []
         for g in groups:
             pk = 0.0
-            for wf in g['envs']:
+            for wf in g['envs_w']:
                 v = np.asarray(wf(np.linspace(0.0, T, _ENV_PROBE_N)), float)
                 pk = max(pk, float(np.max(np.abs(v))))
             c_list.append(pk)
@@ -481,7 +525,7 @@ def evolve_exact_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
     groups, _ = _pair_groups(fields_A, fields_B)
     # 维度校验：场耦合矩阵 = N² 两体基
     for g in groups:
-        if g['K2'].shape != (N2, N2):
+        if g['K2_w'][0].shape != (N2, N2):
             raise ValueError('两体耦合矩阵维度与 states 不一致')
 
     # ---- V_dd（vdd_matrix 优先，否则 pair_core.vdd_sparse）----
@@ -544,7 +588,7 @@ def evolve_exact_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
     c_peaks = []
     for g in groups:
         cs = []
-        for wf in g['envs']:
+        for wf in g['envs_w']:
             v = np.asarray(wf(np.linspace(0.0, T, 64)), float)
             if np.ptp(v) > 1e-9:
                 all_const = False
@@ -557,7 +601,7 @@ def evolve_exact_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
         return _physical_pops(setup, X, tq)
 
     if (all_const or not groups) and setup.dense:
-        K = setup.K_seg(c_peaks if groups else [])
+        K = setup.K_seg(T / 2.0 if T > 0 else 1.0, groups)
         X0 = _embed_pair(psi0_2d, setup)
         # 稠密：一次本征分解 + 全输出时刻向量化重构（支持非厄米）
         evals, evecs, left = _dense_decomp(K[1])
@@ -576,7 +620,7 @@ def evolve_exact_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
         h_floor = max(T / _DT_MIN_FRAC, 1e-9)
 
         def seg_K(ta, tb):
-            return setup.K_seg(setup.c_mids(groups, 0.5 * (ta + tb)))
+            return setup.K_seg(0.5 * (ta + tb), groups)
 
         def rec2(ta, tb, X):
             if progress_arr[1] != 0.0:
@@ -595,11 +639,9 @@ def evolve_exact_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
                     glx, glw = _gl_nodes(n_nodes)
                     nodes = ta + 0.5 * (tb - ta) * (glx + 1.0)
                     ws = 0.5 * (tb - ta) * glw
-                    c_nodes = setup.c_at_nodes(groups, nodes)
-                    c_mid_list = setup.c_mids(groups, 0.5 * (ta + tb))
+                    c_nodes_wf = setup._c_at_nodes_wf(groups, nodes)
                     delta, max_dc = _defect_pass(
-                        setup, K, ta, tb, X, groups, nodes, ws, c_nodes,
-                        c_mid_list, dense_eig)
+                        setup, K, ta, tb, X, groups, nodes, ws, dense_eig)
                     if max_dc < 1e-12:           # 包络平坦：冻结即精确
                         est = 0.0
                         psi_out = psi_frozen

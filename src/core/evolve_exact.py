@@ -46,8 +46,16 @@ _POL_Q = {'π': 0, 'σ+': +1, 'σ-': -1}
 # 光子块阶数：起始/上限（自适应收敛于两者之间）
 _M_START = 2
 _M_MAX = 8
+# M 判定的近共振带宽（MHz）：离共振 Rydberg-Rydberg 巨矩阵元（如光学频下
+# 60S↔60P 的 Ω~19 GHz）不参与 r 判定——其物理贡献是二阶微扰（~1e-9 相对），
+# 光子块阶数由与载频近共振的对决定（Mizuta 2025 / Kuwahara–Mori–Saito 2016
+# 收敛界针对共振耦合算子范数；离共振对的 Sambe 收敛在 M=1 已足够）。
+_M_ANALYTIC_BW_MHZ = 2e4   # 20 GHz
 # 扩展维 ≤ 此值走稠密 eigh，否则稀疏 expm_multiply
-_DENSE_MAX = 1500
+# （2026-08-29 提到 2200：逐载频 M 后 22 态 3 载频 = 45 扇区×22 = 990 维，
+#  M+1 探针 setup 75 扇区×22 = 1650 维——仍须稠密，否则掉进 expm_multiply
+#  THz 对角爆炸。2200 维实对称 eigh ~0.5 s，可接受。）
+_DENSE_MAX = 2200
 # 包络采样（活性判断/恒常判断）
 _ENV_PROBE_N = 2001
 # Richardson 递归深度保护
@@ -145,17 +153,33 @@ class _SambeSetup:
     """光子块扩展空间结构（与段无关的部分只算一次）。
 
     基组 |i⟩⊗|n_1..n_G⟩，扁平索引 i + N·p，p = Σ_g n_g·stride_g
-    （n_g ∈ 0..2M，对角用中心化量子数 n_g−M——与重构相位中的绝对
-    n_g 恰好抵消各自的 M 偏移，规范自洽）。
+    （n_g ∈ 0..2M_g，对角用中心化量子数 n_g−M_g——与重构相位中的绝对
+    n_g 恰好抵消各自的 M_g 偏移，规范自洽）。
+
+    **逐载频 M**（2026-08-29）：M 可为 int（全部载频同阶，向后兼容）或
+    list（每载频独立阶数 M_g）。混合进制张量积：P = Π(2M_g+1)，
+    stride_g = Π_{g'<g}(2M_g'+1)。理论依据：Ho–Chu 多模 Floquet（各模
+    独立收敛判据）+ Mizuta 2025 截断 Sambe 误差上界；光学载频
+    r=Ω/ω~1e-7 → M=1 即单光子阶（误差 ~1e-13），微波 r~3e-4 → M=1..2
+    （误差 ~1e-8..1e-11）——统一 M 会在 125 扇区里浪费 ~3 个数量级。
     """
 
     def __init__(self, E, groups, M):
         self.E = np.asarray(E, float)
         self.N = len(E)
         self.groups = groups
-        self.M = M
-        self.D = 2 * M + 1
-        P = self.D ** len(groups)
+        G = len(groups)
+        if isinstance(M, (int, np.integer)):
+            self.Ms = [int(M)] * G
+        else:
+            self.Ms = [int(m) for m in M]
+            if len(self.Ms) != G:
+                raise ValueError(f'M 长度 {len(self.Ms)} ≠ 载频组数 {G}')
+        self.Ds = [2 * m + 1 for m in self.Ms]      # 每组块数
+        self.D = None                               # 组内用 self.Ds[gi]
+        P = 1
+        for d in self.Ds:
+            P *= d
         self.P = P
         self.dim = self.N * P
         idx = np.arange(P)
@@ -163,25 +187,29 @@ class _SambeSetup:
         self.nvecs = []
         base = np.zeros(P)
         stride = 1
-        for g in groups:
-            nvec = (idx // stride) % self.D
+        for gi, g in enumerate(groups):
+            Dg = self.Ds[gi]
+            Mg = self.Ms[gi]
+            nvec = (idx // stride) % Dg
             self.strides.append(stride)
             self.nvecs.append(nvec)
-            # Sambe 块对角 = E_i − n·ω（与耦合方向 n→n+1 配套：
+            # Sambe 块对角 = E_i − (n_g−M_g)·ω_g（与耦合方向 n→n+1 配套：
             # 吸收共振对 |g,n⟩↔|e,n+1⟩；重构 ψ=Σ c_n e^{−inωt}）
-            base = base - (nvec - M) * g['omega_mhz']
-            stride *= self.D
+            base = base - (nvec - Mg) * g['omega_mhz']
+            stride *= Dg
         self.diag = np.tile(self.E, P) + np.repeat(base, self.N)
         # 重构相位系数：θ_p(t) = nphase[p]·t（rad，t 单位 ns）
         nphase = np.zeros(P)
         for nvec, g in zip(self.nvecs, groups):
             nphase = nphase + nvec * (_CONV * g['omega_mhz'])
         self.nphase = nphase
-        # 中央光子块（各组量子数 n=0，即中心化索引 M）：物理态嵌入位置
-        self.p_center = sum(M * st for st in self.strides)
+        # 中央光子块（各组量子数 n=0，即中心化索引 M_g）：物理态嵌入位置
+        self.p_center = sum(Mg * st for Mg, st in zip(self.Ms, self.strides))
         # 耦合结构：每组 (r, c) 索引对 ↔ V_seg[nz_i, nz_j]·0.5
         self.coup = []
         for gi, g in enumerate(groups):
+            Dg = self.Ds[gi]
+            Mg = self.Ms[gi]
             Vpat = np.zeros((self.N, self.N))
             for A in g['As']:
                 Vpat = Vpat + (np.abs(A) > 1e-12)
@@ -189,15 +217,15 @@ class _SambeSetup:
             # 光子数减少方向 = 已加条目的转置，K_at 中统一对称化补齐
             ii, jj = np.nonzero(Vpat)
             stride = self.strides[gi]
-            # 光子格点扁平索引与各组量子数（一次性构造）
-            grid = np.meshgrid(*[np.arange(self.D) for _ in groups],
+            # 光子格点扁平索引与各组量子数（一次性构造，**混合进制**）
+            grid = np.meshgrid(*[np.arange(d) for d in self.Ds],
                                indexing='ij')
-            pflat = np.zeros(self.D ** len(groups), int)
-            for gg in range(len(groups)):
+            pflat = np.zeros(P, int)
+            for gg in range(G):
                 pflat = pflat + grid[gg].ravel() * self.strides[gg]
             ng_g = grid[gi].ravel()
             rows, cols = [], []
-            for s in range(self.D - 1):
+            for s in range(Dg - 1):
                 p_src = pflat[ng_g == s]       # n_g == s 的全部格点
                 p_dst = p_src + stride
                 for a, b in zip(ii, jj):
@@ -207,30 +235,35 @@ class _SambeSetup:
             rows = np.concatenate(rows) if rows else np.zeros(0, int)
             cols = np.concatenate(cols) if cols else np.zeros(0, int)
             # 值序列与行序（s 层 × 有序对 × p_src 格点）对齐：
-            # 每层 = repeat(vals, n_p)，tile D−1 层
+            # 每层 = repeat(vals, n_p)，tile Dg−1 层
             self.coup.append(dict(r=rows, c=cols, nz_i=ii, nz_j=jj,
-                                  n_p=P // self.D))
+                                  n_p=P // Dg))
         self.K0 = np.diag(self.diag)
         self.dense = self.dim <= _DENSE_MAX
-        # 单位包络耦合结构 Kc_g（稠密）——与包络无关，预计算；
-        # 耦合全为实数时用实型 → 段对角化走实对称 eigh（快 ~5×）
+        # 单位包络耦合结构 Kc_g_wf（稠密）——每波形一个单位矩阵，与包络配对；
+        # 修复：同频多波形合并 bug（原代码将 ΣA 合并后乘 Σenv，丢失逐波配对）。
+        # Kc_dense[gi][w_idx] = 0.5·A_w 的扩展空间映射矩阵（与 envs[w_idx] 一一配对）
         self.Kc_dense = []
         for gi, cp in enumerate(self.coup):
             if cp['r'].size and self.dense:
-                vals = 0.5 * np.sum(
-                    [np.asarray(A[cp['nz_i'], cp['nz_j']])
-                     for A in groups[gi]['As']], axis=0)
-                dtype = float if np.isrealobj(vals) else complex
-                Kc = np.zeros((self.dim, self.dim), dtype)
-                seq = np.tile(np.repeat(vals, cp['n_p']), self.D - 1)
-                Kc[cp['r'], cp['c']] += seq
-                Kc[cp['c'], cp['r']] += np.conj(seq)
-                self.Kc_dense.append(Kc)
+                wf_list = []
+                for A in groups[gi]['As']:
+                    vals = 0.5 * np.asarray(A[cp['nz_i'], cp['nz_j']])
+                    dtype = float if np.isrealobj(vals) else complex
+                    Kc_w = np.zeros((self.dim, self.dim), dtype)
+                    seq = np.tile(np.repeat(vals, cp['n_p']), self.Ds[gi] - 1)
+                    Kc_w[cp['r'], cp['c']] += seq
+                    Kc_w[cp['c'], cp['r']] += np.conj(seq)
+                    wf_list.append(Kc_w)
+                self.Kc_dense.append(wf_list)
             else:
                 self.Kc_dense.append(None)
         # 全部耦合实数 → 段哈密顿实对称（eigh 提速）
-        self.real_K = all(Kc is None or np.isrealobj(Kc)
-                          for Kc in self.Kc_dense)
+        self.real_K = all(
+            Kc_list is None or all(np.isrealobj(kw) for kw in Kc_list
+                                   if kw is not None)
+            for Kc_list in self.Kc_dense
+        )
 
     def V_segs(self, groups, mid):
         """各组在段中点的冻结耦合矩阵 Σ_w env_w(mid)·A_w。"""
@@ -253,10 +286,11 @@ class _SambeSetup:
             return ('diag', None)
         if self.dense:
             K = self.K0.copy()
-            for V, cp in zip(Vs, self.coup):
+            for gi, (V, cp) in enumerate(zip(Vs, self.coup)):
                 if cp['r'].size:
                     vals = 0.5 * V[cp['nz_i'], cp['nz_j']]
-                    seq = np.tile(np.repeat(vals, cp['n_p']), self.D - 1)
+                    seq = np.tile(np.repeat(vals, cp['n_p']),
+                                  self.Ds[gi] - 1)
                     K[cp['r'], cp['c']] += seq
                     # 转置方向（光子数减少）：同值厄米补齐，不可对称化（会减半）
                     K[cp['c'], cp['r']] += np.conj(seq)
@@ -264,18 +298,18 @@ class _SambeSetup:
         rows = [np.arange(self.dim)]
         cols = [np.arange(self.dim)]
         data = [self.diag]
-        for V, cp in zip(Vs, self.coup):
+        for gi, (V, cp) in enumerate(zip(Vs, self.coup)):
             if cp['r'].size:
                 rows.append(cp['r'])
                 cols.append(cp['c'])
                 vals = 0.5 * V[cp['nz_i'], cp['nz_j']]
                 data.append(np.tile(np.repeat(vals, cp['n_p']),
-                                    self.D - 1))
+                                    self.Ds[gi] - 1))
                 # 转置方向（光子数减少）同样入 COO（同值，厄米）
                 rows.append(cp['c'])
                 cols.append(cp['r'])
                 data.append(np.tile(np.repeat(np.conj(vals), cp['n_p']),
-                                    self.D - 1))
+                                    self.Ds[gi] - 1))
         K = sp.coo_matrix((np.concatenate(data),
                            (np.concatenate(rows), np.concatenate(cols))),
                           shape=(self.dim, self.dim)).tocsr()
@@ -358,18 +392,57 @@ def _probe_pops(E, probe_groups, M, psi0, T):
     return np.abs(ps) ** 2
 
 
-def _m_analytic(groups, tol):
-    """解析下界：(r/4)^{2(M−1)} ≤ tol（r = 最大 Ω/ω）——探针起点，
-    避免弱驱动场景（光学）从 M=2 逐级起跳。"""
-    rmax = 0.0
+def _group_res_peak(g, E_mhz, bw_mhz):
+    """组内与载频**近共振**（|ΔE−ω|<bw）的对的最大 |Ω|；E_mhz None → 全局峰值。
+
+    离共振 Rydberg-Rydberg 巨矩阵元（60S↔60P 在光学频 Ω~19 GHz，|ΔE−ω|~295 THz）
+    被排除——其物理贡献为二阶微扰，光子块阶数只由共振对决定。"""
+    if E_mhz is None:
+        return max(float(np.abs(A).max()) for A in g['As'])
+    E = np.asarray(E_mhz, float)
+    peak = 0.0
+    for A in g['As']:
+        Anz = np.abs(A) > 1e-12
+        rows, cols = np.nonzero(Anz)
+        if rows.size == 0:
+            continue
+        det = np.abs((E[rows] - E[cols]) - g['omega_mhz'])
+        m = det < bw_mhz
+        if m.any():
+            peak = max(peak, float(np.abs(A[rows[m], cols[m]]).max()))
+    return peak
+
+
+def _m_analytic(groups, tol, E_mhz=None):
+    """逐载频解析下界：(r_g/4)^{2(M_g−1)} ≤ tol（r_g = 近共振对最大 Ω/ω）。
+
+    返回与 groups 等长的 M 列表——**每组独立**：光学载频（近共振 Ω~104 MHz，
+    r~3.5e-7）→ M=1（3 块，单光子阶即收敛）；微波 r~5e-4 → M=2（5 块）。
+    离共振巨矩阵元（光学频 60S↔60P，Ω~19 GHz）不参与判定（_group_res_peak）。
+    统一 M 会把光学拖到微波阶数（5³=125 扇区），逐载频 M=(1,1,2) → 45 扇区。
+    """
+    Ms = []
     for g in groups:
-        vmax = max(float(np.abs(A).max()) for A in g['As'])
-        rmax = max(rmax, vmax / max(abs(g['omega_mhz']), 1e-9))
-    M = _M_START
-    if rmax > 0.0:
-        while (rmax / 4.0) ** (2 * (M - 1)) > tol and M < _M_MAX:
-            M += 1
-    return M
+        vmax = _group_res_peak(g, E_mhz, _M_ANALYTIC_BW_MHZ)
+        r = vmax / max(abs(g['omega_mhz']), 1e-9)
+        M = _M_START - 1                      # 从 M=1（3 块）起步
+        if r > 0.0:
+            # M=1 的截断误差 ~ (r/4)²（单光子阶，|k|≥2 谐波）；
+            # 若已 ≤ tol 停留 M=1；否则按 (r/4)^{2(M−1)} 升阶。
+            if (r / 4.0) ** 2 > tol:
+                M = 2
+                while (r / 4.0) ** (2 * (M - 1)) > tol and M < _M_MAX:
+                    M += 1
+        Ms.append(max(1, M))
+    return Ms
+
+
+def setup_P(Ms):
+    """逐载频 M 列表 → 扇区数 Π(2M_g+1)。"""
+    p = 1
+    for m in Ms:
+        p *= (2 * int(m) + 1)
+    return p
 
 
 # ============================================================
@@ -397,15 +470,23 @@ def _seg_decomp(setup, groups, ta, tb):
         active = False
         K = setup.K0.copy()
         c_mids = []
-        for g, Kc in zip(groups, setup.Kc_dense):
-            if Kc is None:
+        for g, Kc_list in zip(groups, setup.Kc_dense):
+            if Kc_list is None:
                 c_mids.append(0.0)
                 continue
-            c = sum(float(np.asarray(wf(np.atleast_1d(mid))).flat[0])
-                    for wf in g['envs'])
-            c_mids.append(c)
-            if c != 0.0:
-                K = K + c * Kc
+            # 逐波配对：c_w = env_w(mid)，K_cw = Kc_dense[gi][w]（修复合并 bug）
+            Kc_sum = np.zeros_like(Kc_list[0]) if Kc_list[0] is not None else None
+            c_total = 0.0
+            active_g = False
+            for wf, Kcw in zip(g['envs'], Kc_list):
+                c_w = float(np.asarray(wf(np.atleast_1d(mid))).flat[0])
+                c_total += c_w
+                if c_w != 0.0 and Kcw is not None:
+                    Kc_sum = Kc_sum + c_w * Kcw if Kc_sum is not None else c_w * Kcw
+                    active_g = True
+            c_mids.append(c_total)
+            if active_g:
+                K = K + Kc_sum
                 active = True
         if not active:
             return ('diag', None)
@@ -426,7 +507,7 @@ def _frozen_apply(evals, evecs, a0, ta, tq):
     return evecs @ (a0 * np.exp(-1j * _CONV * evals * (tq - ta)))
 
 
-def _defect_sweep(setup, groups, ta, nodes, ws, evals, evecs, c_mids,
+def _defect_sweep(setup, groups, ta, tb, nodes, ws, evals, evecs, c_mids,
                   psi_nodes):
     """单次缺陷扫描（本征基可分离形式，O(dim·n)）：
 
@@ -441,15 +522,20 @@ def _defect_sweep(setup, groups, ta, nodes, ws, evals, evecs, c_mids,
     ws = np.asarray(ws, float)
     Psi = np.asarray(psi_nodes, complex)                 # (n, dim)
     V = np.zeros_like(Psi)
-    for g, Kc, c_mid in zip(groups, setup.Kc_dense, c_mids):
-        if Kc is None:
+    mid = 0.5 * (ta + tb)                                  # 段中点（用于逐波修正）
+    for g, Kc_list, c_mids_g in zip(groups, setup.Kc_dense, c_mids):
+        if Kc_list is None:
             continue
-        dc = np.zeros(len(nodes))
-        for wf in g['envs']:
-            dc = dc + np.asarray(wf(nodes), float)
-        dc = dc - c_mid
-        if np.max(np.abs(dc)) > 1e-14:
-            V = V + dc[:, None] * (Psi @ Kc.T)           # v_q = Δc·Kc ψ_q（BLAS）
+        # 逐波配对：dc_w(q) = env_w(nodes[q]) − env_w(mid)，乘对应 Kcw（修复合并bug）
+        V_g = np.zeros_like(Psi)
+        has_active = False
+        for wf, Kcw in zip(g['envs'], Kc_list):
+            dc_w = np.asarray(wf(nodes), float) - float(np.asarray(wf(np.atleast_1d(mid)), float).flat[0])
+            if Kcw is not None and np.max(np.abs(dc_w)) > 1e-14:
+                V_g = V_g + dc_w[:, None] * (Psi @ Kcw.T)
+                has_active = True
+        if has_active:
+            V = V + V_g
     G = V @ evecs.conj()                                 # (n, dim) evecs†·v_q
     Ph = np.exp(1j * _CONV * np.outer(evals, nodes))     # (dim, n)
     Csum = np.cumsum(Ph * (G * ws[:, None]).T, axis=1)   # (dim, n) 累积和
@@ -515,10 +601,10 @@ def _propagate_adaptive(setup, groups, psi0, t_grid, tol, progress_arr, log):
             psi_nodes = F.T
             # 两级缺陷扫描：一级用冻结被积态，二级用修正后节点态（Volterra）
             S1, d_nodes1 = _defect_sweep(
-                setup, groups, ta, nodes, ws, evals, evecs, c_mids,
+                setup, groups, ta, tb, nodes, ws, evals, evecs, c_mids,
                 psi_nodes)
             S2, _ = _defect_sweep(
-                setup, groups, ta, nodes, ws, evals, evecs, c_mids,
+                setup, groups, ta, tb, nodes, ws, evals, evecs, c_mids,
                 psi_nodes + d_nodes1)
             psi_out = frozen_at(tb) + _defect_at(setup, S2, evals, evecs, tb)
             if psi_prev is not None:
@@ -651,34 +737,47 @@ def evolve_exact(states, fields, psi0, t_grid, tol=1e-6, decays=None,
     T = float(t[-1])
     tol = float(tol)
 
-    # ---- 光子块收敛：常数包络探针（单次对角化/阶，探针差上界时变截断）----
-    M = max(_M_START, _m_analytic(groups, tol))
+    # ---- 光子块收敛：逐载频常数包络探针 ----
+    # 每载频独立递增（固定其他组）：光学 r~1e-7 → M=1 即收敛；
+    # 微波 r~3e-4 → M=1..2。避免统一 M 把光学拖到微波阶数（125 扇区）。
+    Ms = _m_analytic(groups, tol, E)
     probe_groups = _peak_const_groups(groups, T)
-    prev_probe = None
-    while True:
-        cur_probe = _probe_pops(E, probe_groups, M, psi0v, T)
-        if prev_probe is not None:
-            d = float(np.max(np.abs(cur_probe - prev_probe)))
+    G = len(groups)
+    for gi in range(G):
+        # 近共振峰 Ω（去离共振 Rydberg 巨矩阵元污染）；r 极小（光学量级
+        # <1e-5）→ 解析界已证单光子阶收敛，探针验证纯属浪费——跳过。
+        vmax = _group_res_peak(groups[gi], E, _M_ANALYTIC_BW_MHZ)
+        r_g = vmax / max(abs(groups[gi]['omega_mhz']), 1e-9)
+        if r_g < 1e-5:
+            continue
+        # 微波类组：本组做 M vs M+1 验证（其余组固定）
+        while Ms[gi] < _M_MAX:
+            M_cur = list(Ms)
+            M_nxt = list(Ms)
+            M_nxt[gi] = M_cur[gi] + 1
+            cur = _probe_pops(E, probe_groups, M_cur, psi0v, T)
+            nxt = _probe_pops(E, probe_groups, M_nxt, psi0v, T)
+            d = float(np.max(np.abs(nxt - cur)))
             if d <= tol:
-                # M−1 与 M 差 ≤ tol → M−1 的截断误差已受控，取 M−1
-                log(f'[exact] 光子块收敛：M={M - 1}（M−1→M 探针差 {d:.2e} ≤ tol）')
-                M -= 1
+                break                            # 本组 M_g 已收敛
+            Ms[gi] = M_nxt[gi]
+            log(f'[exact] 光子块 M[{gi}]={M_cur[gi]}→{M_nxt[gi]}：'
+                f'探针截断差 {d:.2e}，递增')
+            if Ms[gi] >= _M_MAX:
+                log(f'[exact] 警告：载频 {groups[gi]["omega_mhz"]:.6g}MHz 光子块'
+                    f'达上限 M={_M_MAX}，截断误差可能 > tol')
                 break
-            log(f'[exact] 光子块 M={M - 1}→{M}：探针截断差 {d:.2e}，递增')
-        prev_probe = cur_probe
-        if M >= _M_MAX:
-            log(f'[exact] 警告：光子块达上限 M={_M_MAX}，截断误差可能 > tol')
-            break
-        M += 1
-    pops, psi_f, report, setup = _run_once(E, groups, M, psi0v, t, tol,
+    log(f'[exact] 光子块（逐载频）M={Ms}'
+        f'（扇区数 Π(2M_g+1)={setup_P(Ms)}）')
+    pops, psi_f, report, setup = _run_once(E, groups, Ms, psi0v, t, tol,
                                            progress_arr, log)
     log(f'[exact] 完成：{report["n_segments"]} 段，'
         f'最大 Richardson 差 {report["max_richardson_diff"]:.2e}'
         f'（tol={tol:.1e}），范数偏差 '
         f'{report["max_norm_dev"]:.2e}')
 
-    report['photon_blocks'] = {f'{g["omega_mhz"]:.6g}MHz': setup.D
-                               for g in groups}
+    report['photon_blocks'] = {f'{g["omega_mhz"]:.6g}MHz': setup.Ds[gi]
+                               for gi, g in enumerate(groups)}
     report['tol'] = float(tol)
     out = dict(t=t, pops=pops, states=states,
                om_mhz=[float(max(np.abs(A).max() for A in g['As']))
