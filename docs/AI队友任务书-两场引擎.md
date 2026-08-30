@@ -212,6 +212,50 @@ hard_numba 9/9、smoke[A]=0.5021、combo[1..4]=0.0013、两体 hard×exact 交�
 1.05e-4。**rk4 不强合并**（numpy/numba 分叉是性能驱动，非重复）。
 **额外收获**：t13 交叉验证抓出 _PairSambeSetup COO 长度 bug（单组盲区）。
 
+## 14. 🛣️ 双路径并行开发蓝图（2026-08-31 船长定，用户指令）
+
+**背景**：重构收口后，两条开发路径并行推进，充分利用已有进展。
+
+### 路径 A：两场 Sambe 两体扩展（debugger 负责）
+**目标**：把"光场旋转系 + 微波-only 光子块"两场逻辑应用到两体 →
+`dim = N²×P_mw = 484×5 = 2420` 稠密可行（替代 exact_pair 60500 维不可用路径）。
+**必读资料（按序）**：
+1. 任务书 §0（当前状态）/§2.3（多光场拍频，两体版同样适用）/§13（重构分层）
+2. `docs/核心资产盘点表.md` §二（两体 Sambe 骨架改造点）
+3. `src/core/evolve_two_field.py` **全文**（单原子两场 Sambe 实现：
+   build_two_field 的 E_rot/opt_terms、_TwoFieldSetup 微波-only 光子块、主循环）
+4. `src/core/evolve_exact_pair.py` **全文**（两体骨架：_PairSambeSetup/
+   _pair_groups/_defect_pass/evolve_exact_pair——t6/t9/t13 修复后）
+5. `src/core/tensor.py`（两体张量化：tensor_states/_as_product_psi/_reduce_A/B/
+   _pair_loss_vectors）、`src/core/sambe.py`（photon_geometry 核心层）
+6. `checks/evolve_exact_pair_selfcheck.py`（EP1-EP5 验收）
+**已有进展**：单原子两场 Sambe 已验证（620ns 三路 6.3e-5）；两体骨架已修复收束
+（EP 12/12）；t13 教训（COO 单组盲区 + exact_pair 真实维度 2420/60500 不可用）
+**验收**：①V_dd=0 直积 ≡ 单原子两场直积 ≤1e-3；②两体交换（R=10μm θ=45° φ=0）
+首峰对照；③22态 2420 维稠密可跑（性能记录）；④与 exact_pair 短窗对拍（若可跑）
+
+### 路径 B：hard 多光场支持（harddev 负责）
+**目标**：实现 §8/§2.3 的 exp 拍频（光场项 exp(i·(ω_f−ω_ref_f)·t)），
+先单原子（evolve_hard + hard_numba）→ 再两体（hard_pair）。
+**必读资料（按序）**：
+1. 任务书 §2.3（多光场拍频，含 t10 修正：**exp 非 cos**）/§12（hard 路线）
+2. `tempsimu/_tf_beat_theory.py`（t10 验证脚本：V1 5.16e-9 / V2 ~1% / V3 cos 95.3% 错误）
+3. `src/core/evolve_two_field.py` build_two_field（:119-126 rot_pick 只取首个——
+   需给每 opt_term 记录 omega_ref_f）+ evolve_hard（:539 起，光场项加 exp 相位）
+4. `src/core/hard_numba.py`（_rhs_hard：光场项 c(t)·A_opt 加 exp(i·δ_f·t)；
+   与微波 cos 一样内核直接求值，**不查表**——δ~260 MHz 周期 3.8ns 振荡）
+5. `src/core/hard_pair.py`（两体 hard 光场项同样处理）
+6. `src/core/dop853.py`（核心层：RHS 附加参数可加 delta_f 数组，无需改驱动）
+**已有进展**：t10 已验证 exp 拍频数学正确（V1 5.16e-9）；hard 单/两体已接入
+dop853 核心层；build_two_field 已产出 opt_terms（含 omega/name，需补 omega_ref）
+**验收**：①单光场行为不变（W4=0 退化逐位一致）；②双光场（W3+W4）与权威对拍
+（拍频版 vs exact/实验室系参考，失谐恢复 +420）；③numba 版与 numpy 版一致；
+④两体 hard_pair 复用（记录性能）
+
+**两条路径交叉点**：build_two_field 的 omega_ref 记录（路径 B 先改，路径 A 复用）；
+t10 拍频结论对 Sambe K 的时变相位因子同样适用（路径 A 的单光场版可先行，
+拍频后补）。
+
 ## A. 历史教训清单（每次遇到分歧时对照）
 
 1. **范数守恒 ≠ 物理正确**：hard 4.6e-8、exact 2.9e-4 都守恒，却曾给错答案
