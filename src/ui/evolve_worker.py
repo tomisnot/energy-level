@@ -21,7 +21,7 @@ class EvolveWorker(QThread):
                  progress_arr, decays=None, parent=None):
         super().__init__(parent)
         self.states = states
-        self.fields = fields
+        self.fields = fields          # method='hard' 时为两场 meta（build_two_field）
         self.psi0 = psi0
         self.t_grid = t_grid
         self.method = method
@@ -33,13 +33,21 @@ class EvolveWorker(QThread):
 
     def run(self):
         try:
-            # ac_shift 已内嵌各 field（随包络时变），无需另传
-            res = evolve.evolve(self.states, self.fields, self.psi0,
-                                self.t_grid, method=self.method,
-                                backend=self.backend,
-                                progress_arr=self.progress_arr,
-                                log=self.log_msg.emit,
-                                decays=self.decays)
+            if self.method == 'hard':
+                # t20：hard 硬积分（numba 加速）——fields 为两场 meta
+                from ..core.evolve_twofield import evolve_hard
+                res = evolve_hard(
+                    self.states, self.fields, self.psi0, self.t_grid,
+                    rtol=1e-8, atol=1e-10, numba=True,
+                    progress_arr=self.progress_arr, log=self.log_msg.emit)
+            else:
+                # ac_shift 已内嵌各 field（随包络时变），无需另传
+                res = evolve.evolve(self.states, self.fields, self.psi0,
+                                    self.t_grid, method=self.method,
+                                    backend=self.backend,
+                                    progress_arr=self.progress_arr,
+                                    log=self.log_msg.emit,
+                                    decays=self.decays)
             self.done.emit(res, None)
         except RuntimeError as e:
             # 用户取消：progress_arr[1]≠0 → 不算错误，静默

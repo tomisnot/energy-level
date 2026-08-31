@@ -104,11 +104,47 @@ def _build_A(cache, states, freq_mhz, intensity_mwcm2, pol, det_selector):
     return A
 
 
-def split_by_freq(waves):
-    """波形列表 → (opt_waves, mw_waves)。"""
+def adaptive_split_threshold(states, default_mhz=MW_MAX_MHZ):
+    """能级间隔分布 → 微波/光场自适应分界阈值（MHz）。
+
+    物理：旋转系 RWA 只在载频 ≫ 里德堡尺度跃迁时有效；微波硬积分受
+    DOP853 载波可行性约束。能级间隙在 log 尺度成簇（里德堡带 vs 光学
+    带），取最大对数间隔比的几何中点作阈值；clamp 到 [1e4, 1e6]
+    （DOP853 载波可行性安全带）。鲁棒性：无清晰两簇（单簇/退化）或
+    孤立离群点（某侧间隙占比 < 5%）时回退 default_mhz。
+    """
+    E = np.array([s['E_mhz'] for s in states], float)
+    if E.size < 2:
+        return default_mhz
+    d = np.abs(E[:, None] - E[None, :])
+    gaps = np.unique(d[np.triu_indices(E.size, 1)])
+    gaps = gaps[gaps > 0]
+    if gaps.size < 2:
+        return default_mhz
+    ratios = gaps[1:] / gaps[:-1]
+    k = int(np.argmax(ratios))
+    r = ratios[k]
+    thr = np.sqrt(gaps[k] * gaps[k + 1])
+    # 双侧最小占比（孤立离群点不干扰聚类）：各侧 ≥ 5%（且 ≥ 3 个间隙）
+    n = gaps.size
+    lo = int(np.searchsorted(gaps, thr, side='right'))
+    if (r >= 1e3 and lo >= max(3, 0.05 * n)
+            and (n - lo) >= max(3, 0.05 * n)):
+        return float(np.clip(thr, 1e4, 1e6))
+    return default_mhz
+
+
+def split_by_freq(waves, states=None):
+    """波形列表 → (opt_waves, mw_waves)。
+
+    states 提供时按能级间隔分布自适应分界（adaptive_split_threshold）；
+    否则回退固定 MW_MAX_MHZ（向后兼容）。
+    """
+    thr = (adaptive_split_threshold(states)
+           if states is not None else MW_MAX_MHZ)
     opt, mw = [], []
     for w in waves:
-        if w.freq_mhz > MW_MAX_MHZ:
+        if w.freq_mhz > thr:
             opt.append(w)
         else:
             mw.append(w)
@@ -124,7 +160,7 @@ def build_two_field(cache, states, waves, mw_M=2):
       mw_groups  : _group_by_freq 格式的微波组（每载频一个，As 为其驱动矩阵）
       N          : 物理态数
     """
-    opt_w, mw_w = split_by_freq(waves)
+    opt_w, mw_w = split_by_freq(waves, states)   # t20：自适应阈值（states 驱动）
     N = len(states)
     E = np.array([s['E_mhz'] for s in states], float)
 

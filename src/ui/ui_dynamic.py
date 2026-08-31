@@ -217,7 +217,8 @@ class DynamicPanel(QWidget):
         self.method_cb = QComboBox()
         # auto：无耗散走 ip4 / 有耗散走 lindblad；exact：第一性原理引擎
         # （实验室系无 RWA/无旋转系/无近远分流，Sambe 光子块 + 包络自适应）。
-        self.method_cb.addItems(['auto', 'ip4', 'exact'])
+        # hard（t20）：微波硬积分 DOP853 零近似 + 光场旋转系（numba 加速）。
+        self.method_cb.addItems(['auto', 'ip4', 'exact', 'hard'])
         self.method_cb.currentTextChanged.connect(self._on_method_changed)
         rowt.addWidget(self.method_cb)
         p.addLayout(rowt)
@@ -714,8 +715,8 @@ class DynamicPanel(QWidget):
         return float(fld.b_gauss()) if fld is not None else 0.0
 
     def _on_method_changed(self, method):
-        """方法切换：exact 无近/远分流概念，共振cut 不适用。"""
-        self.near_cutoff_sb.setEnabled(method != 'exact')
+        """方法切换：exact/hard 无近/远分流概念，共振cut 不适用。"""
+        self.near_cutoff_sb.setEnabled(method not in ('exact', 'hard'))
 
     def _run_single_body(self, states, t, decays):
         """单原子演化路径。"""
@@ -724,6 +725,21 @@ class DynamicPanel(QWidget):
         if method == 'exact':
             # 第一性原理场：全部偶极对耦合，无近/远分流与静态 AC 注入
             fields = waveforms.build_fields_exact(self.cache, states, waves)
+        elif method == 'hard':
+            # t20：两场引擎 meta（光旋转 + 微波硬积分）——普通波走
+            # build_two_field；ArbitraryWave 走 arbitrary_mw_group 并入
+            # mw_groups（cos(φ_f(t)) 任意相位路径，t18）。
+            from ..core.evolve_twofield import (build_two_field,
+                                                arbitrary_mw_group)
+            regular = [w for w in waves
+                       if not isinstance(w, waveforms.ArbitraryWave)]
+            arb = [w for w in waves
+                   if isinstance(w, waveforms.ArbitraryWave)]
+            meta = build_two_field(self.cache, states, regular)
+            for w in arb:
+                meta['mw_groups'].append(
+                    arbitrary_mw_group(self.cache, states, w))
+            fields = meta
         else:
             fields = waveforms.build_fields(
                 waves, states, self.cache,
