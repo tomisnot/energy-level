@@ -162,16 +162,16 @@ def vdd_secular(cache, single, R_um, theta_deg, phi_deg, ref_A, ref_B, N,
 # ============================================================
 
 def pair_rotate_frame(states, fields_A, fields_B):
-    """分别为原子 A/B 计算旋转参考（复用 evolve._ip4_reference）。
+    """分别为原子 A/B 计算旋转参考（复用 evolve._rwa_reference）。
 
     返回 ref_A, ref_B（各 N 元数组）。
     """
     if fields_A:
-        ref_A, _, _ = evolve._ip4_reference(states, fields_A)
+        ref_A, _, _ = evolve._rwa_reference(states, fields_A)
     else:
         ref_A = np.zeros(len(states))
     if fields_B:
-        ref_B, _, _ = evolve._ip4_reference(states, fields_B)
+        ref_B, _, _ = evolve._rwa_reference(states, fields_B)
     else:
         ref_B = np.zeros(len(states))
     return ref_A, ref_B

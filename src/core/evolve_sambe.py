@@ -255,7 +255,7 @@ class _SambeSetup:
             Vs.append(V)
         return Vs, active
 
-    def K_at(self, Vs):
+    def hamiltonian_seg(self, Vs):
         """段哈密顿（稠密或稀疏）。Vs 全零时返回 ('diag', None)。"""
         if not any(np.any(V != 0.0) for V in Vs):
             return ('diag', None)
@@ -357,7 +357,7 @@ def _probe_pops(E, probe_groups, M, psi0, T):
     Vs, active = st.V_segs(probe_groups, 0.5 * T)
     if not active:
         return np.tile(_pops_of(np.asarray(psi0, complex)), (5, 1))
-    kind, K = st.K_at(Vs)
+    kind, K = st.hamiltonian_seg(Vs)
     if kind == 'dense':
         prop = ('dense', np.linalg.eigh(K))
     else:
@@ -470,7 +470,7 @@ def _seg_decomp(setup, groups, ta, tb):
     Vs, active = setup.V_segs(groups, mid)
     if not active:
         return ('diag', None)
-    kind, K = setup.K_at(Vs)
+    kind, K = setup.hamiltonian_seg(Vs)
     if kind == 'dense':
         evals, evecs = np.linalg.eigh(K)
         return ('dense', evals, evecs, None)
@@ -642,7 +642,7 @@ def _run_sambe(E, groups, M, psi0, t, tol, progress_arr, log):
         # 全常数包络 → 单次扩展空间对角化（成本与时长无关）
         Vs, active = setup.V_segs(groups, 0.5 * T)
         if active:
-            kind, K = setup.K_at(Vs)      # 常数包络：冻结即精确
+            kind, K = setup.hamiltonian_seg(Vs)      # 常数包络：冻结即精确
         else:
             kind = 'diag'
         if kind == 'dense':
@@ -890,6 +890,7 @@ def evolve_reference(states, fields, psi0, t_grid, decays=None,
 
 
 # ---- t19 函数级改名兼容别名（旧名 = 新名，外部零改动）----
+_SambeSetup.K_at = _SambeSetup.hamiltonian_seg
 _run_once = _run_sambe
 # _run_me → _run_mastereq 为嵌套运行助手（无模块级旧名引用，不设别名）
 evolve_exact = evolve_sambe
