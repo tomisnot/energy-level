@@ -106,7 +106,7 @@ class _PairSambeSetup:
     Kc_ext_g = 光子邻接（n→n±1，系数 1/2）⊗ 两体单位包络耦合（逐组）。
     """
 
-    def __init__(self, E_pair, N, groups, M, vdd_sp, gamma_pair_mhz):
+    def __init__(self, E_pair, N, groups, M, vdd_sp, gamma_pair_mhz, opt_terms=None):
         self.N = N
         self.N2 = N * N
         self.groups = groups
@@ -120,6 +120,15 @@ class _PairSambeSetup:
         self.diag = geo['diag']
         self.nphase = geo['nphase']
         self.p_center = geo['p_center']
+        # 光学场矩阵（不进光子块）：A_opt⊗I + I⊗A_opt，运行时注入
+        self.opt_Ko = []
+        self.opt_envs_w = []
+        if opt_terms:
+            for Ao_wf, wf in opt_terms:
+                A_2d = np.kron(np.asarray(Ao_wf, float), np.eye(N)) + \
+                       np.kron(np.eye(N), np.asarray(Ao_wf, float))
+                self.opt_Ko.append(A_2d)
+                self.opt_envs_w.append(wf)
         _idx = geo['_idx']  # photon grid index (pair Kc_ext construction)
         # 对角 + Γ/2（寿命 NonHermitian）— V_dd 在调用方处理
         if gamma_pair_mhz is not None and np.any(gamma_pair_mhz):
@@ -186,11 +195,12 @@ class _PairSambeSetup:
         return np.array(rows, float)
 
     def K_seg(self, mid, groups=None):
-        """段算符 K_static + Σ_g Σ_w env_w(mid)·Kcw_{gw}（稀疏/稠密）。
+        """段算符 K_static + Σ_g Σ_w env_w(mid)·Kcw_{gw} + opt_field 注入（稀疏/稠密）。
         
-        统一逐波实现，无分支。单波形组自然退化为等效计算。
+        统一逐波实现，无分支。单波形组自然退化为等效计算。光学场不进光子块，
+        仅在运行时按 c_opt(mid)*Ko 注入到扩展空间对角层。
         """
-        K = self.K_static
+        K = self.K_static.copy() if hasattr(self.K_static, 'copy') else self.K_static
         if groups is None:
             groups = self.groups
         for gi, g in enumerate(groups):
@@ -210,6 +220,23 @@ class _PairSambeSetup:
                     active_g = True
             if active_g:
                 K = K + Kc_sum_g
+        # 光学场注入：不进光子块，直接加到对角层的 N²×N² 子矩阵上
+        if self.opt_Ko:
+            n_opt = len(self.opt_Ko)
+            if self.dense:
+                Ko_dense = [ko if np.ndim(ko) > 1 else ko.toarray() 
+                           if hasattr(ko, 'toarray') else ko for ko in self.opt_Ko]
+            else:
+                Ko_dense = [ko.tocsr() if sp.issparse(ko) else ko for ko in self.opt_Ko]
+            
+            for oi, (Ko, wf) in enumerate(zip(Ko_dense, self.opt_envs_w)):
+                c_o = float(np.asarray(wf(np.atleast_1d(mid))).flat[0])
+                if c_o != 0.0:
+                    if self.dense:
+                        K = K + c_o * Ko
+                    else:
+                        K = K + c_o * Ko.tocsr() if hasattr(Ko, 'tocsr') else K + c_o * Ko
+        
         if self.dense:
             return ('dense', K)
         return ('sparse', K.tocsr())
