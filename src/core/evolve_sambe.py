@@ -38,7 +38,7 @@ import numpy as np
 import scipy.sparse as sp
 from scipy.sparse.linalg import expm_multiply
 
-from . import core
+from . import static_atom as core
 from . import sambe
 
 _CONV = 2 * np.pi * 1e-3          # MHz·ns → rad

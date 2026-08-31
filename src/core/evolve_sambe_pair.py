@@ -34,8 +34,8 @@ from scipy.sparse.linalg import LinearOperator, gmres
 from . import evolve
 from . import sambe
 
-from . import evolve_exact as _ex
-from .evolve_exact import _CONV, _gl_nodes
+from . import evolve_sambe as _ex
+from .evolve_sambe import _CONV, _gl_nodes
 
 # 扩展维 ≤ 此值走稠密路径（本征分解），否则稀疏（Krylov 子空间）
 _DENSE_MAX = 700

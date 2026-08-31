@@ -3,7 +3,7 @@
 import numpy as np
 import scipy.linalg
 
-from . import core
+from . import static_atom as core
 from .field_build import _env_samples, _sublevel_row
 from .evolve_arbitrary import _evolve_arbitrary
 
@@ -1294,7 +1294,7 @@ def evolve(states, fields, psi0, t_grid, method='auto', backend='auto',
     if method == 'exact':
         # 第一性原理引擎：实验室系无 RWA/无旋转系/无近远分流；ac_shift 作为
         # H0 常数对角修正传入（旧接口兼容）；场须为 kind='exact'
-        from . import evolve_exact as _exact
+        from . import evolve_sambe as _exact
         return _exact.evolve_exact(
             states, fields, psi0v, t, tol=(1e-6 if tol is None else tol),
             decays=decays, progress_arr=progress_arr, log=log,

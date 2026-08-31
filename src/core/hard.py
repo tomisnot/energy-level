@@ -34,7 +34,7 @@ from numba import njit
 
 from . import evolve as _evolve
 from . import pair_evolve as _pe
-from .evolve_exact import _CONV
+from .evolve_sambe import _CONV
 
 # 包络查表点数（620ns → h≈0.0047ns；插值误差 ~3e-10）
 _TAB_N = 2 ** 17

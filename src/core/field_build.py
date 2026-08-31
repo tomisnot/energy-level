@@ -3,7 +3,7 @@
 + 助手（_env_samples/_sublevel_row/_floquet_ac_static）。"""
 import numpy as np
 
-from . import core
+from . import static_atom as core
 from .atomic_levels import square
 
 _CONV = 2 * np.pi * 1e-3            # MHz·ns → rad
@@ -33,7 +33,7 @@ def _floquet_ac_static(cache, states, freq_mhz, intensity_mwcm2, pol,
     - mJ 态直接取对应键的位移；F 态（低激发超精细）= Σ|amps|²·shift（mJ 分量加权）。
     n_photon / sos_n_window 缺省（None）时读取面板全局配置（与静态页一致）。
     """
-    from . import core as _c
+    from . import static_atom as _c
     groups, seen = [], set()
     for s in states:
         k = (s['n'], s['l'], s['j'])
@@ -145,7 +145,7 @@ def real_field(cache, states, freq_mhz, intensity_mwcm2, pol='π',
     ∫σ(t)·env²(t)·P_source(t)dt 计入（见 pair_evolve）。
     field['scatter'] 亦随场返回（无近共振时同样有效）。
     """
-    from . import core as _c
+    from . import static_atom as _c
     q = {'π': 0, 'σ+': 1, 'σ-': -1}.get(pol, 0)
     N = len(states)
     E0_sq = _c.field_e0_sq(intensity_mwcm2)
@@ -245,7 +245,7 @@ def arbitrary_field(cache, states, t_ns, amp, pol='π', intensity_mwcm2=100.0,
                       't_ns': t_ns, 'amp': amp, 'offset_ns', 'pol',
                       'intensity_mwcm2', 'omega0_mhz': Ωmax}
     """
-    from . import core as _c
+    from . import static_atom as _c
     q = {'π': 0, 'σ+': 1, 'σ-': -1}.get(pol, 0)
     N = len(states)
     E0_sq = _c.field_e0_sq(intensity_mwcm2)

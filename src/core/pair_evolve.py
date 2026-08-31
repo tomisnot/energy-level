@@ -29,7 +29,7 @@ import numpy as np
 import scipy.sparse as sp
 
 from . import evolve
-from . import core
+from . import static_atom as core
 from . import tensor as _tensor  # noqa: E402  （t14张量化调度层搬移）
 
 _CONV = 2 * np.pi * 1e-3  # MHz·ns → rad
@@ -144,7 +144,7 @@ def vdd_secular(cache, single, R_um, theta_deg, phi_deg, ref_A, ref_B, N,
       V_sec  : (N², N²) 稀疏矩阵——secular 非对角项
       n_kept : 保留的非对角矩阵元数
     """
-    from .pair_core import vdd_sparse
+    from .static_pair import vdd_sparse
     V_sparse = vdd_sparse(cache, single, R_um, theta_deg, phi_deg)
     V_dense = V_sparse.toarray() if sp.issparse(V_sparse) else np.asarray(V_sparse)
     if E_rot_2d is None:

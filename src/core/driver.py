@@ -18,7 +18,7 @@ if sys.stdout is not None:
 import numpy as np
 from scipy.integrate import solve_ivp
 from scipy.constants import epsilon_0, c as C_LIGHT, hbar
-from . import core
+from . import static_atom as core
 from . import pair_core
 
 _CONV = 2 * np.pi * 1e-3            # MHz·ns → 弧度

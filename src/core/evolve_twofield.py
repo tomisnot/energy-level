@@ -28,9 +28,9 @@ method='two_field', backend, loss, error_report)。
 import numpy as np
 import scipy.sparse as sp
 
-from . import core
+from . import static_atom as core
 from . import evolve as _evolve
-from .evolve_exact import (_CONV, _M_MAX, _M_ANALYTIC_BW_MHZ, _group_by_freq,
+from .evolve_sambe import (_CONV, _M_MAX, _M_ANALYTIC_BW_MHZ, _group_by_freq,
                            _gl_nodes, _GL_CACHE, setup_P)
 
 # ---- 场分类 ----
@@ -615,7 +615,7 @@ def evolve_hard(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
     返回与 evolve_exact 同构 dict（method='hard'）。
     """
     if numba:
-        from .hard_numba import evolve_hard_fast
+        from .hard import evolve_hard_fast
         return evolve_hard_fast(states, fields_meta, psi0, t_grid,
                                 rtol=rtol, atol=atol,
                                 progress_arr=progress_arr, log=log,

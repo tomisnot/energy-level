@@ -2,7 +2,7 @@
 """能级构造（t19：evolve.py 拆分）——make_levels / gaussian / square / step。"""
 import numpy as np
 
-from . import core
+from . import static_atom as core
 
 
 def gaussian(t0, sigma):
