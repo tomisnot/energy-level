@@ -6,18 +6,19 @@
 参数（_numba_funcarg_test.py 已验证），故统一为 _dop853_driver(rhs, ...)，
 rhs 为任意 njit 编译的 RHS 回调（单体/两体通用）。
 
-- 系数（_A/_C/_B/_E3/_E5/_D）：**直接复用 hard_numba**（scipy 1.15.2 逐行
-  移植、2.9e-10 基线验证）——禁止手写重建（曾因手写系数 54 处错误）。
+- 系数（_A/_C/_B/_E3/_E5/_D）：**直接复用 hard**（scipy 1.15.2 逐行
+  移植、2.9e-10 基线验证，t19：hard_numba→hard）——禁止手写重建
+  （曾因手写系数 54 处错误）。
 - _rms_norm / _env_at / _env_tab  ：包络查表与范数（纯工具）
 - _dop853_step / _dop853_dense_interp：单步与稠密插值（与 RHS 参数化解耦）
 - _dop853_driver                       ：主循环（rhs 参数化）
 
-使用方：hard_numba.evolve_hard_fast（单体）、hard_pair.evolve_hard_pair（两体）。
+使用方：hard.evolve_hard_fast（单体）、hard.evolve_hard_pair（两体）。
 """
 import numpy as np
 from numba import njit
 
-from .hard_numba import (_A, _C, _B, _E3, _E5, _D, _TAB_N)  # 复用已验证系数
+from .hard import _A, _C, _B, _E3, _E5, _D, _TAB_N  # 复用已验证系数
 
 _np = np
 
