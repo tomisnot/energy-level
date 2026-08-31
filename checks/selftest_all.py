@@ -33,7 +33,6 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _SCRIPTS = ['core_selfcheck.py', 'evolve_dissipative_selfcheck.py',
             'evolve_exact_selfcheck.py', 'evolve_exact_pair_selfcheck.py',
             'ui_selftest.py',
-            'julia_kernel_selfcheck.py',   # Julia 内核门（无 julia.exe 自动 SKIP）
             'pair_evolve_selfcheck.py']
 
 

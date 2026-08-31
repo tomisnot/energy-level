@@ -1,3 +1,6 @@
+# 已退役，仅参考，2026-08-31（t26：Julia 后端全面退役归档；正式项目不再引用本文件）。
+# 原位置：checks/ 根目录 julia_kernel_selfcheck.py
+
 # -*- coding: utf-8 -*-
 """Julia 内核自检（julia/ 包，分阶段验证门 G0..G6）。
 

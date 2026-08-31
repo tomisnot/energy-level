@@ -105,7 +105,7 @@ class DynamicPanel(QWidget):
         self.vdd_R_sb.setRange(0.1, 1000.0)
         self.vdd_R_sb.setValue(5.0)
         self.vdd_R_sb.setDecimals(1)
-        self.vdd_R_sb.setFixedWidth(64)
+        self.vdd_R_sb.setFixedWidth(128)
         self.vdd_R_sb.setToolTip('原子间距 R（μm）')
         vdd_lay.addWidget(self.vdd_R_sb)
         vdd_lay.addWidget(QLabel('θ:'))
@@ -113,7 +113,7 @@ class DynamicPanel(QWidget):
         self.vdd_theta_sb.setRange(0.0, 180.0)
         self.vdd_theta_sb.setValue(0.0)
         self.vdd_theta_sb.setDecimals(1)
-        self.vdd_theta_sb.setFixedWidth(56)
+        self.vdd_theta_sb.setFixedWidth(128)
         self.vdd_theta_sb.setToolTip('极角 θ（°）')
         vdd_lay.addWidget(self.vdd_theta_sb)
         vdd_lay.addWidget(QLabel('φ:'))
@@ -121,7 +121,7 @@ class DynamicPanel(QWidget):
         self.vdd_phi_sb.setRange(0.0, 360.0)
         self.vdd_phi_sb.setValue(0.0)
         self.vdd_phi_sb.setDecimals(1)
-        self.vdd_phi_sb.setFixedWidth(56)
+        self.vdd_phi_sb.setFixedWidth(128)
         self.vdd_phi_sb.setToolTip('方位角 φ（°）')
         vdd_lay.addWidget(self.vdd_phi_sb)
         self._vdd_box.setVisible(False)
@@ -935,23 +935,14 @@ class DynamicPanel(QWidget):
         self._timer.start(100)
 
         from .evolve_worker import EvolveWorkerPair
-        from shutil import which as _which
-        _julia_ok = (
-            _which('julia') is not None or
-            os.path.isfile('D:\julia-1.10.10\bin\julia.exe') or
-            os.environ.get('JULIA_EXE'))
-        use_jl = (method == 'sambe' and _julia_ok and
-                  waves_A is not None and waves_B is not None)
-        if use_jl:
-            self.main.log('[双原子] method=sambe → Julia 后端')
+        # t26：外部后端已退役归档（checks/_archive/）——
+        # sambe 走 Python evolve_sambe_pair / evolve_exact_pair（同引擎）
         self._worker = EvolveWorkerPair(
             states, fields_A, fields_B, psi0_A, psi0_B,
             t, self.progress_arr,
             vdd_matrix=vdd_matrix,
             decays_A=decays_A, decays_B=decays_B,
-            method=method,
-            waves_A=list(waves_A), waves_B=list(waves_B),
-            use_julia=use_jl)
+            method=method)
         self._worker._cache_ref = self.cache
         self._worker.done.connect(self._on_pair_evolve_done)
         self._worker.log_msg.connect(self.main.log)

@@ -4,7 +4,7 @@
 背景（docs/AI队友任务书-两场引擎.md §12 hard 路线，harddev 负责）：
 - 目标：单原子 22 态 620ns ≤5 s（实测基线 173.2 s @ rtol=1e-8）；
   零近似不变——DOP853 硬积分是 hard 的身份，禁止解析化载波（那是变成 Sambe）。
-- Julia 经验迁移（docs/Julia引擎交接文档.md §14.1/§15.3）：
+- 经验迁移（§14.1/§15.3，2026-08-31 已归档参考）：
   ① JIT 内核化（=> numba njit）：RHS 全量编译，消除每次 RHS 求值的 Python
      解释开销（基线 560057 次 RHS / 173.2 s ≈ 309 µs/次 → 内核 ~3-5 µs/次）；
   ② 包络查表化（_pack_pair_terms 模式，pair_evolve.py:290）：均匀网格预采样
@@ -135,7 +135,7 @@ def _pack_hard(fields_meta, T, n_tab=_TAB_N):
 
     返回 (E, opt_As, opt_tabs, opt_deltas, opt_masks,
           mw_As, mw_ws, mw_tabs, t0, dt, CONV)，
-    供 njit 内核直接消费（打包/查表在热循环外做一次——Julia 经验）。
+    供 njit 内核直接消费（打包/查表在热循环外做一次）。
     opt_deltas：光场拍频 δ=ω_f−ω_ref（首场/旧 4 元组 = 0 → 逐位退化）；
     opt_masks：旋转流形掩码（拍频相位符号 m[i]−m[k]）。
     """
@@ -195,7 +195,7 @@ def _pack_hard(fields_meta, T, n_tab=_TAB_N):
 def build_hard_rhs(fields_meta, T, n_tab=_TAB_N, gamma=None):
     """fields_meta（build_two_field 输出）→ njit RHS 闭包（供 solve_ivp 使用）。
 
-    数组在闭包外预打包（Julia 经验：打包/查表在热循环外做一次）。
+    数组在闭包外预打包（打包/查表在热循环外做一次）。
     gamma（N，MHz，可 None）：t24 耗散 NonHermitian 对角（落点=丢失）。
     """
     (E, opt_As, opt_tabs, opt_deltas, opt_masks,
