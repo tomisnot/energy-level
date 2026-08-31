@@ -239,575 +239,444 @@ store 变更经 `pyqtSignal` 广播（页面订阅刷新），不散布同步调
 
 # 五、核心科学计算层 src/core（算法详录）
 
-> 本节是本文档的核心：**精细记录每个核心模块的科学计算算法**——
-> 物理模型、公式、单位、常量、容差、实现函数、关键修复。
+> 本节精细记录核心科学计算层的**物理模型、数值算法、公式与实现映射**。
 > 所有模块无 UI 依赖，可单独导入审查。
 >
-> **2026-08-31 修订**：按 T19「功能驱动重命名」更新文件/函数名——
-> 旧名（core.py / pair_core.py / evolve.py / evolve_exact.py 等）已拆分/改名，
-> 兼容别名层在 `src/__init__.py` 与 `src/core/__init__.py` 保留，外部调用零改动。
+> **2026-08-31 修订**：按 T19「功能驱动重命名」更新文件/函数名；公式改用 LaTeX
+> （GUI 已启用 KaTeX 渲染）。旧模块名经 `src/__init__.py` 兼容别名保留，外部零改动。
 
-## 5.0 层内结构与单位约定
+---
 
-### 5.0.1 文件职责（T19 功能命名后）
+## 5.0 层内总览
 
-| 文件 | 职责 | 依赖 |
-|---|---|---|
-| `static_atom.py` | 单原子静态物理（能级/偶极/AC/DC-Stark/频谱） | ARC 库（原子数据） |
-| `static_pair.py` | 两体静态（V_dd/vdW/交换/雷达图） | static_atom |
-| `atomic_levels.py` | 能级构造（make_levels/gaussian/square/step） | static_atom（偶极） |
-| `field_build.py` | 场构造（field/group_field/real_field/arbitrary_field） | static_atom |
-| `evolve_rwa.py` | 单原子 RWA 演化（ip4 相互作用绘景 / Lindblad / auto） | static_atom + field_build |
-| `evolve_arbitrary.py` | 任意波形演化（实验室系 RK4，第一性原理） | static_atom |
-| `evolve_sambe.py` | 单原子 Sambe 光子块第一性引擎（method='exact'）+ reference | static_atom + sambe |
-| `evolve_sambe_pair.py` | 两体 Sambe 第一性引擎（method='exact' 双原子） | evolve_sambe + static_pair + tensor |
-| `evolve_twofield.py` | 两场引擎（光场旋转系 + 微波）：`evolve_hard`（硬算）/ `evolve_two_field`（微波 Sambe） | evolve_sambe + hard |
-| `hard.py` | hard 引擎内核（单原子/两体，numba 加速，cos(φ(t)) 任意相位） | dop853 + evolve_sambe |
-| `pair_evolve.py` | 两体 RWA 演化（secular） | evolve_rwa + static_pair + tensor |
-| `waveforms.py` | 波形数据层（Wave/GaussianEnv/SquareEnv/ArbitraryWave） | — |
-| `dop853.py` | DOP853 核心层（rhs 参数化驱动，任意 N） | hard（系数） |
-| `sambe.py` | Sambe 光子块几何核心（photon_geometry，任意 N） | — |
-| `tensor.py` | 两体张量化核心（tensor_states/场镜像/V_dd 注入/约化/丢失） | evolve_rwa（decay） |
-| `driver.py` | 统一驱动引擎（RWA/响应谱/dressed） | static_atom + static_pair |
+### 5.0.1 分层与文件职责
 
-> 旧名兼容：`src/core/__init__.py` 增量别名层（core→static_atom、
-> pair_core→static_pair、evolve_exact→evolve_sambe、evolve_exact_pair→
-> evolve_sambe_pair、evolve_two_field→evolve_twofield、hard_numba/hard_pair→hard）；
-> `src/__init__.py` re-export 顶层旧名——**UI/GUI/checks/scripts 引用零改动**。
+```
+┌ 演化层（含时）────────────────────────────────────────────┐
+│ evolve_rwa        RWA 演化（相互作用绘景 RK4 / Lindblad）    │
+│ evolve_arbitrary  任意波形演化（实验室系 RK4，第一性原理）     │
+│ evolve_sambe      单原子 Sambe 光子块第一性引擎               │
+│ evolve_sambe_pair 两体 Sambe 第一性引擎                       │
+│ evolve_twofield   两场引擎：evolve_hard（硬算）/ 微波 Sambe   │
+│ hard               hard 引擎内核（单/两体 numba + cos(φ(t))） │
+│ pair_evolve       两体 RWA 演化（secular）                    │
+│ driver            统一驱动引擎（RWA/dressed/线性响应谱）      │
+└───────────────────────────────────────────────────────────┘
+┌ 静态层（稳态）────────────────────────────────────────────┐
+│ static_atom       单原子静态（能级/偶极/AC/DC-Stark/频谱）    │
+│ static_pair       两体静态（V_dd/vdW/交换/雷达图）            │
+└───────────────────────────────────────────────────────────┘
+┌ 构造层 ──────────────────────────────────────────────────┐
+│ atomic_levels     能级构造（make_levels）                    │
+│ field_build       场构造（field/group/real/arbitrary_field）│
+│ waveforms         波形数据层（Wave/Envelope/ArbitraryWave）  │
+└───────────────────────────────────────────────────────────┘
+┌ 核心层（与维度 N 无关，调度层共用）───────────────────────┐
+│ sambe   Sambe 光子块几何（photon_geometry）                 │
+│ dop853  DOP853 积分驱动（rhs 参数化，任意 N）               │
+│ tensor  两体张量化（基组/场镜像/约化/寿命丢失）             │
+└───────────────────────────────────────────────────────────┘
+```
 
-### 5.0.2 单位约定（全层统一）
+旧名兼容：`src/core/__init__.py` 增量别名层（core→static_atom、pair_core→
+static_pair、evolve_exact→evolve_sambe、evolve_exact_pair→evolve_sambe_pair、
+evolve_two_field→evolve_twofield、hard_numba/hard_pair→hard）；`src/__init__.py`
+re-export 顶层旧名——**UI/GUI/checks/scripts 引用零改动**。
+
+### 5.0.2 单位约定
 
 | 量 | 单位 | 备注 |
 |---|---|---|
-| 能级 / 耦合 / 失谐 / Rabi | **MHz** | 内部 Python float64 全精度 |
-| 频率（光参数） | Hz | 界面 GHz/THz 显示层换算 |
-| 偶极矩阵元 | 原子单位 a.u.（e·a₀） | ARC 返回值 |
-| 光强 | mW/cm² | 换算 W/m² 因子 10 |
+| 能级 / 耦合 / 失谐 / Rabi | **MHz** | float64 全精度 |
+| 偶极矩阵元 | a.u.（e·a₀） | ARC 返回值 |
+| 光强 | mW/cm² | →W/m² 因子 10 |
 | 时间（演化） | ns | 角频率 rad/ns |
-| 几何 | 间距 μm，角度 ° | |
+| 几何 | μm / ° | |
 
-关键换算常数（`static_atom.py` / `evolve_rwa.py` / `evolve_sambe.py`）：
+关键换算常数：
 
-```
-MU_B_MHZ_PER_G    = μ_B/(h·1e10)     # MHz/G
-_CONV             = 2π × 1e-3        # MHz·ns → rad（角频率换算）
-MW_PER_CM2_TO_W_PER_M2 = 10.0        # 光强换算
-A0 = Bohr 半径（m）; E_CHARGE = 基本电荷（C）
-```
+$$C \equiv \texttt{\_CONV} = 2\pi\times10^{-3} \ \text{(rad/ns per MHz)},\qquad \mu_B^{\text{MHz/G}} = \mu_B/(h\cdot10^{10})$$
 
-## 5.1 `static_atom.py` 单原子静态物理
+失谐约定：**正 = 蓝失谐**（ν_光 > ν_跃迁），全项目统一。
 
-### 5.1.1 物理模型总览
+---
 
-1. **能级**：里德堡态（n ≥ 20）只画 fine-structure 的 m_J 子能级（忽略核自旋）；
-   低激发态在 |m_J, m_I⟩ 基下按 m_F 分块数值对角化超精细 + Zeeman 哈密顿量。
-2. **AC-Stark**：唯一后端 = `direct`（Floquet 直接矩阵对角化，第一性原理；
-   legacy「逐伙伴解析/微扰」已于 2025-08 删除）。
-3. **跃迁频谱**：子能级间全部偶极允许跃迁，强度用爱因斯坦 A 系数。
-4. 适用条件：静态（稳态）物理——能级图、寻址光 AC 位移、DC 位移、谱线。
-   与动态演化解耦（§1.3）；动态页不算斯塔克能移。
+## 5.1 单原子静态物理（`static_atom.py`）
 
-### 5.1.2 能级构造算法
+### 5.1.1 里德堡能级
 
-**里德堡态（n ≥ `RYDBERG_N_MIN` = 20）**：
+适用：n ≥ `RYDBERG_N_MIN`（=20），只含 fine-structure m_J 子能级（核自旋忽略）。
 
-```
-E(n,l,j,m) = E0(n,l,j) + g_J(l,j) · μ_B/ħ · B · m
-```
+$$E(n,l,j,m) = E_0(n,l,j) + g_J(l,j)\cdot \mu_B B\, m / \hbar$$
 
-- 每个 m_J 一条子能级；核自旋忽略（超精细对里德堡态可忽略）。
-- 实现：`atomic_levels.make_levels`（见 §5.3）→ `static_atom._base_level_rows` /
-  `_sublevel_energy`；g_J 由 ARC `getLandegjExact` 缓存（`ArcCache.gJ`）。
+实现：`atomic_levels.make_levels` → `_base_level_rows` / `_sublevel_energy`；
+g_J 由 ARC `getLandegjExact` 缓存（`ArcCache.gJ`）。
 
-**低激发态超精细 + Zeeman（数值对角化）**：`get_hyperfine_levels(cache, n, l, j, B)`
+### 5.1.2 低激发态超精细 + Zeeman
 
-在 |m_J, m_I⟩ 基（`mJ_list × mI_list`，I 取自 `atom.I`）下，哈密顿量：
+适用：低激发态（如 6P），在 $|m_J, m_I\rangle$ 基下按 $m_F$ 分块数值对角化：
 
-```
-H = A·I·J + B·Q + μ_B·B·(g_J·J_z + g_I·I_z)
-```
+$$H = A\,\mathbf{I}\!\cdot\!\mathbf{J} + B\,Q + \mu_B B\,(g_J J_z + g_I I_z)$$
 
-- **I·J 矩阵**：对角 `m_J·m_I` + 升降算符项
-  `I₊J₋: (m_J,m_I)→(m_J−1,m_I+1)`、`I₋J₊: (m_J,m_I)→(m_J+1,m_I−1)`，
-  系数 `½√(I(I+1)−m_I(m_I±1))·√(j(j+1)−m_J(m_J∓1))`。
-- **电四极项 Q**（仅 J>1/2 且 I>1/2，B 常数非零）：
-  `Q = 3(I·J)² + 1.5(I·J) − I(I+1)·j(j+1)·1`，除以 `2I(2I−1)j(2j−1)`。
-- **按 m_F 分块**（`m_F = m_J + m_I` 守恒，对角化块大小 ≤ 2I+1）：
-  - 零场块对角化用于标注 F（零场能量 `E_F = (A/2)[F(F+1)−I(I+1)−j(j+1)]`，
-    按排序匹配 F 量子数）；
-  - 加 B 后再对角化 `H_hf + H_z`，得本征能量 E、本征向量。
-- 返回 `(F, m_F, E_mhz, mJ_weights, mJ_amps)`：
-  - `mJ_weights[m_J]`：各电子 m_J 分量占比（对 m_I 求和，界面/谱线显示用）；
-  - `mJ_amps[m_J]`：复振幅（m_I = m_F − m_J 由分块唯一确定，**供跃迁偶极矩阵元计算**）。
-- 里德堡态或无超精细数据 → 返回 None（忽略核自旋）。
+- **I·J 矩阵**：对角 $m_J m_I$ + 升降算符项，系数
+  $\tfrac12\sqrt{I(I+1)-m_I(m_I\pm1)}\sqrt{j(j+1)-m_J(m_J\mp1)}$；
+- **电四极 Q**（仅 J>1/2 且 I>1/2）：$Q = \big[3(\mathbf{I}\!\cdot\!\mathbf{J})^2 + \tfrac32\mathbf{I}\!\cdot\!\mathbf{J} - I(I{+}1)j(j{+}1)\big]/\big[2I(2I{-}1)j(2j{-}1)\big]$；
+- **m_F 分块**（块 ≤ 2I+1）：零场对角化标注 F，加 B 再对角化得本征能量/向量；
+- 返回 `(F, m_F, E_mhz, mJ_weights, mJ_amps)`——`mJ_amps`（复振幅）供跃迁矩阵元。
 
-### 5.1.3 偶极矩阵元算法
+实现：`get_hyperfine_levels`。F 标号采用**绝热约定**（Breit–Rabi 惯例，B 连续延拓）。
 
-**ARC 原始矩阵元**：`ArcCache.dme(n1,l1,j1,m1, n2,l2,j2,m2, q)` 直接查 ARC
-`getDipoleMatrixElement` 并按键缓存（`_dme` 字典）。
+### 5.1.3 偶极矩阵元与 Rabi
 
-**统一入口 `dipole_amplitude(cache, a, b, q)` = ⟨b|d_q|a⟩（a.u.，复）**，四种情况：
+统一入口 $d_q \equiv \langle b|d_q|a\rangle$（`dipole_amplitude`，a.u. 复）：
 
-| a 类型 | b 类型 | 规则 |
+| a | b | 规则 |
 |---|---|---|
-| mJ | mJ | 需 `b.mj == a.mj + q`，直接查 dme |
-| F | mJ | 遍历 a 的 m_J 分量：`Σ amp_a(mj)* · dme(mj → b.mj)`，需 `mj+q == b.mj` |
-| mJ | F | 遍历 b 的 m_J 分量：`Σ amp_b(mj)* · dme(b.mj → a.mj)`，需 `mj+q == a.mj` |
-| F | F | 需 m_F 守恒（`b.mF == a.mF + q`，核自旋不参与），双分量求和 |
+| mJ | mJ | 需 $m_b = m_a + q$，直接查 `ArcCache.dme` |
+| F | mJ | $\sum_{m_J} \text{amp}_a(m_J)^*\, d_{\text{dme}}(m_J \to m_b)$ |
+| mJ | F | 对称求和 |
+| F | F | 需 $m_F$ 守恒（核自旋不参与），双分量求和 |
 
-- 偶极算符只作用于电子（Δm_J = q）；缺 mJ 匹配会把「与其他 mJ 态的耦合」错误归到本对。
-- `transition_strength_q = |dipole_amplitude|²`（谱线/驱动共用同一矩阵元逻辑）。
+偶极算符只作用于电子（$\Delta m_J = q$）；缺 mJ 匹配会错归耦合（有实测 bug 记录）。
 
 **Rabi 换算**（`field_e0_sq` / `rabi_mhz` / `intensity_mwcm2_from_rabi`）：
 
-```
-E0² = 2·I/(ε₀·c)              # I 为 W/m²
-Ω = E0·|d|/ħ                   # d 转 SI：|d|·e·a₀
-Ω_MHz = Ω/(2π)/1e6             # Ω/2π 周频；共振 π 脉冲 = 1/(2Ω) µs
-```
+$$E_0^2 = \frac{2I}{\varepsilon_0 c},\qquad \Omega = \frac{E_0\,|d|}{\hbar},\qquad \Omega_{\text{MHz}} = \frac{\Omega}{2\pi}\times10^{-6}$$
 
-### 5.1.4 AC-Stark 物理公式
+共振 $\pi$ 脉冲 $= \tfrac{1}{2\Omega}\,\mu\text{s}$（Ω/2π 周频约定，全项目统一）。
 
-AC-Stark 唯一后端 = direct（Floquet 矩阵对角化，§5.1.5）。下述物理公式为其内化内容：
+### 5.1.4 AC-Stark（direct 后端，Floquet 对角化）
 
-- **近共振 dressed 两能级精确解**（所有失谐区成立：远失谐回微扰 Ω²/4Δ，
-  共振给 Autler-Townes ±Ω/2）：
+唯一后端 = `direct_ac_stark_shifts`（第一性原理；legacy 逐伙伴算法 2025-08 删除）。
+基组 = 已添加组子能级 + 偶极伙伴（$\lvert\Delta n\rvert\le 3$）。Floquet 哈密顿：
 
-```
-ΔE源 = ½(sign(Δ)·√(Δ²+Ω²) − Δ)      （Δ = 2π·失谐，Ω = Rabi，均 rad/s）
-ΔE目标 = 与之严格反对称
-```
+$$H_F = \sum_n (H_0 + n\hbar\omega)\otimes|n\rangle\langle n| \;+\; \frac{V}{2}\otimes\big(|n{+}1\rangle\langle n| + |n\rangle\langle n{-}1|\big)$$
 
-- **远失谐非 RWA 二阶 SOS**（rotating + counter-rotating 都保留；只留 rotating 会把
-  里德堡-里德堡对位移高估 ~10⁴ 倍）：
+- 光子块 $M = 2\,n_{\text{photon}}+1$（默认 4 → 9 块，近共振 n≥2 收敛、n≥4 全频稳定）；
+- 相邻块耦合 $C = E_0\,C_{\text{unit}}$，$C_{\text{unit},ij} = -d_{ij}\,e\,a_0/(2h\times10^6)$（MHz/单位 E₀）；
+- 一次 `np.linalg.eigh` → 自洽含近共振 dressed + 远失谐反旋 + 多态 + 超精细相干；
+- **两级基组收敛**（window 面板）：位移 = 全偶极伙伴求和，远伙伴按 $1/\Delta E^3$ 衰减，
+  window=1 粗算、2/3 精算，两级差即截断上界（window=2→3 差 <0.3%）；
+- **位移归属**（`_floquet_shifts`）：本征态对光子块 0 投影重叠最大者；共振 50/50 劈裂
+  （重叠 <30%·max）取离裸能最近分支；
+- **光强扫描**（`direct_ac_stark_sweep`）：$C\propto\sqrt{I}$，基组/对角块不随 I 变——一次构建、
+  逐 I 重标定重对角化，快一个量级。
 
-```
-ΔE = −(E0²/4ħ) · |d|² · 2ω_ki/(ω_ki² − ω²)     （ω_ki = 子能级能量差角频率，带符号）
-```
+**物理极限**（内化内容）：近共振 dressed 两能级精确解
+$\Delta E_{\text{src}} = \tfrac12\big(\text{sgn}(\Delta)\sqrt{\Delta^2+\Omega^2}-\Delta\big)$
+（远失谐回 $\Omega^2/4\Delta$，共振给 Autler–Townes $\pm\Omega/2$）；远失谐非 RWA 二阶 SOS
 
-  由 `far_sos_shift_mhz` 实现；目前仅作 `B_gauss=None` 旧调用时的回退
-  （动态位移后端已统一为 direct，2025-09）。
-- **椭圆偏振**（`elliptical_coeffs(α,θ,ε)` → 球基复系数 (c₊₁,c₀,c₋₁)，Σ|c|²=1）：
-  传播 k=(sinα,0,cosα)，垂直基 e1/e2，Jones 矢量到球基变换；耦合按各 q 分量
-  `|c_q|²` 加权（同一 (m,m′) 对只能经唯一 q 耦合，无干涉）。
+$$\Delta E = -\frac{E_0^2}{4\hbar}\,|d|^2\,\frac{2\omega_{ki}}{\omega_{ki}^2 - \omega^2}$$
 
-### 5.1.5 AC-Stark：direct 后端实现（Floquet 矩阵对角化）
+（rotating+counter-rotating 都保留；只留 rotating 会高估 ~10⁴ 倍）。`far_sos_shift_mhz`
+仅作 `B_gauss=None` 旧调用回退。椭圆偏振 `elliptical_coeffs` → 球基复系数
+$(c_{+1}, c_0, c_{-1})$，$\sum|c_q|^2=1$，耦合按 $|c_q|^2$ 加权。
 
-`direct_ac_stark_shifts(cache, groups, address_cfg, B_gauss,
-                        n_photon=None, sos_n_window=None)`：
+### 5.1.5 DC-Stark 与频谱
 
-**基组**：全部已添加组子能级 + 各组偶极伙伴（|Δn| ≤ `DIRECT_SOS_N_WINDOW`=3）。
+**DC-Stark**（`dc_stark_shift_mhz`，二阶 SOS）：
 
-**Floquet 哈密顿量**（光子块 M = 2·n_photon+1；默认 n_photon=4 → 9 块）：
+$$\Delta E_i = \sum_k \frac{|\langle k|d|i\rangle|^2 E^2}{E_i - E_k}$$
 
-```
-H_F = Σ_n (H0 + n·ħω)⊗|n⟩⟨n|  +  (V/2)⊗(|n+1⟩⟨n| + |n⟩⟨n+1|)
-```
+遍历全偶极中间态（吸收 $m+q$ / 发射 $m-q$ 两方向）+ 核自旋平均；E² 标度已验证。
 
-- 对角块 `H0 + (p−n_photon)·freq_mhz·I`；相邻块耦合 `C = E0·C_unit`，
-  其中 `C_unit_ij = −d_ij·(e·a0)/(2h·1e6)`（MHz，单位 E0），`E0² = 2I/(ε0c)`。
-- 一次 `np.linalg.eigh` 对角化 → 自洽包含近共振 dressed + 远失谐反旋项 + 多态耦合 + 超精细相干性。
-- 适用条件：任意失谐（近/远统一处理）；强光/多态/超精细相干场景 n_photon 需 ≥4。
+**谱线**（`spectrum_lines`，爱因斯坦 A 系数）：
 
-**两级基组收敛**（window 面板）：AC 位移 = 全部偶极伙伴中间态求和，远伙伴按
-~1/ΔE³ 衰减 → window=1 粗算、2/3 精算，两级差即截断误差上界（window=2→3 差 <0.3%）。
+$$A = \frac{\omega^3}{3\pi\varepsilon_0\hbar c^3}\,|\langle a|d_q|b\rangle|^2\,(e a_0)^2$$
 
-**结果缓存**：`_DIRECT_SHIFT_CACHE`（键 = 基组/B/偏振/阶数/频率/强度）——同参直接
-返回；改频/改强只重标定耦合并重对角化。**面板全局配置**（`set_ac_stark_config`）。
+矩阵元按 m_J 分辨；偏振按 $|c_q|^2$ 加权；`ac_on=True` 用 AC 移后能量。
+**跃迁对查找**（`collect_transitions`）：组对间取**失谐最小**（非矩阵元最强）的耦合子能级对。
 
-**位移归属**（`_floquet_shifts`）：本征态对光子块 0 的投影重叠确定归属；共振 50/50
-劈裂（重叠 <30%·max）时取离裸能量最近的分支。
+---
 
-**光强扫描**（`direct_ac_stark_sweep`）：耦合 C ∝ E0 ∝ √I，基组/对角块不随 I 变——
-只构建一次，对每个 I 重标定耦合并重对角化，快一个量级。
+## 5.2 两体静态物理（`static_pair.py`）
 
-### 5.1.6 DC-Stark
+### 5.2.1 偶极-偶极 V_dd
 
-`dc_stark_shift_mhz(cache, n, l, j, m, groups, E_vpcm, B_gauss)`：二阶 SOS（第一性原理）：
+$$H_{\text{pair}}(R) = H_1\otimes 1 + 1\otimes H_2 + V_{dd}(R),\qquad
+V_{dd} = \frac{1}{R^3}\sum_{qq'} d_{1q}\,T_{qq'}\,d_{2q'}$$
 
-```
-ΔE_i = Σ_k |⟨k|d|i⟩|² E²/(E_i − E_k)     （静电场无旋转波：全部偶极中间态贡献）
-```
+其中 $T = e_q^{\mathsf T}(1-3\hat n\hat n^{\mathsf T})e_{q'}$，$\hat n=(\sin\theta\cos\phi,\sin\theta\sin\phi,\cos\theta)$
+为连线方向（θ=0 → n∥z）。θ=0 退化：
+$V_{dd}=\tfrac{1}{R^3}\big[-d_{1,-1}d_{2,+1}-d_{1,+1}d_{2,-1}-2d_{1,0}d_{2,0}\big]$。
 
-- 遍历已添加组 + `dipole_partners` 未添加的完整基组；吸收（m+q）/发射（m−q）两方向，
-  dme 参数相应交换；核自旋平均权重。
-- 量纲：ΔE(J) = Σ d_cm²E²/(E_i−E_k)；换算 MHz 除以 h²·1e12（h=2πħ）。
-- E² 标度已验证（checks）。
+实现：`_dipole_sparse`（单原子 $D_q$，CSR，Δl=±1/|Δj|≤1 预过滤，LRU 缓存）
++ `_vdd_tensor` + `vdd_sparse`（$V=\tfrac{1}{R^3}\sum_{ab}T_{ab}\,D_a\otimes D_b$，pair 基 k=i·N+j）。
 
-### 5.1.7 频谱与偏振
+### 5.2.2 基组 / 本征 / 实用提取
 
-**谱线**（`spectrum_lines`）：子能级对 (a,b) 全部偶极允许跃迁：
+- 单原子基 `single_atom_basis`（已添加组 + 偶极伙伴 |Δn|≤n_window）；pair 索引
+  `pair_indices`（k=i·N+j，可选 m_total / energy_window 截断）；
+- `pair_hamiltonian`：$H=\text{diag}(E_{\text{pair}})+V_{dd}$；`pair_eigen`：eigh；
+  `pair_component`：$|\langle\psi|ab\rangle|^2$；
+- **交换耦合** `exchange_coupling`：一阶项 $\langle a|V_{dd}|b\rangle$（MHz，直接查矩阵元，
+  默认 60S↔60P |SP⟩↔|PS⟩）；
+- **vdW 位移** `vdw_shift`：对角化后从 $|\text{ref}\otimes\text{ref}\rangle$ 支提取
+  $\text{shift}=E_{\text{支}}-2E_{\text{ref}}$（二阶 ∝1/R⁶）；
+- **雷达图** `coupling_strength_map`：$|V_c|=\big|\langle\text{tgt}_1\otimes\text{tgt}_2|V_{dd}|\text{src}_1\otimes\text{src}_2\rangle\big|$。
 
-```
-A = ω³/(3πε₀ħc³) · |⟨a|d_q|b⟩|² · (e·a₀)²     （爱因斯坦 A 系数，s⁻¹，作谱线强度）
-```
+---
 
-- 矩阵元按 m_J 分辨（`dipole_amplitude` 四分支）；偏振系数存在时按 `|c_q|²` 加权，
-  pol 标注非零 q 对应的 σ+/π/σ−；`ac_on=True` 时用 AC 移后能量计算频率。
+## 5.3 波形与场构造（`waveforms.py` + `field_build.py`）
 
-**跃迁对查找**（`collect_transitions`）：组对间取**失谐最小**的耦合子能级对
-（与当前寻址光频率最匹配），含超精细/Zeeman 子能级失谐与 Rabi（rad/s）。
+### 5.3.1 波形数据层（`waveforms.py`）
 
-## 5.2 `static_pair.py` 两体静态
-
-### 5.2.1 偶极-偶极相互作用 V_dd
-
-```
-H_pair(R) = H1 ⊗ 1 + 1 ⊗ H2 + V_dd(R)
-V_dd = (1/R³) Σ_qq' d1_q · T_qq' · d2_q'，   T = e_qᵀ(1 − 3nnᵀ)e_q'
-```
-
-- n = (sinθcosφ, sinθsinφ, cosθ) 为两原子连线方向（θ=0 → n∥z）。
-- θ=0 退化：`V_dd = (1/R³)[−d1₋₁d2₊₁ − d1₊₁d2₋₁ − 2d1₀d2₀]`（`VDD_QCOEFF`）。
-- 单位换算：`_DD_CONV = Hartree_Hz/1e6/(1e-6/a₀)³`（MHz·μm³/(a.u.)²）。
-
-**实现**（`_vdd_tensor` + `_dipole_sparse` + `vdd_sparse`）：
-
-- `_dipole_sparse(cache, single, q)`：单原子偶极矩阵 D_q（N×N，CSR），
-  `D_q[i,i2] = ⟨i2|d_q|i⟩`（a.u.），选择定则 Δl=±1、|Δj|≤1 预过滤；
-  以 `_single_fp` 为键 LRU 缓存（容量 64）。
-- `vdd_sparse`：`V = (1/R³) Σ_ab T_ab · kron(D_a, D_b)`（pair 基 k=i·N+j），LRU 缓存。
-
-### 5.2.2 基组构造与截断
-
-- **单原子基**（`single_atom_basis`）：已添加组 + 每组偶极伙伴 |Δn|≤n_window
-  （自动补 vdW 中间态，如 60S 的 59-61 S/P/D）。
-- **pair 索引**（`pair_indices`）：笛卡尔积 (i,j)，k=i·N+j；可选截断：
-  总磁量子数 m_total（m₁+m₂ 分块，V_dd 保 m₁+m₂）；能量窗口
-  `|E_a+E_b−E_ref| ≤ energy_window_mhz`（可选）。
-
-### 5.2.3 pair 哈密顿与本征
-
-- `pair_hamiltonian`：`H = diag(E_pair) + V_dd`（子空间稠密复矩阵）。
-- `pair_eigen`：`np.linalg.eigh` → evals（升序 MHz）+ evecs（列=本征态）。
-- `pair_component(res, a_row, b_row)`：各本征态在 |a⊗b⟩ 的权重 |⟨ψ|ab⟩|²。
-
-### 5.2.4 实用提取
-
-- **交换耦合**（`exchange_coupling`）：一阶项 ⟨a|V_dd|b⟩（MHz）——直接查矩阵元不需对角化；
-  默认 60S↔60P 交换对 |SP⟩↔|PS⟩。
-- **vdW 位移**（`vdw_shift`）：对角化后从 |ref⊗ref⟩ 支（overlap 最大本征态）提取
-  `shift = E_支 − 2E_ref`（二阶项 ∝1/R⁶）。
-- **耦合强度雷达图**（`coupling_strength_map`）：固定 φ 扫 R×θ，
-  `|V_c| = |⟨tgt1⊗tgt2|V_dd|src1⊗src2⟩|`。
-
-## 5.3 `atomic_levels.py` + `field_build.py` 能级与场构造
-
-### 5.3.1 能级构造（`atomic_levels.py`）
-
-- `make_levels(cache, specs)`：规格列表 → 能级行（含 n/l/j/m/mj/mF/kind/E_mhz/amps），
-  为全部引擎（RWA/Sambe/hard/两体）的基组来源。
-- `gaussian` / `square` / `step`：包络函数（历史遗留，演进到 `waveforms.py` 的
-  GaussianEnv/SquareEnv 数据层；此处保留供兼容）。
+| 类/函数 | 功能 |
+|---|---|
+| `GaussianEnv(center,σ,peak)` | $peak\cdot e^{-(\tau-\text{center})^2/2\sigma^2}$ |
+| `SquareEnv(start,edge,height,fall)` | raised-cosine 缓变方波（两端导数连续为 0） |
+| `Wave` | 频率+光强+偏振+包络+offset；`drive` 辅助对仅定参 |
+| `ArbitraryWave` | 任意时域信号（样品 t_ns/amp，任意频谱/啁啾/多频） |
+| `build_fields` | 每波形 → `field_build.real_field`（近共振 + AC 位移） |
+| `serialize_waves`/`restore_waves` | 波形存档（科学数据） |
 
 ### 5.3.2 场构造（`field_build.py`）
 
-三种场工厂（供 `evolve_rwa` 的演化引擎消费）：
+统一场算符（Pulser 范式）：每个物理光场 = `M_k = A_k + diag(ac_k)`——近共振 Rabi 耦合
+矩阵 $A_k$ 与远失谐 AC 位移 diag(ac_k) 同属一场，随包络 $c_k(t)$ 时变
+（避免"常数 AC 位移全时段生效"的物理错误）。
 
-- `field(g, e, Ω, waveform, Δ)`：单对驱动，A 为 0/1 单耦合；
-- `group_field(cache, states, ga, gb, pol, Ω)`：组驱动，A 各 (m_g,m_e) 耦合
-  = |dme|/max|dme|（相对强度来自 static_atom 偶极矩阵元）；
-- `real_field(cache, states, freq, intensity, pol, B_gauss=None, ...)`：真实光场→
-  近共振合并成多对驱动场；AC 位移后端 = direct（Floquet，见 §5.1.5）；
-  `B_gauss=None`（旧调用）回退 `far_sos_shift_mhz` 逐对求和。近共振 Rabi 驱动
-  矩阵 A 仍按 near_cutoff 筛选（RK4 步长的 RWA 硬约束）。
-- `arbitrary_field`：任意波形场（实验室系，无载频概念）——消费方为 `evolve_arbitrary`。
+- `field(g,e,Ω,c,Δ)`：单对驱动，A 为 0/1 单耦合；
+- `group_field`：组驱动，A = |dme|/max|dme|（相对强度）；
+- `real_field`：真实光场 → 近共振多对驱动 + AC 位移（direct 后端）；near_cutoff 筛 A
+  （RK4 步长的 RWA 硬约束）；`B_gauss=None` 回退 `far_sos_shift_mhz`；
+- `arbitrary_field`：任意波形场（实验室系，无载频），消费方 = `evolve_arbitrary`。
 
-## 5.4 `evolve_rwa.py` 单原子 RWA 演化
+---
 
-### 5.4.1 物理模型与场算符
+## 5.4 RWA 演化（`evolve_rwa.py`）
 
-```
-H(t) = H0 − Σ_i ref_i·P_i + Σ_k [ (Ω_k(t)/2)·A_k ] + BS     （RWA，旋转系）
-H(t) = H0 + Σ_k Ω_k(t)·cos(ω_L,k·t)·A_k                      （非 RWA 精确，实验室系）
-```
+### 5.4.1 物理模型
 
-- H0：对角 = 各能级能量 E_mhz（用户输入，可含 Zeeman 等任意静态）。
-- **统一场算符**：每个物理光场 = 一个算符 `M_k = A_k + diag(ac_k)`——
-  近共振驱动对的 Rabi 耦合矩阵 A_k 与远失谐态的二阶 AC 位移 diag(ac_k) 同属
-  一个场，随包络 env_k(t) 一起时变（避免"常数 AC 位移全时段生效"）。
+$$H(t) = H_0 - \sum_i \text{ref}_i P_i + \sum_k \tfrac{\Omega_k(t)}{2} A_k \quad(\text{RWA, 旋转系})$$
+$$H(t) = H_0 + \sum_k \Omega_k(t)\cos(\omega_{L,k} t)\,A_k \quad(\text{非 RWA, 实验室系})$$
 
-### 5.4.2 旋转参考系算法
+适用：任意时变包络；光频（$\Omega/\omega_L < \texttt{IP4\_RWA\_THRESH}{=}10^{-4}$）→ RWA，
+微波等强驱动 → 非 RWA。
 
-**级联 RWA 参考**（`_assign_reference` / `_rwa_reference`）：
+### 5.4.2 旋转参考系（级联 RWA）
 
-以 (n,l,j) 组为单位，从能量最低组 ref=0 出发，沿每个 RWA 场的耦合对传播
-`ref[高能组] = ref[低能组] + ω_L,k`——链式/树状驱动图使每个驱动对在旋转系里共振，
-正确处理**共享能级**的多驱动（如光频 6P↔60S 与微波 60S↔60P 同开时 60S 是中间态）。
-闭环不一致的驱动留下残留拍频 δ（RWA 丢弃并警告，误差 ~Ω/|δ|）。
+以 (n,l,j) 组为单位，从最低能组 ref=0 出发，沿每个 RWA 场耦合对传播
+`ref[高能组] = ref[低能组] + ω_L,k`——正确处理**共享能级**的多驱动（如光频 6P↔60S
+与微波 60S↔60P 同开时 60S 是中间态，级联旋转 ref[60P] = ref[60S] + ω_mw）。
+闭环不一致 → 残留拍频 δ（RWA 丢弃并警告，误差 ~Ω/|δ|）。非 RWA 场共享参考
+（e 跟随 g）使微波为纯 cos 快项（快 ~10⁴ 倍）。旁观态 E_rot 归零（`_e_rot`，
+防 u(t) 相位爆炸）。
 
-**非 RWA 场共享参考**：全部耦合组共享同一参考（e 跟随 g），使微波耦合为纯 cos 快项
-（比全非 RWA 快 ~10⁴ 倍）。
+实现：`_assign_reference` / `_rwa_reference` / `_e_rot`。
 
-**旁观态归一**（`_e_rot`）：旁观态（无耦合）E_rot 归零；耦合态减共同参考——
-避免光频量级参考使 u(t) 相位爆炸。
+### 5.4.3 算法 1：相互作用绘景 RK4（`_evolve_rwa`，纯幺正，默认）
 
-### 5.4.3 算法 1：相互作用绘景 RK4（`_evolve_rwa`，第一性原理，唯一纯幺正算法）
+相互作用绘景 $H_0=\text{diag}(E_{\text{rot}})$ 精确除去，积分 $\tilde V(t)=\sum_k s_k(t)\,u\,M_k\,u^\dagger$。
 
-> 动态分析只用 ip4（单体 RK4 足够快）；精确 Floquet 与 pwc 已封存至
-> `src/_archive/evolve_floquet_pwc.py`。
+**全 RWA + 常数包络 → 一次对角化精确解**：$H=\text{diag}(E_{\text{rot}})+\sum(\Omega/2\cdot c)A+c\,\text{diag}(ac)$，
+$\psi(t)=V\,e^{-i\varepsilon t}V^\dagger\psi_0$（秒出）。
 
-适用：任意时变包络；光频（Ω/ωL < `IP4_RWA_THRESH`=1e-4）→ RWA，微波等强驱动 → 非 RWA。
+**步长三重约束**：
 
-**相互作用绘景**：H0 = diag(E_rot) 相位精确除去，积分
-`Ṽ(t) = Σ s_k(t)·u·M_k·u†`（u = e^{iE_rot t}）。
+$$w_{\max} = \begin{cases} |E_{\text{rot},i}-E_{\text{rot},j}| & \text{RWA}\\ |E_{\text{rot},i}-E_{\text{rot},j}|+\omega_L & \text{非 RWA}\end{cases},\quad
+dt = \min\!\Big(\frac{2\pi}{C\,w_{\max}/\text{frac}},\ \frac{0.06}{C\,c_{\max}},\ \frac{2.0}{C\,c_{\max}},\ \frac{t_{\text{end}}}{500},\ 0.05\Big)$$
 
-**全 RWA + 常数包络 → 一次对角化精确解**：`H = diag(E_rot) + Σ(Ω/2·c)·A + c·diag(ac)`，
-`eigh` → `ψ(t) = V·diag(e^{−iεt})·V†·ψ0`（秒出）。
+frac=20 → ~3e-5 误差。numba 稀疏内核 `_rwa_rk4_core`（S 预计算到 1/4 步子网格）；
+无 numba 时 numpy 回退。实测 N=20 高斯 400 ns → 29 s，误差 3e-5。
 
-**步长三重约束 + 下限/上限**：
+### 5.4.4 算法 2：Lindblad 主方程（自发辐射等）
 
-```
-w_max   = 最快真实振荡频率（RWA 场 → |ΔE_rot|；非 RWA → |ΔE_rot| + ω_L）
-cmax    = max Ω·‖A‖
-dt_carrier = 2π/(_CONV·w_max)/frac            # frac=20 → ~3e-5 误差
-dt_acc     = 0.06/(_CONV·max(cmax,1e-6))
-dt_stab    = 2.0/(_CONV·max(cmax,1e-6))
-dt         = min(dt_carrier, dt_acc, dt_stab, t_end/500, 0.05)
-```
+$$\frac{d\rho}{dt} = -i[H(t),\rho] + \sum_k\Big(L_k\rho L_k^\dagger - \tfrac12\{L_k^\dagger L_k,\rho\}\Big),\qquad
+L_k = \sqrt{\Gamma_k}\,|to_k\rangle\langle from_k|$$
 
-**numba 稀疏内核**（`_rwa_rk4_core`）：稀疏耦合 CSR + S 预计算到 1/4 步子网格；
-无 numba 时 numpy 回退（`_rwa_rk4_core_numpy`）。实测 N=20 高斯脉冲 400 ns → 29 s，
-误差 3e-5。
-
-### 5.4.4 算法 2：Lindblad 主方程（自发辐射等马尔可夫耗散）
-
-```
-dρ/dt = −i[H(t),ρ] + Σ_k (L_k ρ L_k† − ½{L_k†L_k, ρ})
-L_k = √Γ_k |to_k⟩⟨from_k|      （decay(g, Γ, e) 工厂）
-```
-
-- **单位约定**：Γ 单位 MHz → 速率 Γ×1e-3 /ns；跳变算符不乘 2π。
-- **旋转系下跳变算符时不变**（相位抵消）→ 耗散项与旋转参考选择无关，精确。
-- 落点 e=None → 虚拟 loss 态；g==e → 纯退相通道。
-- **`lindblad_eig`**：旋转系下 H 恒定 → Liouvillian 本征分解精确解（机器精度）。
-- **`lindblad`**：矩阵 RK4（任意时变包络，含非 RWA）。**numba 内核**
-  （`_lindblad_rk4_core`）：H 稀疏 + ρ 厄米 → 对易子一次点乘 + rank-1 跳变快速路径。
-  实测非 RWA 微波从 numpy ~40 min 降到 ~1 min（42×）。
-- **`auto_decays`**：按 ARC 权威寿命自动配置（Γ = 1/τ，落点=丢失，排除里德堡慢衰变）。
+- Γ 单位 MHz → 速率 Γ×1e-3 /ns；跳变算符**不乘 2π**；
+- 旋转系下跳变算符时不变（相位抵消）→ 耗散与旋转参考选择无关，精确；
+- 落点 e=None → 虚拟 loss 态（Σpops+loss=1）；g==e → 纯退相；
+- **`lindblad_eig`**（旋转系 H 恒定）：Liouvillian 本征分解
+  $\rho(t)=\sum_k e^{\lambda_k t}v_k\,(w_k^\dagger\rho_0)$，机器精度；
+- **`lindblad`**（任意时变包络）：矩阵 RK4，numba 内核 `_lindblad_rk4_core`
+  （H 稀疏 + ρ 厄米 → 对易一次点乘 + rank-1 跳变）；实测非 RWA 微波 40 min→1 min（42×）；
+- `auto_decays`：ARC 权威寿命自动配置（Γ=1/τ，落点=丢失）。
 
 ### 5.4.5 auto 调度与参考积分器
 
 ```
-auto（无耗散）：恒 'ip4'（相互作用绘景 RK4）
-auto（有耗散）：旋转系 H 恒定 → 'lindblad_eig'；否则 → 'lindblad'
+auto（无耗散）：恒 ip4；auto（有耗散）：旋转系 H 恒定 → lindblad_eig，否则 lindblad
 ```
 
-参考积分器（内部保留，仅 checks 交叉验证）：`_evolve_reference_lab`（实验室系
-solve_ivp 非 RWA，最无偏基准）、`_evolve_reference_hybrid`（光频 RWA + 其余非 RWA，
-快 ~10⁴ 倍）。
-
-`rwa_error_estimate`：每驱动 RWA 误差估计 `est_err ≈ Ω/(4ωL)`。
-
-## 5.5 `evolve_arbitrary.py` 任意波形演化
-
-**适用**：ArbitraryWave（无单频、任意时域信号——任意频谱/啁啾/多频叠加）。
-
-```
-H(t) = H0 + Σ_k amp_k(t)·V̂_k        （实验室系，无 RWA/无旋转系/无近远分流）
-```
-
-- V̂ 含**复相位**（dipole_amplitude 复振幅）——任意信号中不一致的相对相位正确干涉。
-- 步长受信号 Nyquist 约束（`f_max_mhz = 0.5/dt_min`）——慢（含 THz 高频时锁死），
-  属第一性原理必要的代价。
-- 实现：`_evolve_arbitrary`（实验室系相互作用绘景 RK4，`_arb_rk4_core`）。
-- **注**：hard 路径（§5.8）提供"旋转系载波剥离 + cos(φ(t)) 残差"的更快任意波形
-  方案（`evolve_twofield.arbitrary_mw_group`，2026-08-31）。
-
-## 5.6 `evolve_sambe.py` 单原子 Sambe 第一性引擎
-
-### 5.6.1 物理模型（实验室系 TDSE）
-
-```
-H(t) = H0 + Σ_k Ω_k·env_k(t)·cos(ω_k t)·A_k        （实验室系，无模型近似）
-```
-
-无 RWA、无旋转系、无近/远失谐分流、无静态能移注入：AC 位移、Bloch–Siegert、远失谐
-效应全部从精确传播中自然涌现。Ω_k = static_atom.rabi_mhz；A_k 为全偶极允许对耦合矩阵。
-**场构造**：`build_fields_exact(cache, states, waves)`（无 near_cutoff、无 Floquet 注入）。
-
-### 5.6.2 数值算法（`evolve_sambe`；含耗散时转 `evolve_reference`）
-
-1. **Sambe (t,t') 光子块扩展空间**：每个相异载频一个光子维（阶数 M 由常数包络探针
-   递增收敛）；块对角承载载波相位 → 成本与段内载波周期数无关。
-2. **包络自适应分段**：段内包络冻结于中点值，段传播 = 冻结哈密顿精确指数；
-   链状态全程扩展空间连续传播（边界不重嵌入，无微运动泄漏），仅输出时刻投影物理态。
-3. **Duhamel 缺陷修正**：`δ(t) = −iC∫ U_f(t,s)·[K(s)−K(c_mid)]·ψ(s) ds`，
-   本征基可分离 + Gauss 求积（节点 32/64/128，节点加密差即误差估计）+ 两级 Picard。
-4. **误差控制**：单旋钮 `tol`（默认 1e-6）；`error_report` 附段数/残差/范数/光子块数。
-5. **参考积分器** `evolve_reference`：H0 相互作用绘景 + DOP853（幺正）/BDF（Lindblad）。
-6. **常数包络快速路径**：单次扩展空间对角化，成本与时长无关。
-
-### 5.6.3 光子块阶数（逐载频 M）
-
-`_m_analytic`：`(r_g/4)^{2(M_g−1)} ≤ tol`（r_g = 近共振对最大 Ω/ω）。光学 r~1e-7 → M=1
-（3 块）；微波 r~5e-4 → M=2（5 块）。离共振巨矩阵元（如光学频 60S↔60P Ω~19 GHz）
-不参与判定（`_group_res_peak`，近共振带宽 `_M_ANALYTIC_BW_MHZ`=20 GHz）——其物理贡献
-是二阶微扰，光子块阶数只由共振对决定。逐载频 M=(1,1,2) → 45 扇区（统一 M 会 125 扇区）。
-
-**实测**：两能级高斯 400 ns tol=1e-7 → 与 DOP853 参考一致至 3.5e-8；N=20 微波多能级
-400 ns / tol=1e-6 → ≈22 s、与参考一致至 2.1e-6。
-
-## 5.7 `evolve_sambe_pair.py` 两体 Sambe 第一性引擎
-
-### 5.7.1 模型（无 secular、无 RWA、无旋转系、无近/远分流）
-
-```
-H_2d(t) = [H_A0 + Σ_f Ω_f env_f(t)cos(ω_f t)·d̂_A] ⊗ I
-        + I ⊗ [H_B0 + Σ_f Ω_f env_f(t)cos(ω_f t)·d̂_B] + V_dd
-```
-
-V_dd 完整保留（不做 `pair_evolve` 的 `_secular_filter`）：近简并交换、远失谐 vdW 通道
-全部自然涌现。A/B 同频场共享一个光子维。
-
-### 5.7.2 数值算法
-
-1. **两体 Sambe 扩展空间**：索引 idx = k + N²·p；K_static（E_pair + 光子偏移 +
-   V_dd 块对角 + 寿命 NonHermitian）与逐频组光子邻接耦合一次预计算；
-   扩展维 ≤ `_DENSE_MAX`（700）自动转稠密。
-2. **冻结中点段传播**：稀疏 expm_multiply（Krylov）；稠密自动厄米判定本征分解
-   （绝对容差判厄米，能量标度 1e6 MHz）。
-3. **Krylov Duhamel 缺陷修正**：Gauss 节点阶梯（16/32/64），包络近平坦时跳过。
-4. **寿命耗散**：复用 `tensor._pair_loss_vectors` → NonHermitian 对角 −iΓ/2。
-5. **返回契约与 `pair_evolve` 同键**（GUI 双原子直接复用）+ error_report。
-
-**实测**：交换场景首峰 10.30 ns ≡ π/(2C·|V_ex|)，P_max=1.0000；vdW 远失谐通道 ≡
-两体实验室系稠密 DOP853（2e-10）；V_dd=0 ≡ 单原子 exact 直积（1.4e-7）。
-**大基组现状**：扩展维 >700 走稀疏 Krylov——实测 N=20/原子（N²·P=3600）>25 min
-未出结果，实用不可行；待"两场两体变体"（光场旋转 + 微波-only 光子块，dim=2420 稠密）。
-
-## 5.8 `evolve_twofield.py` 两场引擎（光场旋转系 + 微波）
-
-### 5.8.1 核心思想（用户提议 2026-08-29）
-
-把电磁场按频段拆开：**光场用旋转系解析吸收载波，微波硬积分（或 Sambe 光子块）**——
-消除 THz 光学载波使 DOP853 步长爆炸的问题，只解析 17 GHz 微波载波。
-
-### 5.8.2 场分类（`split_by_freq`）
-
-`MW_MAX_MHZ = 1e5`（100 GHz）：载频 ≤100 GHz 视为微波，>视为光场。
-（2026-08-31 规划：改为自适应阈值，基于能级间隔分布，见 t20。）
-
-### 5.8.3 算法 A：`evolve_hard`（微波硬算，零近似）
-
-```
-H(t) = diag(E_rot) + Σ_opt c_f(t)·exp(i·δ_f·t)·A_opt + Σ_mw c_f(t)·cos(φ_f(t))·A_mw
-```
-
-- **光场**：旋转系（6P 流形 +ω_opt，耦合停在失谐）；光学 RWA（反旋 Bloch–Siegert
-  相位 4.4e-5 rad ≪ tol）；**多光场拍频** exp(i·δ_f·t)（t10 验证：exp 正确、cos 错误 95%）。
-- **微波**：cos(φ_f(t)) 完整载波**硬积分**（φ 任意：定频=chirp 特例，t18 统一路径）——
-  多光子、Bloch–Siegert、任意谐波、任意时域信号天然全含，零近似。
-- **V_dd**（两体）：实验室系静态 → IP 相位扭曲 e^{iC·(E_lab[k]−E_lab[l])t}，按 dE 分组。
-- 误差：DOP853 自适应（rtol/atol 显式）；RHS 厄米 → 范数机器精度。
-- 性能：单原子 620ns 4s（45×numba）、两体 1500ns 84s（7×）；步长由最高瞬时频率决定。
-
-**核心层**：`hard.py`（`evolve_hard_fast`/`evolve_hard_pair`，numba）+ `dop853.py`
-（rhs 参数化 DOP853 驱动，任意 N）。
-
-### 5.8.4 算法 B：`evolve_two_field`（微波 Sambe 光子块）
-
-- 微波进扩展空间（M=2，5 块，多光子显式）；光场以 `(A_opt⊗I_P)` 块对角进入。
-- 620ns 三路（exact/hard/sambe 两场）一致 ≤6.3e-5；单原子 620ns 2.0s（最快）。
-- 两体扩展（dim=2420 稠密）为 t15 路径 A（qwen 额度恢复后）。
-
-### 5.8.5 任意波形微波（`arbitrary_mw_group`，2026-08-31）
-
-ArbitraryWave → hard 兼容组：Hilbert 解析分解 `amp(t) = env(t)·cos(φ(t))`（精确 ~1e-11）
-+ 全偶极实振幅 A + env/φ 插值——UI 的 ArbitraryWave 无缝喂 hard。
-
-## 5.9 `hard.py` + `dop853.py` hard 内核
-
-### 5.9.1 DOP853 核心层（`dop853.py`）
-
-- `_dop853_driver(rhs, ...)`：scipy solve_ivp(DOP853) 主循环的 numba 移植
-  （SAFETY=0.9、MIN/MAX_FACTOR、order=7 select_initial_step、RMS×complex 误差范数、
-  contd8 稠密输出）——**rhs 参数化**（numba first-class 函数参数），任意 N 通用。
-- `_dop853_step` / `_dop853_dense_interp`：单步与稠密插值。
-- 系数（_A/_C/_B/_E3/_E5/_D）复用 `hard.py`（scipy 1.15.2 移植，2.9e-10 基线验证）。
-- `_env_tab` / `_env_at`：包络均匀查表 + 线性插值（误差 ~3e-10 ≪ rtol）。
-- **核心-调度分层**：单体/两体 RHS 各一个 njit，共用一套驱动（消除 ~450 行重复）。
-
-### 5.9.2 hard 引擎（`hard.py`）
-
-- `evolve_hard_fast`（单原子）/ `evolve_hard_pair`（两体）：numba RHS + dop853 驱动。
-- `build_hard_rhs`：fields_meta → njit RHS 闭包（光场 exp 拍频 + 微波 cos(φ(t)) 查表）。
-- 性能：620ns 单原子 3.8-4.0s（45.6×）、两体 1500ns 83.6s、V_dd 过滤 `_VDD_MIN_FRAC=1e-4`
-  （5184→144 物理元素）。
-
-## 5.10 `pair_evolve.py` 两体 RWA 演化
-
-### 5.10.1 张量基组与场
-
-```
-H(t) = [H_A(t) ⊗ I_B] + [I_A ⊗ H_B(t)] + V_dd
-```
-
-两体基组 = 单体笛卡尔积（`tensor.tensor_states`）；场镜像 `_tensor_field_atom`
-（M_A⊗I_B / I_A⊗M_B）；初态 `tensor._as_product_psi`；旋转参考 `pair_rotate_frame`。
-
-### 5.10.2 V_dd 旋转系 secular RWA
-
-`_secular_filter(V_dense, E_rot_2d, ratio=SECULAR_RATIO=10.0)`：
-
-```
-V_{αβ} 振荡频率 = |E_rot_β − E_rot_α|（E_rot 含 V_dd 对角位移）
-|Δ| < ratio·|V| → 保留；否则高振荡项平均为零 → 丢弃
-```
-
-> 判据必须用**真实旋转系能量差**（含 V_dd 对角位移）——误用旋转参考之差会把
-> 远失谐 vdW 元误当 secular 保留（T5 回归钉死）。
-
-### 5.10.3 演化主循环（`_pair_rwa`）
-
-- RWA 分类（`_is_rwa`）；对角化精确路径（全 RWA + 常数包络 + 无振荡非 RWA 场）；
-- 步长三类场分别计入 w_max；旁观态归一（同 `_e_rot`）；
-- numba 并行 RK4（`_pair_rwa_jit`，~45×）；两体寿命耗散（NonHermitian）；
-- 远失谐散射 depump（report-only）。
-
-**模型局限**：secular RWA 丢弃远失谐元素 → 二阶 vdW 能移不在演化哈密顿中。
-
-## 5.11 `driver.py` 统一驱动引擎
-
-### 5.11.1 分层设计
-
-```
-静态层 pair_static    ：非 driver 因素 → H_static（含 vdW/交换）
-驱动层 driver_operator：driver → (D, ω, Ω)
-化简层 rwa_hamiltonian：旋转系 RWA → H_rwa
-演化层 evolve          ：定常哈密顿一次对角化 → 布居演化
-```
-
-### 5.11.2 RWA 化简 + dressed 投影 + 线性响应
-
-- `rwa_hamiltonian`：每态按光子数减 n_k·ω（`_photon_numbers` BFS，支持双光子级联）。
-- `_dressed_hamiltonian`：静态 H 全对角化 → dressed 能级（含 vdW）→ 驱动投影本征基。
-- `response_spectrum_linear`：一次静态对角化 + 黄金规则 `S(ω) = Σ_k |⟨k|D|i⟩|² δ(ω−ΔE_k)`。
-
-## 5.12 `waveforms.py` 波形数据层
-
-- **包络工厂**：`GaussianEnv(center, σ, peak)`、`SquareEnv(start, edge, height, fall_start)`
-  （raised cosine 缓变方波，两端导数连续为 0）。
-- **`Wave`**：频率 + 光强 + 偏振 + 包络 + 起始偏移；`drive`（g/e 辅助对）仅定参。
-- **`ArbitraryWave`**：任意时域信号（样品 t_ns/amp，任意频谱/啁啾/多频），
-  消费方 = `evolve_arbitrary`（实验室系）或 `evolve_twofield.arbitrary_mw_group`（hard）。
-- **`build_fields(waves, states, cache, near_cutoff_mhz)`**：每波形 → `field_build.real_field`。
-- **序列化**：`serialize_waves` / `restore_waves`（波形 = 科学数据，参与存档）。
-
-## 5.13 `sambe.py` + `tensor.py` 核心层（重构 2b/3 产物）
-
-- **`sambe.photon_geometry(E, groups, Ms)`**：Sambe 光子块几何（混合进制 stride /
-  量子数 / 块对角 / 重构相位 / 中央光子块）——任意 N 通用，`_SambeSetup` 与
-  `_PairSambeSetup` 共用（消除几何构造重复）。
-- **`tensor.py`**：两体张量化工具——`tensor_states`（基组）、`tensor_fields`
-  （场镜像）、`_as_product_psi`（初态）、`_reduce_A/_reduce_B`（约化布居）、
-  `_pair_loss_vectors`（寿命丢失）。全部引擎（pair_evolve/evolve_sambe_pair/hard_pair）共用。
+参考积分器（仅 checks 交叉验证）：`_evolve_reference_lab`（实验室系 solve_ivp 非 RWA，
+最无偏）、`_evolve_reference_hybrid`（光 RWA + 其余非 RWA，快 ~10⁴ 倍）。
+`rwa_error_estimate`：$e_{\text{est}}\approx\Omega/(4\omega_L)$。
 
 ---
 
-> 兼容性：全部旧模块名/函数名经 `src/__init__.py` 与 `src/core/__init__.py` 别名层
-> 保留——`from src.core import core` / `from src.core.evolve_exact import ...` 等
-> 仍可用（T19 后内部代码已改用新名，兼容层只服务外部）。
+## 5.5 任意波形演化（`evolve_arbitrary.py`）
+
+适用：ArbitraryWave（无单频、任意时域信号）。
+
+$$H(t) = H_0 + \sum_k \text{amp}_k(t)\,\hat V_k \quad(\text{实验室系，无 RWA/旋转系/近远分流})$$
+
+$\hat V$ 含复相位（dipole_amplitude 复振幅）——不一致相对相位正确干涉。步长受信号
+Nyquist 约束（`f_max=0.5/dt_min`），慢但第一性原理。实现：`_evolve_arbitrary`
+（相互作用绘景 RK4，`_arb_rk4_core`）。
+**注**：hard 路径（§5.8）提供"旋转系载波剥离 + cos(φ(t)) 残差"的更快任意波形方案。
+
+---
+
+## 5.6 Sambe 第一性引擎（`evolve_sambe.py` + `evolve_sambe_pair.py`）
+
+### 5.6.1 物理模型（实验室系 TDSE，无模型近似）
+
+$$H(t) = H_0 + \sum_k \Omega_k\,c_k(t)\cos(\omega_k t)\,A_k$$
+
+无 RWA/无旋转系/无近远分流/无静态能移注入：AC 位移、Bloch–Siegert、远失谐效应全部
+自然涌现。场构造 `build_fields_exact`（无 near_cutoff、无 Floquet 注入）。
+
+### 5.6.2 数值算法（`evolve_sambe`；耗散转 `evolve_reference`）
+
+1. **Sambe (t,t') 光子块扩展空间**：每相异载频一个光子维，块对角承载载波相位
+   → 成本与段内载波周期数无关；
+2. **包络自适应分段**：段内冻结中点值，冻结哈密顿精确指数传播；链状态全程扩展空间
+   连续传播（边界不重嵌入，无微运动泄漏），仅输出时刻投影物理态；
+3. **Duhamel 缺陷修正**：
+   $$\delta(t) = -iC\int_{t_a}^{t} U_f(t,s)\big[K(s)-K(c_{\text{mid}})\big]\psi(s)\,ds$$
+   本征基可分离 + Gauss 求积（节点 32/64/128，加密差即误差估计）+ 两级 Picard；
+4. **误差控制**：单旋钮 `tol`（默认 1e-6），`error_report` 附段数/残差/范数/光子块数；
+5. **参考积分器** `evolve_reference`：H0 相互作用绘景 + DOP853（幺正）/BDF（Lindblad）；
+6. **常数包络快速路径**：单次扩展空间对角化。
+
+### 5.6.3 光子块阶数（逐载频 M）
+
+$$(r_g/4)^{2(M_g-1)} \le \texttt{tol},\qquad r_g = \frac{\Omega_{\text{共振对}}}{\omega_g}$$
+
+光学 r~1e-7 → M=1（3 块）；微波 r~5e-4 → M=2（5 块）。离共振巨矩阵元（如光学频
+60S↔60P Ω~19 GHz）不参与判定（`_group_res_peak`，带宽 `_M_ANALYTIC_BW_MHZ`=20 GHz）。
+逐载频 M=(1,1,2) → 45 扇区（统一 M 会 125）。实测：tol=1e-7 → 与 DOP853 一致 3.5e-8；
+N=20 微波 400 ns / tol=1e-6 → ≈22 s、一致 2.1e-6。
+
+### 5.6.4 两体扩展（`evolve_sambe_pair.py`，公开函数 `evolve_sambe_pair`）
+
+$$H_{2d}(t) = \big[H_{A0} + \textstyle\sum_f \Omega_f c_f(t)\cos(\omega_f t)\,\hat d_A\big]\otimes I \;+\; I\otimes[\cdots] + V_{dd}$$
+
+- 两体 Sambe 扩展空间（idx = k + N²·p）；K_static（E_pair + 光子偏移 + V_dd 块对角 +
+  寿命 NonHermitian）与逐频光子邻接预计算；扩展维 ≤ `_DENSE_MAX`(700) 转稠密；
+- 冻结中点段传播：稀疏 expm_multiply（Krylov）/ 稠密自动厄米 eigh（绝对容差判厄米）；
+- Krylov Duhamel 缺陷修正（Gauss 节点 16/32/64）；寿命复用 `tensor._pair_loss_vectors`；
+- 实测：交换首峰 10.30 ns ≡ π/(2C|V_ex|)，P=1.0000；vdW 通道 ≡ 稠密 DOP853（2e-10）；
+  V_dd=0 ≡ 单原子 exact 直积（1.4e-7）。
+- **大基组现状**：>700 维稀疏 Krylov 慢（N=20/原子 N²·P=3600 >25 min 不可行）——
+  待"两场两体变体"（光旋转 + 微波-only 光子块，dim=2420 稠密）。
+
+---
+
+## 5.7 两场引擎与 hard（`evolve_twofield.py` + `hard.py` + `dop853.py`）
+
+### 5.7.1 核心思想（2026-08-29 用户提议）
+
+把电磁场按频段拆开：**光场旋转系解析吸收载波，微波硬积分（或 Sambe 光子块）**——
+消除 THz 光学载波导致的步长爆炸，只解析 17 GHz 微波载波。
+
+### 5.7.2 场分类（`split_by_freq`）
+
+$f \le \texttt{MW\_MAX\_MHZ}{=}10^5$ MHz → 微波，否则光场。（t20 规划：自适应阈值。）
+
+### 5.7.3 算法 A：`evolve_hard`（微波硬算，零近似）
+
+$$H(t) = \text{diag}(E_{\text{rot}}) + \sum_{\text{opt}} c_f(t)\,e^{i\delta_f t}\,A_{\text{opt}} + \sum_{\text{mw}} c_f(t)\cos\big(\varphi_f(t)\big)A_{\text{mw}}$$
+
+- **光场**：旋转系（6P 流形 +ω_opt，耦合停失谐）；光学 RWA（反旋 Bloch–Siegert
+  4.4e-5 rad ≪ tol）；**多光场拍频** $e^{i\delta_f t}$（t10 验证：exp 正确、cos 错 95%）；
+- **微波**：$\cos(\varphi_f(t))$ 完整载波**硬积分**（φ 任意：定频=chirp 特例，t18 统一）——
+  多光子、Bloch–Siegert、任意谐波、任意时域天然全含，零近似；
+- **V_dd**（两体）：IP 相位扭曲 $e^{iC(E_k-E_l)t}$，按 dE 分组；
+- 误差：DOP853 自适应（rtol/atol 显式），RHS 厄米 → 范数机器精度；
+- 性能：单原子 620ns **4 s**（45×numba）、两体 1500ns **84 s**（7×）。
+
+### 5.7.4 算法 B：`evolve_two_field`（微波 Sambe 光子块）
+
+微波进扩展空间（M=2，5 块，多光子显式）；光场 `(A_opt⊗I_P)` 块对角。620ns 三路
+（exact/hard/两场）一致 ≤6.3e-5；单原子 620ns **2 s**（最快）。两体扩展（dim=2420）
+为 t15 路径 A。
+
+### 5.7.5 任意波形微波（`arbitrary_mw_group`，t18）
+
+ArbitraryWave → hard 兼容组：Hilbert 解析分解 $a(t)=c(t)\cos\varphi(t)$（~1e-11）
++ 全偶极实振幅 + env/φ 插值——UI 任意波形无缝喂 hard。
+
+### 5.7.6 DOP853 核心层（`dop853.py`）
+
+`_dop853_driver(rhs, ...)`：scipy solve_ivp(DOP853) 主循环的 numba 移植（SAFETY=0.9、
+order=7 初始步、RMS×complex 误差范数、contd8 稠密输出）——**rhs 参数化**（numba
+first-class），任意 N 通用。系数（_A/_C/_B/_E3/_E5/_D）复用 `hard.py`（scipy 1.15.2
+移植，2.9e-10 基线）。`_env_tab`/`_env_at` 包络查表（~3e-10 误差）。
+
+### 5.7.7 hard 引擎（`hard.py`）
+
+`evolve_hard_fast`（单原子）/ `evolve_hard_pair`（两体）：numba RHS + dop853 驱动。
+`build_hard_rhs`：fields_meta → njit RHS 闭包。V_dd 过滤 `_VDD_MIN_FRAC=1e-4`
+（5184→144 物理元素）。性能：620ns 3.8-4.0s、两体 1500ns 83.6s。
+
+---
+
+## 5.8 两体 RWA 演化（`pair_evolve.py`）
+
+### 5.8.1 张量基组与场
+
+$$H(t) = \big[H_A(t)\otimes I_B\big] + \big[I_A\otimes H_B(t)\big] + V_{dd}$$
+
+两体基组 = 单体笛卡尔积（`tensor.tensor_states`，k=i·N+j）；场镜像 `tensor.tensor_fields`
+（M_A⊗I / I⊗M_A）；初态 `tensor._as_product_psi`；旋转参考 `pair_rotate_frame`。
+
+### 5.8.2 V_dd 旋转系 secular RWA
+
+$$|E_{\text{rot},\beta} - E_{\text{rot},\alpha}| < \texttt{SECULAR\_RATIO}{=}10\cdot|V| \Rightarrow \text{保留}$$
+
+> 判据必须用**真实旋转系能量差**（含 V_dd 对角位移）——误用参考之差会把远失谐 vdW
+> 元误当 secular 保留（T5 回归钉死）。
+
+### 5.8.3 演化主循环（`_pair_rwa`）
+
+- RWA 分类（`_is_rwa`）；对角化精确路径（全 RWA + 常数包络 + 无振荡非 RWA 场）；
+- 步长三类场分别计入 w_max；旁观态归一；numba 并行 RK4（`_pair_rwa_jit`，~45×）；
+- 两体寿命耗散（NonHermitian，loss_A/B = 速率×布居积分，Σpops+lossA+lossB≡1）；
+- 远失谐散射 depump（report-only）。
+- **模型局限**：secular 丢远失谐 → 二阶 vdW 能移不在演化哈密顿中。
+
+---
+
+## 5.9 统一驱动引擎（`driver.py`）
+
+```
+静态层 pair_static → H_static（含 vdW/交换）；驱动层 driver_operator → (D,ω,Ω)
+化简层 rwa_hamiltonian → H_rwa（光子数 BFS 减 n_k·ω，支持双光子级联）
+演化层 evolve → 定常哈密顿一次对角化；dressed 投影含 vdW 封锁
+```
+
+**线性响应谱**（黄金规则，`response_spectrum_linear`）：
+
+$$S(\omega) = \sum_k |\langle k|D|i\rangle|^2\,\delta(\omega - (E_k - E_i))$$
+
+一次静态对角化 + 驱动算符投影本征基 → 全部共振一次算出（O(N²)）。`response_spectrum`
+（逐频率扫）为对照。`build_system(n_body=1/2)` 统一接口；静态能移走
+`static_atom.direct_ac_stark_shifts` / `dc_stark_shift_mhz`。
+
+---
+
+## 5.10 核心层（`sambe.py` + `tensor.py`）
+
+### 5.10.1 Sambe 光子块几何（`sambe.photon_geometry(E, groups, Ms)`）
+
+任意 N 通用：混合进制 stride / 量子数 / 块对角（$E_i - (n_g - M_g)\omega_g$）/ 重构相位
+（$\theta_p(t)=n_{\text{phase}}[p]\,t$）/ 中央光子块（p_center）。`_SambeSetup` 与
+`_PairSambeSetup` 共用（消除几何构造重复）。
+
+### 5.10.2 两体张量化（`tensor.py`）
+
+`tensor_states`（基组）、`tensor_fields`（场镜像）、`_as_product_psi`（初态）、
+`_reduce_A/_reduce_B`（约化布居）、`_pair_loss_vectors`（寿命丢失）——全部引擎
+（pair_evolve / evolve_sambe_pair / hard_pair）共用。
+
+---
+
+> 兼容性：全部旧模块名/函数名经 `src/__init__.py` 与 `src/core/__init__.py` 别名层保留
+> ——`from src.core import core` / `from src.core.evolve_exact import ...` 等仍可用
+> （T19 后内部代码已改用新名，兼容层只服务外部）。
 
 # 六、检测与脚本层 checks/ scripts/
 
