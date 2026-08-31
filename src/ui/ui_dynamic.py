@@ -1020,10 +1020,11 @@ class DynamicPanel(QWidget):
         self.canvas_top.draw_idle()
 
     def _plot_wave_group(self, ax, tag, glist, color_of):
-        """在给定 axes 内画一组波形曲线（twinx 独立标度；无标题）。
+        """在给定 axes 内画一组波形曲线（单 y 轴，各通道归一化；无标题）。
 
-        零基线对齐：所有轴 ylim 从 0 起；每轴刻度强制含 0；主轴画贯穿全宽
-        的 0 参考线（所有通道共享同一零基线，多轴零点视觉对齐）。
+        2026-08-31 修改：放弃 twinx 多 y 轴（多轴堆叠 + 零基线错位 + 与
+        布居图对齐困难），改为**单 y 轴 + 逐通道归一化**——所有曲线画在
+        同一坐标系（y 范围 [0,1]），形状/时序清晰、天然对齐，无轴堆叠。
         """
         ax.clear()
         ax.set_xlabel('t (ns)')
@@ -1032,42 +1033,32 @@ class DynamicPanel(QWidget):
         ax.grid(alpha=0.3)
         ax.axhline(0.0, color='0.35', lw=0.8, alpha=0.6, zorder=0)  # 零基线
         if not glist:
-            ax.set_ylabel('光强')
+            ax.set_ylabel('归一化光强')
             return
         has_I = len(glist[0]) >= 5
-        unit = 'mW/cm²' if has_I else '包络'
+        ax.set_ylabel('归一化光强' if has_I else '归一化包络')
         for k, e in enumerate(glist):
             name, t, env, f = e[0], e[1], e[2], e[3]
             I = float(e[4]) if has_I else 1.0
             y = I * np.asarray(env, float)
             ymax = float(y.max()) if y.size else 0.0
             c = color_of(f)
-            if k == 0:
-                target = ax
-                ax.set_ylabel(f'{tag}:{name}  {unit}', color=c, fontsize=8)
-            else:
-                target = ax.twinx()
-                # 关键：twin 轴去掉自己的矩形框（left/bottom spine 默认开着
-                # 会叠出"带边界的嵌套小图"，引起各通道零基线视觉错位）；
-                # 只保留外移的 right spine 作为独立刻度轴。
-                target.set_frame_on(False)
-                target.spines['right'].set_position(
-                    ('outward', 42.0 * (k - 1)))
-                target.spines['top'].set_visible(False)
-                target.yaxis.label.set_color(c)
-                target.tick_params(axis='y', colors=c, labelsize=7)
-                target.set_ylabel(f'{name}', color=c, fontsize=7)
-            target.plot(t, y, lw=1.5, color=c, label=(name if k == 0 else None))
-            target.fill_between(t, y, 0.0, color=c, alpha=0.22)
-            top = max(ymax * 1.05, 1e-12)
-            target.set_ylim(0.0, top)                       # 0 起 → 底部对齐
-            loc = MaxNLocator(nbins=4)
-            ticks = np.asarray(loc.tick_values(0.0, top))
-            ticks = ticks[(ticks >= 0.0) & (ticks <= top)]
-            if not np.any(np.isclose(ticks, 0.0)):          # 强制 0 刻度可见
-                ticks = np.unique(np.append(ticks, 0.0))
-            target.set_yticks(ticks)
-        ax.set_xlim(glist[0][1][0], glist[0][1][-1])
+            # 归一化到 [0,1]（峰值 = 1；全零时保持 0）
+            yn = y / ymax if ymax > 1e-12 else y
+            ax.plot(t, yn, lw=1.5, color=c, label=name)
+            ax.fill_between(t, yn, 0.0, color=c, alpha=0.22)
+        ax.set_ylim(0.0, 1.02)
+        loc = MaxNLocator(nbins=4)
+        ticks = np.asarray(loc.tick_values(0.0, 1.02))
+        ticks = ticks[(ticks >= 0.0) & (ticks <= 1.02)]
+        if not np.any(np.isclose(ticks, 0.0)):
+            ticks = np.unique(np.append(ticks, 0.0))
+        ax.set_yticks(ticks)
+        ax.legend(fontsize=7, loc='upper right')
+        # x 从 0 起 → 与下方布居图 x=0 对齐（waveforms_to_env 用 0 起始网格）
+        x0 = float(glist[0][1][0])
+        x1 = float(glist[0][1][-1])
+        ax.set_xlim(0.0 if x0 < 0 else x0, max(x1, x0))
 
     def _draw_bot(self, states, res):
         """底部：态布居（只画前 N 个平均布居最大的态，N=topn_sb）+ loss 曲线。"""
@@ -1083,6 +1074,8 @@ class DynamicPanel(QWidget):
         if loss.max() > 1e-12:
             ax.plot(res['t'], loss, lw=1.6, ls='--', color='#333333',
                     label='loss（离场）')
+        ax.margins(x=0)                     # 取消 x 方向边距 → 贴齐 y 轴与右缘
+        ax.set_xlim(res['t'][0], res['t'][-1])
         ax.legend(fontsize=8)
         self.canvas_bot.draw_idle()
 
@@ -1107,5 +1100,7 @@ class DynamicPanel(QWidget):
         if loss.max() > 1e-12:
             ax.plot(res['t'], loss, lw=1.6, ls='--', color='#333333',
                     label='loss')
+        ax.margins(x=0)                     # 取消 x 方向边距 → 贴齐 y 轴与右缘
+        ax.set_xlim(res['t'][0], res['t'][-1])
         ax.legend(fontsize=7, ncol=1)
         self.canvas_bot.draw_idle()
