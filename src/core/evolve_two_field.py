@@ -39,6 +39,43 @@ OPT_NRES_BW_MHZ = 2e3       # 旋转后近共振对筛选带宽（2 GHz）
 MW_NRES_BW_MHZ = 5e3        # 微波近共振对筛选带宽（5 GHz）
 
 
+def arbitrary_mw_group(cache, states, wave):
+    """ArbitraryWave → hard 兼容 mw_group（t18：旧任意波形重构适配 hard）。
+
+    解析信号分解（Hilbert）：amp(t) = env(t)·cos(φ(t)) 精确（env=|z|,
+    φ=unwrap arg z，重构误差 ~1e-11）；env/φ 以绝对时间插值函数给出，
+    经 hard 打包为查表（cos(φ_f(t)) 任意相位路径，内核插值求值）。
+    A 为全偶极实振幅（|d|·rabi）——复杂偶极相位（多通道干涉）暂以 |d|
+    吸收，单通道驱动精确（多通道场景为后续扩展）。
+    用法：meta = dict(E_rot=…, N=N, opt_terms=[], disc_times=[],
+                      mw_groups=[arbitrary_mw_group(cache, states, wave)])。
+    """
+    from scipy.signal import hilbert
+    q = {'σ+': +1, 'π': 0, 'σ-': -1}.get(wave.pol, 0)
+    E0_sq = core.field_e0_sq(float(wave.intensity_mwcm2))
+    N = len(states)
+    A = np.zeros((N, N))
+    for i in range(N):
+        for j in range(i + 1, N):
+            d = core.dipole_amplitude(cache, _crow(states[i]),
+                                      _crow(states[j]), q)
+            if abs(d) < 1e-12:
+                continue
+            A[i, j] = A[j, i] = core.rabi_mhz(abs(d), E0_sq)
+    if not np.any(A):
+        raise ValueError('arbitrary_mw_group：偏振下无任何偶极耦合')
+    ts = wave.t_ns + wave.offset_ns          # 绝对时间样品
+    z = hilbert(wave.amp)
+    env_h, phi_h = np.abs(z), np.unwrap(np.angle(z))
+    return dict(omega_mhz=0.0, As=[A],
+                envs=[lambda tv: np.interp(np.asarray(tv, float), ts, env_h,
+                                           left=0.0, right=0.0)],
+                phase_fn=lambda tv: np.interp(
+                    np.asarray(tv, float), ts, phi_h,
+                    left=phi_h[0], right=phi_h[-1]),
+                labels=[wave.name])
+
+
 def _crow(s):
     """states 元素 → core.dipole_amplitude 子能级行。"""
     return dict(n=s['n'], l=s['l'], j=s['j'], kind=s['kind'],
@@ -595,18 +632,22 @@ def evolve_hard(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
 
     E = E_rot - float(E_rot.min())          # 公共偏移=全局相位（精确等价）
 
-    # 微波：A 与 (ω, env) 列表；ω_mw 全保留（cos 载波）
+    # 微波：A 与 (ω, env, 相位函数) 列表；t18 统一 cos(φ_f(t)) 任意相位——
+    # 定频 φ=C·ω·t（默认），变频/任意相位由 mw_groups['phase_fn'] 提供。
     mw_terms = []
     for g in mw_groups:
+        w = float(g['omega_mhz'])
+        ph_fn = g.get('phase_fn')
         for A, wf in zip(g['As'], g['envs']):
-            mw_terms.append((np.asarray(A, float), float(g['omega_mhz']), wf))
+            mw_terms.append((np.asarray(A, float), w, wf, ph_fn))
 
     def V_at(tv):
-        """旋转系相互作用绘景：H0=diag(E) 精确，Ṽ = u·(光+微波 La·cos)·u†。
+        """旋转系相互作用绘景：H0=diag(E) 精确，Ṽ = u·(光+微波 cos(φ))·u†。
 
         光场拍频（§2.3/§8）：第 2+ 光场相对共享参考失谐 δ=ω_f−ω_ref，
         耦合项乘 exp(i·C·δ·t·(m[i]−m[k]))（m=旋转流形掩码；t10 验证：
         exp 拍频正确、cos 错误）。首场 δ=0 → 乘 1，逐位退化为旧行为。
+        微波（t18）：cos(φ_f(t))，φ 任意（定频=chirp 特例）。
         """
         V = np.zeros((N, N), complex)
         for tup in opt_terms:
@@ -623,10 +664,12 @@ def evolve_hard(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
                     V = V + c * ph * A_opt
                 else:
                     V = V + c * A_opt
-        for A, wL, wf in mw_terms:
+        for A, wL, wf, ph_fn in mw_terms:
             env = float(np.asarray(wf(np.atleast_1d(tv))).flat[0])
             if env != 0.0:
-                V = V + env * np.cos(_CONV * wL * tv) * A
+                ph = (ph_fn(tv) if ph_fn is not None
+                      else _CONV * wL * tv)
+                V = V + env * np.cos(float(np.asarray(ph).flat[0])) * A
         u = np.exp(1j * _CONV * E * tv)
         return u[:, None] * V * np.conj(u)[None, :]
 
@@ -645,7 +688,7 @@ def evolve_hard(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
     nfev = getattr(sol, 'nfev', None)
     log(f'[hard] DOP853 完成：{len(t)} 输出点'
         + (f'，{nfev} 次 RHS 求值' if nfev else '')
-        + f'（微波载波 {max((abs(w) for _, w, _ in mw_terms), default=0):.4g} MHz'
+        + f'（微波载波 {max((abs(w) for _, w, _, _ in mw_terms), default=0):.4g} MHz'
         f' 硬积分，零微波近似）')
     report = dict(n_segments=1, max_richardson_diff=0.0, dt_min_hit=False,
                   max_norm_dev=float(np.max(np.abs(pops.sum(axis=1) - 1.0))))
@@ -653,7 +696,7 @@ def evolve_hard(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
         log(f'[hard] ⚠ 范数偏差 {report["max_norm_dev"]:.2e}'
             '（DOP853 容差不足或 RHS 非厄米）')
     out = dict(t=t, pops=pops, states=states,
-               om_mhz=[float(np.abs(A).max()) for A, _, _ in mw_terms]
+               om_mhz=[float(np.abs(A).max()) for A, _, _, _ in mw_terms]
                + [float(np.abs(A_opt).max()) for A_opt, *_ in opt_terms],
                method='hard', backend='hard-dop853',
                loss=np.zeros(len(t)), error_report=report)

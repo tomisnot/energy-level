@@ -46,10 +46,17 @@ def _env_at(tab, t, t0, dt):
 
 
 @njit(cache=True)
-def _rhs_hard(t, y, E, opt_As, opt_tabs, mw_As, mw_ws, mw_tabs, t0, dt, CONV):
-    """单原子 hard RHS（光场旋转系 + 微波 cos 载波硬积分，零近似）。
+def _rhs_hard(t, y, E, opt_As, opt_tabs, opt_deltas, opt_masks,
+              mw_As, mw_ws, mw_tabs, mw_phases, t0, dt, CONV):
+    """单原子 hard RHS（光场旋转系 + 微波 cos(φ_f(t)) 硬积分，零近似）。
 
     y' = −iC·u·(Ṽ·(conj(u)∘y))，u = exp(iC·E·t)。
+    光场拍频（§2.3/§8）：δ=ω_f−ω_ref ≠ 0 的光场耦合项乘
+    exp(iC·δ·t·(m[i]−m[k]))（m=旋转流形掩码，t10 验证 exp 拍频正确）；
+    δ=0（首场/旧元组）逐位退化为 c·A 原行为。
+    微波（t18 统一 cos(φ_f(t)) 任意相位）：相位表 mw_phases 线性插值求值
+    ——定频 φ=C·ω·t 为线性表（插值精确，逐位≈直算）；变频/任意相位由
+    phase_fn 采样。步长随 φ' 自适应（物理必然）。
     所有矩阵按非零元跳过（A 稀疏，光学只耦合 6P↔60S 等少数对）。
     """
     N = E.shape[0]
@@ -59,16 +66,29 @@ def _rhs_hard(t, y, E, opt_As, opt_tabs, mw_As, mw_ws, mw_tabs, t0, dt, CONV):
         c = _env_at(opt_tabs[oi], t, t0, dt)
         if c != 0.0:
             A = opt_As[oi]
-            for i in range(N):
-                for k in range(N):
-                    a = A[i, k]
-                    if a != 0.0:
-                        V[i, k] += c * a
+            d = opt_deltas[oi]
+            if d != 0.0:
+                p1 = np.exp(1j * CONV * d * t)
+                p2 = p1.conjugate()
+                mask = opt_masks[oi]
+                for i in range(N):
+                    mi = mask[i]
+                    for k in range(N):
+                        a = A[i, k]
+                        if a != 0.0:
+                            ph = p1 if (mi - mask[k]) > 0 else p2
+                            V[i, k] += c * a * ph
+            else:
+                for i in range(N):
+                    for k in range(N):
+                        a = A[i, k]
+                        if a != 0.0:
+                            V[i, k] += c * a
     n_mw = mw_As.shape[0]
     for mi in range(n_mw):
         env = _env_at(mw_tabs[mi], t, t0, dt)
         if env != 0.0:
-            cw = env * np.cos(CONV * mw_ws[mi] * t)
+            cw = env * np.cos(_env_at(mw_phases[mi], t, t0, dt))
             A = mw_As[mi]
             for i in range(N):
                 for k in range(N):
@@ -99,8 +119,11 @@ def _env_tab(wf, T, n_pts):
 def _pack_hard(fields_meta, T, n_tab=_TAB_N):
     """fields_meta（build_two_field 输出）→ 内核打包数组。
 
-    返回 (E, opt_As, opt_tabs, mw_As, mw_ws, mw_tabs, t0, dt, CONV)，
+    返回 (E, opt_As, opt_tabs, opt_deltas, opt_masks,
+          mw_As, mw_ws, mw_tabs, t0, dt, CONV)，
     供 njit 内核直接消费（打包/查表在热循环外做一次——Julia 经验）。
+    opt_deltas：光场拍频 δ=ω_f−ω_ref（首场/旧 4 元组 = 0 → 逐位退化）；
+    opt_masks：旋转流形掩码（拍频相位符号 m[i]−m[k]）。
     """
     E_rot = np.asarray(fields_meta['E_rot'], float)
     E = E_rot - float(E_rot.min())
@@ -108,31 +131,51 @@ def _pack_hard(fields_meta, T, n_tab=_TAB_N):
     mw_groups = fields_meta['mw_groups']
     n0 = E.size
     if opt_terms:
-        opt_As = np.stack([np.asarray(A, float) for A, *_ in opt_terms])
-        opt_tabs = np.stack([_env_tab(wf, T, n_tab)
-                             for _, wf, *_ in opt_terms])
+        opt_As = np.stack([np.asarray(t[0], float) for t in opt_terms])
+        opt_tabs = np.stack([_env_tab(t[1], T, n_tab) for t in opt_terms])
+        opt_deltas = np.array(
+            [float(t[2]) - float(t[4]) if len(t) > 4 else 0.0
+             for t in opt_terms], float)
+        opt_masks = np.stack(
+            [np.asarray(t[5], int) if len(t) > 5
+             else np.zeros(n0, int)
+             for t in opt_terms])
     else:
         opt_As = np.zeros((0, n0, n0))
         opt_tabs = np.zeros((0, n_tab))
-    mw_As_list, mw_ws_list, mw_tabs_list = [], [], []
+        opt_deltas = np.zeros(0)
+        opt_masks = np.zeros((0, n0), int)
+    mw_As_list, mw_ws_list, mw_tabs_list, mw_phase_list = [], [], [], []
     for g in mw_groups:
         w = float(g['omega_mhz'])
+        # t18：hard 统一 cos(φ_f(t)) 任意相位路径——定频 φ=C·ω·t（线性，
+        # 插值精确退化）；变频/任意相位由 mw_groups 的 phase_fn 提供
+        # （如 ArbitraryWave 解析信号相位；无则默认定频）。
+        ph_fn = g.get('phase_fn')
         for A, wf in zip(g['As'], g['envs']):
             mw_As_list.append(np.asarray(A, float))
             mw_ws_list.append(w)
             mw_tabs_list.append(_env_tab(wf, T, n_tab))
+            if ph_fn is None:
+                ts = np.linspace(0.0, float(T), n_tab)
+                mw_phase_list.append(_CONV * w * ts)
+            else:
+                mw_phase_list.append(_env_tab(ph_fn, T, n_tab))
     if mw_As_list:
         mw_As = np.stack(mw_As_list)
         mw_ws = np.asarray(mw_ws_list, float)
         mw_tabs = np.stack(mw_tabs_list)
+        mw_phases = np.stack(mw_phase_list)
     else:
         mw_As = np.zeros((0, n0, n0))
         mw_ws = np.zeros(0)
         mw_tabs = np.zeros((0, n_tab))
+        mw_phases = np.zeros((0, n_tab))
     t0 = 0.0
     dt = float(T) / (n_tab - 1) if n_tab > 1 else 1.0
     CONV = float(_CONV)
-    return (E, opt_As, opt_tabs, mw_As, mw_ws, mw_tabs, t0, dt, CONV)
+    return (E, opt_As, opt_tabs, opt_deltas, opt_masks,
+            mw_As, mw_ws, mw_tabs, mw_phases, t0, dt, CONV)
 
 
 def build_hard_rhs(fields_meta, T, n_tab=_TAB_N):
@@ -140,12 +183,13 @@ def build_hard_rhs(fields_meta, T, n_tab=_TAB_N):
 
     数组在闭包外预打包（Julia 经验：打包/查表在热循环外做一次）。
     """
-    E, opt_As, opt_tabs, mw_As, mw_ws, mw_tabs, t0, dt, CONV = \
+    (E, opt_As, opt_tabs, opt_deltas, opt_masks,
+     mw_As, mw_ws, mw_tabs, t0, dt, CONV) = \
         _pack_hard(fields_meta, T, n_tab=n_tab)
 
     def rhs(tv, y):
-        return _rhs_hard(tv, y, E, opt_As, opt_tabs, mw_As, mw_ws,
-                         mw_tabs, t0, dt, CONV)
+        return _rhs_hard(tv, y, E, opt_As, opt_tabs, opt_deltas, opt_masks,
+                         mw_As, mw_ws, mw_tabs, t0, dt, CONV)
     return rhs
 
 

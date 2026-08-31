@@ -43,26 +43,36 @@ from .dop853 import _dop853_driver, _env_at, _env_tab, _TAB_N
 _VDD_MIN_FRAC = 1e-4
 
 
-def _embed_triplets(A, side, N):
-    """单原子 A（N×N）→ 两体嵌入三元组 (rows, cols, vals)。
+def _embed_triplets(A, side, N, mask=None):
+    """单原子 A（N×N）→ 两体嵌入三元组 (rows, cols, vals[, signs])。
 
     side='A'：A⊗I（k=(i,j)→i·N+j，仅 i 变化）；side='B'：I⊗A（仅 j 变化）。
     返回按 row 排序（写顺序化，numba 标量循环更快）。
+    mask 提供时（光场拍频）：signs[每元素] = mask[单原子行]−mask[单原子列]
+    ∈{±1,0}——旋转系内拍频相位 exp(iC·δ·t·sign) 的符号（t10：exp 非 cos）。
     """
     ii, jj = np.nonzero(np.abs(np.asarray(A, float)) > 1e-15)
     rows, cols, vals = [], [], []
+    has_mask = mask is not None
+    signs = [] if has_mask else None
     if side == 'A':
         for a, b in zip(ii, jj):
+            s = mask[a] - mask[b] if has_mask else 0
             for j in range(N):
                 rows.append(a * N + j)
                 cols.append(b * N + j)
                 vals.append(float(A[a, b]))
+                if has_mask:
+                    signs.append(s)
     else:
         for a, b in zip(ii, jj):
+            s = mask[a] - mask[b] if has_mask else 0
             for i in range(N):
                 rows.append(i * N + a)
                 cols.append(i * N + b)
                 vals.append(float(A[a, b]))
+                if has_mask:
+                    signs.append(s)
     rows = np.asarray(rows, np.int64)
     cols = np.asarray(cols, np.int64)
     vals = np.asarray(vals, float)
@@ -71,14 +81,22 @@ def _embed_triplets(A, side, N):
         rows = rows[o]
         cols = cols[o]
         vals = vals[o]
+        if has_mask:
+            signs = np.asarray(signs, np.int8)[o]
+    if has_mask:
+        return rows, cols, vals, np.asarray(signs, np.int8)
     return rows, cols, vals
 
 
 def _pack_pair_hard(fields_meta_A, fields_meta_B, states, T, vdd_sp, n_tab):
-    """→ (E_A, E_B, fld_rows, fld_cols, fld_vals, fld_envs, fld_ws, fld_ptr,
+    """→ (E_A, E_B, fld_rows, fld_cols, fld_vals, fld_envs, fld_phase_tabs,
+         fld_ptr, fld_deltas, fld_sgns,
          vdd_rows, vdd_cols, vdd_vals, vdd_grp_start, vdd_grp_dE, t0, dt, CONV)
     E_A/E_B：每原子 IP 能量（各自减 min）；fld_*：全部场项三元组
-    （光场 ω=0 → cos(0)=1，微波 ω 保留）；vdd_*：V_dd 按 dE 排序分组。
+    （光场相位表=0 → cos(0)=1，微波相位表=C·ω·t 或 phase_fn——t18 统一
+    cos(φ_f(t)) 任意相位）；fld_deltas：光场拍频 δ=ω_f−ω_ref（微波/首场=0）；
+    fld_sgns：每三元组相位符号 m[i]−m[k]（δ=0 项为 0）；
+    vdd_*：V_dd 按 dE 排序分组。
     """
     N = len(states)
     E_lab = np.array([s['E_mhz'] for s in states], float)
@@ -90,32 +108,52 @@ def _pack_pair_hard(fields_meta_A, fields_meta_B, states, T, vdd_sp, n_tab):
                            for i in range(N) for j in range(N)])
 
     # ---- 场项 ----
-    fld_rows_l, fld_cols_l, fld_vals_l, fld_env_l, fld_w_l = \
-        [], [], [], [], []
+    fld_rows_l, fld_cols_l, fld_vals_l, fld_env_l = [], [], [], []
+    fld_phase_l, fld_delta_l, fld_sgn_l = [], [], []
     for side, meta in (('A', fields_meta_A), ('B', fields_meta_B)):
-        for A_opt, wf, *_ in meta['opt_terms']:
-            r, c, v = _embed_triplets(A_opt, side, N)
+        for tup in meta['opt_terms']:
+            A_opt, wf = tup[0], tup[1]
+            omega_f = float(tup[2])
+            omega_ref = float(tup[4]) if len(tup) > 4 else omega_f
+            mask = tup[5] if len(tup) > 5 else None
+            delta = omega_f - omega_ref
+            if delta != 0.0 and mask is not None:
+                r, c, v, sg = _embed_triplets(A_opt, side, N, mask)
+                fld_sgn_l.append(sg)
+            else:
+                r, c, v = _embed_triplets(A_opt, side, N)
+                fld_sgn_l.append(np.zeros(r.size, np.int8))
             fld_rows_l.append(r)
             fld_cols_l.append(c)
             fld_vals_l.append(v)
             fld_env_l.append(_env_tab(wf, T, n_tab))
-            fld_w_l.append(0.0)                      # 光场：无 cos 载波
+            fld_phase_l.append(np.zeros(n_tab))        # 光场：cos(0)=1
+            fld_delta_l.append(delta)
         for g in meta['mw_groups']:
             w = float(g['omega_mhz'])
+            ph_fn = g.get('phase_fn')
             for A, wf in zip(g['As'], g['envs']):
                 r, c, v = _embed_triplets(A, side, N)
                 fld_rows_l.append(r)
                 fld_cols_l.append(c)
                 fld_vals_l.append(v)
                 fld_env_l.append(_env_tab(wf, T, n_tab))
-                fld_w_l.append(w)                    # 微波：cos 载波保留
+                if ph_fn is None:
+                    ts = np.linspace(0.0, float(T), n_tab)
+                    fld_phase_l.append(_CONV * w * ts)   # 定频 φ=C·ω·t
+                else:
+                    fld_phase_l.append(_env_tab(ph_fn, T, n_tab))
+                fld_delta_l.append(0.0)
+                fld_sgn_l.append(np.zeros(r.size, np.int8))
     n_terms = len(fld_rows_l)
     if n_terms:
         fld_rows = np.concatenate(fld_rows_l)
         fld_cols = np.concatenate(fld_cols_l)
         fld_vals = np.concatenate(fld_vals_l)
         fld_envs = np.stack(fld_env_l)
-        fld_ws = np.asarray(fld_w_l, float)
+        fld_phase_tabs = np.stack(fld_phase_l)
+        fld_deltas = np.asarray(fld_delta_l, float)
+        fld_sgns = np.concatenate(fld_sgn_l)
         ptr = np.zeros(n_terms + 1, np.int64)
         for k, r in enumerate(fld_rows_l):
             ptr[k + 1] = ptr[k] + r.size
@@ -124,7 +162,9 @@ def _pack_pair_hard(fields_meta_A, fields_meta_B, states, T, vdd_sp, n_tab):
         fld_cols = np.zeros(0, np.int64)
         fld_vals = np.zeros(0, float)
         fld_envs = np.zeros((0, n_tab))
-        fld_ws = np.zeros(0)
+        fld_phase_tabs = np.zeros((0, n_tab))
+        fld_deltas = np.zeros(0)
+        fld_sgns = np.zeros(0, np.int8)
         ptr = np.zeros(1, np.int64)
 
     # ---- V_dd：相位扭曲 + 按 dE 分组 ----
@@ -170,7 +210,9 @@ def _pack_pair_hard(fields_meta_A, fields_meta_B, states, T, vdd_sp, n_tab):
     t0 = 0.0
     dt = float(T) / (n_tab - 1) if n_tab > 1 else 1.0
     CONV = float(_CONV)
-    return (E_A, E_B, fld_rows, fld_cols, fld_vals, fld_envs, fld_ws, ptr,
+    return (E_A, E_B, fld_rows, fld_cols, fld_vals, fld_envs,
+            fld_phase_tabs, ptr,
+            fld_deltas, fld_sgns,
             vdd_rows, vdd_cols, vdd_vals, grp_start, grp_dE, t0, dt, CONV)
 
 
@@ -179,9 +221,16 @@ def _pack_pair_hard(fields_meta_A, fields_meta_B, states, T, vdd_sp, n_tab):
 # ============================================================
 @njit(cache=True)
 def _rhs_hard_pair(t, y, E_A, E_B, fld_rows, fld_cols, fld_vals, fld_envs,
-                   fld_ws, fld_ptr, vdd_rows, vdd_cols, vdd_vals,
+                   fld_phase_tabs, fld_ptr, fld_deltas, fld_sgns,
+                   vdd_rows, vdd_cols, vdd_vals,
                    vdd_grp_start, vdd_grp_dE, t0t, dtt, CONV):
-    """两体 hard RHS：y' = −iC·[u∘(Ṽ·(conj(u)∘y)) + V_dd_twisted·y]。"""
+    """两体 hard RHS：y' = −iC·[u∘(Ṽ·(conj(u)∘y)) + V_dd_twisted·y]。
+
+    光场拍频：δ=ω_f−ω_ref ≠ 0 的项乘 exp(iC·δ·t·sgn)（sgn=每三元组
+    相位符号，m[i]−m[k]；δ=0 逐位退化——t10 验证 exp 拍频正确）。
+    微波（t18）：cos(φ_f(t)) 相位表插值——定频 φ=C·ω·t（光场相位表=0
+    → cos(0)=1），变频/任意相位由 phase_fn 采样。
+    """
     N = E_A.size
     N2 = N * N
     uA = np.exp(1j * CONV * E_A * t)
@@ -196,14 +245,22 @@ def _rhs_hard_pair(t, y, E_A, E_B, fld_rows, fld_cols, fld_vals, fld_envs,
     # **不再**乘 u_pair）分开——混用会把 V_dd 项多乘一个 u[k]。
     dy_f = np.zeros(N2, np.complex128)
     dy_v = np.zeros(N2, np.complex128)
-    # 场项（逐项三元组；光场 ω=0 → cos(0)=1）
+    # 场项（逐项三元组；光场相位表=0 → cos(0)=1，微波相位表=φ_f(t)）
     n_terms = fld_ptr.size - 1
     for ti in range(n_terms):
         c = _env_at(fld_envs[ti], t, t0t, dtt)
-        cw = c * np.cos(CONV * fld_ws[ti] * t)
+        cw = c * np.cos(_env_at(fld_phase_tabs[ti], t, t0t, dtt))
         if cw != 0.0:
-            for m in range(fld_ptr[ti], fld_ptr[ti + 1]):
-                dy_f[fld_rows[m]] += fld_vals[m] * cw * zu[fld_cols[m]]
+            d = fld_deltas[ti]
+            if d != 0.0:
+                p1 = np.exp(1j * CONV * d * t)
+                p2 = p1.conjugate()
+                for m in range(fld_ptr[ti], fld_ptr[ti + 1]):
+                    ph = p1 if fld_sgns[m] > 0 else p2
+                    dy_f[fld_rows[m]] += fld_vals[m] * cw * ph * zu[fld_cols[m]]
+            else:
+                for m in range(fld_ptr[ti], fld_ptr[ti + 1]):
+                    dy_f[fld_rows[m]] += fld_vals[m] * cw * zu[fld_cols[m]]
     # V_dd（相位扭曲按 dE 分组：每组一个 exp；相位 e^{iC·(E_lab[k]−E_lab[l])t}
     # 已含旋转系 Ω-twist 与 IP u-twist 的合并，无额外 u 因子）
     n_grp = vdd_grp_dE.size
