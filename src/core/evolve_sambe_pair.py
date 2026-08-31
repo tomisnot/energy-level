@@ -527,7 +527,7 @@ def _pair_m_probe(E_pair, N, groups, M, vdd_sp, gamma_pair_mhz, psi0_2d,
 # ============================================================
 # 主入口
 # ============================================================
-def evolve_exact_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
+def evolve_sambe_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
                       vdd_matrix=None, R_um=None, theta_deg=0.0,
                       phi_deg=0.0, cache=None, tol=1e-6,
                       decays_A=None, decays_B=None,
@@ -760,4 +760,5 @@ def evolve_exact_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
 
 
 # ---- t19 函数级改名兼容别名（旧名 = 新名，外部零改动）----
+evolve_exact_pair = evolve_sambe_pair
 _PairSambeSetup.K_seg = _PairSambeSetup.hamiltonian_seg
