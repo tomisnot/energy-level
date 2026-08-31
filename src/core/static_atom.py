@@ -709,13 +709,28 @@ def direct_ac_stark_shifts(cache, groups, address_cfg, B_gauss=0.0,
     # 二能级与全伙伴基组中均不出现（n=1 即收敛至 0.1%），屏蔽反而把
     # 真实远失谐位移硬置 0（~6.6 MHz 偏差）——已删除，统一按 n_photon
     # 管理精度（默认 4；极端强光/近简并流形可调高并加收敛自检）。
-    H = np.zeros((N * M, N * M), dtype=np.complex128)
-    for p in range(M):
-        sl = slice(p * N, (p + 1) * N)
-        H[sl, sl] = np.diag(E) + (p - n_photon) * freq_mhz * np.eye(N)
-    for p in range(M - 1):
-        H[p * N:(p + 1) * N, (p + 1) * N:(p + 2) * N] = C
-        H[(p + 1) * N:(p + 2) * N, p * N:(p + 1) * N] = C.conj().T
+    # t23：实数化——Floquet H 实测完全实对称（C_unit 虚部恒 0、E 实对角、
+    # 无耗散），实数 eigh（syevd）比复数（heevd）快 ~7×（2142 维
+    # 16.8s→2.4s）。若 C 出现非零虚部（偶极复相位场景）回退复数路径，
+    # 物理不变，仅数值路径。
+    if not np.any(C.imag):
+        H = np.zeros((N * M, N * M), dtype=np.float64)
+        for p in range(M):
+            sl = slice(p * N, (p + 1) * N)
+            H[sl, sl] = np.diag(E) + (p - n_photon) * freq_mhz * np.eye(N)
+        for p in range(M - 1):
+            a, b = p * N, (p + 1) * N
+            H[a:b, b:b + N] = C.real
+            H[b:b + N, a:b] = C.real.T
+    else:
+        H = np.zeros((N * M, N * M), dtype=np.complex128)
+        for p in range(M):
+            sl = slice(p * N, (p + 1) * N)
+            H[sl, sl] = np.diag(E) + (p - n_photon) * freq_mhz * np.eye(N)
+        for p in range(M - 1):
+            a, b = p * N, (p + 1) * N
+            H[a:b, b:b + N] = C
+            H[b:b + N, a:b] = C.conj().T
     evals, evecs = np.linalg.eigh(H)
     keys = _occ_keys_direct(states)
     out = _floquet_shifts(evals, evecs, E, keys, n_photon)
@@ -735,7 +750,10 @@ def _floquet_shifts(evals, evecs, E, keys, n_photon, E0mat=None):
     M = 2 * n_photon + 1
     p0 = n_photon                          # 光子块 0
     if E0mat is None:
-        E0mat = np.zeros((N * M, N), dtype=np.complex128)
+        # t23：实数路径（Floquet H 实对称 → evecs 实）——E0mat 用 float64；
+        # 若调用方传复数 evecs（复数回退路径），实数 E0mat 仍兼容
+        # （np.conj(evecs).T @ E0mat 对复/实混合正确）。
+        E0mat = np.zeros((N * M, N))
         E0mat[p0 * N:(p0 + 1) * N, :] = np.eye(N)
     ov = np.abs(np.conj(evecs).T @ E0mat) ** 2     # (NM, N)：本征态对源的重叠
     out = {}
@@ -782,17 +800,23 @@ def direct_ac_stark_sweep(cache, groups, address_cfg, B_gauss, intensities,
     # 与光强无关的光子块结构：H(I) = H_diag + E0(I)·H_coup（无里德堡屏蔽，
     # 见 direct_ac_stark_shifts —— 实测截断伪影不存在，屏蔽反致真实位移清零）
     NM = N * M
-    H_diag = np.zeros((NM, NM), dtype=np.complex128)
+    # t23：实数化（同 direct_ac_stark_shifts）——C_unit 虚部恒 0 → 实对称路径
+    cplx = np.any(C_unit.imag)
+    H_diag = np.zeros((NM, NM), dtype=np.complex128 if cplx else np.float64)
     for p in range(M):
         sl = slice(p * N, (p + 1) * N)
         H_diag[sl, sl] = np.diag(E) + (p - n_photon) * freq_mhz * np.eye(N)
-    H_coup = np.zeros((NM, NM), dtype=np.complex128)
+    H_coup = np.zeros((NM, NM), dtype=np.complex128 if cplx else np.float64)
     for p in range(M - 1):
         a, b = p * N, (p + 1) * N
-        H_coup[a:b, b:b + N] = C_unit
-        H_coup[b:b + N, a:b] = C_unit.conj().T
+        if cplx:
+            H_coup[a:b, b:b + N] = C_unit
+            H_coup[b:b + N, a:b] = C_unit.conj().T
+        else:
+            H_coup[a:b, b:b + N] = C_unit.real
+            H_coup[b:b + N, a:b] = C_unit.real.T
     p0 = n_photon
-    E0mat = np.zeros((NM, N), dtype=np.complex128)
+    E0mat = np.zeros((NM, N), dtype=np.complex128 if cplx else np.float64)
     E0mat[p0 * N:(p0 + 1) * N, :] = np.eye(N)
     shifts = {k: np.zeros(len(intensities)) for k in keys}
     for t, I in enumerate(intensities):
