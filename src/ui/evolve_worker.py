@@ -44,8 +44,11 @@ class EvolveWorker(QThread):
                     decays=self.decays)
             else:
                 # ac_shift 已内嵌各 field（随包络时变），无需另传
+                # t25：显示名 'sambe' → 引擎 'exact'（Sambe 光子块）
                 res = evolve.evolve(self.states, self.fields, self.psi0,
-                                    self.t_grid, method=self.method,
+                                    self.t_grid,
+                                    method={'sambe': 'exact'}.get(
+                                        self.method, self.method),
                                     backend=self.backend,
                                     progress_arr=self.progress_arr,
                                     log=self.log_msg.emit,
@@ -173,6 +176,8 @@ class EvolveWorkerPair(QThread):
         self.waves_A = waves_A
         self.waves_B = waves_B
         self.use_julia = use_julia
+        # t25：显示名 'sambe' → 引擎 'exact'（Sambe 光子块；分支调度统一）
+        self.method = {'sambe': 'exact'}.get(method, method)
         self.states = states
         self.fields_A = fields_A
         self.fields_B = fields_B

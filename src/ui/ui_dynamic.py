@@ -31,6 +31,9 @@ from ..core import waveforms
 from .evolve_worker import EvolveWorker
 from .ui_waves import state_key, find_state_index
 
+# ip4 的近/远分流边界（原共振 cut 控件，t25 移除 UI 后内部默认，单位 MHz）
+_IP4_NEAR_CUTOFF_MHZ = 5000.0
+
 
 class DynamicPanel(QWidget):
     """动态分析：上光场波形、下态演化曲线。
@@ -92,6 +95,37 @@ class DynamicPanel(QWidget):
         p.setSpacing(6)
 
         # ---- 单原子/双原子切换 ----
+        # ---- V_dd 参数（仅双原子模式可见；t25：与"双原子"单选同一行紧凑）----
+        self._vdd_box = QWidget()
+        vdd_lay = QHBoxLayout(self._vdd_box)
+        vdd_lay.setContentsMargins(0, 0, 0, 0)
+        vdd_lay.setSpacing(2)
+        vdd_lay.addWidget(QLabel('R:'))
+        self.vdd_R_sb = QDoubleSpinBox()
+        self.vdd_R_sb.setRange(0.1, 1000.0)
+        self.vdd_R_sb.setValue(5.0)
+        self.vdd_R_sb.setDecimals(1)
+        self.vdd_R_sb.setFixedWidth(64)
+        self.vdd_R_sb.setToolTip('原子间距 R（μm）')
+        vdd_lay.addWidget(self.vdd_R_sb)
+        vdd_lay.addWidget(QLabel('θ:'))
+        self.vdd_theta_sb = QDoubleSpinBox()
+        self.vdd_theta_sb.setRange(0.0, 180.0)
+        self.vdd_theta_sb.setValue(0.0)
+        self.vdd_theta_sb.setDecimals(1)
+        self.vdd_theta_sb.setFixedWidth(56)
+        self.vdd_theta_sb.setToolTip('极角 θ（°）')
+        vdd_lay.addWidget(self.vdd_theta_sb)
+        vdd_lay.addWidget(QLabel('φ:'))
+        self.vdd_phi_sb = QDoubleSpinBox()
+        self.vdd_phi_sb.setRange(0.0, 360.0)
+        self.vdd_phi_sb.setValue(0.0)
+        self.vdd_phi_sb.setDecimals(1)
+        self.vdd_phi_sb.setFixedWidth(56)
+        self.vdd_phi_sb.setToolTip('方位角 φ（°）')
+        vdd_lay.addWidget(self.vdd_phi_sb)
+        self._vdd_box.setVisible(False)
+
         row_mode = QHBoxLayout()
         self._mode_group = QButtonGroup(self)
         self._radio_single = QRadioButton('单原子')
@@ -102,34 +136,9 @@ class DynamicPanel(QWidget):
         self._mode_group.idClicked.connect(self._on_mode_changed)
         row_mode.addWidget(self._radio_single)
         row_mode.addWidget(self._radio_pair)
+        row_mode.addWidget(self._vdd_box)      # t25：紧跟"双原子"后，同一行
         row_mode.addStretch(1)
         p.addLayout(row_mode)
-
-        # ---- V_dd 参数（仅双原子模式可见）----
-        self._vdd_box = QWidget()
-        vdd_lay = QHBoxLayout(self._vdd_box)
-        vdd_lay.setContentsMargins(0, 0, 0, 0)
-        vdd_lay.setSpacing(4)
-        vdd_lay.addWidget(QLabel('R(μm)'))
-        self.vdd_R_sb = QDoubleSpinBox()
-        self.vdd_R_sb.setRange(0.1, 1000.0)
-        self.vdd_R_sb.setValue(5.0)
-        self.vdd_R_sb.setDecimals(1)
-        vdd_lay.addWidget(self.vdd_R_sb)
-        vdd_lay.addWidget(QLabel('θ(°)'))
-        self.vdd_theta_sb = QDoubleSpinBox()
-        self.vdd_theta_sb.setRange(0.0, 180.0)
-        self.vdd_theta_sb.setValue(0.0)
-        self.vdd_theta_sb.setDecimals(1)
-        vdd_lay.addWidget(self.vdd_theta_sb)
-        vdd_lay.addWidget(QLabel('φ(°)'))
-        self.vdd_phi_sb = QDoubleSpinBox()
-        self.vdd_phi_sb.setRange(0.0, 360.0)
-        self.vdd_phi_sb.setValue(0.0)
-        self.vdd_phi_sb.setDecimals(1)
-        vdd_lay.addWidget(self.vdd_phi_sb)
-        p.addWidget(self._vdd_box)
-        self._vdd_box.setVisible(False)
 
         # ---- 波形管理：单原子与双原子「原子A」共用同一面板 ----
         # 先在单原子模式校准波形 → 切到双原子时原子 A 原样迁移，无需重配。
@@ -203,22 +212,14 @@ class DynamicPanel(QWidget):
         self.npts_sb = QSpinBox()
         self.npts_sb.setRange(10, 50000); self.npts_sb.setValue(1501)
         rowt.addWidget(self.npts_sb)
-        rowt.addWidget(QLabel('共振cut(MHz)'))
-        self.near_cutoff_sb = QDoubleSpinBox()
-        self.near_cutoff_sb.setRange(1.0, 1e6)
-        self.near_cutoff_sb.setDecimals(0)
-        self.near_cutoff_sb.setValue(5000.0)
-        self.near_cutoff_sb.setToolTip(
-            'real_field 近/远分流边界：缺省 5 GHz 保守地板（相干包含整个'
-            '超精细/精细流形）；协议场景（STIRAP/拉曼想只相干驱动目标对）'
-            '可调小（如 50 MHz）——流形其余态作远失谐 AC 位移（二阶，Ω/Δ≪1 时准确）')
-        rowt.addWidget(self.near_cutoff_sb)
         rowt.addWidget(QLabel('方法'))
         self.method_cb = QComboBox()
-        # auto：无耗散走 ip4 / 有耗散走 lindblad；exact：第一性原理引擎
-        # （实验室系无 RWA/无旋转系/无近远分流，Sambe 光子块 + 包络自适应）。
-        # hard（t20）：微波硬积分 DOP853 零近似 + 光场旋转系（numba 加速）。
-        self.method_cb.addItems(['auto', 'ip4', 'exact', 'hard'])
+        # t25：选项重构——ip4：RWA 相互作用绘景 RK4（近/远分流用内部默认
+        # 5 GHz，不暴露 UI）；sambe：第一性原理 Sambe 光子块（实验室系无
+        # RWA/无旋转系/无近远分流，原 'exact' 更名，引擎 evolve_sambe）；
+        # hard：微波硬积分 DOP853 零近似 + 光场旋转系 + 耗散（numba 加速）。
+        self.method_cb.addItems(['ip4', 'sambe', 'hard'])
+        self.method_cb.setCurrentText('hard')      # t25：默认 hard
         self.method_cb.currentTextChanged.connect(self._on_method_changed)
         rowt.addWidget(self.method_cb)
         p.addLayout(rowt)
@@ -275,9 +276,23 @@ class DynamicPanel(QWidget):
         p.addWidget(self.decay_custom_box)
         self.decay_custom_box.setVisible(False)     # 默认自动档
 
+        # ---- 显示选项 + 荧光读出（t25）----
+        row_disp = QHBoxLayout()
+        self.display_mode_cb = QComboBox()
+        self.display_mode_cb.addItems(['态布居', '荧光读出'])
+        self.display_mode_cb.setToolTip(
+            '态布居：前 N 态布居曲线；荧光读出：指定读出能级上的概率'
+            '（单原子 |⟨i|ψ⟩|²；双原子 A/B 各自约化概率）')
+        self.display_mode_cb.currentIndexChanged.connect(self._on_display_mode)
+        row_disp.addWidget(self.display_mode_cb)
+        self.readout_cb = QComboBox()
+        self.readout_cb.setToolTip('荧光读出能级（基组全部子能级，F 区分）')
+        row_disp.addWidget(self.readout_cb, 1)
+        self.readout_cb.setVisible(False)
         self.run_btn = QPushButton('运行演化')
         self.run_btn.clicked.connect(self._run)
-        p.addWidget(self.run_btn)
+        row_disp.addWidget(self.run_btn)
+        p.addLayout(row_disp)
         # 直接作为主程序右侧面板的普通区块（无独立滚动区，融入同一层级）
         return panel
 
@@ -376,6 +391,23 @@ class DynamicPanel(QWidget):
             _fill(combo,
                   pending.get('A' if k == 0 else 'B') if pending else None,
                   cur_t[k])
+        # 荧光读出态下拉（基组全部子能级；label 含 F 区分——低激发超精细
+        # 态如 '6P3/2 F=3.0, m_F=+3.0'，里德堡如 '60S1/2 m_J=+0.5'）
+        cur_r = self.readout_cb.currentText()
+        self.readout_cb.clear()
+        for i, s in enumerate(states):
+            self.readout_cb.addItem(s['label'], i)
+        if cur_r:
+            idx = self.readout_cb.findText(cur_r)
+            if idx >= 0:
+                self.readout_cb.setCurrentIndex(idx)
+        elif getattr(self, '_pending_readout', ''):
+            idx = self.readout_cb.findText(self._pending_readout)
+            if idx >= 0:
+                self.readout_cb.setCurrentIndex(idx)
+            self._pending_readout = ''
+        elif self.readout_cb.count():
+            self.readout_cb.setCurrentIndex(0)
         self._pending_psi_keys = None
         self._refresh_decay_combos(states)
         # 基组变化 → 波形面板辅助 g/e 下拉数据源同步（A ≡ 共享面板，去重）
@@ -576,7 +608,9 @@ class DynamicPanel(QWidget):
                 'npts': self.npts_sb.value(),
                 'method': self.method_cb.currentText(),
                 'decay_mode': self.decay_mode_cb.currentIndex(),
-                'near_cutoff': self.near_cutoff_sb.value(),
+                # t25：显示选项（0 态布居 / 1 荧光读出）+ 读出态（身份文本）
+                'display_mode': self.display_mode_cb.currentIndex(),
+                'readout': self.readout_cb.currentText(),
             },
             'pair': {
                 'R_um': self.vdd_R_sb.value(),
@@ -622,8 +656,17 @@ class DynamicPanel(QWidget):
         # 科学参数
         self.tmax_sb.setValue(float(dyn.get('t_max', 1500.0)))
         self.npts_sb.setValue(int(dyn.get('npts', 1501)))
-        self.method_cb.setCurrentText(dyn.get('method', 'auto'))
-        self.near_cutoff_sb.setValue(float(dyn.get('near_cutoff', 5000.0)))
+        # t25：旧档方法名映射（auto→ip4、exact→sambe）；未知/缺省 → hard
+        _m = {'auto': 'ip4', 'exact': 'sambe'}.get(
+            dyn.get('method', 'hard'), dyn.get('method', 'hard'))
+        if _m not in ('ip4', 'sambe', 'hard'):
+            _m = 'hard'
+        self.method_cb.setCurrentText(_m)
+        # 显示选项 + 读出态（读出态文本在 _on_m_changed 填充时按 label 恢复）
+        self.display_mode_cb.setCurrentIndex(
+            int(dyn.get('display_mode', 0)))
+        self._on_display_mode()
+        self._pending_readout = str(dyn.get('readout', ''))
         # 自发辐射档位（双原子模式现支持寿命/丢失通道，同样恢复）
         self.decay_mode_cb.setCurrentIndex(int(dyn.get('decay_mode', 0)))
         pair = state.get('pair', {})
@@ -715,15 +758,34 @@ class DynamicPanel(QWidget):
         return float(fld.b_gauss()) if fld is not None else 0.0
 
     def _on_method_changed(self, method):
-        """方法切换：exact/hard 无近/远分流概念，共振cut 不适用。"""
-        self.near_cutoff_sb.setEnabled(method not in ('exact', 'hard'))
+        """t25：方法切换（ip4/sambe/hard）；near_cutoff 控件已移除，
+        ip4 用内部默认 5 GHz。无额外 UI 联动。"""
+        pass
+
+    def _on_display_mode(self, *_):
+        """显示选项切换：荧光读出 → 显示读出态下拉；重绘上次结果。"""
+        fluo = self.display_mode_cb.currentIndex() == 1
+        self.readout_cb.setVisible(fluo)
+        self._redraw_last()
+
+    def _redraw_last(self):
+        """按当前显示选项重绘最近一次结果（无结果则不动）。"""
+        res = getattr(self, '_last_res', None)
+        if res is None:
+            return
+        states = getattr(self, '_run_states', None)
+        if self._is_two_body:
+            self._draw_bot_pair(res)
+        elif states is not None:
+            self._draw_bot(states, res)
 
     def _run_single_body(self, states, t, decays):
         """单原子演化路径。"""
         waves = list(self.wave_panel.waves)
         method = self.method_cb.currentText()
-        if method == 'exact':
-            # 第一性原理场：全部偶极对耦合，无近/远分流与静态 AC 注入
+        if method == 'sambe':
+            # 第一性原理场（Sambe 光子块）：全部偶极对耦合，无近/远分流与
+            # 静态 AC 注入（原 'exact' 更名，引擎 evolve_sambe）
             fields = waveforms.build_fields_exact(self.cache, states, waves)
         elif method == 'hard':
             # t20：两场引擎 meta（光旋转 + 微波硬积分）——普通波走
@@ -741,9 +803,10 @@ class DynamicPanel(QWidget):
                     arbitrary_mw_group(self.cache, states, w))
             fields = meta
         else:
+            # ip4：RWA 近/远分流用内部默认 5 GHz（t25 移除 UI 控件）
             fields = waveforms.build_fields(
                 waves, states, self.cache,
-                near_cutoff_mhz=self.near_cutoff_sb.value(),
+                near_cutoff_mhz=_IP4_NEAR_CUTOFF_MHZ,
                 B_gauss=self._field_B())
         self.wave_data = waveforms.waveforms_to_env(waves, t)
         psi0 = self.psi_combo.currentIndex()
@@ -790,20 +853,21 @@ class DynamicPanel(QWidget):
 
             fields_A = _meta(waves_A)
             fields_B = _meta(waves_B)
-        elif method == 'exact':
-            # 第一性两体：全部偶极对耦合，无近/远分流与静态 AC 注入
+        elif method == 'sambe':
+            # 第一性两体（Sambe）：全部偶极对耦合，无近/远分流与静态 AC 注入
             fields_A = waveforms.build_fields_exact(self.cache, states,
                                                     waves_A)
             fields_B = waveforms.build_fields_exact(self.cache, states,
                                                     waves_B)
         else:
+            # ip4：内部默认 5 GHz 近/远分流（t25）
             fields_A = waveforms.build_fields(
                 waves_A, states, self.cache,
-                near_cutoff_mhz=self.near_cutoff_sb.value(),
+                near_cutoff_mhz=_IP4_NEAR_CUTOFF_MHZ,
                 B_gauss=self._field_B())
             fields_B = waveforms.build_fields(
                 waves_B, states, self.cache,
-                near_cutoff_mhz=self.near_cutoff_sb.value(),
+                near_cutoff_mhz=_IP4_NEAR_CUTOFF_MHZ,
                 B_gauss=self._field_B())
         # 波形预览：合并 A+B
         env_A = waveforms.waveforms_to_env(waves_A, t)
@@ -876,10 +940,10 @@ class DynamicPanel(QWidget):
             _which('julia') is not None or
             os.path.isfile('D:\julia-1.10.10\bin\julia.exe') or
             os.environ.get('JULIA_EXE'))
-        use_jl = (method == 'exact' and _julia_ok and
+        use_jl = (method == 'sambe' and _julia_ok and
                   waves_A is not None and waves_B is not None)
         if use_jl:
-            self.main.log('[双原子] method=exact → Julia 后端')
+            self.main.log('[双原子] method=sambe → Julia 后端')
         self._worker = EvolveWorkerPair(
             states, fields_A, fields_B, psi0_A, psi0_B,
             t, self.progress_arr,
@@ -1062,6 +1126,9 @@ class DynamicPanel(QWidget):
 
     def _draw_bot(self, states, res):
         """底部：态布居（只画前 N 个平均布居最大的态，N=topn_sb）+ loss 曲线。"""
+        if self.display_mode_cb.currentIndex() == 1:
+            self._draw_readout_single(states, res)
+            return
         ax = self.ax_bot; ax.clear()
         ax.set_xlabel('t (ns)'); ax.set_ylabel('布居'); ax.grid(alpha=0.3)
         pops = res['pops']
@@ -1081,6 +1148,9 @@ class DynamicPanel(QWidget):
 
     def _draw_bot_pair(self, res):
         """双原子底部：两体态布居（按平均布居取前 N 个 product 态）。"""
+        if self.display_mode_cb.currentIndex() == 1:
+            self._draw_readout_pair(res)
+            return
         ax = self.ax_bot; ax.clear()
         pops_2d = res['pops_2d']
         states_2d = res.get('states_2d', [])
@@ -1103,4 +1173,52 @@ class DynamicPanel(QWidget):
         ax.margins(x=0)                     # 取消 x 方向边距 → 贴齐 y 轴与右缘
         ax.set_xlim(res['t'][0], res['t'][-1])
         ax.legend(fontsize=7, ncol=1)
+        self.canvas_bot.draw_idle()
+
+    def _readout_index(self, n_states):
+        """荧光读出态索引（基组索引；越界/无选择回退 0）。"""
+        i = self.readout_cb.currentData() if self.readout_cb.count() else None
+        if i is None or not (0 <= i < n_states):
+            return 0
+        return int(i)
+
+    def _draw_readout_single(self, states, res):
+        """单原子荧光读出：|⟨读出态|ψ⟩|² 随时间。
+
+        纯幺正演化下 pops 即 |⟨i|ψ⟩|²（精确读出概率）；耗散时 loss 不算
+        读出（离场），曲线为 |⟨i|ψ⟩|² 的存活部分——无需 psi（record_amp），
+        布居即投影模方。
+        """
+        ax = self.ax_bot; ax.clear()
+        ax.set_xlabel('t (ns)'); ax.set_ylabel('读出概率'); ax.grid(alpha=0.3)
+        i = self._readout_index(len(states))
+        pops = res['pops']
+        ax.plot(res['t'], pops[:, i], lw=1.6,
+                label=f'|⟨读出态|ψ⟩|²  {states[i]["label"]}')
+        ax.set_ylim(-0.02, 1.02)
+        ax.margins(x=0)
+        ax.set_xlim(res['t'][0], res['t'][-1])
+        ax.legend(fontsize=8)
+        self.canvas_bot.draw_idle()
+
+    def _draw_readout_pair(self, res):
+        """双原子荧光读出：A/B 两原子在读出态上的约化概率。
+
+        约化：ρ_A(i) = Σ_j pops_2d[i·N+j]，ρ_B(i) = Σ_j pops_2d[j·N+i]
+        （k=i·N+j 的 product 基排序；pops_2d 足够，无需 psi 投影）。
+        """
+        ax = self.ax_bot; ax.clear()
+        ax.set_xlabel('t (ns)'); ax.set_ylabel('读出概率'); ax.grid(alpha=0.3)
+        pops_2d = res['pops_2d']
+        N = int(round(np.sqrt(pops_2d.shape[1])))
+        i = self._readout_index(N)
+        lab = self.readout_cb.currentText()
+        ax.plot(res['t'], pops_2d[:, i * N:(i + 1) * N].sum(axis=1),
+                lw=1.4, label=f'A: ρ_A({lab})')
+        ax.plot(res['t'], pops_2d[:, i::N].sum(axis=1),
+                lw=1.4, ls='--', label=f'B: ρ_B({lab})')
+        ax.set_ylim(-0.02, 1.02)
+        ax.margins(x=0)
+        ax.set_xlim(res['t'][0], res['t'][-1])
+        ax.legend(fontsize=8)
         self.canvas_bot.draw_idle()

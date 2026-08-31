@@ -138,6 +138,32 @@ def test_dynamic(app, win):
           0 in top and len(top) == min(8, N))
     dyn._draw_bot(states, res); app.processEvents()
 
+    # ---- t25：方法重构（默认 hard、无 auto/exact、无 near_cutoff 控件）----
+    check('方法默认 hard', dyn.method_cb.currentText() == 'hard')
+    check('方法选项 ip4/sambe/hard',
+          [dyn.method_cb.itemText(i) for i in range(dyn.method_cb.count())]
+          == ['ip4', 'sambe', 'hard'])
+    check('无 near_cutoff 控件', not hasattr(dyn, 'near_cutoff_sb'))
+
+    # ---- t25：显示选项 + 荧光读出（单原子绘制 + 双原子约化）----
+    dyn.display_mode_cb.setCurrentIndex(1); app.processEvents()
+    check('荧光读出态下拉出现（含全部能级）',
+          dyn.readout_cb.isVisible() and dyn.readout_cb.count() == N)
+    res2 = {'t': t, 'pops': res['pops']}
+    dyn._run_states = list(states)
+    dyn._last_res = res2
+    dyn._draw_bot(states, res2); app.processEvents()
+    check('单原子荧光读出单线绘制', len(dyn.ax_bot.lines) == 1)
+    res3 = {'t': t, 'pops_2d': np.zeros((len(t), N * N))}
+    res3['pops_2d'][:, 3] = 0.4
+    dyn._is_two_body = True
+    dyn._draw_bot_pair(res3); app.processEvents()
+    check('双原子荧光读出 A/B 双线',
+          len(dyn.ax_bot.lines) == 2)
+    dyn._is_two_body = False
+    dyn.display_mode_cb.setCurrentIndex(0); app.processEvents()
+    check('显示模式恢复态布居', not dyn.readout_cb.isVisible())
+
     # ---- 自发辐射三档：自动（ARC 寿命）/ 禁用 / 自定义 ----
     check('自发辐射默认自动档 + 配置区隐藏',
           dyn.decay_mode_cb.currentIndex() == 0
@@ -165,7 +191,7 @@ def test_dynamic(app, win):
     dyn._add_decay()
     dyn.psi_combo.setCurrentIndex(0)
     dyn.tmax_sb.setValue(200.0); dyn.npts_sb.setValue(101)
-    dyn.method_cb.setCurrentText('auto')
+    dyn.method_cb.setCurrentText('ip4')    # t25：'auto' 移除；ip4+decays → lindblad
     dyn.wave_panel.waves.clear()       # 纯衰变场景：无波形
     dyn._run()
     t0 = time.perf_counter()
@@ -375,7 +401,7 @@ def test_stir_states(app):
                                   E_hf=float(e_hf), amps=amps))
     states = evolve.make_levels(cache, specs)
     waves = waveforms.restore_waves(data.get('waves', []))
-    cut = data['dynamic'].get('near_cutoff', 5000.0)
+    cut = 5000.0          # t25：near_cutoff 控件移除，ip4 用内部默认 5 GHz
     fields = waveforms.build_fields(waves, states, cache,
                                     near_cutoff_mhz=cut)
     check('STIRAP 存档恢复：波形 + 场非空',
