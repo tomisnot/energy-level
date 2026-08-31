@@ -235,6 +235,10 @@ def _dop853_driver(rhs, y0, t_eval, T, rtol, atol, max_step, prog, stat,
         h_step = h
         n_acc += 1
         prog[0] = min(t_new / T, 0.999)
+        # t21：取消支持——GUI 置 prog[1]≠0 时抛 RuntimeError（numba njit 内
+        # raise 已验证兼容），上层（worker）按 progress_arr[1]≠0 → 'cancelled'
+        if prog[1] != 0.0:
+            raise RuntimeError('cancelled')
         # 稠密输出：记录 (t, t_new] 内的 t_eval 点
         if i_eval < n_eval and t_eval[i_eval] <= t_new:
             dense_done = False

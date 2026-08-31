@@ -771,7 +771,26 @@ class DynamicPanel(QWidget):
         waves_A = list(self.wave_panel_A.waves)
         waves_B = list(self.wave_panel_B.waves)
         method = self.method_cb.currentText()
-        if method == 'exact':
+        if method == 'hard':
+            # t21：pair hard——各原子两场 meta（普通波 build_two_field +
+            # ArbitraryWave→arbitrary_mw_group）；V_dd 在主线程预计算
+            from ..core.evolve_twofield import (build_two_field,
+                                                arbitrary_mw_group)
+
+            def _meta(wvs):
+                reg = [w for w in wvs
+                       if not isinstance(w, waveforms.ArbitraryWave)]
+                arb = [w for w in wvs
+                       if isinstance(w, waveforms.ArbitraryWave)]
+                m = build_two_field(self.cache, states, reg)
+                for w in arb:
+                    m['mw_groups'].append(
+                        arbitrary_mw_group(self.cache, states, w))
+                return m
+
+            fields_A = _meta(waves_A)
+            fields_B = _meta(waves_B)
+        elif method == 'exact':
             # 第一性两体：全部偶极对耦合，无近/远分流与静态 AC 注入
             fields_A = waveforms.build_fields_exact(self.cache, states,
                                                     waves_A)

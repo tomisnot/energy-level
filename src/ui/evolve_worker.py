@@ -268,7 +268,18 @@ class EvolveWorkerPair(QThread):
 
     def run(self):
         try:
-            if self.method == 'exact' and self.use_julia:
+            if self.method == 'hard':
+                # t21：pair hard（fields_A/B 为 build_two_field meta）
+                from ..core.hard import evolve_hard_pair
+                res = evolve_hard_pair(
+                    self.states, self.fields_A, self.fields_B,
+                    self.psi0_A, self.psi0_B,
+                    t_grid=self.t_grid,
+                    vdd_matrix=self.vdd_matrix,
+                    decays_A=self.decays_A, decays_B=self.decays_B,
+                    progress_arr=self.progress_arr,
+                    log=self.log_msg.emit)
+            elif self.method == 'exact' and self.use_julia:
                 res = self._run_julia()
                 if res is not None:
                     self.done.emit(res, None)
@@ -283,7 +294,8 @@ class EvolveWorkerPair(QThread):
                     decays_A=self.decays_A, decays_B=self.decays_B,
                     progress_arr=self.progress_arr,
                     log=self.log_msg.emit)
-            else:
+            elif self.method != 'hard':
+                # hard 分支已在上方赋值 res；此处排除，避免 pair_evolve 覆盖
                 from ..core import pair_evolve
                 res = pair_evolve.pair_evolve(
                     self.states, self.fields_A, self.fields_B,
