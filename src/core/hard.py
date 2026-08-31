@@ -56,7 +56,7 @@ def _env_at(tab, t, t0, dt):
 
 @njit(cache=True)
 def _rhs_hard(t, y, E, opt_As, opt_tabs, opt_deltas, opt_masks,
-              mw_As, mw_ws, mw_tabs, mw_phases, t0, dt, CONV):
+              mw_As, mw_ws, mw_tabs, mw_phases, t0, dt, CONV, gamma=None):
     """单原子 hard RHS（光场旋转系 + 微波 cos(φ_f(t)) 硬积分，零近似）。
 
     y' = −iC·u·(Ṽ·(conj(u)∘y))，u = exp(iC·E·t)。
@@ -116,6 +116,11 @@ def _rhs_hard(t, y, E, opt_As, opt_tabs, opt_deltas, opt_masks,
             if vik != 0.0:
                 acc += vik * z[k]
         out[i] = -1j * CONV * u[i] * acc
+    # t24：耗散 NonHermitian 对角 −iΓ_MHz/2 → RHS −(C·Γ)/2·y
+    # （gamma 为 MHz；落点=丢失，与两体 hard 同语义）
+    if gamma is not None:
+        for i in range(N):
+            out[i] -= 0.5 * CONV * gamma[i] * y[i]
     return out
 
 
@@ -187,18 +192,20 @@ def _pack_hard(fields_meta, T, n_tab=_TAB_N):
             mw_As, mw_ws, mw_tabs, mw_phases, t0, dt, CONV)
 
 
-def build_hard_rhs(fields_meta, T, n_tab=_TAB_N):
+def build_hard_rhs(fields_meta, T, n_tab=_TAB_N, gamma=None):
     """fields_meta（build_two_field 输出）→ njit RHS 闭包（供 solve_ivp 使用）。
 
     数组在闭包外预打包（Julia 经验：打包/查表在热循环外做一次）。
+    gamma（N，MHz，可 None）：t24 耗散 NonHermitian 对角（落点=丢失）。
     """
     (E, opt_As, opt_tabs, opt_deltas, opt_masks,
-     mw_As, mw_ws, mw_tabs, t0, dt, CONV) = \
+     mw_As, mw_ws, mw_tabs, mw_phases, t0, dt, CONV) = \
         _pack_hard(fields_meta, T, n_tab=n_tab)
 
     def _rhs_hard_pack(tv, y):
         return _rhs_hard(tv, y, E, opt_As, opt_tabs, opt_deltas, opt_masks,
-                         mw_As, mw_ws, mw_tabs, t0, dt, CONV)
+                         mw_As, mw_ws, mw_tabs, mw_phases, t0, dt, CONV,
+                         gamma)
     return _rhs_hard_pack
 
 
@@ -327,9 +334,50 @@ def _mw_terms_of(fields_meta):
     return mw_terms
 
 
+def _single_loss_rates(states, decays):
+    """单原子寿命通道 → 每态耗散率向量 Gamma_ns（/ns，落点=丢失）。
+
+    与两体 _pair_loss_vectors 同语义：from 解析到索引，Γ（MHz）×1e-3
+    = 速率 /ns；显式落点（to 在空间）/纯退相 → NotImplementedError
+    （落点=丢失的确定性 NonHermitian 演化；其他请用 lindblad 引擎）。
+    """
+    Gamma = np.zeros(len(states))
+    for ch in decays or []:
+        g_idx = _evolve._resolve_state_idx(states, ch['from'])
+        if g_idx is None:
+            raise ValueError(
+                f'hard 耗散：通道 from 无法解析到基组 ({ch["from"]!r})')
+        to = ch.get('to')
+        if to is not None and _evolve._resolve_state_idx(states, to) is not None:
+            raise NotImplementedError(
+                'hard 耗散仅支持落点=丢失（寿命通道）；显式落点 / 纯退相'
+                '请用单原子 lindblad 引擎')
+        gam_ns = float(ch['gamma_mhz']) * 1e-3          # MHz → /ns
+        if gam_ns <= 0:
+            continue
+        Gamma[g_idx] += gam_ns
+    return Gamma
+
+
+def _loss_and_norm(pops, Gamma_ns, t):
+    """从布居 + 耗散率（/ns）× 时间数组 → loss 数组 + 含 loss 范数偏差。
+
+    loss(t) = ∫₀ᵗ pops(τ)·Gamma_ns dτ（梯形积分），
+    norm_dev = max|Σpops(t) + loss(t) − 1|（无耗散时 Σpops≡1）。
+    """
+    if not np.any(Gamma_ns):
+        return np.zeros(len(t)), float(np.max(np.abs(pops.sum(axis=1) - 1.0)))
+    rate = pops @ Gamma_ns
+    dt = np.diff(t)
+    loss = np.zeros(len(t))
+    loss[1:] = np.cumsum(0.5 * (rate[1:] + rate[:-1]) * dt)
+    norm_dev = float(np.max(np.abs(pops.sum(axis=1) + loss - 1.0)))
+    return loss, norm_dev
+
+
 def evolve_hard_fast(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
                      progress_arr=None, log=None, record_amp=False,
-                     n_tab=_TAB_N, driver='numba'):
+                     n_tab=_TAB_N, driver='numba', decays=None):
     """evolve_hard 的 numba 加速版：同数学、同 DOP853、同返回契约。
 
     driver='numba'（默认）：复用 dop853 核心层全编译 DOP853 主循环
@@ -350,6 +398,11 @@ def evolve_hard_fast(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
     T = float(t[-1])
     E = E_rot - float(E_rot.min())
     pack = _pack_hard(fields_meta, T, n_tab=n_tab)
+    # t24：耗散（落点=丢失）——Gamma_ns（/ns）→ gamma（MHz）传给内核
+    has_decay = bool(decays)
+    Gamma_ns = (_single_loss_rates(states, decays) if has_decay
+                else np.zeros(N))
+    gamma = Gamma_ns / _CONV if has_decay else None
 
     if driver == 'numba':
         # 函数级 import：dop853 从本模块 import 系数（_A.._D），模块级
@@ -359,7 +412,7 @@ def evolve_hard_fast(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
                 else np.asarray(progress_arr, float))
         stat = np.zeros(4)
         y_out = _dop853_driver(_rhs_hard, psi0v, t, T, float(rtol),
-                               float(atol), np.inf, prog, stat, *pack)
+                               float(atol), np.inf, prog, stat, *pack, gamma)
         pops = np.abs(y_out) ** 2
         nfev = int(stat[0])
         n_acc = int(stat[1])
@@ -370,9 +423,10 @@ def evolve_hard_fast(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
             f'（{n_acc} 接受步 / {n_rej} 拒绝步）'
             + (f'（微波载波 {max((abs(w) for _, w, _ in mw_terms), default=0):.4g}'
                ' MHz 硬积分，零微波近似）'))
+        loss, norm_dev = _loss_and_norm(pops, Gamma_ns, t)
         report = dict(n_segments=n_acc, max_richardson_diff=0.0,
                       dt_min_hit=False,
-                      max_norm_dev=float(np.max(np.abs(pops.sum(axis=1) - 1.0))))
+                      max_norm_dev=float(norm_dev))
         if report['max_norm_dev'] > 1e-6:
             log(f'[hard-numba] ⚠ 范数偏差 {report["max_norm_dev"]:.2e}'
                 '（DOP853 容差不足或 RHS 非厄米）')
@@ -380,7 +434,7 @@ def evolve_hard_fast(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
                    om_mhz=[float(np.abs(A).max()) for A, _, _ in mw_terms]
                    + [float(np.abs(A_opt).max()) for A_opt, *_ in opt_terms],
                    method='hard', backend='hard-numba-dop853',
-                   loss=np.zeros(len(t)), error_report=report)
+                   loss=loss, error_report=report)
         if record_amp:
             uT = np.exp(1j * _CONV * E * T)
             out['psi_amp'] = np.conj(uT) * y_out[-1]
@@ -388,10 +442,10 @@ def evolve_hard_fast(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
 
     # ---- driver='scipy'：njit RHS + scipy solve_ivp ----
     from scipy.integrate import solve_ivp
-    rhs = build_hard_rhs(fields_meta, T, n_tab=n_tab)
+    rhs = build_hard_rhs(fields_meta, T, n_tab=n_tab, gamma=gamma)
     if progress_arr is not None:
         progress_arr[0] = 0.15
-    sol = solve_ivp(_rhs_hard_pack, (0.0, T), psi0v, method='DOP853',
+    sol = solve_ivp(rhs, (0.0, T), psi0v, method='DOP853',
                     t_eval=t, rtol=rtol, atol=atol)
     if not sol.success:
         raise RuntimeError(f'hard(numba) 积分失败: {sol.message}')
@@ -403,8 +457,9 @@ def evolve_hard_fast(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
         + (f'，{nfev} 次 RHS 求值' if nfev else '')
         + (f'（微波载波 {max((abs(w) for _, w, _ in mw_terms), default=0):.4g}'
            ' MHz 硬积分，零微波近似）'))
+    loss, norm_dev = _loss_and_norm(pops, Gamma_ns, t)
     report = dict(n_segments=1, max_richardson_diff=0.0, dt_min_hit=False,
-                  max_norm_dev=float(np.max(np.abs(pops.sum(axis=1) - 1.0))))
+                  max_norm_dev=float(norm_dev))
     if report['max_norm_dev'] > 1e-6:
         log(f'[hard-numba] ⚠ 范数偏差 {report["max_norm_dev"]:.2e}'
             '（DOP853 容差不足或 RHS 非厄米）')
@@ -412,7 +467,7 @@ def evolve_hard_fast(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
                om_mhz=[float(np.abs(A).max()) for A, _, _ in mw_terms]
                + [float(np.abs(A_opt).max()) for A_opt, *_ in opt_terms],
                method='hard', backend='hard-numba-dop853',
-               loss=np.zeros(len(t)), error_report=report)
+               loss=loss, error_report=report)
     if record_amp:
         uT = np.exp(1j * _CONV * E * T)
         out['psi_amp'] = np.conj(uT) * sol.y[:, -1]
@@ -611,13 +666,14 @@ def _pack_pair_hard(fields_meta_A, fields_meta_B, states, T, vdd_sp, n_tab):
 def _rhs_hard_pair(t, y, E_A, E_B, fld_rows, fld_cols, fld_vals, fld_envs,
                    fld_phase_tabs, fld_ptr, fld_deltas, fld_sgns,
                    vdd_rows, vdd_cols, vdd_vals,
-                   vdd_grp_start, vdd_grp_dE, t0t, dtt, CONV):
+                   vdd_grp_start, vdd_grp_dE, t0t, dtt, CONV, gamma=None):
     """两体 hard RHS：y' = −iC·[u∘(Ṽ·(conj(u)∘y)) + V_dd_twisted·y]。
 
     光场拍频：δ=ω_f−ω_ref ≠ 0 的项乘 exp(iC·δ·t·sgn)（sgn=每三元组
     相位符号，m[i]−m[k]；δ=0 逐位退化——t10 验证 exp 拍频正确）。
     微波（t18）：cos(φ_f(t)) 相位表插值——定频 φ=C·ω·t（光场相位表=0
     → cos(0)=1），变频/任意相位由 phase_fn 采样。
+    耗散（t24）：gamma（N²，MHz）NonHermitian 对角 −iΓ/2。
     """
     N = E_A.size
     N2 = N * N
@@ -663,6 +719,10 @@ def _rhs_hard_pair(t, y, E_A, E_B, fld_rows, fld_cols, fld_vals, fld_envs,
         for j in range(N):
             k = i * N + j
             out[k] = -1j * CONV * (ui * uB[j] * dy_f[k] + dy_v[k])
+    # t24：耗散 NonHermitian 对角 −iΓ_MHz/2 → RHS −(C·Γ)/2·y
+    if gamma is not None:
+        for k in range(N2):
+            out[k] -= 0.5 * CONV * gamma[k] * y[k]
     return out
 
 # ============================================================
@@ -733,9 +793,10 @@ def evolve_hard_pair(states, fields_meta_A, fields_meta_B, psi0_A, psi0_B,
                 else np.asarray(progress_arr, float))
         stat = np.zeros(4)
         # 复用 dop853 核心层（first-class RHS 参数化，t11 验证逐位一致）
+        # t24：gamma_MHz 传入内核（落点=丢失 NonHermitian，此前只算不用）
         y_out = _dop853_driver(_rhs_hard_pair, psi0_2d, t, T,
                                float(rtol), float(atol), np.inf,
-                               prog, stat, *pack)
+                               prog, stat, *pack, gamma_MHz)
         nfev = int(stat[0])
         n_acc = int(stat[1])
         n_rej = int(stat[2])
@@ -746,7 +807,7 @@ def evolve_hard_pair(states, fields_meta_A, fields_meta_B, psi0_A, psi0_B,
         from scipy.integrate import solve_ivp
 
         def _rhs_hard_pack(tv, y):
-            return _rhs_hard_pair(tv, y, *pack)
+            return _rhs_hard_pair(tv, y, *pack, gamma_MHz)
         sol = solve_ivp(_rhs_hard_pack, (0.0, T), psi0_2d, method='DOP853',
                         t_eval=t, rtol=rtol, atol=atol)
         if not sol.success:

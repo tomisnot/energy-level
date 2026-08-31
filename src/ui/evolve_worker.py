@@ -34,12 +34,14 @@ class EvolveWorker(QThread):
     def run(self):
         try:
             if self.method == 'hard':
-                # t20：hard 硬积分（numba 加速）——fields 为两场 meta
+                # t20/t24：hard 硬积分（numba 加速）——fields 为两场 meta；
+                # t24：decays 传透（落点=丢失 NonHermitian，此前静默忽略）
                 from ..core.evolve_twofield import evolve_hard
                 res = evolve_hard(
                     self.states, self.fields, self.psi0, self.t_grid,
                     rtol=1e-8, atol=1e-10, numba=True,
-                    progress_arr=self.progress_arr, log=self.log_msg.emit)
+                    progress_arr=self.progress_arr, log=self.log_msg.emit,
+                    decays=self.decays)
             else:
                 # ac_shift 已内嵌各 field（随包络时变），无需另传
                 res = evolve.evolve(self.states, self.fields, self.psi0,

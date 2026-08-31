@@ -627,7 +627,8 @@ def _evolve_opt_only(states, fields_meta, psi0v, t, tol, log):
 
 
 def evolve_hard(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
-                progress_arr=None, log=None, record_amp=False, numba=False):
+                progress_arr=None, log=None, record_amp=False, numba=False,
+                decays=None):
     """微波硬算 + 光场旋转系（第一性原理，**零微波近似**）——method='hard'。
 
     numba=True 时委托 hard_numba.evolve_hard_fast（同数学、同 DOP853、
@@ -655,7 +656,7 @@ def evolve_hard(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
         return evolve_hard_fast(states, fields_meta, psi0, t_grid,
                                 rtol=rtol, atol=atol,
                                 progress_arr=progress_arr, log=log,
-                                record_amp=record_amp)
+                                record_amp=record_amp, decays=decays)
     from scipy.integrate import solve_ivp
     log = log or (lambda *a: None)
     t = np.asarray(t_grid, float)
@@ -665,6 +666,13 @@ def evolve_hard(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
     mw_groups = fields_meta['mw_groups']
     psi0v = _evolve._as_vector(states, psi0)
     T = float(t[-1])
+    # t24：耗散（落点=丢失）——Gamma_ns（/ns），RHS 加 −Γ/2·y
+    has_decay = bool(decays)
+    if has_decay:
+        from .hard import _single_loss_rates
+        Gamma_ns = _single_loss_rates(states, decays)
+    else:
+        Gamma_ns = None
 
     E = E_rot - float(E_rot.min())          # 公共偏移=全局相位（精确等价）
 
@@ -710,7 +718,10 @@ def evolve_hard(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
         return u[:, None] * V * np.conj(u)[None, :]
 
     def _rhs_twofield(tv, y):
-        return -1j * _CONV * (coupling_at(tv) @ y)
+        out = -1j * _CONV * (coupling_at(tv) @ y)
+        if Gamma_ns is not None:                 # 落点=丢失 NonHermitian
+            out = out - 0.5 * Gamma_ns * y
+        return out
 
     if progress_arr is not None:
         progress_arr[0] = 0.15
@@ -728,6 +739,12 @@ def evolve_hard(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
         f' 硬积分，零微波近似）')
     report = dict(n_segments=1, max_richardson_diff=0.0, dt_min_hit=False,
                   max_norm_dev=float(np.max(np.abs(pops.sum(axis=1) - 1.0))))
+    if has_decay:
+        from .hard import _loss_and_norm
+        loss, norm_dev = _loss_and_norm(pops, Gamma_ns, t)
+        report['max_norm_dev'] = norm_dev
+    else:
+        loss = np.zeros(len(t))
     if report['max_norm_dev'] > 1e-6:
         log(f'[hard] ⚠ 范数偏差 {report["max_norm_dev"]:.2e}'
             '（DOP853 容差不足或 RHS 非厄米）')
@@ -735,7 +752,7 @@ def evolve_hard(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
                om_mhz=[float(np.abs(A).max()) for A, _, _, _ in mw_terms]
                + [float(np.abs(A_opt).max()) for A_opt, *_ in opt_terms],
                method='hard', backend='hard-dop853',
-               loss=np.zeros(len(t)), error_report=report)
+               loss=loss, error_report=report)
     if record_amp:
         uT = np.exp(1j * _CONV * E * T)
         out['psi_amp'] = np.conj(uT) * sol.y[:, -1]

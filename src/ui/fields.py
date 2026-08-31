@@ -13,7 +13,7 @@
 - 作用范围：scope 默认 'both'（表格第 5 列可选 atom1/atom2）。
 """
 import numpy as np
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 from PyQt5.QtWidgets import *
 
 from ..core import core
@@ -254,11 +254,23 @@ class FieldPanel(QWidget):
         self.selection_changed.emit()
 
     def _changed(self, *_):
-        """兼容旧代码：真正的数据更新才触发全局重算。"""
-        # 面板 AC-Stark 精度配置 → 全局（静态页 + 动态页共用）
+        """真正的数据更新才触发全局重算。
+
+        t24 防抖：B/光强/频率等控件连续变化时用 180ms 单发定时器合并
+        data_changed/changed 发射——拖动滑块不逐 tick 全量重算（AC 已
+        13× 提速，防抖锦上添花）；set_ac_stark_config 立即执行（廉价）。
+        """
         core.set_ac_stark_config(
             n_photon=int(self.n_photon_spin.value()),
             sos_n_window=int(self.window_spin.value()))
+        if getattr(self, '_debounce_timer', None) is None:
+            self._debounce_timer = QTimer(self)
+            self._debounce_timer.setSingleShot(True)
+            self._debounce_timer.setInterval(180)
+            self._debounce_timer.timeout.connect(self._emit_global_refresh)
+        self._debounce_timer.start()          # 重启 → 连续变化合并
+
+    def _emit_global_refresh(self):
         self.data_changed.emit()
         self.changed.emit()
 

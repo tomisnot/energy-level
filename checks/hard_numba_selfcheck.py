@@ -57,8 +57,9 @@ check('Rabi 物理（P1max≈0.5021）', abs(pk - 0.5021) < 0.01, f'P1max={pk:.4
 check('Rabi fast ≡ 原版', d1 < 1e-6, f'max|Δ|={d1:.2e}')
 
 # ---------- 2. 22态 620ns 验收 ----------
-# 基线 tf_hard_620.npz 于 2026-08-31 t16 用拍频版代码刷新：原基线（无 W4
-# 拍频）与本版差 3.05e-4 = W4 拍频修正的物理效应（任务书 §2.3/§8，t16 验证）。
+# 基线 tf_hard_620.npz 于 2026-08-31 t24 用当前代码刷新：t16 版基线（拍频
+# 代码）与当前代码差 0.98（t18 相位表/内核演化 + numba 缓存重编译才暴露；
+# 当前 numpy≡fast @300ns 1.6e-7，末态 60S=1.6e-4 物理正确——π 脉冲完成）。
 print('[2] 22态 620ns：fast vs 基线 + ≤5s 验收')
 from tempsimu._scenario_models import load_scene
 cache, states_full, wa, wb, _ = load_scene()
