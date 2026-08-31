@@ -166,7 +166,7 @@ def hamiltonian(states, fields, t_ns, bs=False):
 # ============================================================
 # 算法 2：相互作用绘景 RK4（第一性原理，任意时变包络；光频 RWA + 微波非 RWA）
 # ============================================================
-def _ip4_reference(states, fields):
+def _rwa_reference(states, fields):
     """ip4 的旋转参考：RWA 场级联传播 + 非 RWA 场 e 跟随 g（共享参考）。
 
     返回 (ref_arr, rwa_geoms, non_geoms, E_rot)。
@@ -224,7 +224,7 @@ def _ip4_reference(states, fields):
 
 
 # ---------------- ip4 核心循环（numba JIT；无 numba 时回退 numpy） ----------------
-def _ip4_vtilde_impl(B, mats, S, n_terms, N, sidx, u, ps):
+def _rwa_vtilde_impl(B, mats, S, n_terms, N, sidx, u, ps):
     """out = u ⊙ (B@(u* ⊙ ps))，B = Σ_k S[k,sidx]·mats[k]（就地写 B）。
 
     统一场算符 M=A+diag(ac)：对角位移在 u 变换下相位抵消（|u|²=1），
@@ -248,13 +248,13 @@ def _ip4_vtilde_impl(B, mats, S, n_terms, N, sidx, u, ps):
 
 
 if _njit is not None:
-    _ip4_vtilde = _njit(cache=True)(_ip4_vtilde_impl)
+    _rwa_vtilde = _njit(cache=True)(_rwa_vtilde_impl)
 else:
-    _ip4_vtilde = _ip4_vtilde_impl
+    _rwa_vtilde = _rwa_vtilde_impl
 
 
 @_njit(cache=True)
-def _ip4_vtilde_sp(B, mats, S, n_terms, N, sidx, u, ps, nz_i, nz_j,
+def _rwa_vtilde_sp(B, mats, S, n_terms, N, sidx, u, ps, nz_i, nz_j,
                    row_ptr, n_nz):
     """稀疏版：只处理耦合非零元（CSR）。out = u ⊙ (B@(u* ⊙ ps))。
 
@@ -279,7 +279,7 @@ def _ip4_vtilde_sp(B, mats, S, n_terms, N, sidx, u, ps, nz_i, nz_j,
     return out
 
 
-def _ip4_rk4_core_numpy(mats, S, Ec, dt, psi0, out_step, n_out, N,
+def _rwa_rk4_core_numpy(mats, S, Ec, dt, psi0, out_step, n_out, N,
                         n_terms, record_amp, t_end, progress_arr):
     """numpy 回退版（无 numba）。返回 (psi_starts, psi_last, div)。"""
     c = -1j * _CONV
@@ -297,12 +297,12 @@ def _ip4_rk4_core_numpy(mats, S, Ec, dt, psi0, out_step, n_out, N,
     def rk4(ps, u0, i0):
         u05 = u0 * w05
         u1 = u0 * w1
-        k1 = c * _ip4_vtilde(B, mats, S, n_terms, N, i0, u0, ps)
-        k2 = c * _ip4_vtilde(B, mats, S, n_terms, N, i0 + 2, u05,
+        k1 = c * _rwa_vtilde(B, mats, S, n_terms, N, i0, u0, ps)
+        k2 = c * _rwa_vtilde(B, mats, S, n_terms, N, i0 + 2, u05,
                              ps + dt / 2 * k1)
-        k3 = c * _ip4_vtilde(B, mats, S, n_terms, N, i0 + 2, u05,
+        k3 = c * _rwa_vtilde(B, mats, S, n_terms, N, i0 + 2, u05,
                              ps + dt / 2 * k2)
-        k4 = c * _ip4_vtilde(B, mats, S, n_terms, N, i0 + 4, u1,
+        k4 = c * _rwa_vtilde(B, mats, S, n_terms, N, i0 + 4, u1,
                              ps + dt * k3)
         return ps + dt / 6 * (k1 + 2 * k2 + 2 * k3 + k4), u1
 
@@ -327,7 +327,7 @@ def _ip4_rk4_core_numpy(mats, S, Ec, dt, psi0, out_step, n_out, N,
 if _njit is not None:
 
     @_njit(cache=True, nogil=True)
-    def _ip4_rk4_core(mats, S, Ec, dt, psi0, out_step, n_out, N, n_terms,
+    def _rwa_rk4_core(mats, S, Ec, dt, psi0, out_step, n_out, N, n_terms,
                       record_amp, t_end, nz_i, nz_j, row_ptr, n_nz,
                       progress_arr):
         """相互作用绘景 RK4 主循环（numba，稀疏耦合，nogil 供进度轮询）。
@@ -372,22 +372,22 @@ if _njit is not None:
                 u05[i] = u[i] * w05[i]
                 u1[i] = u[i] * w1[i]
             # k1（t, u）
-            k1 = c * _ip4_vtilde_sp(B, mats, S, n_terms, N, i0, u, psi,
+            k1 = c * _rwa_vtilde_sp(B, mats, S, n_terms, N, i0, u, psi,
                                     nz_i, nz_j, row_ptr, n_nz)
             # k2（t+dt/2, u05）
             for i in range(N):
                 ps[i] = psi[i] + dt / 2.0 * k1[i]
-            k2 = c * _ip4_vtilde_sp(B, mats, S, n_terms, N, i0 + 2, u05, ps,
+            k2 = c * _rwa_vtilde_sp(B, mats, S, n_terms, N, i0 + 2, u05, ps,
                                     nz_i, nz_j, row_ptr, n_nz)
             # k3（t+dt/2, u05）
             for i in range(N):
                 ps[i] = psi[i] + dt / 2.0 * k2[i]
-            k3 = c * _ip4_vtilde_sp(B, mats, S, n_terms, N, i0 + 2, u05, ps,
+            k3 = c * _rwa_vtilde_sp(B, mats, S, n_terms, N, i0 + 2, u05, ps,
                                     nz_i, nz_j, row_ptr, n_nz)
             # k4（t+dt, u1）
             for i in range(N):
                 ps[i] = psi[i] + dt * k3[i]
-            k4 = c * _ip4_vtilde_sp(B, mats, S, n_terms, N, i0 + 4, u1, ps,
+            k4 = c * _rwa_vtilde_sp(B, mats, S, n_terms, N, i0 + 4, u1, ps,
                                     nz_i, nz_j, row_ptr, n_nz)
             # 更新
             for i in range(N):
@@ -410,13 +410,13 @@ if _njit is not None:
         return psi_starts, psi_last, div
 
 
-def _evolve_ip4(E, states, fields, psi0, t, frac=40.0, record_amp=False,
+def _evolve_rwa(E, states, fields, psi0, t, frac=40.0, record_amp=False,
                 progress_arr=None):
     """相互作用绘景 RK4（第一性原理）。
 
     - 光频（Ω/ωL < IP4_RWA_THRESH）→ RWA 旋转系耦合（反旋转误差 ~1e-7）；
     - 微波等强驱动 → 非 RWA：保留 cos(ω t) 反旋转项（第一性原理）。
-    - 参考系：RWA 级联 + 非 RWA 共享（_ip4_reference）。
+    - 参考系：RWA 级联 + 非 RWA 共享（_rwa_reference）。
     - 相互作用绘景 H0=diag(E−ref)：相位精确除去 → 每步误差 ~(Ω·dt)³，
       dt = 最快非 RWA 载波周期/frac（默认 40 → 误差 ~1e-6，~1 min 内）。
     - 全 RWA 且包络恒常 → 一次对角化精确解（RWA 内精确，秒出）。
@@ -424,7 +424,7 @@ def _evolve_ip4(E, states, fields, psi0, t, frac=40.0, record_amp=False,
     N = len(states)
     if progress_arr is None:
         progress_arr = np.zeros(2)
-    ref_arr, rwa_g, non_g = _ip4_reference(states, fields)
+    ref_arr, rwa_g, non_g = _rwa_reference(states, fields)
     E_rot = np.asarray(E, float) - ref_arr
     # 旁观态（不在任何耦合对里）无相位演化需求（ψ=0），但其 E_rot 绝对值
     # 可达光频量级（如 6P↔60S 光场把 60S 参考抬到 ~2.96e8 MHz），会让
@@ -578,11 +578,11 @@ def _evolve_ip4(E, states, fields, psi0, t, frac=40.0, record_amp=False,
         row_ptr = np.zeros(N + 1, np.int64)
         for i in range(N):
             row_ptr[i + 1] = row_ptr[i] + sum(1 for p in nz if p[0] == i)
-        psi_starts, psi_last, div = _ip4_rk4_core(
+        psi_starts, psi_last, div = _rwa_rk4_core(
             mats_arr, S, Ec, dt, psi0c, out_step, len(t_out), N, n_terms,
             record_amp, t_out[-1], nz_i, nz_j, row_ptr, n_nz, progress_arr)
     else:
-        psi_starts, psi_last, div = _ip4_rk4_core_numpy(
+        psi_starts, psi_last, div = _rwa_rk4_core_numpy(
             mats_arr, S, Ec, dt, psi0c, out_step, len(t_out), N, n_terms,
             record_amp, t_out[-1], progress_arr)
     if div == 1:
@@ -941,7 +941,7 @@ def _evolve_lindblad(E, states, fields, decays, psi0, t, frac=20.0,
     N = len(states)
     if progress_arr is None:
         progress_arr = np.zeros(2)
-    ref_arr, rwa_g, non_g = _ip4_reference(states, fields)
+    ref_arr, rwa_g, non_g = _rwa_reference(states, fields)
     E_rot = _e_rot(np.asarray(E, float), ref_arr, states, rwa_g, non_g)
     Ls, N_eff = _decay_ops(decays, states)
     t_out = np.asarray(t, float)
@@ -1009,7 +1009,7 @@ def _evolve_lindblad(E, states, fields, decays, psi0, t, frac=20.0,
         else:
             generic.append(L)
 
-    def rhs(rho, tv):
+    def _rhs_lindblad(rho, tv):
         H = H_at(tv)
         d = -1j * _CONV * (H @ rho - rho @ H)
         for ti, fi, val in jumps:
@@ -1025,10 +1025,10 @@ def _evolve_lindblad(E, states, fields, decays, psi0, t, frac=20.0,
         return d
 
     def rk4(rho, tv, h):
-        k1 = rhs(rho, tv)
-        k2 = rhs(rho + (h / 2.0) * k1, tv + h / 2.0)
-        k3 = rhs(rho + (h / 2.0) * k2, tv + h / 2.0)
-        k4 = rhs(rho + h * k3, tv + h)
+        k1 = _rhs_lindblad(rho, tv)
+        k2 = _rhs_lindblad(rho + (h / 2.0) * k1, tv + h / 2.0)
+        k3 = _rhs_lindblad(rho + (h / 2.0) * k2, tv + h / 2.0)
+        k4 = _rhs_lindblad(rho + h * k3, tv + h)
         return rho + (h / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
 
     # ---- 积分：numba 内核（默认） / numpy 回退 ----
@@ -1132,7 +1132,7 @@ def _evolve_lindblad(E, states, fields, decays, psi0, t, frac=20.0,
 # ============================================================
 # 参考积分器（内部保留，仅 checks 交叉验证用；不作为可选 method）
 # ============================================================
-def _evolve_full(E, geoms, psi0, t, record_amp):
+def _evolve_reference_lab(E, geoms, psi0, t, record_amp):
     """非 RWA 零近似演化（实验室系 solve_ivp，慢）——第一性原理参考。"""
     from scipy.integrate import solve_ivp
     N = len(psi0)
@@ -1147,20 +1147,20 @@ def _evolve_full(E, geoms, psi0, t, record_amp):
                      * np.cos(_CONV * g['omega_L_mhz'] * tv)) * g['A']
         return H
 
-    def rhs(tv, y):
+    def _rhs_ref(tv, y):
         return -1j * _CONV * (H_at(tv) @ y)
 
-    sol = solve_ivp(rhs, (t[0], t[-1]), np.asarray(psi0, complex),
+    sol = solve_ivp(_rhs_ref, (t[0], t[-1]), np.asarray(psi0, complex),
                     t_eval=t, rtol=1e-8, atol=1e-10)
     if not sol.success:
-        raise RuntimeError(f'_evolve_full 积分失败: {sol.message}')
+        raise RuntimeError(f'_evolve_reference_lab 积分失败: {sol.message}')
     pops = np.abs(sol.y).T ** 2
     if record_amp:
         return t, pops, sol.y[:, -1]
     return t, pops, None
 
 
-def _evolve_full_hybrid(E, states, fields, psi0, t, record_amp, thresh=1e-4):
+def _evolve_reference_hybrid(E, states, fields, psi0, t, record_amp, thresh=1e-4):
     """混合参考（光频 RWA + 其余非 RWA，solve_ivp）——验证 ip4 的参考。
 
     非 RWA 驱动的 g/e 共享同一旋转参考（e 跟随 g），使微波耦合为纯 cos 快项
@@ -1179,7 +1179,7 @@ def _evolve_full_hybrid(E, states, fields, psi0, t, record_amp, thresh=1e-4):
                 / max(g['omega_L_mhz'], 1e-9))
     rwa_g = [g for g in geoms if _ratio(g) < thresh]
     non_g = [g for g in geoms if _ratio(g) >= thresh]
-    ref_arr, _, _ = _ip4_reference(states, fields)
+    ref_arr, _, _ = _rwa_reference(states, fields)
     H0 = np.diag(E - ref_arr).astype(float)
     H0 = H0 - np.min(np.diag(H0)) * np.eye(N)
     for g in rwa_g:
@@ -1196,13 +1196,13 @@ def _evolve_full_hybrid(E, states, fields, psi0, t, record_amp, thresh=1e-4):
                      * np.cos(_CONV * g['omega_L_mhz'] * tv)) * g['A']
         return H
 
-    def rhs(tv, y):
+    def _rhs_ref(tv, y):
         return -1j * _CONV * (H_at(tv) @ y)
 
-    sol = solve_ivp(rhs, (t[0], t[-1]), np.asarray(psi0, complex),
+    sol = solve_ivp(_rhs_ref, (t[0], t[-1]), np.asarray(psi0, complex),
                     t_eval=t, rtol=1e-9, atol=1e-11)
     if not sol.success:
-        raise RuntimeError(f'_evolve_full_hybrid 积分失败: {sol.message}')
+        raise RuntimeError(f'_evolve_reference_hybrid 积分失败: {sol.message}')
     pops = np.abs(sol.y).T ** 2
     if record_amp:
         return t, pops, sol.y[:, -1]
@@ -1370,7 +1370,7 @@ def evolve(states, fields, psi0, t_grid, method='auto', backend='auto',
         return out
 
     if method == 'ip4':
-        t, pops, psi = _evolve_ip4(E, states, fields, psi0v, t,
+        t, pops, psi = _evolve_rwa(E, states, fields, psi0v, t,
                                    frac=ip4_frac, record_amp=record_amp,
                                    progress_arr=progress_arr)
         out = dict(t=t, pops=pops, states=states,
@@ -1394,7 +1394,7 @@ def evolve(states, fields, psi0, t_grid, method='auto', backend='auto',
                 '自动改用 lindblad（RK4）')
             method = 'lindblad'
         else:
-            ref_arr, rwa_g, non_g = _ip4_reference(states, fields)
+            ref_arr, rwa_g, non_g = _rwa_reference(states, fields)
             E_rot = _e_rot(E, ref_arr, states, rwa_g, non_g)
             consts = [_env_samples(g['waveform'], t[-1]) for g in rwa_g]
             t, pops, loss, rho_f = _evolve_lindblad_eig(
@@ -1466,3 +1466,16 @@ def level_pops(states, pops, n, l, j, m=None):
     if not idx:
         return np.zeros(pops.shape[0])
     return pops[:, idx].sum(axis=1)
+
+
+
+# ---- t19 函数级改名兼容别名（旧名 = 新名，外部零改动）----
+_ip4_reference = _rwa_reference
+_ip4_vtilde_impl = _rwa_vtilde_impl
+_ip4_vtilde_sp = _rwa_vtilde_sp
+_ip4_vtilde = _rwa_vtilde
+_ip4_rk4_core_numpy = _rwa_rk4_core_numpy
+_ip4_rk4_core = _rwa_rk4_core
+_evolve_ip4 = _evolve_rwa
+_evolve_full = _evolve_reference_lab
+_evolve_full_hybrid = _evolve_reference_hybrid

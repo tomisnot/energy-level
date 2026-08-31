@@ -150,7 +150,7 @@ def real_field(cache, states, freq_mhz, intensity_mwcm2, pol='π',
     N = len(states)
     E0_sq = _c.field_e0_sq(intensity_mwcm2)
     omega_rad = 2.0 * np.pi * freq_mhz * 1e6
-    wf = waveform if waveform is not None else square(0.0, 1e12)
+    _env_sample = waveform if waveform is not None else square(0.0, 1e12)
     A = np.zeros((N, N))
     g_idx, e_idx = [], []
     ac = np.zeros(N)
@@ -217,7 +217,7 @@ def real_field(cache, states, freq_mhz, intensity_mwcm2, pol='π',
     M = A + np.diag(ac)
     fld = {'kind': 'multi', 'M': M, 'A': A, 'ac_shift': ac,
            'g_idx': g_idx, 'e_idx': e_idx,
-           'omega0_mhz': 1.0, 'omega_L_mhz': freq_mhz, 'waveform': wf,
+           'omega0_mhz': 1.0, 'omega_L_mhz': freq_mhz, 'waveform': _env_sample,
            'scatter': scatter}
     if return_scatter:
         return fld, ac, scatter

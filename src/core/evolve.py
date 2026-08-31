@@ -7,24 +7,31 @@
   - evolve_rwa.py       单原子 RWA 演化（ip4 / Lindblad / evolve 调度）
   - evolve_arbitrary.py 任意波形演化（实验室系 RK4）
 
-本文件仅 re-export 全部公共与内部名——外部调用（UI/checks/scripts/封存模块）
-零改动（from src.core import evolve / from src.core.evolve import X 照常）。
+本文件仅 re-export 全部公共与内部名（新旧名均导出；旧名兼容别名在源模块内，
+外部调用 UI/checks/scripts/封存模块零改动）。
 """
 from .atomic_levels import gaussian, square, step, make_levels
 from .field_build import (field, group_field, real_field, arbitrary_field,
                           _env_samples, _sublevel_row, _floquet_ac_static,
                           _CONV, _POL_Q, _ENV_SAMPLES, _lifetime_cache)
 from .evolve_rwa import (hamiltonian, _field_geometry, _assign_reference,
+                         # t19 新名
+                         _rwa_reference, _rwa_vtilde_impl, _rwa_vtilde_sp,
+                         _rwa_vtilde, _rwa_rk4_core_numpy, _rwa_rk4_core,
+                         _evolve_rwa, _evolve_reference_lab,
+                         _evolve_reference_hybrid,
+                         # 旧名（源模块别名，外部兼容）
                          _ip4_reference, _ip4_vtilde_impl, _ip4_vtilde_sp,
                          _ip4_vtilde, _ip4_rk4_core_numpy, _ip4_rk4_core,
-                         _evolve_ip4, decay, auto_decays, _resolve_state_idx,
+                         _evolve_ip4, _evolve_full, _evolve_full_hybrid,
+                         decay, auto_decays, _resolve_state_idx,
                          _e_rot, _decay_ops, _lindblad_eligible,
                          _evolve_lindblad_eig, _lindblad_rhs_impl,
                          _lindblad_rk4_step_impl, _lindblad_rk4_core_impl,
                          _lindblad_rhs, _lindblad_rk4_step, _lindblad_rk4_core,
-                         _evolve_lindblad, _evolve_full, _evolve_full_hybrid,
-                         _onehot, _as_vector, evolve, rwa_error_estimate,
-                         group_pops, level_pops, IP4_RWA_THRESH, _CONV,
-                         _POL_Q, _ENV_SAMPLES, _lifetime_cache)
+                         _evolve_lindblad, _onehot, _as_vector, evolve,
+                         rwa_error_estimate, group_pops, level_pops,
+                         IP4_RWA_THRESH, _CONV, _POL_Q, _ENV_SAMPLES,
+                         _lifetime_cache)
 from .evolve_arbitrary import (_arb_interp, _arb_apply, _arb_rk4_core,
                                _evolve_arbitrary, _CONV)

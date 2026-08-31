@@ -173,7 +173,7 @@ def build_two_field(cache, states, waves, mw_M=2):
         # = ½·rabi_mhz。与 exact 引擎 SambeSetup 的 0.5·A 对齐（evolve_exact.py:
         # 226）。此前 AC-Stark 位移偏 4×（Ω²/Δ）——"AC 位移调交换共振"是本场景
         # 核心物理。微波项保持 1.0（实验室系全 cos，硬积分无 RWA，正确）。
-        # 单点修复：所有消费方（Sambe opt_ext / defect / hard V_at / numba /
+        # 单点修复：所有消费方（Sambe opt_ext / defect / hard coupling_at / numba /
         # pair 打包）自动获得 ½。om_mhz 报告随之变为 RWA 耦合振幅。
         A = 0.5 * A
         opt_terms.append((A, w.waveform, w.freq_mhz, w.name,
@@ -336,7 +336,7 @@ class _TwoFieldSetup:
                  for _, wf, _, _ in opt_terms]
         return c_mw, c_opt
 
-    def K_at(self, mw_groups, opt_terms, mid):
+    def hamiltonian_seg(self, mw_groups, opt_terms, mid):
         """段哈密顿（稠密）：K0 + Σ_w env_w(mid)·Kcw_w + Σ o env_o(mid)·Ke_o。
         修复同频合并bug：逐波形配对 env_w × Kcw 而非 (Σenv)×Kc_merged。"""
         if self.dense:
@@ -440,12 +440,12 @@ def evolve_two_field(states, fields_meta, psi0, t_grid, tol=1e-6,
 
     def seg_decomp(ta, tb):
         mid = 0.5 * (ta + tb)
-        # 计算各波形单独包络（用于 K_at 逐波配对，修复合并 bug）
+        # 计算各波形单独包络（用于 hamiltonian_seg 逐波配对，修复合并 bug）
         c_mw = [sum(float(np.asarray(wf(np.atleast_1d(mid))).flat[0])
                     for wf in g['envs']) for g in mw_groups]
         c_opt = [float(np.asarray(wf(np.atleast_1d(mid))).flat[0])
                  for _, wf, _, _ in opt_terms]
-        kind, K = setup.K_at(mw_groups, opt_terms, mid)
+        kind, K = setup.hamiltonian_seg(mw_groups, opt_terms, mid)
         if kind == 'diag':
             return ('diag', None, c_mw, c_opt)
         evals, evecs = np.linalg.eigh(K)
@@ -497,7 +497,7 @@ def evolve_two_field(states, fields_meta, psi0, t_grid, tol=1e-6,
             progress_arr[0] = min(tprev / T, 0.999)
         tb = float(t[iout])
 
-        def rec2(ta, tb, X):
+        def _propagate_seg(ta, tb, X):
             if progress_arr is not None and progress_arr[1] != 0.0:
                 raise RuntimeError('用户取消')
             dec = seg_decomp(ta, tb)
@@ -526,8 +526,8 @@ def evolve_two_field(states, fields_meta, psi0, t_grid, tol=1e-6,
                 prev = cur
             if est > tol and (tb - ta) > h_floor:
                 tm = 0.5 * (ta + tb)
-                Xm = rec2(ta, tm, X)
-                return rec2(tm, tb, Xm)
+                Xm = _propagate_seg(ta, tm, X)
+                return _propagate_seg(tm, tb, Xm)
             report['max_richardson_diff'] = max(
                 report['max_richardson_diff'], est)
             report['n_segments'] += 1
@@ -535,7 +535,7 @@ def evolve_two_field(states, fields_meta, psi0, t_grid, tol=1e-6,
                 report['dt_min_hit'] = True
             return psi_out
 
-        X = rec2(tprev, tb, X)
+        X = _propagate_seg(tprev, tb, X)
         ps = _reconstruct(setup, X, tb)
         p = _pops_of(ps)
         pops[iout] = p
@@ -567,7 +567,7 @@ def _evolve_opt_only(states, fields_meta, psi0v, t, tol, log):
     opt_terms = fields_meta['opt_terms']
     E_rot = E_rot - float(E_rot.min())
 
-    def rhs(tv, y):
+    def _rhs_twofield(tv, y):
         V = np.zeros((N, N), complex)
         for A_opt, wf, _, _ in opt_terms:
             c = float(np.asarray(wf(np.atleast_1d(tv))).flat[0])
@@ -576,7 +576,7 @@ def _evolve_opt_only(states, fields_meta, psi0v, t, tol, log):
         u = np.exp(1j * _CONV * E_rot * tv)
         return -1j * _CONV * (u * (V @ (np.conj(u) * y)))
 
-    sol = solve_ivp(rhs, (0.0, float(t[-1])), psi0v, method='DOP853',
+    sol = solve_ivp(_rhs_twofield, (0.0, float(t[-1])), psi0v, method='DOP853',
                     t_eval=t, rtol=1e-9, atol=1e-11)
     if not sol.success:
         raise RuntimeError(f'two_field(opt-only) 积分失败: {sol.message}')
@@ -641,7 +641,7 @@ def evolve_hard(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
         for A, wf in zip(g['As'], g['envs']):
             mw_terms.append((np.asarray(A, float), w, wf, ph_fn))
 
-    def V_at(tv):
+    def coupling_at(tv):
         """旋转系相互作用绘景：H0=diag(E) 精确，Ṽ = u·(光+微波 cos(φ))·u†。
 
         光场拍频（§2.3/§8）：第 2+ 光场相对共享参考失谐 δ=ω_f−ω_ref，
@@ -673,12 +673,12 @@ def evolve_hard(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
         u = np.exp(1j * _CONV * E * tv)
         return u[:, None] * V * np.conj(u)[None, :]
 
-    def rhs(tv, y):
-        return -1j * _CONV * (V_at(tv) @ y)
+    def _rhs_twofield(tv, y):
+        return -1j * _CONV * (coupling_at(tv) @ y)
 
     if progress_arr is not None:
         progress_arr[0] = 0.15
-    sol = solve_ivp(rhs, (0.0, T), psi0v, method='DOP853',
+    sol = solve_ivp(_rhs_twofield, (0.0, T), psi0v, method='DOP853',
                     t_eval=t, rtol=rtol, atol=atol)
     if not sol.success:
         raise RuntimeError(f'hard 积分失败: {sol.message}')
@@ -704,3 +704,7 @@ def evolve_hard(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
         uT = np.exp(1j * _CONV * E * T)
         out['psi_amp'] = np.conj(uT) * sol.y[:, -1]
     return out
+
+
+# ---- t19 函数级改名兼容别名（旧名 = 新名，外部零改动）----
+_TwoFieldSetup.K_at = _TwoFieldSetup.hamiltonian_seg

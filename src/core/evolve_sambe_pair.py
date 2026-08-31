@@ -194,7 +194,7 @@ class _PairSambeSetup:
                 rows.append(np.asarray(wf(nodes), float))
         return np.array(rows, float)
 
-    def K_seg(self, mid, groups=None):
+    def hamiltonian_seg(self, mid, groups=None):
         """段算符 K_static + Σ_g Σ_w env_w(mid)·Kcw_{gw} + opt_field 注入（稀疏/稠密）。
         
         统一逐波实现，无分支。单波形组自然退化为等效计算。光学场不进光子块，
@@ -280,15 +280,15 @@ def _dense_decomp(K):
     evals, evecs = np.linalg.eig(K_arr)
     return evals, evecs, np.linalg.inv(evecs)
 
-def _prop_step(setup, K_seg, ta, tb, X):
+def _prop_step(setup, hamiltonian_seg, ta, tb, X):
     """冻结段传播（稠密路径：本征分解精确指数）。"""
     dt = tb - ta
-    evals, evecs, left = _dense_decomp(K_seg[1])
+    evals, evecs, left = _dense_decomp(hamiltonian_seg[1])
     a0 = np.asarray(left @ X).ravel()
     phase = np.asarray(np.exp(-1j * _CONV * dt * evals)).ravel()
     return np.asarray(evecs) @ (a0 * phase)
 
-def _defect_pass(setup, K_seg, ta, tb, X, groups, nodes, ws, dense_eig):
+def _defect_pass(setup, hamiltonian_seg, ta, tb, X, groups, nodes, ws, dense_eig):
     """本征基 Duhamel 缺陷扫描。统一逐波实现：ΔK = Σ_g Σ_w (env_w(nodes)-env_w(mid))·Kcw_{gw}。"""
     n = len(nodes)
     mid = 0.5 * (ta + tb)
@@ -485,7 +485,7 @@ def _pair_m_probe(E_pair, N, groups, M, vdd_sp, gamma_pair_mhz, psi0_2d,
                 v = np.asarray(wf(np.linspace(0.0, T, _ENV_PROBE_N)), float)
                 pk = max(pk, float(np.max(np.abs(v))))
             c_list.append(pk)
-        K = stp.K_seg(T / 2.0 if T > 0 else 1.0, groups)
+        K = stp.hamiltonian_seg(T / 2.0 if T > 0 else 1.0, groups)
         X = _embed_pair(psi0_2d, stp)
         if stp.dense:
             X = _prop_step(stp, K, 0.0, T, X)
@@ -627,7 +627,7 @@ def evolve_exact_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
         return _physical_pops(setup, X, tq)
 
     if (all_const or not groups) and setup.dense:
-        K = setup.K_seg(T / 2.0 if T > 0 else 1.0, groups)
+        K = setup.hamiltonian_seg(T / 2.0 if T > 0 else 1.0, groups)
         X0 = _embed_pair(psi0_2d, setup)
         # 稠密：一次本征分解 + 全输出时刻向量化重构（支持非厄米）
         evals, evecs, left = _dense_decomp(K[1])
@@ -646,9 +646,9 @@ def evolve_exact_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
         h_floor = max(T / _DT_MIN_FRAC, 1e-9)
 
         def seg_K(ta, tb):
-            return setup.K_seg(0.5 * (ta + tb), groups)
+            return setup.hamiltonian_seg(0.5 * (ta + tb), groups)
 
-        def rec2(ta, tb, X):
+        def _propagate_seg(ta, tb, X):
             if progress_arr[1] != 0.0:
                 raise RuntimeError('用户取消')
             K = seg_K(ta, tb)
@@ -687,8 +687,8 @@ def evolve_exact_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
                     setup, K[1], X, ta, tb, tol, groups)
             if (not np.isfinite(est) or est > tol) and (tb - ta) > h_floor:
                 tm = 0.5 * (ta + tb)
-                Xm = rec2(ta, tm, X)
-                return rec2(tm, tb, Xm)
+                Xm = _propagate_seg(ta, tm, X)
+                return _propagate_seg(tm, tb, Xm)
             report['max_richardson_diff'] = max(
                 report['max_richardson_diff'],
                 float(est) if np.isfinite(est) else 1e3)
@@ -701,7 +701,7 @@ def evolve_exact_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
         tprev = 0.0
         for i in range(1, len(t)):
             progress_arr[0] = min(tprev / T, 0.999)
-            X = rec2(tprev, float(t[i]), X)
+            X = _propagate_seg(tprev, float(t[i]), X)
             pops_2d[i] = _record_chain(X, t[i])
             tprev = float(t[i])
         pops_2d[0] = np.abs(psi0_2d) ** 2
@@ -756,3 +756,8 @@ def evolve_exact_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
         ph = np.exp(-1j * setup.nphase * T)
         out['psi_amp'] = ph @ Xm
     return out
+
+
+
+# ---- t19 函数级改名兼容别名（旧名 = 新名，外部零改动）----
+_PairSambeSetup.K_seg = _PairSambeSetup.hamiltonian_seg

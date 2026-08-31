@@ -546,7 +546,7 @@ def _propagate_adaptive(setup, groups, psi0, t_grid, tol, progress_arr, log):
                   max_norm_dev=0.0)
     h_floor = max(T / _DT_MIN_FRAC, 1e-9)
 
-    def rec2(ta, tb, X):
+    def _propagate_seg(ta, tb, X):
         """自适应传播 X(ta) → X(tb)（无输出；返回修正后链状态）。"""
         if progress_arr[1] != 0.0:
             raise RuntimeError('用户取消')
@@ -589,8 +589,8 @@ def _propagate_adaptive(setup, groups, psi0, t_grid, tol, progress_arr, log):
             psi_prev = psi_out
         if est > tol and (tb - ta) > h_floor:
             tm = 0.5 * (ta + tb)
-            Xm = rec2(ta, tm, X)
-            return rec2(tm, tb, Xm)
+            Xm = _propagate_seg(ta, tm, X)
+            return _propagate_seg(tm, tb, Xm)
         report['max_richardson_diff'] = max(
             report['max_richardson_diff'], est)
         report['n_segments'] += 1
@@ -604,7 +604,7 @@ def _propagate_adaptive(setup, groups, psi0, t_grid, tol, progress_arr, log):
     tprev = 0.0
     for i in range(1, len(t)):
         progress_arr[0] = min(tprev / T, 0.999)
-        X = rec2(tprev, float(t[i]), X)
+        X = _propagate_seg(tprev, float(t[i]), X)
         ps = _reconstruct(setup, X, t[i])
         p = _pops_of(ps)
         pops[i] = p
@@ -634,7 +634,7 @@ def _env_all_constant(groups, T):
 # ============================================================
 # 单次全传播（给定光子块阶数；供主入口与 M 收敛对比）
 # ============================================================
-def _run_once(E, groups, M, psi0, t, tol, progress_arr, log):
+def _run_sambe(E, groups, M, psi0, t, tol, progress_arr, log):
     """返回 (pops, psi_f, report, setup)。"""
     setup = _SambeSetup(E, groups, M)
     T = float(t[-1])
@@ -666,7 +666,7 @@ def _run_once(E, groups, M, psi0, t, tol, progress_arr, log):
 # ============================================================
 # 主入口：method='exact'（无耗散；含耗散转参考路径）
 # ============================================================
-def evolve_exact(states, fields, psi0, t_grid, tol=1e-6, decays=None,
+def evolve_sambe(states, fields, psi0, t_grid, tol=1e-6, decays=None,
                  progress_arr=None, log=None, record_amp=False,
                  E_shift=None):
     """第一性原理单原子含时演化（无模型近似）。
@@ -744,7 +744,7 @@ def evolve_exact(states, fields, psi0, t_grid, tol=1e-6, decays=None,
                 break
     log(f'[exact] 光子块（逐载频）M={Ms}'
         f'（扇区数 Π(2M_g+1)={setup_P(Ms)}）')
-    pops, psi_f, report, setup = _run_once(E, groups, Ms, psi0v, t, tol,
+    pops, psi_f, report, setup = _run_sambe(E, groups, Ms, psi0v, t, tol,
                                            progress_arr, log)
     log(f'[exact] 完成：{report["n_segments"]} 段，'
         f'最大 Richardson 差 {report["max_richardson_diff"]:.2e}'
@@ -795,7 +795,7 @@ def evolve_reference(states, fields, psi0, t_grid, decays=None,
     terms = [(np.asarray(f['A'], float), float(f['omega_L_mhz']),
               f['waveform']) for f in fields]
 
-    def V_at(tv):
+    def coupling_at(tv):
         V = np.zeros((N, N))
         for A, wL, wf in terms:
             env = float(np.asarray(wf(np.atleast_1d(tv))).flat[0])
@@ -804,10 +804,10 @@ def evolve_reference(states, fields, psi0, t_grid, decays=None,
         return V
 
     def _run_unitary(rtl, atl):
-        def rhs(tv, y):
+        def _rhs_sambe(tv, y):
             u = np.exp(1j * _CONV * E * tv)
-            return -1j * _CONV * (u * (V_at(tv) @ (np.conj(u) * y)))
-        sol = solve_ivp(rhs, (0.0, T), psi0v, method='DOP853',
+            return -1j * _CONV * (u * (coupling_at(tv) @ (np.conj(u) * y)))
+        sol = solve_ivp(_rhs_sambe, (0.0, T), psi0v, method='DOP853',
                         t_eval=t, rtol=rtl, atol=atl)
         if not sol.success:
             raise RuntimeError(f'reference 积分失败: {sol.message}')
@@ -842,7 +842,7 @@ def evolve_reference(states, fields, psi0, t_grid, decays=None,
     def rhs_me(tv, rv):
         rho = rv.reshape((N_eff, N_eff), order='F')
         u = np.exp(1j * _CONV * E * tv)
-        V = V_at(tv)
+        V = coupling_at(tv)
         H = np.zeros((N_eff, N_eff), complex)
         H[:N, :N] = (u[:, None] * V) * np.conj(u)[None, :]
         d = -1j * _CONV * (H @ rho - rho @ H)
@@ -852,7 +852,7 @@ def evolve_reference(states, fields, psi0, t_grid, decays=None,
                      - 0.5 * (LdL @ rho + rho @ LdL))
         return d.ravel(order='F')
 
-    def _run_me(rtl, atl):
+    def _run_mastereq(rtl, atl):
         # BDF：支持复数 y（Radau 不支持；耗散率可致刚性，隐式多步稳定）
         sol = solve_ivp(rhs_me, (0.0, T), rho0.ravel(order='F'),
                         method='BDF', t_eval=t, rtol=rtl, atol=atl)
@@ -860,7 +860,7 @@ def evolve_reference(states, fields, psi0, t_grid, decays=None,
             raise RuntimeError(f'reference(Lindblad) 积分失败: {sol.message}')
         return sol.y
 
-    rv = _run_me(rtol, atol)
+    rv = _run_mastereq(rtol, atol)
     pops = np.zeros((len(t), N))
     loss = np.zeros(len(t))
     for k in range(len(t)):
@@ -875,7 +875,7 @@ def evolve_reference(states, fields, psi0, t_grid, decays=None,
     if record_amp:
         out['rho'] = rv[:, -1].reshape((N_eff, N_eff), order='F')
     if verify:
-        rv2 = _run_me(rtol / 10.0, atol / 10.0)
+        rv2 = _run_mastereq(rtol / 10.0, atol / 10.0)
         pops2 = np.zeros_like(pops)
         for k in range(len(t)):
             pops2[k] = np.real(np.diag(
@@ -886,3 +886,10 @@ def evolve_reference(states, fields, psi0, t_grid, decays=None,
     progress_arr[0] = 1.0
     return out
     return out
+
+
+
+# ---- t19 函数级改名兼容别名（旧名 = 新名，外部零改动）----
+_run_once = _run_sambe
+# _run_me → _run_mastereq 为嵌套运行助手（无模块级旧名引用，不设别名）
+evolve_exact = evolve_sambe

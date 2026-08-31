@@ -119,10 +119,10 @@ def _rhs_hard(t, y, E, opt_As, opt_tabs, opt_deltas, opt_masks,
     return out
 
 
-def _env_tab(wf, T, n_pts):
-    """包络在 [0,T] 均匀网格上的采样表（wf 为绝对时间 callable）。"""
+def _env_tab(_env_sample, T, n_pts):
+    """包络在 [0,T] 均匀网格上的采样表（_env_sample 为绝对时间 callable）。"""
     ts = np.linspace(0.0, float(T), n_pts)
-    return np.asarray(wf(ts), float)
+    return np.asarray(_env_sample(ts), float)
 
 
 def _pack_hard(fields_meta, T, n_tab=_TAB_N):
@@ -196,10 +196,10 @@ def build_hard_rhs(fields_meta, T, n_tab=_TAB_N):
      mw_As, mw_ws, mw_tabs, t0, dt, CONV) = \
         _pack_hard(fields_meta, T, n_tab=n_tab)
 
-    def rhs(tv, y):
+    def _rhs_hard_pack(tv, y):
         return _rhs_hard(tv, y, E, opt_As, opt_tabs, opt_deltas, opt_masks,
                          mw_As, mw_ws, mw_tabs, t0, dt, CONV)
-    return rhs
+    return _rhs_hard_pack
 
 
 # ============================================================
@@ -391,7 +391,7 @@ def evolve_hard_fast(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
     rhs = build_hard_rhs(fields_meta, T, n_tab=n_tab)
     if progress_arr is not None:
         progress_arr[0] = 0.15
-    sol = solve_ivp(rhs, (0.0, T), psi0v, method='DOP853',
+    sol = solve_ivp(_rhs_hard_pack, (0.0, T), psi0v, method='DOP853',
                     t_eval=t, rtol=rtol, atol=atol)
     if not sol.success:
         raise RuntimeError(f'hard(numba) 积分失败: {sol.message}')
@@ -745,9 +745,9 @@ def evolve_hard_pair(states, fields_meta_A, fields_meta_B, psi0_A, psi0_B,
         # driver='scipy'：njit RHS + scipy solve_ivp（对照用）
         from scipy.integrate import solve_ivp
 
-        def rhs(tv, y):
+        def _rhs_hard_pack(tv, y):
             return _rhs_hard_pair(tv, y, *pack)
-        sol = solve_ivp(rhs, (0.0, T), psi0_2d, method='DOP853',
+        sol = solve_ivp(_rhs_hard_pack, (0.0, T), psi0_2d, method='DOP853',
                         t_eval=t, rtol=rtol, atol=atol)
         if not sol.success:
             raise RuntimeError(f'hard-pair(scipy) 积分失败: {sol.message}')

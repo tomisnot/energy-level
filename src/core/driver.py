@@ -52,7 +52,7 @@ def full_evolve(H0_mhz, D, omega_rad_ns, om_mhz, psi0, t_ns):
     Dm = np.asarray(D, complex)
     Dd = Dm.conj().T
 
-    def rhs(t, psi):
+    def _rhs_amp(t, psi):
         ph = np.exp(-1j * omega_rad_ns * t)
         Ht = H0 + (om_mhz / 2.0) * (Dm * ph + Dd * np.conj(ph))
         return (-1j * _CONV) * (Ht @ psi)

@@ -340,7 +340,7 @@ if _HAS_NUMBA:
         return out
 
     @njit(cache=True, nogil=True)
-    def _pair_rk4_jit(Ec, DATA, IDX, PTR2D, OFF, NT, COEF, OMG, ENV,
+    def _pair_rwa_rk4_jit(Ec, DATA, IDX, PTR2D, OFF, NT, COEF, OMG, ENV,
                       w05, w1, psi0, t_out, dt, use_par, gam,
                       gammaA, gammaB, progress_arr=None):
         """顺序时间步进 + 每步 4 阶段（小基组串行复用缓冲 / 大基组 prange）。
@@ -475,9 +475,9 @@ if _HAS_NUMBA:
         return pops, psi, sA, sB
 
 
-def _pair_ip4_jit(E_rot_2d, fields_2d, psi0, t_out, dt, M_steps,
+def _pair_rwa_jit(E_rot_2d, fields_2d, psi0, t_out, dt, M_steps,
                   progress_arr, gamma_A=None, gamma_B=None):
-    """numba 版 _pair_ip4 步进（扁平 CSR + 可选两体寿命耗散）。
+    """numba 版 _pair_rwa 步进（扁平 CSR + 可选两体寿命耗散）。
 
     默认串行内核：两体场行内非零少（kron 结构），prange 行并行的区域调度
     开销通常大于收益（实测 K=576、60ns 下并行 27 s vs 串行 4.8 s）。
@@ -500,7 +500,7 @@ def _pair_ip4_jit(E_rot_2d, fields_2d, psi0, t_out, dt, M_steps,
     if gamma_B is not None:
         gB = np.asarray(gamma_B, float)
         gam = gam + gB
-    pops, psi, lossA, lossB = _pair_rk4_jit(
+    pops, psi, lossA, lossB = _pair_rwa_rk4_jit(
         Ec, DATA, IDX, PTR2D, OFF, NT, COEF, OMG, ENV, w05, w1,
         np.asarray(psi0, complex), np.asarray(t_out, float), dt, False,
         gam, gA, gB, progress_arr=progress_arr)
@@ -512,7 +512,7 @@ def _pair_ip4_jit(E_rot_2d, fields_2d, psi0, t_out, dt, M_steps,
 # ============================================================
 
 _pair_loss_vectors = _tensor._pair_loss_vectors
-def _pair_ip4(E_rot_2d, fields_2d, psi0, t, frac=20.0,
+def _pair_rwa(E_rot_2d, fields_2d, psi0, t, frac=20.0,
               progress_arr=None, decays=None,
               gamma_A=None, gamma_B=None, decay_out=False):
     """两体相互作用绘景 RK4（自包含，不调用 evolve._evolve_ip4）。
@@ -623,13 +623,13 @@ def _pair_ip4(E_rot_2d, fields_2d, psi0, t, frac=20.0,
     if _HAS_NUMBA:
         try:
             if has_decay:
-                _pops, _psi, _lA, _lB = _pair_ip4_jit(
+                _pops, _psi, _lA, _lB = _pair_rwa_jit(
                     E_rot_2d, fields_2d, psi0, t_out, dt, M_steps,
                     progress_arr, gamma_A=gamma_A, gamma_B=gamma_B)
                 if decay_out:
                     return t_out, _pops, _psi, _lA, _lB
                 return t_out, _pops, _psi
-            _pops, _psi, _lA, _lB = _pair_ip4_jit(
+            _pops, _psi, _lA, _lB = _pair_rwa_jit(
                 E_rot_2d, fields_2d, psi0, t_out, dt, M_steps,
                 progress_arr)
             if decay_out:
@@ -986,7 +986,7 @@ def pair_evolve(states, fields_A, fields_B, psi0_A, psi0_B,
         progress_arr = np.zeros(2)
 
     # ---- 自包含 RK4 演化（可选两体寿命耗散）----
-    res = _pair_ip4(
+    res = _pair_rwa(
         E_rot_2d, fields_2d, psi0_2d, t,
         frac=ip4_frac, progress_arr=progress_arr,
         gamma_A=gamma_A, gamma_B=gamma_B, decay_out=has_decay)
@@ -1033,3 +1033,10 @@ def pair_evolve(states, fields_A, fields_B, psi0_A, psi0_B,
         method='ip4',
         backend='numpy',
     )
+
+
+
+# ---- t19 函数级改名兼容别名（旧名 = 新名，外部零改动）----
+_pair_ip4 = _pair_rwa
+_pair_ip4_jit = _pair_rwa_jit
+_pair_rk4_jit = _pair_rwa_rk4_jit
