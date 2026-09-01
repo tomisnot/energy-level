@@ -432,6 +432,20 @@ def evolve_two_field(states, fields_meta, psi0, t_grid, tol=1e-6,
     psi0v = _evolve._as_vector(states, psi0)
     T = float(t[-1])
     tol = float(tol)
+    # 多光场拍频防护（t30）：Sambe 冻结段只能承载"段内慢变"的项，而第 2+
+    # 光场相对共享参考的拍频 δ=ω_f−ω_ref（~200 MHz → C·δ ≈ 1.3 rad/ns）在
+    # ns 级段内已转过 O(1) 弧度，冻结中点 + 包络缺陷修正均无法表示 → 此前
+    # 静默丢弃相位（错误结果）。与其给错答案，不如显式拒绝：拍频场景请用
+    # evolve_hard（DOP853 逐时刻求值 exp(iδt)，已实现且 t10 验证通过）。
+    for _tup in opt_terms:
+        if len(_tup) > 4:
+            _of, _oref = float(_tup[2]), float(_tup[4])
+            if abs(_of - _oref) > 1e-9 * max(abs(_of), 1.0):
+                raise NotImplementedError(
+                    f'两场 Sambe 引擎不支持多光场拍频：光场 {_tup[3]!r} '
+                    f'ω={_of:.6g} MHz 与共享旋转参考 {_oref:.6g} MHz 相差 '
+                    f'{_of - _oref:+.6g} MHz（拍频相位 exp(i·C·δ·t) 无法在'
+                    '冻结段+包络缺陷修正中表示）。请改用 method="hard"。')
 
     # 微波光子块阶数：解析界（近共振 r），至少 M=2（多光子显式）
     E = np.array([s['E_mhz'] for s in states], float)
