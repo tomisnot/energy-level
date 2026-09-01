@@ -32,6 +32,7 @@ sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _SCRIPTS = ['core_selfcheck.py', 'evolve_dissipative_selfcheck.py',
             'evolve_exact_selfcheck.py', 'evolve_exact_pair_selfcheck.py',
+            'two_field_pair_selfcheck.py',
             'ui_selftest.py',
             'pair_evolve_selfcheck.py']
 

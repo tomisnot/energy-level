@@ -354,8 +354,12 @@ class _TwoFieldSetup:
             else:
                 self.Kc_dense.append(None)
         # 光场单位矩阵（A_opt ⊗ I_P，块对角重复）
+        # （t30：opt_terms 自 t16 起为 6 元组 (A, wf, omega, name, ref, mask)，
+        #   此处残留 4 元组解包会在含光场时直接崩溃——Sambe 路径自 t16 后
+        #   无人运行故未暴露；改索引取值，与 evolve_hard 的消费方式一致。）
         self.opt_ext = []
-        for A_opt, _, _, _ in opt_terms:
+        for t_ in opt_terms:
+            A_opt = t_[0]
             if self.dense:
                 self.opt_ext.append(
                     np.kron(np.eye(P), np.asarray(A_opt, float)))
@@ -368,8 +372,8 @@ class _TwoFieldSetup:
         """段中点：微波各包络和 + 光场各包络和。"""
         c_mw = [sum(float(np.asarray(wf(np.atleast_1d(mid))).flat[0])
                     for wf in g['envs']) for g in groups]
-        c_opt = [float(np.asarray(wf(np.atleast_1d(mid))).flat[0])
-                 for _, wf, _, _ in opt_terms]
+        c_opt = [float(np.asarray(t_[1](np.atleast_1d(mid))).flat[0])
+                 for t_ in opt_terms]
         return c_mw, c_opt
 
     def hamiltonian_seg(self, mw_groups, opt_terms, mid):
@@ -387,8 +391,8 @@ class _TwoFieldSetup:
                     if c_w != 0.0:
                         K = K + c_w * Kcw
                         any_c = True
-            for oi, (A_opt, wf, _, _) in enumerate(opt_terms):
-                c_o = float(np.asarray(wf(np.atleast_1d(mid))).flat[0])
+            for oi, t_ in enumerate(opt_terms):
+                c_o = float(np.asarray(t_[1](np.atleast_1d(mid))).flat[0])
                 if c_o != 0.0:
                     K = K + c_o * self.opt_ext[oi]
                     any_c = True
@@ -493,8 +497,8 @@ def evolve_two_field(states, fields_meta, psi0, t_grid, tol=1e-6,
         # 计算各波形单独包络（用于 hamiltonian_seg 逐波配对，修复合并 bug）
         c_mw = [sum(float(np.asarray(wf(np.atleast_1d(mid))).flat[0])
                     for wf in g['envs']) for g in mw_groups]
-        c_opt = [float(np.asarray(wf(np.atleast_1d(mid))).flat[0])
-                 for _, wf, _, _ in opt_terms]
+        c_opt = [float(np.asarray(t_[1](np.atleast_1d(mid))).flat[0])
+                 for t_ in opt_terms]
         kind, K = setup.hamiltonian_seg(mw_groups, opt_terms, mid)
         if kind == 'diag':
             return ('diag', None, c_mw, c_opt)
@@ -524,10 +528,10 @@ def evolve_two_field(states, fields_meta, psi0, t_grid, tol=1e-6,
                     has_active = True
             if has_active:
                 V = V + V_g
-        # 光场包络差（单波形组，不变）
-        for oi, (A_opt, wf, _, _) in enumerate(opt_terms):
+        # 光场包络差（t30：6 元组索引取值，残留 4 元组解包已修）
+        for oi, t_ in enumerate(opt_terms):
             Ke = setup.opt_ext[oi]
-            dc = np.asarray(wf(nodes), float) - c_opt[oi]
+            dc = np.asarray(t_[1](nodes), float) - c_opt[oi]
             if np.max(np.abs(dc)) > 1e-14:
                 V = V + dc[:, None] * (Psi @ Ke.T)
         G = V @ evecs.conj()
@@ -619,10 +623,10 @@ def _evolve_opt_only(states, fields_meta, psi0v, t, tol, log):
 
     def _rhs_twofield(tv, y):
         V = np.zeros((N, N), complex)
-        for A_opt, wf, _, _ in opt_terms:
-            c = float(np.asarray(wf(np.atleast_1d(tv))).flat[0])
+        for t_ in opt_terms:
+            c = float(np.asarray(t_[1](np.atleast_1d(tv))).flat[0])
             if c != 0.0:
-                V = V + c * A_opt
+                V = V + c * t_[0]
         u = np.exp(1j * _CONV * E_rot * tv)
         return -1j * _CONV * (u * (V @ (np.conj(u) * y)))
 

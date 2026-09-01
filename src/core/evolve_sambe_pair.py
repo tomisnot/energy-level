@@ -275,8 +275,10 @@ class _PairSambeSetup:
         # 稠密上限：默认 _DENSE_MAX（全载频进光子块，维数易爆炸）；两场变体
         # 显式传 _TF_DENSE_MAX（光场不占光子块 → 2420 维稠密可行）
         self.dense_max = _DENSE_MAX if dense_max is None else int(dense_max)
-        self.D = 2 * M + 1
         geo = sambe.photon_geometry(E_pair, groups, M)
+        # 逐组块数（M 可为 int 或逐载频 list；photon_geometry 统一展开）
+        self.Ds = list(geo['Ds'])
+        self.D = 2 * self.Ds[0] + 1 if len(set(self.Ds)) == 1 else None
         self.P = geo['P']
         self.dim = geo['dim']
         self.strides = geo['strides']
@@ -325,9 +327,10 @@ class _PairSambeSetup:
         self.Kc_ext = [[] for _ in groups]
         for gi, g in enumerate(groups):
             stride = self.strides[gi]
+            Dg = self.Ds[gi]
             rs, cs = [], []
-            for s in range(self.D - 1):
-                p_src = _idx[(_idx // stride) % self.D == s]
+            for s in range(Dg - 1):
+                p_src = _idx[(_idx // stride) % Dg == s]
                 rs.append(p_src + stride)
                 cs.append(p_src)
             T = sp.coo_matrix(
