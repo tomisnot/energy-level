@@ -6,9 +6,13 @@ tempsimu/
 .dsh-vision-toolkit/
 microwave_pulse/
 
-# PyInstaller 鏋勫缓浜х墿涓庢瀯寤鸿櫄鎷熺幆澧冿紙涓嶅叆搴擄級
+# PyInstaller 构建产物与构建虚拟环境（不入库）
 build_venv/
 build/
 dist/
 
-# AgentTeams 运行时状态（不入库）.agent-teams/
+# AgentTeams 运行时状态（不入库）
+.agent-teams/
+
+# WorkBuddy 会话数据（不入库）
+.workbuddy/
