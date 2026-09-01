@@ -40,6 +40,10 @@ class EvolveWorker(QThread):
                     rtol=1e-8, atol=1e-10, numba=True,
                     progress_arr=self.progress_arr, log=self.log_msg.emit,
                     decays=self.decays)
+                # t28：收尾阶段标记（JIT 装载/准备 5% → 积分 5-95% → 收尾 95%）
+                if len(self.progress_arr) > 2:
+                    self.progress_arr[2] = 2
+                    self.progress_arr[0] = 1.0
             else:
                 # ac_shift 已内嵌各 field（随包络时变），无需另传
                 # t25：显示名 'sambe' → 引擎 'exact'（Sambe 光子块）
@@ -107,6 +111,10 @@ class EvolveWorkerPair(QThread):
                     decays_A=self.decays_A, decays_B=self.decays_B,
                     progress_arr=self.progress_arr,
                     log=self.log_msg.emit)
+                # t28：收尾阶段标记（同单原子 hard）
+                if len(self.progress_arr) > 2:
+                    self.progress_arr[2] = 2
+                    self.progress_arr[0] = 1.0
             if self.method == 'exact':
                 from ..core.evolve_exact_pair import evolve_exact_pair
                 res = evolve_exact_pair(

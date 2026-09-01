@@ -743,7 +743,10 @@ class DynamicPanel(QWidget):
             decays = []
         t = np.linspace(0, self.tmax_sb.value(), self.npts_sb.value())
         self._run_states = states
-        self.progress_arr = np.zeros(2)
+        # t28：prog 3 元素——[0]=全程进度(0-1)、[1]=取消标志、[2]=阶段
+        # （0=准备/JIT、1=积分[driver 写 t/T]、2=收尾）；hard 的 JIT 装载
+        # ~19s 期间进度条不再死 0%（阶段标签提示）。
+        self.progress_arr = np.zeros(3)
 
         if self._is_two_body:
             self._run_two_body(states, t)
@@ -956,7 +959,8 @@ class DynamicPanel(QWidget):
         dlg.setWindowTitle('演化')
         lay = QVBoxLayout(dlg)
         lay.setContentsMargins(14, 12, 14, 12)
-        lay.addWidget(QLabel('正在演化…（计算中可取消）'))
+        self._stage_label = QLabel('正在准备…')      # t28：阶段文本（_poll 更新）
+        lay.addWidget(self._stage_label)
         self._pbar = QProgressBar(dlg)
         self._pbar.setRange(0, 1000)
         lay.addWidget(self._pbar)
@@ -975,9 +979,21 @@ class DynamicPanel(QWidget):
             self._dlg.setWindowTitle('正在取消…')
 
     def _poll_progress(self):
-        """轮询进度数组更新进度条。"""
+        """轮询进度数组更新进度条 + 阶段标签（t28：阶段化覆盖 hard 的
+        JIT 装载/积分/收尾全程——准备 5%、积分 5→95%、收尾 95%）。"""
+        pa = self.progress_arr
+        stage = int(pa[2]) if len(pa) > 2 else 0
+        p0 = float(pa[0])
+        if stage == 2:
+            val, lab = 950, '收尾…'
+        elif p0 >= 0.002:                       # 积分中（driver 写 t/T）
+            val, lab = int(50 + 900 * p0), f'积分 {min(int(100 * p0), 100)}%'
+        else:
+            val, lab = 50, 'JIT 编译/准备…'
         if self._pbar is not None:
-            self._pbar.setValue(int(self.progress_arr[0] * 1000))
+            self._pbar.setValue(val)
+        if getattr(self, '_stage_label', None) is not None:
+            self._stage_label.setText(lab)
 
     def _on_evolve_done(self, res, error):
         self._dlg_timer.stop()
