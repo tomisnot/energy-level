@@ -192,13 +192,18 @@ class DynamicPanel(QWidget):
         row2.addWidget(self.psi_combo, 1)
         row2.addWidget(self._psi_box, 1)
         self._psi_box.setVisible(False)
-        row2.addWidget(QLabel('显示态数'))
-        self.topn_sb = QSpinBox()
-        self.topn_sb.setRange(1, 40)
-        self.topn_sb.setValue(8)
-        self.topn_sb.setToolTip('按最近一次结果的平均布居取前 N 个态绘制'
-                                '（无需手动勾选，内部自动筛选）')
-        row2.addWidget(self.topn_sb)
+        # t27：自发辐射从独立行移入初态行右侧（原"显示态数"位置）——
+        # 单原子 psi_combo stretch=1 / 双原子 psi_box(A/B) 各 stretch=1，
+        # 自发辐射档位自然宽度，整行协调不挤压。
+        row2.addWidget(QLabel('自发辐射'))
+        self.decay_mode_cb = QComboBox()
+        self.decay_mode_cb.addItems(['自动（ARC 寿命）', '禁用', '自定义'])
+        self.decay_mode_cb.setToolTip(
+            '自动：按 ARC 权威能级寿命自动配置 Γ=1/τ'
+            '（仅 τ≤100 µs 的低激发态，落点=丢失，运行后状态栏显示通道数）；'
+            '自定义：手动配置衰变通道（从态/Γ/落点/纯退相）')
+        self.decay_mode_cb.currentIndexChanged.connect(self._on_decay_mode)
+        row2.addWidget(self.decay_mode_cb)
         p.addLayout(row2)
 
         # ---- 时间 / 方法 / 截断 一行 ----
@@ -224,24 +229,7 @@ class DynamicPanel(QWidget):
         rowt.addWidget(self.method_cb)
         p.addLayout(rowt)
 
-        # ---- 自发辐射：自动（ARC 寿命）/ 禁用 / 自定义（一行选择 + 可折叠自定义区）----
-        rowdm = QHBoxLayout()
-        rowdm.addWidget(QLabel('自发辐射'))
-        self.decay_mode_cb = QComboBox()
-        self.decay_mode_cb.addItems(['自动（ARC 寿命）', '禁用', '自定义'])
-        self.decay_mode_cb.setToolTip(
-            '自动：按 ARC 权威能级寿命自动配置 Γ=1/τ'
-            '（仅 τ≤100 µs 的低激发态，落点=丢失，运行后状态栏显示通道数）；'
-            '自定义：手动配置衰变通道（从态/Γ/落点/纯退相）')
-        self.decay_mode_cb.currentIndexChanged.connect(self._on_decay_mode)
-        rowdm.addWidget(self.decay_mode_cb, 1)
-        p.addLayout(rowdm)
-        # self.decay_auto_label = QLabel(
-        #     '自动：Γ=1/τ(ARC)，仅 τ≤100 µs 低激发态，落点=丢失；'
-        #     '里德堡慢衰变/黑体辐射请用 自定义')
-        # self.decay_auto_label.setWordWrap(True)
-        # self.decay_auto_label.setFixedHeight(16)
-        # p.addWidget(self.decay_auto_label)
+        # ---- 自发辐射（t27：档位选择移入初态行右侧；自定义折叠区保留原位）----
         # 自定义配置区（仅 自定义 档显示；自动/禁用 隐藏）
         self.decay_custom_box = QWidget()
         dcb = QVBoxLayout(self.decay_custom_box)
@@ -276,7 +264,7 @@ class DynamicPanel(QWidget):
         p.addWidget(self.decay_custom_box)
         self.decay_custom_box.setVisible(False)     # 默认自动档
 
-        # ---- 显示选项 + 荧光读出（t25）----
+        # ---- 显示选项 + 荧光读出 / 显示态数（t25 + t27）----
         row_disp = QHBoxLayout()
         self.display_mode_cb = QComboBox()
         self.display_mode_cb.addItems(['态布居', '荧光读出'])
@@ -285,10 +273,20 @@ class DynamicPanel(QWidget):
             '（单原子 |⟨i|ψ⟩|²；双原子 A/B 各自约化概率）')
         self.display_mode_cb.currentIndexChanged.connect(self._on_display_mode)
         row_disp.addWidget(self.display_mode_cb)
+        # t27：topn_sb（态布居专用，原初态行）移入显示选项行——与 readout_cb
+        # 同位互斥（态布居→topn，荧光读出→readout）；readout_cb 去掉 stretch
+        # 不再占满，运行按钮贴右侧。
+        self.topn_sb = QSpinBox()
+        self.topn_sb.setRange(1, 40)
+        self.topn_sb.setValue(8)
+        self.topn_sb.setToolTip('按最近一次结果的平均布居取前 N 个态绘制'
+                                '（无需手动勾选，内部自动筛选）')
+        row_disp.addWidget(self.topn_sb)
         self.readout_cb = QComboBox()
         self.readout_cb.setToolTip('荧光读出能级（基组全部子能级，F 区分）')
-        row_disp.addWidget(self.readout_cb, 1)
-        self.readout_cb.setVisible(False)
+        row_disp.addWidget(self.readout_cb)
+        self.readout_cb.setVisible(False)        # 初始态布居 → topn 显示
+        row_disp.addStretch(1)
         self.run_btn = QPushButton('运行演化')
         self.run_btn.clicked.connect(self._run)
         row_disp.addWidget(self.run_btn)
@@ -763,9 +761,11 @@ class DynamicPanel(QWidget):
         pass
 
     def _on_display_mode(self, *_):
-        """显示选项切换：荧光读出 → 显示读出态下拉；重绘上次结果。"""
+        """显示选项切换：态布居 → 显示态数 topn；荧光读出 → 读出态下拉。
+        （t27：topn/readout 同位互斥显隐）"""
         fluo = self.display_mode_cb.currentIndex() == 1
         self.readout_cb.setVisible(fluo)
+        self.topn_sb.setVisible(not fluo)
         self._redraw_last()
 
     def _redraw_last(self):

@@ -145,10 +145,13 @@ def test_dynamic(app, win):
           == ['ip4', 'sambe', 'hard'])
     check('无 near_cutoff 控件', not hasattr(dyn, 'near_cutoff_sb'))
 
-    # ---- t25：显示选项 + 荧光读出（单原子绘制 + 双原子约化）----
+    # ---- t25/t27：显示选项 + 荧光读出（单原子绘制 + 双原子约化）----
     dyn.display_mode_cb.setCurrentIndex(1); app.processEvents()
     check('荧光读出态下拉出现（含全部能级）',
           dyn.readout_cb.isVisible() and dyn.readout_cb.count() == N)
+    check('readout_cb 不占满（t27 去 stretch）',
+          dyn.readout_cb.width() < dyn.width() * 0.6)
+    check('荧光读出时 topn 隐藏（t27 互斥）', not dyn.topn_sb.isVisible())
     res2 = {'t': t, 'pops': res['pops']}
     dyn._run_states = list(states)
     dyn._last_res = res2
@@ -163,6 +166,7 @@ def test_dynamic(app, win):
     dyn._is_two_body = False
     dyn.display_mode_cb.setCurrentIndex(0); app.processEvents()
     check('显示模式恢复态布居', not dyn.readout_cb.isVisible())
+    check('态布居时 topn 显示（t27 互斥）', dyn.topn_sb.isVisible())
 
     # ---- 自发辐射三档：自动（ARC 寿命）/ 禁用 / 自定义 ----
     check('自发辐射默认自动档 + 配置区隐藏',
