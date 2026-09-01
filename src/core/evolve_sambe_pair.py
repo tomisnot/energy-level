@@ -33,6 +33,7 @@ vdW 通道效应全部由精确传播自然涌现。单原子侧沿用 evolve_ex
 """
 import numpy as np
 import scipy.sparse as sp
+import time as _time
 from scipy.sparse.linalg import LinearOperator, gmres
 
 from . import evolve
@@ -790,9 +791,14 @@ def _pair_propagate(E_pair_rot, N, groups, opt_terms, V, gamma_pair,
 
     X = _embed_pair(psi0_2d, setup)
     tprev = 0.0
+    _t_wall = _time.perf_counter()
     for i in range(1, len(t)):
         progress_arr[0] = min(tprev / T, 0.999)
         X = _propagate_seg(tprev, float(t[i]), X)
+        if report['n_segments'] % 20 == 0:
+            log(f'[pair_sambe] 进度 t={t[i]:.2f}/{T:.2f} ns，'
+                f'{report["n_segments"]} 段'
+                f'（{_time.perf_counter() - _t_wall:.0f}s）')
         pops_2d[i] = _physical_pops(setup, X, t[i])
         tprev = float(t[i])
     pops_2d[0] = np.abs(psi0_2d) ** 2

@@ -91,7 +91,7 @@
 | `evolve_rwa.py` | 单原子 RWA 演化（ip4/Lindblad/auto） | static_atom |
 | `evolve_arbitrary.py` | 任意波形演化（实验室系 RK4） | static_atom |
 | `evolve_sambe.py` | 单原子 Sambe 第一性引擎 + reference | sambe |
-| `evolve_sambe_pair.py` | 两体 Sambe 第一性引擎 | evolve_sambe + tensor |
+| `evolve_sambe_pair.py` | 两体 Sambe 第一性引擎 + 两体两场变体（t30） | evolve_sambe + tensor + evolve_twofield |
 | `evolve_twofield.py` | 两场引擎（光场旋转 + 微波 hard/Sambe） | evolve_sambe + hard |
 | `hard.py` | hard 引擎内核（单/两体 numba + cos(φ(t))） | dop853 |
 | `pair_evolve.py` | 两体 RWA 演化（secular） | evolve_rwa + tensor |
@@ -252,6 +252,7 @@ $$H(t) = H_0 + \sum_k \Omega_k\,c_k(t)\cos(\omega_k t)\,A_k$$
 - **逐载频 M**：$(r_g/4)^{2(M_g-1)} \le \text{tol}$（光学 M=1、微波 M=2）
 - **冻结段 + Duhamel 缺陷修正**：`δ(t) = −iC∫U_f(t,s)[K(s)−K(c_mid)]ψ(s)ds`
 - **两体扩展**：idx=k+N²·p，V_dd 块对角 + 寿命 NonHermitian；大基组走稀疏 Krylov
+- **两体两场变体**：见 §5.6.5（光场不进光子块 → dim=N²·P_mw）
 - 误差：单旋钮 tol（默认 1e-6），error_report 可见
 
 ## 5.6 两场引擎与 hard（`evolve_twofield.py` / `hard.py` / `dop853.py`）
@@ -279,6 +280,30 @@ $$H(t) = \text{diag}(E_{\text{rot}}) + \sum_{\text{opt}} c_f(t)\,e^{i\delta_f t}
 
 ArbitraryWave → hard 兼容组：Hilbert 分解 $a(t)=c(t)\cos\varphi(t)$ + 全偶极振幅。
 
+### 5.6.5 两体两场 Sambe（`evolve_sambe_pair.build_two_field_pair` + `evolve_two_field_pair`，t30）
+
+把 §5.6.1 的"光场旋转系 + 微波-only 光子块"应用到两体（路径 A）：
+$\tilde E_{pair}[iN{+}j] = E_{rot,A}[i] + E_{rot,B}[j]$（旋转参考 = 光场**载频**，
+低能流形整体抬升）；光场耦合 $\frac{1}{2}\Omega(A_{opt}\otimes I + I\otimes A_{opt})$
+为旋转系常数矩阵（RWA 共振项，不占光子维）；微波按载频分组进光子块
+（A/B 同频共享光子维，M≥2 多光子显式）。
+
+$$\dim = N^2 \cdot P_{mw} = 484 \times 5 = 2420\ (22\text{ 态})，\text{稠密可行}$$
+
+（对比：全载频进光子块的两体 Sambe 为 60500 维，不可用。）
+
+**V_dd 旋转系 RWA 筛选**（本变体唯一额外近似，与光学 RWA 同级）：
+旋转系内 $\tilde V_{dd}[r,c] = V[r,c]\,e^{iC(\Delta E_{lab}-\Delta E_{rot})t}$——
+两侧"旋转流形占据数"相同的元素静态保留（含 $|60S,60P\rangle\leftrightarrow|60P,60S\rangle$
+交换：$\Delta E_{lab}=0$ 且两侧 6P 占据数相同）；相差 ±1 的元素以 $\omega_{opt}$
+（THz）快振荡，RWA 丢弃，净效应 ≤ $|V|^2/\Delta \sim 5\times10^{-8}$ MHz
+（`vdd_rot_filter`，统计入 error_report['vdd_rwa']）。
+
+多光场拍频（δ=ω_f−ω_ref≠0）显式 NotImplementedError（拍频相位无法在冻结段
+表示；单原子 `evolve_two_field` 同步加了防护）。验收：
+`checks/two_field_pair_selfcheck.py`（11 项）——TP3 与两体实验室系稠密
+DOP853 第一性参考对拍 Δ=2.3e-4（短窗）。
+
 ## 5.7 两体 RWA（`pair_evolve.py`）
 
 $$H(t) = H_A(t)\otimes I + I\otimes H_B(t) + V_{dd}$$
@@ -301,6 +326,7 @@ $$S(\omega) = \sum_k |\langle k|D|i\rangle|^2\,\delta(\omega - (E_k - E_i))$$
 | `evolve_dissipative_selfcheck.py` | 18 | Lindblad/耗散 |
 | `evolve_exact_selfcheck.py` | 11 | Sambe 单体 |
 | `evolve_exact_pair_selfcheck.py` | 12+SKIP | Sambe 两体 |
+| `two_field_pair_selfcheck.py` | 11 | 两体两场（含实验室系第一性对拍） |
 | `hard_numba_selfcheck.py` | 9 | hard 单/两体（含 620ns 性能） |
 | `pair_evolve_selfcheck.py` | 12 | 两体 RWA |
 | `two_field_selfcheck.py` | 4 | 两场引擎 |
@@ -334,7 +360,7 @@ $$S(\omega) = \sum_k |\langle k|D|i\rangle|^2\,\delta(\omega - (E_k - E_i))$$
 ## 8.1 已知限制
 
 - `exact`/`hard` 的 ArbitraryWave：hard 支持（t18），Sambe 暂不支持
-- 两体 Sambe 大基组（N²·P>700）：稀疏 Krylov 慢（>25min 不可行）——待两体两场变体
+- 两体 Sambe 全载频进光子块（N²·Π(2M+1)=60500）：不可用——用两体两场变体（§5.6.5，dim=2420）；稀疏 Krylov 路径在本机有解释器崩溃（EP6，研究级待查）
 - NonHermitian 耗散仅支持落点=丢失（显式落点/纯退相 NotImplementedError）
 - pair hard 的 V_dd 需主线程预计算（ARC SQLite 线程约束）
 - ip4/RWA 有 P1 静默失效风险（远失谐旁观者混叠）——关键计算用 exact/hard 交叉验证
@@ -347,6 +373,6 @@ $$S(\omega) = \sum_k |\langle k|D|i\rangle|^2\,\delta(\omega - (E_k - E_i))$$
 | 核心-调度重构（dop853/sambe/tensor） | ✅ 完成 |
 | 静态 AC-Stark 实数化 13× | ✅ 完成 |
 | GUI 画布对齐（单轴归一化） | ✅ 完成 |
-| 两体两场变体（光旋转+微波-only 光子块，dim=2420） | ⏳ 待 Sambe 两体扩展 |
-| 多光场拍频在 Sambe K 的时变相位 | ⏳ 后续 |
+| 两体两场变体（光旋转+微波-only 光子块，dim=2420） | ✅ t30 完成（TP1-TP5 自检） |
+| 多光场拍频在 Sambe K 的时变相位 | ⏳ 后续（当前显式拒绝，用 hard） |
 | 1500ns 全场景正式验收 | ⏳ 待跑 |

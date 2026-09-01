@@ -247,6 +247,18 @@ hard_numba 9/9、smoke[A]=0.5021、combo[1..4]=0.0013、两体 hard×exact 交�
 **验收**：①V_dd=0 直积 ≡ 单原子两场直积 ≤1e-3；②两体交换（R=10μm θ=45° φ=0）
 首峰对照；③22态 2420 维稠密可跑（性能记录）；④与 exact_pair 短窗对拍（若可跑）
 
+> **✅ 完成记录（2026-09-01，t30）**：`evolve_sambe_pair.py` 落地
+> `build_two_field_pair` + `evolve_two_field_pair`（+ `vdd_rot_filter` +
+> `_pair_mw_Ms`），`checks/two_field_pair_selfcheck.py` 11 项全绿：
+> - 验收① TP2：V_dd=0 直积 ≡ 单原子两场 Δ=4.6e-14（≪1e-3）
+> - 验收②/④ TP3：两场（光+微波+V_dd 含 6P 占据数变化元素）≡ 两体实验室系
+>   稠密 DOP853 第一性参考 Δ=2.3e-4；无光场时与 evolve_sambe_pair 逐位一致
+> - 验收③：22 态 dim=2420 稠密可跑（tempsimu/_tf_pair_22states.py，
+>   V_dd 旋转筛选丢 4320/5184 元素，max|V|=1.5e-5 MHz，净效应 8.8e-12 MHz）
+> - 单原子 `evolve_two_field` 的 t16 残留 4 元组解包（Sambe 路径含光场即崩）
+>   已一并修复；多光场拍频在 Sambe 路径显式拒绝（NotImplementedError）。
+> - 传播核心上收 `_pair_propagate`，两体 Sambe 与两场变体共用一份实现。
+
 ### 路径 B：hard 多光场支持（harddev 负责）
 **目标**：实现 §8/§2.3 的 exp 拍频（光场项 exp(i·(ω_f−ω_ref_f)·t)），
 先单原子（evolve_hard + hard_numba）→ 再两体（hard_pair）。
