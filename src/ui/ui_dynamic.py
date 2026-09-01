@@ -35,6 +35,7 @@ from .ui_waves import state_key, find_state_index
 _IP4_NEAR_CUTOFF_MHZ = 5000.0
 # readout_cb 末尾"复杂配置…"哨兵项 data（t30：全能级读出率加权）
 _COMPLEX_READOUT = -1
+_COMPLEX_LABEL = '复杂配置…'
 
 
 class DynamicPanel(QWidget):
@@ -414,17 +415,22 @@ class DynamicPanel(QWidget):
         if pw is not None and len(pw) == len(states):
             self._readout_weights = np.asarray(pw, float)
         self._pending_readout_weights = None
-        if cur_r:
-            idx = self.readout_cb.findText(cur_r)
+        # t30 微调：复杂配置只能用户主动选中——cur_r/_pending_readout 为哨兵
+        # 项时忽略，回退第一个真实能级（初始/恢复档都不得默认落在复杂配置上）
+        want = cur_r
+        if not want or want == _COMPLEX_LABEL:
+            want = getattr(self, '_pending_readout', '')
+        if not want or want == _COMPLEX_LABEL:
+            want = ''
+        if want:
+            idx = self.readout_cb.findText(want)
             if idx >= 0:
                 self.readout_cb.setCurrentIndex(idx)
-        elif getattr(self, '_pending_readout', ''):
-            idx = self.readout_cb.findText(self._pending_readout)
-            if idx >= 0:
-                self.readout_cb.setCurrentIndex(idx)
-            self._pending_readout = ''
+            else:
+                self.readout_cb.setCurrentIndex(0)
         elif self.readout_cb.count():
             self.readout_cb.setCurrentIndex(0)
+        self._pending_readout = ''
         self._pending_psi_keys = None
         self._refresh_decay_combos(states)
         # 基组变化 → 波形面板辅助 g/e 下拉数据源同步（A ≡ 共享面板，去重）
@@ -792,38 +798,55 @@ class DynamicPanel(QWidget):
 
     def _on_display_mode(self, *_):
         """显示选项切换：态布居 → 显示态数 topn；荧光读出 → 读出态下拉。
-        （t27：topn/readout 同位互斥显隐）"""
+        （t27：topn/readout 同位互斥显隐；t30 微调：切回态布居关复杂配置窗）"""
         fluo = self.display_mode_cb.currentIndex() == 1
         self.readout_cb.setVisible(fluo)
         self.topn_sb.setVisible(not fluo)
+        if not fluo:
+            self._close_readout_dlg()
         self._redraw_last()
 
     def _on_readout_activated(self, idx):
-        """t30：用户主动选中"复杂配置…"→ 弹权重配置窗（每次选中都弹）。
-
-        仅 activated（用户交互）触发——currentIndexChanged 只重绘，程序化
-        refill（基组刷新/存档恢复）重选哨兵项不再弹模态窗（防阻塞）。"""
+        """t30：用户主动选中"复杂配置…"→ 弹权重配置窗（每次选中都弹/常驻）；
+        选中真实能级 → 关复杂配置窗。仅 activated（用户交互）触发——
+        currentIndexChanged 只重绘，程序化 refill 重选哨兵项不弹窗（防阻塞）。"""
         if idx >= 0 and self.readout_cb.itemData(idx) == _COMPLEX_READOUT:
             self._open_readout_config()
+        else:
+            self._close_readout_dlg()
+
+    def _close_readout_dlg(self):
+        """关复杂配置窗（显示模式切回态布居 / 选中真实能级 / 用户关闭）。"""
+        dlg = getattr(self, '_readout_dlg', None)
+        if dlg is not None:
+            dlg.close()
 
     def _open_readout_config(self):
-        """复杂配置：独立小窗口列出全部能级 + 读出率（0-1，默认 0）。
+        """复杂配置：常驻非模态窗口列出全部能级 + 读出率（0-1，默认 0）。
 
-        读出率 = 在该态前提下能被荧光计数的概率；确定后写回
-        self._readout_weights（float64，索引随基组）。"""
+        读出率 = 在该态前提下能被荧光计数的概率；'确定'应用权重并刷新画布
+        （窗口不关），'关闭'/X 才关；显示模式切回态布居或选中真实能级时
+        自动关闭。已存在且可见 → raise_() 复用（不重复建）。"""
         states = (getattr(self, '_run_states', None)
                   or getattr(self, '_states', None) or [])
         if not states:
             self.main.log('无基组，无法配置读出率')
             return
+        dlg = getattr(self, '_readout_dlg', None)
+        if dlg is not None and dlg.isVisible():
+            dlg.raise_()
+            dlg.activateWindow()
+            return
         w = getattr(self, '_readout_weights', None)
         if w is None or len(w) != len(states):
             w = np.zeros(len(states))
         dlg = QDialog(self)
+        dlg.setAttribute(Qt.WA_DeleteOnClose)
         dlg.setWindowTitle('复杂配置：能级读出率')
         lay = QVBoxLayout(dlg)
         lay.addWidget(QLabel(
-            '读出率 = 在该态前提下能被荧光计数的概率（范围 0-1，默认 0）'))
+            '读出率 = 在该态前提下能被荧光计数的概率（0-1，默认 0）；'
+            '确定应用并刷新画布（窗口保持），关闭/X 退出'))
         scroll = QScrollArea(dlg)
         scroll.setWidgetResizable(True)
         inner = QWidget()
@@ -843,17 +866,23 @@ class DynamicPanel(QWidget):
         lay.addWidget(scroll)
         rowb = QHBoxLayout()
         ok = QPushButton('确定')
-        ok.clicked.connect(dlg.accept)
-        cc = QPushButton('取消')
-        cc.clicked.connect(dlg.reject)
+
+        def _apply():
+            self._readout_weights = np.array(
+                [s.value() for s in spins], dtype=np.float64)
+            self._redraw_last()
+
+        ok.clicked.connect(_apply)
+        cc = QPushButton('关闭')
+        cc.clicked.connect(dlg.close)
         rowb.addWidget(ok)
         rowb.addWidget(cc)
         lay.addLayout(rowb)
         dlg.setFixedWidth(540)
-        if dlg.exec_() == QDialog.Accepted:
-            self._readout_weights = np.array(
-                [s.value() for s in spins], dtype=np.float64)
-            self._redraw_last()
+        self._readout_dlg = dlg
+        dlg.destroyed.connect(
+            lambda *a: setattr(self, '_readout_dlg', None))
+        dlg.show()
 
     def _redraw_last(self):
         """按当前显示选项重绘最近一次结果（无结果则不动）。"""

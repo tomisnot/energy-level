@@ -173,18 +173,26 @@ def test_dynamic(app, win):
     check('复杂配置读出绘制（Σ wᵢ·Pᵢ）',
           len(dyn.ax_bot.lines) == 1
           and '权重全 0' not in dyn.ax_bot.lines[0].get_label())
-    # t30：复杂配置弹窗逻辑（离屏 patch exec_ 立即确定 + 权重写回）
-    import PyQt5.QtWidgets as _qtw
-    _orig_exec = _qtw.QDialog.exec_
-    _qtw.QDialog.exec_ = lambda self: _qtw.QDialog.Accepted
-    try:
-        dyn._readout_weights = np.zeros(N)
-        dyn._open_readout_config()
-        check('复杂配置弹窗确定后权重写回',
-              len(dyn._readout_weights) == N
-              and np.all(dyn._readout_weights == 0.0))
-    finally:
-        _qtw.QDialog.exec_ = _orig_exec
+    # t30：复杂配置弹窗（非模态常驻）——确定应用权重且窗口保持；关闭清引用
+    dyn._readout_weights = np.zeros(N)
+    dyn._open_readout_config()
+    app.processEvents()
+    check('复杂配置弹窗非模态显示', getattr(dyn, '_readout_dlg', None)
+          is not None and dyn._readout_dlg.isVisible())
+    ok_btn = [b for b in dyn._readout_dlg.findChildren(
+        __import__('PyQt5.QtWidgets', fromlist=['QPushButton']).QPushButton)
+        if b.text() == '确定'][0]
+    ok_btn.click()
+    app.processEvents()
+    check('确定应用权重（窗口保持）',
+          len(dyn._readout_weights) == N
+          and np.all(dyn._readout_weights == 0.0)
+          and dyn._readout_dlg.isVisible())
+    dyn._readout_dlg.close()
+    app.processEvents()
+    from PyQt5.QtCore import QEvent
+    app.sendPostedEvents(None, QEvent.DeferredDelete)   # WA_DeleteOnClose 延迟删除
+    check('关窗清引用', getattr(dyn, '_readout_dlg', None) is None)
     res3 = {'t': t, 'pops_2d': np.zeros((len(t), N * N))}
     res3['pops_2d'][:, 3] = 0.4
     dyn._is_two_body = True
@@ -212,6 +220,8 @@ def test_dynamic(app, win):
     check('restore 恢复 readout_weights',
           np.allclose(dyn._readout_weights,
                       [0.1, 0.2, 0.3] + [0.0] * (N - 3)))
+    check('复杂配置不可作默认（恢复回退真实能级）',
+          dyn.readout_cb.currentData() != -1)
 
     # ---- 自发辐射三档：自动（ARC 寿命）/ 禁用 / 自定义 ----
     check('自发辐射默认自动档 + 配置区隐藏',
