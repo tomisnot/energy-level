@@ -152,10 +152,11 @@ def test_dynamic(app, win):
           == ['ip4', 'sambe', 'hard'])
     check('无 near_cutoff 控件', not hasattr(dyn, 'near_cutoff_sb'))
 
-    # ---- t25/t27：显示选项 + 荧光读出（单原子绘制 + 双原子约化）----
+    # ---- t25/t27/t30：显示选项 + 荧光读出（单原子绘制 + 双原子约化）----
     dyn.display_mode_cb.setCurrentIndex(1); app.processEvents()
-    check('荧光读出态下拉出现（含全部能级）',
-          dyn.readout_cb.isVisible() and dyn.readout_cb.count() == N)
+    check('荧光读出态下拉出现（含全部能级 + 复杂配置）',
+          dyn.readout_cb.isVisible() and dyn.readout_cb.count() == N + 1
+          and dyn.readout_cb.itemData(dyn.readout_cb.count() - 1) == -1)
     check('readout_cb 不占满（t27 去 stretch）',
           dyn.readout_cb.width() < dyn.width() * 0.6)
     check('荧光读出时 topn 隐藏（t27 互斥）', not dyn.topn_sb.isVisible())
@@ -164,16 +165,53 @@ def test_dynamic(app, win):
     dyn._last_res = res2
     dyn._draw_bot(states, res2); app.processEvents()
     check('单原子荧光读出单线绘制', len(dyn.ax_bot.lines) == 1)
+    # t30：复杂配置加权读出（权重写回后重绘 → Σw·P 单线）
+    dyn._readout_weights = np.ones(N) / N
+    dyn.readout_cb.setCurrentIndex(dyn.readout_cb.count() - 1)
+    dyn._redraw_last()          # 索引可能已在哨兵项（setCurrentIndex 同值不触发）
+    app.processEvents()
+    check('复杂配置读出绘制（Σ wᵢ·Pᵢ）',
+          len(dyn.ax_bot.lines) == 1
+          and '权重全 0' not in dyn.ax_bot.lines[0].get_label())
+    # t30：复杂配置弹窗逻辑（离屏 patch exec_ 立即确定 + 权重写回）
+    import PyQt5.QtWidgets as _qtw
+    _orig_exec = _qtw.QDialog.exec_
+    _qtw.QDialog.exec_ = lambda self: _qtw.QDialog.Accepted
+    try:
+        dyn._readout_weights = np.zeros(N)
+        dyn._open_readout_config()
+        check('复杂配置弹窗确定后权重写回',
+              len(dyn._readout_weights) == N
+              and np.all(dyn._readout_weights == 0.0))
+    finally:
+        _qtw.QDialog.exec_ = _orig_exec
     res3 = {'t': t, 'pops_2d': np.zeros((len(t), N * N))}
     res3['pops_2d'][:, 3] = 0.4
     dyn._is_two_body = True
     dyn._draw_bot_pair(res3); app.processEvents()
-    check('双原子荧光读出 A/B 双线',
-          len(dyn.ax_bot.lines) == 2)
+    check('双原子复杂配置 A/B 双线', len(dyn.ax_bot.lines) == 2)
     dyn._is_two_body = False
+    # t30：改读出态/显示态数触发重绘（解暂存直接转换）
+    dyn.readout_cb.setCurrentIndex(0); app.processEvents()
+    check('改读出态触发重绘（仍单线）', len(dyn.ax_bot.lines) == 1)
+    dyn.display_mode_cb.setCurrentIndex(0); app.processEvents()
+    n0 = len(dyn.ax_bot.lines)
+    dyn.topn_sb.setValue(3); app.processEvents()
+    check('改显示态数触发重绘', len(dyn.ax_bot.lines) >= 1)
     dyn.display_mode_cb.setCurrentIndex(0); app.processEvents()
     check('显示模式恢复态布居', not dyn.readout_cb.isVisible())
     check('态布居时 topn 显示（t27 互斥）', dyn.topn_sb.isVisible())
+    # t30：serialize 含 readout_weights 且 round-trip 一致
+    sv = dyn.serialize_state()
+    dyn._readout_weights = np.array([0.1, 0.2, 0.3] + [0.0] * (N - 3))
+    sv2 = dyn.serialize_state()
+    check('serialize 含 readout_weights',
+          'readout_weights' in sv2['dynamic']
+          and len(sv2['dynamic']['readout_weights']) == N)
+    dyn.restore_state(sv2); app.processEvents()
+    check('restore 恢复 readout_weights',
+          np.allclose(dyn._readout_weights,
+                      [0.1, 0.2, 0.3] + [0.0] * (N - 3)))
 
     # ---- 自发辐射三档：自动（ARC 寿命）/ 禁用 / 自定义 ----
     check('自发辐射默认自动档 + 配置区隐藏',

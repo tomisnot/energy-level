@@ -14,11 +14,11 @@ import json
 import numpy as np
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QEvent
 from PyQt5.QtGui import QColor, QIcon, QPixmap
-from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-                             QPushButton, QSpinBox, QDoubleSpinBox, QComboBox,
-                             QListWidget, QListWidgetItem, QMessageBox,
-                             QDialog, QProgressBar, QRadioButton,
-                             QButtonGroup, QTabWidget, QFrame)
+from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
+                             QLabel, QPushButton, QSpinBox, QDoubleSpinBox,
+                             QComboBox, QListWidget, QListWidgetItem,
+                             QMessageBox, QDialog, QProgressBar, QRadioButton,
+                             QButtonGroup, QTabWidget, QFrame, QScrollArea)
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.colors import LogNorm
@@ -33,6 +33,8 @@ from .ui_waves import state_key, find_state_index
 
 # ip4 的近/远分流边界（原共振 cut 控件，t25 移除 UI 后内部默认，单位 MHz）
 _IP4_NEAR_CUTOFF_MHZ = 5000.0
+# readout_cb 末尾"复杂配置…"哨兵项 data（t30：全能级读出率加权）
+_COMPLEX_READOUT = -1
 
 
 class DynamicPanel(QWidget):
@@ -281,9 +283,18 @@ class DynamicPanel(QWidget):
         self.topn_sb.setValue(8)
         self.topn_sb.setToolTip('按最近一次结果的平均布居取前 N 个态绘制'
                                 '（无需手动勾选，内部自动筛选）')
+        # t30：参数更改触发画布重绘（有解暂存时直接转换，不重新运行）
+        self.topn_sb.valueChanged.connect(self._redraw_last)
         row_disp.addWidget(self.topn_sb)
         self.readout_cb = QComboBox()
-        self.readout_cb.setToolTip('荧光读出能级（基组全部子能级，F 区分）')
+        self.readout_cb.setToolTip('荧光读出能级（基组全部子能级，F 区分）；'
+                                   '末尾"复杂配置…"= 全能级读出率加权')
+        self.readout_cb.setFixedWidth(300)
+        # t30：currentIndexChanged（含程序化 refill）只重绘；activated（用户
+        # 主动选择）才弹复杂配置窗——避免基组刷新/存档恢复重选哨兵项时模态
+        # 弹窗阻塞（faulthandler 定位的挂起根因）
+        self.readout_cb.currentIndexChanged.connect(self._redraw_last)
+        self.readout_cb.activated.connect(self._on_readout_activated)
         row_disp.addWidget(self.readout_cb)
         self.readout_cb.setVisible(False)        # 初始态布居 → topn 显示
         row_disp.addStretch(1)
@@ -390,11 +401,19 @@ class DynamicPanel(QWidget):
                   pending.get('A' if k == 0 else 'B') if pending else None,
                   cur_t[k])
         # 荧光读出态下拉（基组全部子能级；label 含 F 区分——低激发超精细
-        # 态如 '6P3/2 F=3.0, m_F=+3.0'，里德堡如 '60S1/2 m_J=+0.5'）
+        # 态如 '6P3/2 F=3.0, m_F=+3.0'，里德堡如 '60S1/2 m_J=+0.5'；
+        # t30：末尾"复杂配置…"哨兵项 + 权重随基组重置/恢复）
         cur_r = self.readout_cb.currentText()
         self.readout_cb.clear()
         for i, s in enumerate(states):
             self.readout_cb.addItem(s['label'], i)
+        self.readout_cb.addItem('复杂配置…', _COMPLEX_READOUT)
+        # t30：基组重建 → 读出率权重重置全 0；恢复档有 pending 则用之
+        self._readout_weights = np.zeros(len(states), dtype=np.float64)
+        pw = getattr(self, '_pending_readout_weights', None)
+        if pw is not None and len(pw) == len(states):
+            self._readout_weights = np.asarray(pw, float)
+        self._pending_readout_weights = None
         if cur_r:
             idx = self.readout_cb.findText(cur_r)
             if idx >= 0:
@@ -609,6 +628,10 @@ class DynamicPanel(QWidget):
                 # t25：显示选项（0 态布居 / 1 荧光读出）+ 读出态（身份文本）
                 'display_mode': self.display_mode_cb.currentIndex(),
                 'readout': self.readout_cb.currentText(),
+                # t30：复杂配置读出率权重（索引随基组；无配置时全 0）
+                'readout_weights': list(getattr(
+                    self, '_readout_weights',
+                    np.zeros(len(getattr(self, '_states', []))))),
             },
             'pair': {
                 'R_um': self.vdd_R_sb.value(),
@@ -665,6 +688,10 @@ class DynamicPanel(QWidget):
             int(dyn.get('display_mode', 0)))
         self._on_display_mode()
         self._pending_readout = str(dyn.get('readout', ''))
+        # t30：复杂配置读出率权重（长度不符/缺失 → 全 0，_on_m_changed 应用）
+        _rw = dyn.get('readout_weights')
+        self._pending_readout_weights = (
+            list(_rw) if isinstance(_rw, (list, tuple)) else None)
         # 自发辐射档位（双原子模式现支持寿命/丢失通道，同样恢复）
         self.decay_mode_cb.setCurrentIndex(int(dyn.get('decay_mode', 0)))
         pair = state.get('pair', {})
@@ -770,6 +797,63 @@ class DynamicPanel(QWidget):
         self.readout_cb.setVisible(fluo)
         self.topn_sb.setVisible(not fluo)
         self._redraw_last()
+
+    def _on_readout_activated(self, idx):
+        """t30：用户主动选中"复杂配置…"→ 弹权重配置窗（每次选中都弹）。
+
+        仅 activated（用户交互）触发——currentIndexChanged 只重绘，程序化
+        refill（基组刷新/存档恢复）重选哨兵项不再弹模态窗（防阻塞）。"""
+        if idx >= 0 and self.readout_cb.itemData(idx) == _COMPLEX_READOUT:
+            self._open_readout_config()
+
+    def _open_readout_config(self):
+        """复杂配置：独立小窗口列出全部能级 + 读出率（0-1，默认 0）。
+
+        读出率 = 在该态前提下能被荧光计数的概率；确定后写回
+        self._readout_weights（float64，索引随基组）。"""
+        states = (getattr(self, '_run_states', None)
+                  or getattr(self, '_states', None) or [])
+        if not states:
+            self.main.log('无基组，无法配置读出率')
+            return
+        w = getattr(self, '_readout_weights', None)
+        if w is None or len(w) != len(states):
+            w = np.zeros(len(states))
+        dlg = QDialog(self)
+        dlg.setWindowTitle('复杂配置：能级读出率')
+        lay = QVBoxLayout(dlg)
+        lay.addWidget(QLabel(
+            '读出率 = 在该态前提下能被荧光计数的概率（范围 0-1，默认 0）'))
+        scroll = QScrollArea(dlg)
+        scroll.setWidgetResizable(True)
+        inner = QWidget()
+        gl = QGridLayout(inner)
+        gl.setColumnStretch(0, 1)
+        spins = []
+        for i, s in enumerate(states):
+            gl.addWidget(QLabel(s['label']), i, 0)
+            sb = QDoubleSpinBox()
+            sb.setRange(0.0, 1.0)
+            sb.setDecimals(3)
+            sb.setValue(float(w[i]))
+            sb.setFixedWidth(90)
+            gl.addWidget(sb, i, 1)
+            spins.append(sb)
+        scroll.setWidget(inner)
+        lay.addWidget(scroll)
+        rowb = QHBoxLayout()
+        ok = QPushButton('确定')
+        ok.clicked.connect(dlg.accept)
+        cc = QPushButton('取消')
+        cc.clicked.connect(dlg.reject)
+        rowb.addWidget(ok)
+        rowb.addWidget(cc)
+        lay.addLayout(rowb)
+        dlg.setFixedWidth(540)
+        if dlg.exec_() == QDialog.Accepted:
+            self._readout_weights = np.array(
+                [s.value() for s in spins], dtype=np.float64)
+            self._redraw_last()
 
     def _redraw_last(self):
         """按当前显示选项重绘最近一次结果（无结果则不动）。"""
@@ -1183,14 +1267,23 @@ class DynamicPanel(QWidget):
         self.canvas_bot.draw_idle()
 
     def _readout_index(self, n_states):
-        """荧光读出态索引（基组索引；越界/无选择回退 0）。"""
+        """荧光读出态索引（基组索引；越界/无选择回退 0；复杂配置哨兵透传）。"""
         i = self.readout_cb.currentData() if self.readout_cb.count() else None
+        if i == _COMPLEX_READOUT:
+            return _COMPLEX_READOUT
         if i is None or not (0 <= i < n_states):
             return 0
         return int(i)
 
+    def _readout_weights_vec(self, n_states):
+        """复杂配置权重向量（长度校验；无/不符 → 全 0）。"""
+        w = getattr(self, '_readout_weights', None)
+        if w is None or len(w) != n_states:
+            return np.zeros(n_states)
+        return np.asarray(w, float)
+
     def _draw_readout_single(self, states, res):
-        """单原子荧光读出：|⟨读出态|ψ⟩|² 随时间。
+        """单原子荧光读出：|⟨读出态|ψ⟩|² 随时间；复杂配置 → Σ wᵢ·Pᵢ 加权期望。
 
         纯幺正演化下 pops 即 |⟨i|ψ⟩|²（精确读出概率）；耗散时 loss 不算
         读出（离场），曲线为 |⟨i|ψ⟩|² 的存活部分——无需 psi（record_amp），
@@ -1200,16 +1293,25 @@ class DynamicPanel(QWidget):
         ax.set_xlabel('t (ns)'); ax.set_ylabel('读出概率'); ax.grid(alpha=0.3)
         i = self._readout_index(len(states))
         pops = res['pops']
-        ax.plot(res['t'], pops[:, i], lw=1.6,
-                label=f'|⟨读出态|ψ⟩|²  {states[i]["label"]}')
-        ax.set_ylim(-0.02, 1.02)
+        if i == _COMPLEX_READOUT:
+            w = self._readout_weights_vec(len(states))
+            y = pops @ w
+            lab = '荧光计数期望 Σ wᵢ·Pᵢ' + ('（权重全 0）'
+                                           if not np.any(w) else '')
+            ax.plot(res['t'], y, lw=1.6, label=lab)
+            ax.set_ylim(-0.02, max(1.02, 1.05 * float(y.max())))
+        else:
+            ax.plot(res['t'], pops[:, i], lw=1.6,
+                    label=f'|⟨读出态|ψ⟩|²  {states[i]["label"]}')
+            ax.set_ylim(-0.02, 1.02)
         ax.margins(x=0)
         ax.set_xlim(res['t'][0], res['t'][-1])
         ax.legend(fontsize=8)
         self.canvas_bot.draw_idle()
 
     def _draw_readout_pair(self, res):
-        """双原子荧光读出：A/B 两原子在读出态上的约化概率。
+        """双原子荧光读出：A/B 两原子在读出态上的约化概率；复杂配置 →
+        Σ wᵢ·ρ_A/B 加权期望。
 
         约化：ρ_A(i) = Σ_j pops_2d[i·N+j]，ρ_B(i) = Σ_j pops_2d[j·N+i]
         （k=i·N+j 的 product 基排序；pops_2d 足够，无需 psi 投影）。
@@ -1220,11 +1322,25 @@ class DynamicPanel(QWidget):
         N = int(round(np.sqrt(pops_2d.shape[1])))
         i = self._readout_index(N)
         lab = self.readout_cb.currentText()
-        ax.plot(res['t'], pops_2d[:, i * N:(i + 1) * N].sum(axis=1),
-                lw=1.4, label=f'A: ρ_A({lab})')
-        ax.plot(res['t'], pops_2d[:, i::N].sum(axis=1),
-                lw=1.4, ls='--', label=f'B: ρ_B({lab})')
-        ax.set_ylim(-0.02, 1.02)
+        if i == _COMPLEX_READOUT:
+            w = self._readout_weights_vec(N)
+            yA = (pops_2d.reshape(-1, N, N).transpose(0, 2, 1)
+                  @ w).sum(axis=1)        # ρ_A(i) = Σ_j pops[i·N+j]
+            yB = (pops_2d.reshape(-1, N, N) @ w).sum(axis=1)
+            # ρ_B(i) = Σ_j pops[j·N+i]
+            labA = 'A: 荧光计数期望 Σ wᵢ·ρ_A' + ('（权重全 0）'
+                                                 if not np.any(w) else '')
+            labB = 'B: Σ wᵢ·ρ_B'
+            ax.plot(res['t'], yA, lw=1.4, label=labA)
+            ax.plot(res['t'], yB, lw=1.4, ls='--', label=labB)
+            ymax = max(1.02, 1.05 * float(max(yA.max(), yB.max())))
+            ax.set_ylim(-0.02, ymax)
+        else:
+            ax.plot(res['t'], pops_2d[:, i * N:(i + 1) * N].sum(axis=1),
+                    lw=1.4, label=f'A: ρ_A({lab})')
+            ax.plot(res['t'], pops_2d[:, i::N].sum(axis=1),
+                    lw=1.4, ls='--', label=f'B: ρ_B({lab})')
+            ax.set_ylim(-0.02, 1.02)
         ax.margins(x=0)
         ax.set_xlim(res['t'][0], res['t'][-1])
         ax.legend(fontsize=8)
