@@ -824,9 +824,11 @@ class DynamicPanel(QWidget):
     def _open_readout_config(self):
         """复杂配置：常驻非模态窗口列出全部能级 + 读出率（0-1，默认 0）。
 
-        读出率 = 在该态前提下能被荧光计数的概率；'确定'应用权重并刷新画布
-        （窗口不关），'关闭'/X 才关；显示模式切回态布居或选中真实能级时
-        自动关闭。已存在且可见 → raise_() 复用（不重复建）。"""
+        读出率 = 在该态前提下能被荧光计数的概率；**无确定/取消按钮**——
+        每个 spinbox 改动**实时写回** self._readout_weights 并刷新画布；
+        窗口随 readout_cb 选择而显隐（选"复杂配置…"弹出，选真实能级或
+        切回态布居自动关闭），也可手动 X 关闭。已存在且可见 → raise_() 复用。
+        """
         states = (getattr(self, '_run_states', None)
                   or getattr(self, '_states', None) or [])
         if not states:
@@ -846,13 +848,12 @@ class DynamicPanel(QWidget):
         lay = QVBoxLayout(dlg)
         lay.addWidget(QLabel(
             '读出率 = 在该态前提下能被荧光计数的概率（0-1，默认 0）；'
-            '确定应用并刷新画布（窗口保持），关闭/X 退出'))
+            '改动实时生效并刷新画布，无需确认。'))
         scroll = QScrollArea(dlg)
         scroll.setWidgetResizable(True)
         inner = QWidget()
         gl = QGridLayout(inner)
         gl.setColumnStretch(0, 1)
-        spins = []
         for i, s in enumerate(states):
             gl.addWidget(QLabel(s['label']), i, 0)
             sb = QDoubleSpinBox()
@@ -860,29 +861,25 @@ class DynamicPanel(QWidget):
             sb.setDecimals(3)
             sb.setValue(float(w[i]))
             sb.setFixedWidth(90)
+            # t32：无确定/取消——值变化实时写回权重并刷新画布
+            sb.valueChanged.connect(
+                lambda v, i=i: self._set_readout_weight(i, v))
             gl.addWidget(sb, i, 1)
-            spins.append(sb)
         scroll.setWidget(inner)
         lay.addWidget(scroll)
-        rowb = QHBoxLayout()
-        ok = QPushButton('确定')
-
-        def _apply():
-            self._readout_weights = np.array(
-                [s.value() for s in spins], dtype=np.float64)
-            self._redraw_last()
-
-        ok.clicked.connect(_apply)
-        cc = QPushButton('关闭')
-        cc.clicked.connect(dlg.close)
-        rowb.addWidget(ok)
-        rowb.addWidget(cc)
-        lay.addLayout(rowb)
         dlg.setFixedWidth(540)
         self._readout_dlg = dlg
         dlg.destroyed.connect(
             lambda *a: setattr(self, '_readout_dlg', None))
         dlg.show()
+
+    def _set_readout_weight(self, i, v):
+        """复杂配置：单个能级读出率实时写回 + 刷新画布（t32）。"""
+        w = getattr(self, '_readout_weights', None)
+        if w is None or not (0 <= i < len(w)):
+            return
+        w[i] = float(v)
+        self._redraw_last()
 
     def _redraw_last(self):
         """按当前显示选项重绘最近一次结果（无结果则不动）。"""

@@ -173,20 +173,24 @@ def test_dynamic(app, win):
     check('复杂配置读出绘制（Σ wᵢ·Pᵢ）',
           len(dyn.ax_bot.lines) == 1
           and '权重全 0' not in dyn.ax_bot.lines[0].get_label())
-    # t30：复杂配置弹窗（非模态常驻）——确定应用权重且窗口保持；关闭清引用
+    # t30：复杂配置弹窗（非模态常驻）——t32 无确定/取消，spinbox 实时写回；
+    # 关窗清引用
     dyn._readout_weights = np.zeros(N)
     dyn._open_readout_config()
     app.processEvents()
     check('复杂配置弹窗非模态显示', getattr(dyn, '_readout_dlg', None)
           is not None and dyn._readout_dlg.isVisible())
-    ok_btn = [b for b in dyn._readout_dlg.findChildren(
-        __import__('PyQt5.QtWidgets', fromlist=['QPushButton']).QPushButton)
-        if b.text() == '确定'][0]
-    ok_btn.click()
+    sp = dyn._readout_dlg.findChildren(
+        __import__('PyQt5.QtWidgets', fromlist=['QDoubleSpinBox']).QDoubleSpinBox)
+    check('弹窗无确定/取消按钮（仅 spinbox）',
+          len(dyn._readout_dlg.findChildren(
+              __import__('PyQt5.QtWidgets',
+                         fromlist=['QPushButton']).QPushButton)) == 0)
+    sp[0].setValue(0.5)             # 触发 valueChanged → 实时写回 + 重绘
     app.processEvents()
-    check('确定应用权重（窗口保持）',
+    check('spinbox 实时写回权重（窗口保持）',
           len(dyn._readout_weights) == N
-          and np.all(dyn._readout_weights == 0.0)
+          and np.isclose(dyn._readout_weights[0], 0.5)
           and dyn._readout_dlg.isVisible())
     dyn._readout_dlg.close()
     app.processEvents()
