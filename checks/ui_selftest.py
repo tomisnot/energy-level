@@ -49,6 +49,13 @@ def test_main(app):
     win = main_mod.MainWindow()
     win.show(); app.processEvents()
     check('主窗口构造 + 全局主题', bool(app.styleSheet()))
+    # ---- t29：QComboBox down-arrow 三角（全局 QSS + 资产）----
+    check('QSS 含 QComboBox::down-arrow',
+          'QComboBox::down-arrow' in ui_theme.QSS)
+    _arrow = os.path.join(os.path.dirname(ui_theme.__file__),
+                          'assets', 'down_arrow.png')
+    check('down-arrow 资产存在且非空',
+          os.path.isfile(_arrow) and os.path.getsize(_arrow) > 200)
     for idx in (0, 1):
         win.canvas_tabs.setCurrentIndex(idx); app.processEvents()
     check('两页切换（页面栈）', win.page_stack.currentIndex() == 1)

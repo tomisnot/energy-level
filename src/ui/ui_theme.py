@@ -8,7 +8,14 @@
 
 设计：中性灰阶 + 圆角 + 悬停态（无 emoji / 无彩色），与 TTL 编辑器原主题一致，
 覆盖全部常用控件；所有字体/颜色/尺寸收敛为常量，便于统一调整。
+
+t29：QComboBox 全局样式接管绘制后原生下拉箭头消失（与按钮难区分）——
+补充 QComboBox::down-arrow 三角图像（assets/down_arrow.png，中性灰
+COL_TEXT_DIM #6b7280，纯 Python 生成已入库；缺失时运行时 fallback 就地
+生成，仍失败则 QSS 不设 image，不崩溃）。
 """
+
+import os
 
 # ---------------- 主题常量（统一调整入口） ----------------
 FONT_FAMILY = 'Microsoft YaHei'
@@ -26,6 +33,32 @@ COL_HEAD = '#edf0f3'        # 表头
 COL_ROW_ALT = '#f7f8fa'     # 交替行
 COL_GRID = '#e4e6ea'
 COL_DANGER = '#c0392b'
+
+_ARROW_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           'assets', 'down_arrow.png')
+
+
+def _down_arrow_url():
+    """down-arrow PNG 绝对路径（正斜杠，QSS url 用）；缺失时 try 就地生成
+    （纯 Python 生成器 scripts/make_down_arrow.py，无 Qt 依赖）；仍失败
+    返回 None——QSS 不设 image（Qt 不渲染箭头，不崩溃）。"""
+    if not os.path.isfile(_ARROW_PATH):
+        try:
+            from scripts.make_down_arrow import make_png
+            data = make_png()
+            os.makedirs(os.path.dirname(_ARROW_PATH), exist_ok=True)
+            with open(_ARROW_PATH, 'wb') as f:
+                f.write(data)
+        except Exception:
+            return None
+    return _ARROW_PATH.replace('\\', '/')
+
+
+_DOWN_ARROW_URL = _down_arrow_url()
+_DOWN_ARROW_QSS = (
+    f'QComboBox::down-arrow {{ image: url("{_DOWN_ARROW_URL}"); '
+    f'width: 12px; height: 8px; }}'
+    if _DOWN_ARROW_URL else '')
 
 QSS = f"""
 * {{ font-family: '{FONT_FAMILY}'; font-size: {FONT_SIZE}; }}
@@ -48,6 +81,7 @@ QDoubleSpinBox, QSpinBox, QComboBox, QLineEdit, QTextEdit, QPlainTextEdit {{
 QDoubleSpinBox:focus, QSpinBox:focus, QComboBox:focus, QLineEdit:focus,
 QTextEdit:focus, QPlainTextEdit:focus {{ border-color: {COL_ACCENT}; }}
 QComboBox::drop-down {{ border: none; width: 18px; }}
+{_DOWN_ARROW_QSS}
 QComboBox QAbstractItemView {{ background: {COL_PANEL}; border: 1px solid {COL_BORDER};
     selection-background-color: #d4dbe3; selection-color: {COL_TEXT}; }}
 QTableWidget, QTableView {{
