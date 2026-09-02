@@ -65,6 +65,20 @@ _DT_MIN_FRAC = 2e5
 _DBG_LOG = None
 
 
+def _eigh_opt(K):
+    """eigh 加速（t37）：Sambe 段 eigh 是小矩阵（~234-990 维），OpenBLAS
+    多线程在此尺度是净损失（24 线程 16ms vs 1 线程 6ms @234 维——线程同步
+    开销主导）。调用方应在**整个演化运行**外包 threadpool_limits(1)
+    （逐段开关上下文的开销 ~15ms/段，反而更慢）；本 helper 保留为参考。
+    数值结果与多线程一致（~1e-13 舍入内）。"""
+    try:
+        import threadpoolctl
+        with threadpoolctl.threadpool_limits(limits=1):
+            return np.linalg.eigh(K)
+    except Exception:
+        return np.linalg.eigh(K)
+
+
 # ============================================================
 # 场构造（无 near_cutoff / 无 AC 注入 / 无 scatter——全部补丁机制切割）
 # ============================================================
@@ -780,8 +794,16 @@ def evolve_sambe(states, fields, psi0, t_grid, tol=1e-6, decays=None,
                 break
     log(f'[exact] 光子块（逐载频）M={Ms}'
         f'（扇区数 Π(2M_g+1)={setup_P(Ms)}）')
-    pops, psi_f, report, setup = _run_sambe(E, groups, Ms, psi0v, t, tol,
-                                           progress_arr, log, frozen_h_ns)
+    if frozen_h_ns is not None and frozen_h_ns > 0:
+        # t37：frozen 段 eigh 是小矩阵——全程单线程（OpenBLAS 24 线程在此
+        # 尺度是净损失 16ms→6ms @234 维；逐段开关上下文开销更大，故包全程）
+        import threadpoolctl
+        with threadpoolctl.threadpool_limits(limits=1):
+            pops, psi_f, report, setup = _run_sambe(
+                E, groups, Ms, psi0v, t, tol, progress_arr, log, frozen_h_ns)
+    else:
+        pops, psi_f, report, setup = _run_sambe(
+            E, groups, Ms, psi0v, t, tol, progress_arr, log, frozen_h_ns)
     if frozen_h_ns is not None and frozen_h_ns > 0:
         log(f'[exact] 纯冻结模式完成：{report["n_segments"]} 段'
             f'（h={frozen_h_ns}ns），范数偏差 {report["max_norm_dev"]:.2e}')
