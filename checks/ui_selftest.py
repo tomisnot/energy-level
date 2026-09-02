@@ -370,9 +370,10 @@ def test_state_save(app):
           and len(dyn.wave_panel_A.waves) == 1
           and dyn.psi_combo_A.currentIndex() == 1
           and dyn.topn_sb.value() == 12)
-    # 旧档兼容（STIRAP.json：顶层旧格式，无 mode/pair/waves_A/B）
-    data = json.load(open(os.path.join(_ROOT, 'save_state', 'STIRAP.json'),
-                          encoding='utf-8'))
+    # 旧档兼容（_legacy/STIRAP_v1.json：顶层旧格式 v1，无 mode/pair/waves_A/B）
+    data = json.load(open(os.path.join(
+        _ROOT, 'save_state', '_legacy', 'STIRAP_v1.json'),
+        encoding='utf-8'))
     dyn.restore_state(data)
     app.processEvents()
     check('旧档兼容：无 mode/pair → 单原子 + 波形恢复',
@@ -446,9 +447,12 @@ def test_progress(app):
 
 # ================= 6. STIRAP/拉曼 存档恢复端到端 =================
 def test_stir_states(app):
-    """恢复 save_state/STIRAP.json → build_fields → 演化 → 60S 转移（协议存档回归）。"""
-    data = json.load(open(os.path.join(_ROOT, 'save_state', 'STIRAP.json'),
-                          encoding='utf-8'))
+    """恢复 save_state/_legacy/STIRAP_v1.json（v1 旧格式）→ build_fields
+    → 演化 → 60S 转移（协议存档回归；当前 save_state/STIRAP.json 已是 v2，
+    v1 样本归档在 _legacy 供兼容回归）。"""
+    data = json.load(open(os.path.join(
+        _ROOT, 'save_state', '_legacy', 'STIRAP_v1.json'),
+        encoding='utf-8'))
     cache = core.ArcCache(__import__('arc').Rubidium87())
     B = float(data['B_gauss'])
     specs = []

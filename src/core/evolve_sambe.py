@@ -526,7 +526,8 @@ def _defect_at(setup, S, evals, evecs, tq):
     return evecs @ (-1j * _CONV * np.exp(-1j * _CONV * evals * tq) * S)
 
 
-def _propagate_adaptive(setup, groups, psi0, t_grid, tol, progress_arr, log):
+def _propagate_adaptive(setup, groups, psi0, t_grid, tol, progress_arr, log,
+                        frozen_h_ns=None):
     """自适应分段演化：全程在 Sambe 扩展空间连续传播（边界不重嵌入，
     无微运动泄漏；幺正守恒），仅在输出时刻投影物理态。
 
@@ -535,6 +536,12 @@ def _propagate_adaptive(setup, groups, psi0, t_grid, tol, progress_arr, log):
     函数含本征拍频振荡，节点须解析），节点加密差即误差估计：≤ tol 接受，
     否则真中点细分（细分同时降低所需节点数）——可细分到输出网格以下，
     直到残差 ≤ tol 或触及绝对下限。
+
+    **frozen_h_ns（t36 方案 1）**：>0 时切换"纯冻结"模式——固定 h 内部细分，
+    每段只做中点对角化 + 精确指数（无缺陷修正/无 Gauss 节点/无 Richardson）。
+    缺陷修正的 Gauss 核含 THz 光子块本征跨度 → 在 THz 场景段被细分到
+    h_floor 仍不收敛；纯冻结误差 = 段内包络变化（σ 缓变场景 h=1ns 布居
+    偏差 ~1e-7），与 THz 解耦。默认 None = 原缺陷路径（行为不变）。
     """
     T = float(t_grid[-1])
     t = np.asarray(t_grid, float)
@@ -544,12 +551,37 @@ def _propagate_adaptive(setup, groups, psi0, t_grid, tol, progress_arr, log):
     pops[0] = _pops_of(psi0)
     report = dict(n_segments=0, max_richardson_diff=0.0, dt_min_hit=False,
                   max_norm_dev=0.0)
+    if frozen_h_ns is not None and frozen_h_ns > 0:
+        report['frozen_h_ns'] = float(frozen_h_ns)
     h_floor = max(T / _DT_MIN_FRAC, 1e-9)
+
+    def _frozen_seg(ta, tb, X):
+        """纯冻结段：中点 K 一次对角化 + 精确指数（无缺陷修正）。"""
+        if progress_arr[1] != 0.0:
+            raise RuntimeError('用户取消')
+        dec = _seg_decomp(setup, groups, ta, tb)
+        if dec[0] == 'diag':
+            return X * np.exp(-1j * _CONV * (tb - ta) * setup.diag)
+        if dec[0] == 'sparse':
+            _, K, _, _ = dec
+            return expm_multiply(-1j * _CONV * (tb - ta) * K, X)
+        _, evals, evecs, _ = dec
+        a0 = evecs.conj().T @ X
+        return evecs @ (a0 * np.exp(-1j * _CONV * evals * (tb - ta)))
 
     def _propagate_seg(ta, tb, X):
         """自适应传播 X(ta) → X(tb)（无输出；返回修正后链状态）。"""
         if progress_arr[1] != 0.0:
             raise RuntimeError('用户取消')
+        if frozen_h_ns is not None and frozen_h_ns > 0:
+            # t36：纯冻结——固定 h 内部细分（不依赖缺陷修正收敛；段长由
+            # 包络缓变决定，与 THz 本征跨度解耦）
+            nsub = max(1, int(np.ceil((tb - ta) / float(frozen_h_ns))))
+            hh = (tb - ta) / nsub
+            report['n_segments'] += nsub
+            for s in range(nsub):
+                X = _frozen_seg(ta + s * hh, ta + (s + 1) * hh, X)
+            return X
         dec = _seg_decomp(setup, groups, ta, tb)
         if dec[0] == 'diag':
             report['n_segments'] += 1
@@ -634,8 +666,9 @@ def _env_all_constant(groups, T):
 # ============================================================
 # 单次全传播（给定光子块阶数；供主入口与 M 收敛对比）
 # ============================================================
-def _run_sambe(E, groups, M, psi0, t, tol, progress_arr, log):
-    """返回 (pops, psi_f, report, setup)。"""
+def _run_sambe(E, groups, M, psi0, t, tol, progress_arr, log,
+               frozen_h_ns=None):
+    """返回 (pops, psi_f, report, setup)。frozen_h_ns：t36 纯冻结模式段长。"""
     setup = _SambeSetup(E, groups, M)
     T = float(t[-1])
     if _env_all_constant(groups, T):
@@ -659,7 +692,7 @@ def _run_sambe(E, groups, M, psi0, t, tol, progress_arr, log):
                           np.abs(pops.sum(axis=1) - 1.0))))
         return pops, ps[-1], report, setup
     pops, psi_f, report = _propagate_adaptive(
-        setup, groups, psi0, t, tol, progress_arr, log)
+        setup, groups, psi0, t, tol, progress_arr, log, frozen_h_ns)
     return pops, psi_f, report, setup
 
 
@@ -668,12 +701,15 @@ def _run_sambe(E, groups, M, psi0, t, tol, progress_arr, log):
 # ============================================================
 def evolve_sambe(states, fields, psi0, t_grid, tol=1e-6, decays=None,
                  progress_arr=None, log=None, record_amp=False,
-                 E_shift=None):
+                 E_shift=None, frozen_h_ns=None):
     """第一性原理单原子含时演化（无模型近似）。
 
     fields : kind='exact' 场列表（build_fields_exact 输出或手工同构）
     tol    : 布居容差（包络冻结 + 光子块截断两处共用）
     decays : 非空 → 转 evolve_reference（Lindblad，第一期执行路径）
+    frozen_h_ns : t36 方案 1——>0 时启用"纯冻结分段"（砍缺陷修正，固定
+        段长 h；适合 THz 光子块 × 时变包络场景如 STIRAP，缺陷修正的
+        Gauss 核在 THz 本征跨度下死局）。None = 原缺陷路径（默认不变）。
     返回 dict(t, pops, states, om_mhz, method='exact', backend, loss,
               error_report, [psi_amp | rho])——与 evolve.evolve 同构。
     """
@@ -745,11 +781,15 @@ def evolve_sambe(states, fields, psi0, t_grid, tol=1e-6, decays=None,
     log(f'[exact] 光子块（逐载频）M={Ms}'
         f'（扇区数 Π(2M_g+1)={setup_P(Ms)}）')
     pops, psi_f, report, setup = _run_sambe(E, groups, Ms, psi0v, t, tol,
-                                           progress_arr, log)
-    log(f'[exact] 完成：{report["n_segments"]} 段，'
-        f'最大 Richardson 差 {report["max_richardson_diff"]:.2e}'
-        f'（tol={tol:.1e}），范数偏差 '
-        f'{report["max_norm_dev"]:.2e}')
+                                           progress_arr, log, frozen_h_ns)
+    if frozen_h_ns is not None and frozen_h_ns > 0:
+        log(f'[exact] 纯冻结模式完成：{report["n_segments"]} 段'
+            f'（h={frozen_h_ns}ns），范数偏差 {report["max_norm_dev"]:.2e}')
+    else:
+        log(f'[exact] 完成：{report["n_segments"]} 段，'
+            f'最大 Richardson 差 {report["max_richardson_diff"]:.2e}'
+            f'（tol={tol:.1e}），范数偏差 '
+            f'{report["max_norm_dev"]:.2e}')
 
     report['photon_blocks'] = {f'{g["omega_mhz"]:.6g}MHz': setup.Ds[gi]
                                for gi, g in enumerate(groups)}
