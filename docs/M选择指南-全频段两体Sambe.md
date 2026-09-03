@@ -46,7 +46,12 @@ per_freq_M 的 list 顺序 = 载频组顺序（_pair_groups 按出现顺序分�
 - mw 高斯活跃区（σ=20）h=8ns 逐段（frozen 语义，误差 4.8e-4）
 - 实测：46 eigh / 145.6s / 峰值显存 2.14GB（<6.4 ✓）
 
-## GUI 扩展点（TODO）
+## GUI 接线（t56 已落地）
 
-两体动态页的"每频段光子数"配置：evolve_worker 透传 per_freq_M 到 evolve_sambe_pair；
-UI 控件（每载频组 M 微调 + 默认自动判据）——引擎入口已完整，GUI 接线为后续任务。
+- `src/ui/evolve_worker.py` 的 **EvolveWorkerPair** 已支持 `per_freq_M`/`frozen_h_ns` 参数
+  （method='sambe'/'exact' 分支透传到 evolve_sambe_pair；旧路径 pair_evolve 保留）
+- 调用方（两体动态页）传 `per_freq_M=[1, 1]`、`frozen_h_ns=8.0` 即用全频段推荐档；
+  不传 = None（引擎自动判据/历史行为，向后兼容）
+- ui_selftest 57/57 不破坏；smoke：2 态小场景 method='sambe' + per_freq_M=[1,1] +
+  frozen_h_ns=0.5 跑通（pops2d (31,4)）
+- UI 面板控件（每载频组 M 微调框）为后续美化项——引擎与 worker 调用链已完整
