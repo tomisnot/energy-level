@@ -125,13 +125,22 @@ def gpu_propagate_pair(setup, groups, psi0_2d, t_grid, frozen_h_ns=8.0,
                 n_eigh += 1
                 vc = v.to(torch.complex128)
                 a0 = vc.t() @ X
-                X = vc @ (a0 * torch.exp(-1j * _CONV * w * hh)
-                          .to(torch.complex128))
+                # 子步内输出点（船长 t57 修复）：内部时刻用 (w,v) 从子步起点
+                # 精确传播——eigh 一次可任意时刻求值，零额外成本
                 for ii in idx:
                     if tb - 1e-9 <= t_grid[ii] <= tb + hh + 1e-9:
-                        Xm = X.reshape(setup.P, N2)
+                        dt_i = t_grid[ii] - tb
+                        if dt_i < 1e-12:
+                            Xm = X.reshape(setup.P, N2)
+                        else:
+                            X_i = vc @ (a0 * torch.exp(
+                                -1j * _CONV * w * dt_i)
+                                .to(torch.complex128))
+                            Xm = X_i.reshape(setup.P, N2)
                         pops[ii] = torch.abs(Xm.conj().T @ Xm).diagonal() \
                             .real.cpu().numpy()
+                X = vc @ (a0 * torch.exp(-1j * _CONV * w * hh)
+                          .to(torch.complex128))
                 tb = tb + hh
         log(f'[sambe_pair-gpu] 块 [{b0:.0f},{b1:.0f}] 完成'
             f'（eigh {n_eigh}）')
