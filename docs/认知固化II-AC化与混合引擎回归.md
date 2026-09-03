@@ -8,17 +8,20 @@
 > 2026-09-06 二更：**8 用例核心全达成**——用例 8 两体 dim 1452 + norm 7.69e-8
 > （f0720b9）+ mixed 正式化入 src（ae04d11）+ V5 锚验证（7457dc5）+ GUI
 > mixed/auto 接入（c186a4e）+ EP6 保护（9bde559）。
+> 2026-09-06 三更：**t62 收官**——22 态两体 620ns 全程 norm 4.79e-7（≤1e-4 ✓）
+> + dim 1452 + 509s（6767507，vs t61 923s/7260 维：5 倍降维 + 1.8× 速度）；
+> vs t61 Δ 归因包络不匹配（run_case_pair 恒 env——非引擎差异，变包络 = 后续
+> 扩展）。目标 6 ac_ize 入 evolve_sambe_pair（884a961）。GUI 目标 5 全接入。
 
 ---
 
 ## 0. 当前状态一句话
 
-混合引擎（光 Sambe + 微波当场）**8 用例核心全达成**：用例 1-7 单原子
-≡frozen（1e-5~1e-8 级）；用例 8 两体 **22 态 dim=1452（5 倍降维 vs 7260）
-+ norm 7.69e-8 + 微波动力学正常**。mixed 正式化已入 src（evolve_mixed 含
-far_sos AC 化注入物理 E）+ GUI method='mixed'/'auto' 已接入（ui 57/57）。
-剩 620ns 全程数据（t60 收尾）即 t62 收官。EP6 稀疏路径已加保护（防静默
-卡死）。全频段两体 Sambe norm 漂移已根治（AC 化降维，620ns norm 1.75e-5）。
+混合引擎（光 Sambe + 微波当场）**t62 收官：8 用例全过 + 22 态两体 620ns
+验收达成**（dim 1452 = 5 倍降维 vs 7260、620ns norm 4.79e-7、509s CPU）。
+正式实现：src evolve_mixed（far_sos AC 化）+ GUI method='mixed'/'auto' +
+ac_ize API + Sambe 高级面板。单原子域锚验证 V1-V5 全过（≡frozen 1e-5~1e-8、
+混合域 ≡M=4 锚 6.86e-3）。后续扩展：两体 mixed 变包络支持 + 正式化入 src。
 
 ## 1. norm 漂移根因链（t55-t58）
 
