@@ -992,7 +992,7 @@ def evolve_two_field_pair(states, fields_meta_A, fields_meta_B, psi0_A,
                           theta_deg=0.0, phi_deg=0.0, cache=None, tol=1e-6,
                           mw_M=None, decays_A=None, decays_B=None,
                           progress_arr=None, log=None, record_amp=False,
-                          dense_max=None):
+                          dense_max=None, frozen_h_ns=None):
     """两体两场引擎：光场旋转系 + 微波-only Sambe 光子块（t30，路径 A）。
 
     与 evolve_sambe_pair 的差别只在"场怎么进扩展空间"：
@@ -1076,7 +1076,7 @@ def evolve_two_field_pair(states, fields_meta_A, fields_meta_B, psi0_A,
     pops_2d, X_final, report, setup = _pair_propagate(
         E_pair_rot, N, groups, opt_terms, V, gamma_pair, psi0_2d, t, tol,
         Ms, progress_arr, log,
-        _TF_DENSE_MAX if dense_max is None else dense_max)
+        _TF_DENSE_MAX if dense_max is None else dense_max, frozen_h_ns)
 
     # ---- loss 曲线（NonHermitian 速率积分）----
     loss_A = np.zeros(len(t))
