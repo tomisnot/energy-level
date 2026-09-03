@@ -892,12 +892,18 @@ def evolve_sambe_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
                       phi_deg=0.0, cache=None, tol=1e-6,
                       decays_A=None, decays_B=None,
                       progress_arr=None, log=None, record_amp=False,
-                      frozen_h_ns=None, per_freq_M=None, device='cpu'):
+                      frozen_h_ns=None, per_freq_M=None, device='cpu',
+                      ac_ize=False):
     """两体第一性原理含时演化（完整 V_dd，无 secular/RWA/旋转系）。
 
     签名与返回契约对齐 pair_evolve.pair_evolve（GUI 直接复用）；
     耗散仅支持寿命通道（落点=丢失，NonHermitian），显式落点/纯退相
     抛 NotImplementedError（同 pair_evolve v1 限制）。
+
+    ac_ize : t62 目标 6——True 时自动 AC 化：光场远强对（r=Ω/ω>r_crit）
+        剔除 + far_sos 位移注入物理能级（E_pair 自动含 δ_i+δ_j）。假设
+        A/B 场同构（交换全过程场景）；异构场用 A 侧位移近似（log 提示）。
+        默认 False 零行为变化。
     """
     from . import pair_evolve as _pe
     from . import pair_core as _pc
@@ -908,6 +914,38 @@ def evolve_sambe_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
     T = float(t[-1])
     N = len(states)
     N2 = N * N
+    E0 = np.array([s['E_mhz'] for s in states], float)
+
+    # ---- 目标 6：AC 化（远强对剔除 + far_sos 位移注入物理 E）----
+    E_shift = np.zeros(N)
+    if ac_ize:
+        from .evolve_mixed import ac_ize_physical_E, R_CRIT
+        E2a, A_newA = ac_ize_physical_E(E0,
+                                         [f for f in fields_A
+                                          if f['omega_L_mhz'] > 1e5])
+        E2b, A_newB = ac_ize_physical_E(E0,
+                                         [f for f in fields_B
+                                          if f['omega_L_mhz'] > 1e5])
+        # A/B 同构假设：E_shift 取 A 侧（B 侧位移并入 A 侧——同场时同 δ）
+        E_shift = E2a - E0
+        if np.max(np.abs((E2b - E0) - E_shift)) > 1.0:
+            log(f'[pair_exact] ⚠ A/B 光场 AC 位移不同（max 差 '
+                f'{np.max(np.abs((E2b-E0)-E_shift)):.1f} MHz）——取 A 侧'
+                f'（E_pair 位移近似；异构场建议 per_freq_M 大 M 或手工 AC 化）')
+        n_opt = 0
+        fa2, fb2 = [], []
+        for f, Anew in zip([f for f in fields_A if f['omega_L_mhz'] > 1e5],
+                           A_newA):
+            fa2.append(dict(f, A=Anew)); n_opt += 1
+        for f, Anew in zip([f for f in fields_B if f['omega_L_mhz'] > 1e5],
+                           A_newB):
+            fb2.append(dict(f, A=Anew))
+        # 重组 fields（光场剔除后 + 微波原样）
+        fields_A = [f for f in fields_A if f['omega_L_mhz'] <= 1e5] + fa2
+        fields_B = [f for f in fields_B if f['omega_L_mhz'] <= 1e5] + fb2
+        log(f'[pair_exact] AC 化 {n_opt} 组光场：E_shift 范围 '
+            f'{E_shift.min():+.2f}..{E_shift.max():+.2f} MHz'
+            f'（远强对剔除——t58 r 判据 r_crit={R_CRIT}）')
 
     groups, _ = _pair_groups(fields_A, fields_B)
     # 维度校验：场耦合矩阵 = N² 两体基
@@ -954,6 +992,9 @@ def evolve_sambe_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
     psi0_B_vec = evolve._as_vector(states, psi0_B)
     psi0_2d = _pe._as_product_psi(psi0_A_vec, psi0_B_vec, N)
     E = np.array([s['E_mhz'] for s in states], float)
+    if ac_ize:
+        # 目标 6：AC 位移注入物理能级——E_pair[i,j] 含 δ_i+δ_j（A/B 同构）
+        E = E + E_shift
     E_pair = np.zeros(N2)
     for i in range(N):
         for j in range(N):
