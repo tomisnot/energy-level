@@ -226,7 +226,10 @@ class DynamicPanel(QWidget):
         # 5 GHz，不暴露 UI）；sambe：第一性原理 Sambe 光子块（实验室系无
         # RWA/无旋转系/无近远分流，原 'exact' 更名，引擎 evolve_sambe）；
         # hard：微波硬积分 DOP853 零近似 + 光场旋转系 + 耗散（numba 加速）。
-        self.method_cb.addItems(['ip4', 'sambe', 'hard'])
+        # t62：加 mixed（混合引擎——光 Sambe 光子块 + 微波当场，强光近共振
+        # + 微波场景；两体 mixed 未验收前两体页退回 sambe）与 auto（智能
+        # 路由——route_auto 按场/能级选 hard/sambe/mixed）。
+        self.method_cb.addItems(['ip4', 'sambe', 'hard', 'mixed', 'auto'])
         self.method_cb.setCurrentText('hard')      # t25：默认 hard
         self.method_cb.currentTextChanged.connect(self._on_method_changed)
         rowt.addWidget(self.method_cb)

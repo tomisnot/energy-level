@@ -44,6 +44,15 @@ class EvolveWorker(QThread):
                 if len(self.progress_arr) > 2:
                     self.progress_arr[2] = 2
                     self.progress_arr[0] = 1.0
+            elif self.method == 'mixed':
+                # t62：混合引擎（光 Sambe 光子块 + 微波当场，φ-帧单 DOP853）
+                # ——fields 为 kind='exact' 场列表（build_fields_exact 输出，
+                # 与 sambe 同构——正式版已含 far_sos AC 化注入物理 E，ae04d11）
+                from ..core.evolve_mixed import evolve_mixed
+                res = evolve_mixed(
+                    self.states, self.fields, self.psi0, self.t_grid,
+                    tol=1e-8,
+                    progress_arr=self.progress_arr, log=self.log_msg.emit)
             else:
                 # ac_shift 已内嵌各 field（随包络时变），无需另传
                 # t25：显示名 'sambe' → 引擎 'exact'（Sambe 光子块）
