@@ -160,30 +160,39 @@ class _MixedSetup:
         self._is_mw = np.asarray(self._is_mw, np.int64)
         self._wcos = np.asarray(self._wcos, np.float64)
 
-        # ---- 远失谐光场对 AC 位移解析注入（t43）----
-        # BW_OPT 过滤丢掉的远失谐对（|ΔD|≥BW_OPT、|Kc| 显著）的二阶微扰位移：
-        # δE_a += |Kc|²/(4ΔD)、δE_b += |Kc|²/(4·(−ΔD))——ref（全 Sambe）的
-        # dressed 自然涌现被过滤丢失，用解析二阶补齐（Ω/Δ~0.046 需验证够用）。
-        ac = np.zeros(self.dim)
-        n_ac = 0
+        # ---- 远失谐光场对净 AC 位移（t44：eigh 法——双向边带抵消后真实值）----
+        # t43 的单向 Ω²/4Δ（±156 GHz）是伪值：光子块含 60S↔60P 的 n→n±1 两个
+        # 边带方向，位移符号相反几乎抵消 → 净位移 ~±18 MHz（船长诊断：
+        # tempsimu/_t43_diag_ac.py——60S +18、60P −18，间隙失谐仅 −36 MHz）。
+        # 最可靠法：只含远对（|ΔD|≥BW_OPT）的 K 对角化，读中心扇区各物理态
+        # 的 dressed 位移（近对留在 RHS 作相干动力学，不进静态注入）。
+        K_far = np.array(self.setup.K0, complex)
         for gi, g in enumerate(grps_opt):
             for Kcw in self.setup.Kc_dense[gi] or []:
                 if Kcw is None:
                     continue
                 Kcw = np.asarray(Kcw, complex)
-                ii, jj = np.nonzero(np.abs(Kcw) > 1e-12)
-                for a, b in zip(ii, jj):
-                    dD = float(self.D_full[a] - self.D_full[b])
-                    if abs(dD) < BW_OPT:
-                        continue
-                    v = abs(Kcw[a, b])
-                    if v < AC_MIN_V:
-                        continue
-                    ac[a] += v * v / (4.0 * dD)
-                    ac[b] += v * v / (4.0 * (-dD))
-                    n_ac += 1
-        self.ac_diag = ac
-        self.n_ac_pairs = n_ac
+                mask = np.abs(self.D_full[:, None] - self.D_full[None, :]) \
+                    < BW_OPT
+                Kcw_far = np.where(mask, 0.0, Kcw)   # 近对清零，只留远对
+                np.fill_diagonal(Kcw_far, 0.0)
+                K_far = K_far + Kcw_far
+        ac = np.zeros(self.dim)
+        if np.any(K_far - np.diag(np.diag(K_far))):
+            evals_f, evecs_f = np.linalg.eigh(K_far)
+            pc = int(getattr(self.setup, 'p_center', 0))
+            for i in range(N):
+                ext = pc * N + i
+                w = np.abs(evecs_f[ext]) ** 2
+                k = int(np.argmax(w))
+                shift = float(evals_f[k]) - float(self.E[i])
+                for s in range(self.P):
+                    ac[s * N + i] = shift
+        self.ac_diag = np.zeros(self.dim)
+        self.n_ac_pairs = 0
+        # t44 结论：22 态净 AC ~±198 MHz（多 mJ 对叠加，非 2 态 ±18）——注入
+        # 破坏微波转移（60S末 0.52 vs ref 0.00016）→ 残差非远失谐 AC 单一来源，
+        # 默认关闭注入（置零）；ac_diag 保留供诊断。
 
     def make_env_tabs(self, T, n_tab=62001):
         self.env_dt = T / (n_tab - 1)
