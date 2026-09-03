@@ -748,6 +748,12 @@ def _pair_propagate(E_pair_rot, N, groups, opt_terms, V, gamma_pair,
     def seg_K(ta, tb):
         return setup.hamiltonian_seg(0.5 * (ta + tb), groups)
 
+    # t57b：frozen 的 eigh 复用缓存——K 恒定相邻段（包络值相同）共享分解
+    # （引擎级 const 合并：square 平台/全关区的段不再重复 eigh；仅无耗散
+    #  Hermitian 路径——耗散 NonHermitian 不缓存）
+    _eigh_key = [None]
+    _eigh_val = [None]       # (evals, evecs)
+
     def _propagate_seg(ta, tb, X):
         if progress_arr[1] != 0.0:
             raise RuntimeError('用户取消')
@@ -759,25 +765,34 @@ def _pair_propagate(E_pair_rot, N, groups, opt_terms, V, gamma_pair,
             report['n_segments'] += nsub
             for _s in range(nsub):
                 t1 = ta + _s * hh
-                K = seg_K(t1, t1 + hh)
-                if K[0] == 'sparse':
-                    # 冻结需稠密 eigh——稀疏 K 稠密化（frozen 场景维度受
-                    # dense_max 控制由调用方保证）
-                    Kd = K[1].toarray()
+                mid = t1 + 0.5 * hh
+                envs_key = tuple(
+                    round(float(np.asarray(wf(np.atleast_1d(mid))).flat[0]),
+                          12)
+                    for g in groups for wf in g['envs_w'])
+                use_cache = (_eigh_key[0] == envs_key
+                             and _eigh_val[0] is not None)
+                if use_cache:
+                    evals, evecs = _eigh_val[0]
                 else:
-                    Kd = K[1]
-                if np.iscomplexobj(Kd) and np.any(np.imag(Kd) != 0):
-                    # 耗散（NonHermitian）→ 通用分解
-                    evals, evecs, left = _dense_decomp(Kd)
-                    X = evecs @ ((left @ X)
-                                 * np.exp(-1j * _CONV * hh * evals))
-                else:
-                    # 实对称（无耗散）→ Hermitian eigh（~14× 快，t55 CPU
-                    # 对比关键：4356 维 2.8s 而非 _dense_decomp 的 ~40s）
+                    K = seg_K(t1, t1 + hh)
+                    if K[0] == 'sparse':
+                        # 冻结需稠密 eigh——稀疏 K 稠密化
+                        Kd = K[1].toarray()
+                    else:
+                        Kd = K[1]
+                    if np.iscomplexobj(Kd) and np.any(np.imag(Kd) != 0):
+                        # 耗散（NonHermitian）→ 通用分解（不缓存）
+                        evals, evecs, left = _dense_decomp(Kd)
+                        X = evecs @ ((left @ X)
+                                     * np.exp(-1j * _CONV * hh * evals))
+                        continue
                     Kd = np.real(Kd)
                     evals, evecs = np.linalg.eigh(Kd)
-                    a0 = evecs.conj().T @ X
-                    X = evecs @ (a0 * np.exp(-1j * _CONV * hh * evals))
+                    _eigh_key[0] = envs_key
+                    _eigh_val[0] = (evals, evecs)
+                a0 = evecs.conj().T @ X
+                X = evecs @ (a0 * np.exp(-1j * _CONV * hh * evals))
             return X
         K = seg_K(ta, tb)
         if setup.dense:
