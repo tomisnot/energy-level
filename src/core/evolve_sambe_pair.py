@@ -44,6 +44,8 @@ from .evolve_sambe import _CONV, _gl_nodes
 
 # 扩展维 ≤ 此值走稠密路径（本征分解），否则稀疏（Krylov 子空间）
 _DENSE_MAX = 700
+_SPARSE_SEG_MAX = 50000         # EP6 保护：稀疏自适应细分总段数上限（防爆炸卡死）
+_SPARSE_MAX_DEPTH = 4           # EP6 保护：稀疏自适应二分递归深度上限（正常 est 深度 ≤3）
 # 缺陷求积节点阶梯
 _NODE_LADDER = (16, 32, 64, 128)
 # 包络采样（活性判断/恒常判断）
@@ -753,10 +755,19 @@ def _pair_propagate(E_pair_rot, N, groups, opt_terms, V, gamma_pair,
     #  Hermitian 路径——耗散 NonHermitian 不缓存）
     _eigh_key = [None]
     _eigh_val = [None]       # (evals, evecs)
+    _seg_depth = [0]         # EP6 保护：稀疏自适应递归深度计数
 
     def _propagate_seg(ta, tb, X):
         if progress_arr[1] != 0.0:
             raise RuntimeError('用户取消')
+        # EP6 保护（船长）：dt_min_hit = 某叶子细分到 h_floor 仍不收敛——
+        # 稀疏 IP Volterra 病理（THz 光子块死局，t46）——立即报错而非继续
+        # 爆炸细分（原行为：每输出区间细分到 h_floor → 2e9 段静默卡死）
+        if report['dt_min_hit']:
+            raise RuntimeError(
+                f'[pair_sambe] 稀疏自适应不收敛（细分到 h_floor 仍 est>tol）'
+                f'——THz 光子块 IP Volterra 死局（t46/EP6）；'
+                f'请用 frozen_h_ns 冻结模式')
         if frozen_h_ns is not None and frozen_h_ns > 0:
             # t48：纯冻结——固定 h 内部细分（无缺陷修正；THz 对角由 eigh 精确
             # 承载，误差 = 包络段内变化，与 THz 解耦）
@@ -828,9 +839,27 @@ def _pair_propagate(E_pair_rot, N, groups, opt_terms, V, gamma_pair,
             psi_out, est, _mf, _qw = _subspace_segment(
                 setup, K[1], X, ta, tb, tol, groups)
         if (not np.isfinite(est) or est > tol) and (tb - ta) > h_floor:
-            tm = 0.5 * (ta + tb)
-            Xm = _propagate_seg(ta, tm, X)
-            return _propagate_seg(tm, tb, Xm)
+            # EP6 保护（船长）：稀疏自适应细分深度/段数上限——病理场景
+            # （est 永不收敛 → 二分爆炸到 h_floor，静默卡死 >4min）明确报错。
+            # 正常场景 est 在深度 1-3 收敛；深度 12 对应 h~5e-4ns（远细于
+            # 任何物理需求）。报错建议 frozen_h_ns（THz 光子块正解，t48）。
+            if _seg_depth[0] >= _SPARSE_MAX_DEPTH:
+                raise RuntimeError(
+                    f'[pair_sambe] 稀疏自适应细分过深（>'
+                    f'{_SPARSE_MAX_DEPTH} 层，est 不收敛）——THz 光子块 IP '
+                    f'Volterra 死局（t46/EP6）；请用 frozen_h_ns 冻结模式')
+            if report['n_segments'] > _SPARSE_SEG_MAX:
+                raise RuntimeError(
+                    f'[pair_sambe] 稀疏自适应细分爆炸（est 不收敛，已超 '
+                    f'{_SPARSE_SEG_MAX} 段）——场景病态（t46/EP6）；'
+                    f'请用 frozen_h_ns 冻结模式')
+            _seg_depth[0] += 1
+            try:
+                tm = 0.5 * (ta + tb)
+                Xm = _propagate_seg(ta, tm, X)
+                return _propagate_seg(tm, tb, Xm)
+            finally:
+                _seg_depth[0] -= 1
         report['max_richardson_diff'] = max(
             report['max_richardson_diff'],
             float(est) if np.isfinite(est) else 1e3)
