@@ -146,10 +146,11 @@ def test_dynamic(app, win):
     dyn._draw_bot(states, res); app.processEvents()
 
     # ---- t25：方法重构（默认 hard、无 auto/exact、无 near_cutoff 控件）----
+    # t62：加 mixed（混合引擎）与 auto（智能路由）两档
     check('方法默认 hard', dyn.method_cb.currentText() == 'hard')
-    check('方法选项 ip4/sambe/hard',
+    check('方法选项 ip4/sambe/hard/mixed/auto',
           [dyn.method_cb.itemText(i) for i in range(dyn.method_cb.count())]
-          == ['ip4', 'sambe', 'hard'])
+          == ['ip4', 'sambe', 'hard', 'mixed', 'auto'])
     check('无 near_cutoff 控件', not hasattr(dyn, 'near_cutoff_sb'))
 
     # ---- t25/t27/t30：显示选项 + 荧光读出（单原子绘制 + 双原子约化）----

@@ -686,10 +686,12 @@ class DynamicPanel(QWidget):
         # 科学参数
         self.tmax_sb.setValue(float(dyn.get('t_max', 1500.0)))
         self.npts_sb.setValue(int(dyn.get('npts', 1501)))
-        # t25：旧档方法名映射（auto→ip4、exact→sambe）；未知/缺省 → hard
-        _m = {'auto': 'ip4', 'exact': 'sambe'}.get(
+        # t25：旧档方法名映射（exact→sambe）；未知/缺省 → hard
+        # t62：白名单加 mixed/auto——'auto' 原样恢复（新智能路由语义；
+        # 极老档的 backend-auto 也落 auto——语义演进可接受）
+        _m = {'exact': 'sambe'}.get(
             dyn.get('method', 'hard'), dyn.get('method', 'hard'))
-        if _m not in ('ip4', 'sambe', 'hard'):
+        if _m not in ('ip4', 'sambe', 'hard', 'mixed', 'auto'):
             _m = 'hard'
         self.method_cb.setCurrentText(_m)
         # 显示选项 + 读出态（读出态文本在 _on_m_changed 填充时按 label 恢复）
@@ -899,10 +901,23 @@ class DynamicPanel(QWidget):
         """单原子演化路径。"""
         waves = list(self.wave_panel.waves)
         method = self.method_cb.currentText()
+        if method == 'auto':
+            # t62 auto 智能路由（目标 4）：route_auto 按场/能级判 hard/sambe/
+            # mixed——缓存精确判据（失谐+强度）；reason 显示状态栏
+            from ..core.route import route_auto
+            method, reason = route_auto(states, waves, two_body=False,
+                                        cache=self.cache)
+            self.main.log(f'auto 路由 → {method}：{reason}')
         if method == 'sambe':
             # 第一性原理场（Sambe 光子块）：全部偶极对耦合，无近/远分流与
             # 静态 AC 注入（原 'exact' 更名，引擎 evolve_sambe）
             fields = waveforms.build_fields_exact(self.cache, states, waves)
+        elif method == 'mixed':
+            # t62 混合引擎（光 Sambe 光子块 + 微波当场）——fields 同构
+            # build_fields_exact（evolve_mixed 正式版内部做 far_sos AC 化）
+            fields = waveforms.build_fields_exact(self.cache, states, waves)
+            self.main.log('mixed：光场 Sambe 光子块 + 微波当场'
+                          '（φ-帧，t62 验证 ≡frozen 1e-5~1e-8 级）')
         elif method == 'hard':
             # t20：两场引擎 meta（光旋转 + 微波硬积分）——普通波走
             # build_two_field；ArbitraryWave 走 arbitrary_mw_group 并入
@@ -937,7 +952,7 @@ class DynamicPanel(QWidget):
         self._timer.start(100)
 
         self._worker = EvolveWorker(states, fields, psi0, t,
-                                     self.method_cb.currentText(),
+                                     method,
                                      'auto',
                                      self.progress_arr, decays=decays)
         self._worker.done.connect(self._on_evolve_done)
@@ -950,6 +965,20 @@ class DynamicPanel(QWidget):
         waves_A = list(self.wave_panel_A.waves)
         waves_B = list(self.wave_panel_B.waves)
         method = self.method_cb.currentText()
+        if method == 'auto':
+            # t62 auto：两体路由（route_auto two_body=True——mixed 两体未验收
+            # 前 route 判据保守回 sambe AC 化路径或 hard）
+            from ..core.route import route_auto
+            wa = list(self.wave_panel_A.waves) + list(self.wave_panel_B.waves)
+            method, reason = route_auto(states, wa, two_body=True,
+                                        cache=self.cache)
+            self.main.log(f'auto 路由（两体）→ {method}：{reason}')
+        if method == 'mixed':
+            # 两体 mixed（用例 8 dim 1452）未验收前：退回 sambe（全频段
+            # 两体 Sambe 可用）并提示
+            self.main.log('mixed 两体引擎验收中——本次退回 sambe'
+                          '（全频段两体 Sambe）')
+            method = 'sambe'
         if method == 'hard':
             # t21：pair hard——各原子两场 meta（普通波 build_two_field +
             # ArbitraryWave→arbitrary_mw_group）；V_dd 在主线程预计算
