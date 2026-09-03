@@ -26,17 +26,23 @@ from .evolve_sambe import (_group_by_freq, _SambeSetup, _m_analytic, _embed)
 _CONV = 2 * np.pi * 1e-3
 MW_NRES_BW_MHZ = 5e3          # 微波近共振带宽
 BW_OPT = 2e4                  # 光场反旋过滤带宽（20 GHz）
+AC_MIN_V = 1.0                # 远失谐对 AC 注入的 |Kc| 阈值（MHz）
 
 
 @njit(cache=True)
 def _rhs_phi(t, phi, iis, jjs, vals, dDs, wids, is_mw, wcos,
-             n_pairs_w, env_tab, env_dt, C):
-    """φ-帧统一 RHS：−iC·[光场 env·Kc + 微波 env·cos·A]∘e^{iC·ΔD·t}·φ。
+             n_pairs_w, env_tab, env_dt, ac_diag, C):
+    """φ-帧统一 RHS：−iC·[光场 env·Kc + 微波 env·cos·A]∘e^{iC·ΔD·t}·φ
+    − iC·ac_diag∘φ（远失谐对 AC 位移解析注入）。
 
     t 为绝对时间（φ=e^{iCDt}X 定义是绝对的）。wids[k] → 波索引；
     is_mw[w]=1 时该项带 cos(C·w·t)。"""
     tv = t
     tot = np.zeros_like(phi)
+    # AC 位移对角项（常数——远失谐对被 BW_OPT 过滤丢失的 dressed 二阶补齐）
+    for a in range(len(phi)):
+        if ac_diag[a] != 0.0:
+            tot[a] += ac_diag[a] * phi[a]
     ip = 0
     nw = len(wcos)
     for w in range(nw):
@@ -154,6 +160,31 @@ class _MixedSetup:
         self._is_mw = np.asarray(self._is_mw, np.int64)
         self._wcos = np.asarray(self._wcos, np.float64)
 
+        # ---- 远失谐光场对 AC 位移解析注入（t43）----
+        # BW_OPT 过滤丢掉的远失谐对（|ΔD|≥BW_OPT、|Kc| 显著）的二阶微扰位移：
+        # δE_a += |Kc|²/(4ΔD)、δE_b += |Kc|²/(4·(−ΔD))——ref（全 Sambe）的
+        # dressed 自然涌现被过滤丢失，用解析二阶补齐（Ω/Δ~0.046 需验证够用）。
+        ac = np.zeros(self.dim)
+        n_ac = 0
+        for gi, g in enumerate(grps_opt):
+            for Kcw in self.setup.Kc_dense[gi] or []:
+                if Kcw is None:
+                    continue
+                Kcw = np.asarray(Kcw, complex)
+                ii, jj = np.nonzero(np.abs(Kcw) > 1e-12)
+                for a, b in zip(ii, jj):
+                    dD = float(self.D_full[a] - self.D_full[b])
+                    if abs(dD) < BW_OPT:
+                        continue
+                    v = abs(Kcw[a, b])
+                    if v < AC_MIN_V:
+                        continue
+                    ac[a] += v * v / (4.0 * dD)
+                    ac[b] += v * v / (4.0 * (-dD))
+                    n_ac += 1
+        self.ac_diag = ac
+        self.n_ac_pairs = n_ac
+
     def make_env_tabs(self, T, n_tab=62001):
         self.env_dt = T / (n_tab - 1)
         tab = np.zeros((len(self._env_list), n_tab))
@@ -194,7 +225,8 @@ def evolve_mixed(states, fields, psi0, t_grid, tol=1e-8, max_step=0.05,
     T = float(t[-1])
     setup.make_env_tabs(T)
     log(f'[mixed] 光场 P={setup.P} dim={setup.dim}；波 {len(setup._wcos)}'
-        f'（mw {int(setup._is_mw.sum())}）；耦合对 {len(setup.iis)}')
+        f'（mw {int(setup._is_mw.sum())}）；耦合对 {len(setup.iis)}'
+        f'；AC 注入远失谐对 {setup.n_ac_pairs}')
 
     X0 = _embed(psi0v, setup.setup)
     prog = (np.zeros(2) if progress_arr is None
@@ -207,7 +239,8 @@ def evolve_mixed(states, fields, psi0, t_grid, tol=1e-8, max_step=0.05,
                                max_step, prog, stat, setup.iis, setup.jjs,
                                setup.vals, setup.dDs, setup.wids,
                                setup._is_mw, setup._wcos, setup.n_pairs_w,
-                               setup.env_tab, setup.env_dt, float(C))
+                               setup.env_tab, setup.env_dt, setup.ac_diag,
+                               float(C))
     else:
         from scipy.integrate import solve_ivp
 
@@ -215,7 +248,7 @@ def evolve_mixed(states, fields, psi0, t_grid, tol=1e-8, max_step=0.05,
             return _rhs_phi(tv, phi, setup.iis, setup.jjs, setup.vals,
                             setup.dDs, setup.wids, setup._is_mw,
                             setup._wcos, setup.n_pairs_w, setup.env_tab,
-                            setup.env_dt, C)
+                            setup.env_dt, setup.ac_diag, C)
         sol = solve_ivp(rhs, (0.0, T), X0, method='DOP853', t_eval=t,
                         rtol=tol, atol=1e-10, max_step=max_step)
         if not sol.success:
