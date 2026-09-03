@@ -766,9 +766,18 @@ def _pair_propagate(E_pair_rot, N, groups, opt_terms, V, gamma_pair,
                     Kd = K[1].toarray()
                 else:
                     Kd = K[1]
-                evals, evecs, left = _dense_decomp(Kd)
-                X = evecs @ ((left @ X)
-                             * np.exp(-1j * _CONV * hh * evals))
+                if np.iscomplexobj(Kd) and np.any(np.imag(Kd) != 0):
+                    # 耗散（NonHermitian）→ 通用分解
+                    evals, evecs, left = _dense_decomp(Kd)
+                    X = evecs @ ((left @ X)
+                                 * np.exp(-1j * _CONV * hh * evals))
+                else:
+                    # 实对称（无耗散）→ Hermitian eigh（~14× 快，t55 CPU
+                    # 对比关键：4356 维 2.8s 而非 _dense_decomp 的 ~40s）
+                    Kd = np.real(Kd)
+                    evals, evecs = np.linalg.eigh(Kd)
+                    a0 = evecs.conj().T @ X
+                    X = evecs @ (a0 * np.exp(-1j * _CONV * hh * evals))
             return X
         K = seg_K(ta, tb)
         if setup.dense:
