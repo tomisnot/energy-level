@@ -82,7 +82,8 @@ class EvolveWorkerPair(QThread):
 
     def __init__(self, states, fields_A, fields_B, psi0_A, psi0_B,
                  t_grid, progress_arr, vdd_matrix=None, parent=None,
-                 decays_A=None, decays_B=None, method='ip4'):
+                 decays_A=None, decays_B=None, method='ip4',
+                 per_freq_M=None, frozen_h_ns=None):
         super().__init__(parent)
         # t25/t26：显示名 'sambe' → 引擎 'exact'（Sambe 光子块；分支调度统一）
         self.method = {'sambe': 'exact'}.get(method, method)
@@ -96,6 +97,9 @@ class EvolveWorkerPair(QThread):
         self.vdd_matrix = vdd_matrix
         self.decays_A = decays_A
         self.decays_B = decays_B
+        # t56：全频段两体 Sambe 可调参数（逐载频光子数 + 纯冻结段长）
+        self.per_freq_M = per_freq_M
+        self.frozen_h_ns = frozen_h_ns
         self._cache_ref = None
 
     def run(self):
@@ -124,7 +128,9 @@ class EvolveWorkerPair(QThread):
                     vdd_matrix=self.vdd_matrix,
                     decays_A=self.decays_A, decays_B=self.decays_B,
                     progress_arr=self.progress_arr,
-                    log=self.log_msg.emit)
+                    log=self.log_msg.emit,
+                    frozen_h_ns=self.frozen_h_ns,
+                    per_freq_M=self.per_freq_M)
             elif self.method != 'hard':
                 # hard 分支已在上方赋值 res；此处排除，避免 pair_evolve 覆盖
                 from ..core import pair_evolve
