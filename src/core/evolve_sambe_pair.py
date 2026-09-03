@@ -957,8 +957,10 @@ def evolve_sambe_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
         f'最大残差 {report["max_richardson_diff"]:.2e}'
         f'（tol={tol:.1e}），范数偏差 {report["max_norm_dev"]:.2e}')
 
-    report['photon_blocks'] = {f'{g["omega_mhz"]:.6g}MHz': 2 * M + 1
-                               for g in groups}
+    report['photon_blocks'] = {
+        f'{g["omega_mhz"]:.6g}MHz': (2 * M + 1 if isinstance(M, int)
+                                     else 2 * M[gi] + 1)
+        for gi, g in enumerate(groups)}
     report['tol'] = float(tol)
 
     out = dict(
