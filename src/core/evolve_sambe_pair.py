@@ -839,7 +839,7 @@ def evolve_sambe_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
                       phi_deg=0.0, cache=None, tol=1e-6,
                       decays_A=None, decays_B=None,
                       progress_arr=None, log=None, record_amp=False,
-                      frozen_h_ns=None):
+                      frozen_h_ns=None, per_freq_M=None):
     """两体第一性原理含时演化（完整 V_dd，无 secular/RWA/旋转系）。
 
     签名与返回契约对齐 pair_evolve.pair_evolve（GUI 直接复用）；
@@ -909,11 +909,26 @@ def evolve_sambe_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
     if progress_arr is None:
         progress_arr = np.zeros(2)
 
-    # ---- M 探针 ----
-    M, mdiff = _pair_m_probe(E_pair, N, groups, 2, V, gamma_pair,
-                             psi0_2d, T, tol, log=log)
-    log(f'[pair_exact] 光子块收敛：M={M}'
-        + (f'（探针差 {mdiff:.2e}）' if mdiff == mdiff else '（达上限）'))
+    # ---- M 探针 / 逐载频光子数（t52：per_freq_M 可调）----
+    # per_freq_M：每载频组独立光子数 M_g（list，长度 = 载频组数）或 int（全体）
+    # ——光场 r=Ω/ω~1e-7 → M=1 即收敛；微波 r~3e-4 → M=1（实测 5.75e-5）或
+    # 保守 M=2。None = 均匀 M 探针（历史行为）。
+    if per_freq_M is None:
+        M, mdiff = _pair_m_probe(E_pair, N, groups, 2, V, gamma_pair,
+                                 psi0_2d, T, tol, log=log)
+        log(f'[pair_exact] 光子块收敛：M={M}'
+            + (f'（探针差 {mdiff:.2e}）' if mdiff == mdiff else '（达上限）'))
+    else:
+        G = len(groups)
+        if isinstance(per_freq_M, (list, tuple, np.ndarray)):
+            if len(per_freq_M) != G:
+                raise ValueError(
+                    f'per_freq_M 长度 {len(per_freq_M)} ≠ 载频组数 {G}')
+            M = [int(m) for m in per_freq_M]
+        else:
+            M = [int(per_freq_M)] * G
+        log(f'[pair_exact] 逐载频光子块 M={M}'
+            f'（用户指定 per_freq_M；dim = N²·Π(2M_g+1)）')
 
     pops_2d, X_final, report, setup = _pair_propagate(
         E_pair, N, groups, None, V, gamma_pair, psi0_2d, t, tol, M,
