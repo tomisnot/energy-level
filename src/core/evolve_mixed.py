@@ -27,6 +27,38 @@ _CONV = 2 * np.pi * 1e-3
 MW_NRES_BW_MHZ = 5e3          # 微波近共振带宽
 BW_OPT = 2e4                  # 光场反旋过滤带宽（20 GHz）
 AC_MIN_V = 1.0                # 远失谐对 AC 注入的 |Kc| 阈值（MHz）
+R_CRIT = 0.0135               # t58: M_max=2 的 r 判据（r>r_crit → AC 化）
+
+
+def ac_ize_physical_E(E, f_opt, r_crit=R_CRIT):
+    """远失谐强对 AC 化（t62 正确组合）：剔除 + far_sos 位移注入**物理能级 E**。
+
+    t62 用例 2/3 验证：远强对（60S↔60P @ 295.7THz，r=Ω/ω>r_crit）不转移布居，
+    净效应 = AC 位移（far_sos 双向公式 ±18.23MHz）——加进物理 E_i（非扩展对角
+    ac_diag——t44 错误路径）→ K0/D 同步 → 光场失谐与微波共振自动含位移
+    （"光频移阻断微波"自动产生，用例 3）。
+
+    返回 (E2, A_list_new)：E2 = E+E_shift；A_list_new = 剔除远强对后的光场 A。
+    """
+    N = len(E)
+    E_shift = np.zeros(N)
+    A_new = []
+    for f in f_opt:
+        A = np.asarray(f['A'], float).copy()
+        w = float(f['omega_L_mhz'])
+        for i in range(N):
+            for k in range(i + 1, N):
+                if abs(A[i, k]) < 1e-9:
+                    continue
+                if abs(A[i, k]) <= r_crit * w:
+                    continue            # 近对/弱对保留（光子块动态）
+                nu = E[k] - E[i]
+                dE1 = -(A[i, k] ** 2) * nu / (nu ** 2 - w ** 2) / 2.0
+                E_shift[i] += dE1
+                E_shift[k] -= dE1
+                A[i, k] = A[k, i] = 0.0
+        A_new.append(A)
+    return E + E_shift, A_new
 
 
 @njit(cache=True)
@@ -226,14 +258,20 @@ def evolve_mixed(states, fields, psi0, t_grid, tol=1e-8, max_step=0.05,
 
     f_opt = [f for f in fields if f['omega_L_mhz'] > 1e5]
     f_mw = [f for f in fields if f['omega_L_mhz'] <= 1e5]
-    grps_opt = _group_by_freq(f_opt)
+    # t62 AC 化（正确组合）：远强对剔除 + far_sos 位移注入物理 E（非 ac_diag）
+    E2, A_opt_new = ac_ize_physical_E(E, f_opt)
+    f_opt_ac = [dict(f, A=A) for f, A in zip(f_opt, A_opt_new)]
+    grps_opt = _group_by_freq(f_opt_ac)
     grps_mw = _group_by_freq(f_mw) if f_mw else []
     if not grps_opt:
         raise ValueError('evolve_mixed 需要光场（载频 > 1e5 MHz）')
-    setup = _MixedSetup(E, grps_opt, grps_mw, N)
+    setup = _MixedSetup(E2, grps_opt, grps_mw, N)
+    E_shift = E2 - E
+    log(f'[mixed] AC 化位移范围 {E_shift.min():+.1f}..{E_shift.max():+.1f} MHz'
+        f'；P={setup.P} dim={setup.dim}')
     T = float(t[-1])
     setup.make_env_tabs(T)
-    log(f'[mixed] 光场 P={setup.P} dim={setup.dim}；波 {len(setup._wcos)}'
+    log(f'[mixed] 波 {len(setup._wcos)}'
         f'（mw {int(setup._is_mw.sum())}）；耦合对 {len(setup.iis)}'
         f'；AC 注入远失谐对 {setup.n_ac_pairs}')
 
