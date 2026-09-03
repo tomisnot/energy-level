@@ -848,7 +848,7 @@ def evolve_sambe_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
                       phi_deg=0.0, cache=None, tol=1e-6,
                       decays_A=None, decays_B=None,
                       progress_arr=None, log=None, record_amp=False,
-                      frozen_h_ns=None, per_freq_M=None):
+                      frozen_h_ns=None, per_freq_M=None, device='cpu'):
     """两体第一性原理含时演化（完整 V_dd，无 secular/RWA/旋转系）。
 
     签名与返回契约对齐 pair_evolve.pair_evolve（GUI 直接复用）；
@@ -939,9 +939,20 @@ def evolve_sambe_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
         log(f'[pair_exact] 逐载频光子块 M={M}'
             f'（用户指定 per_freq_M；dim = N²·Π(2M_g+1)）')
 
-    pops_2d, X_final, report, setup = _pair_propagate(
-        E_pair, N, groups, None, V, gamma_pair, psi0_2d, t, tol, M,
-        progress_arr, log, _DENSE_MAX, frozen_h_ns)
+    if device == 'cuda':
+        # t57：GPU 全驻留路径（torch；const 段合并移植自 tempsimu/_t50_full）
+        from .evolve_sambe_pair_gpu import gpu_propagate_pair
+        setup = _PairSambeSetup(E_pair, N, groups, M, V, gamma_pair,
+                                dense_max=10 ** 9)
+        pops_2d, n_eigh = gpu_propagate_pair(
+            setup, groups, psi0_2d, t, frozen_h_ns or 8.0, log=log)
+        X_final = None
+        report = dict(n_segments=n_eigh, max_richardson_diff=0.0,
+                      dt_min_hit=False, max_norm_dev=0.0)
+    else:
+        pops_2d, X_final, report, setup = _pair_propagate(
+            E_pair, N, groups, None, V, gamma_pair, psi0_2d, t, tol, M,
+            progress_arr, log, _DENSE_MAX, frozen_h_ns)
 
     # ---- loss 曲线（NonHermitian 速率积分，同 pair_evolve 语义）----
     loss_A = np.zeros(len(t))
