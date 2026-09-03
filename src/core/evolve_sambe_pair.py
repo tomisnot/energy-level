@@ -692,19 +692,26 @@ def _pair_m_probe(E_pair, N, groups, M, vdd_sp, gamma_pair_mhz, psi0_2d,
 # 传播核心（evolve_sambe_pair / evolve_two_field_pair 共用）
 # ============================================================
 def _pair_propagate(E_pair_rot, N, groups, opt_terms, V, gamma_pair,
-                    psi0_2d, t, tol, M, progress_arr, log, dense_max):
+                    psi0_2d, t, tol, M, progress_arr, log, dense_max,
+                    frozen_h_ns=None):
     """冻结段传播主循环（稠密本征基缺陷 / 稀疏 IP Volterra）。
 
     两体 Sambe 与两体两场变体的唯一差别在"喂进来的 groups / opt_terms /
     E_pair_rot 怎么构造"（载频是否全部进光子块），传播数学完全一致——
     故此处只保留一份实现（2026-08-31 核心-调度分层纪律）。
+
+    **frozen_h_ns（t48 阶段 A）**：>0 时切"纯冻结"模式（t36 单原子同款）——
+    固定 h 内部细分，每段只做中点 K 稠密 eigh + 精确指数（无缺陷修正/
+    无 Gauss 节点）——THz 光子块下缺陷 Gauss 死局（t46 稀疏亦死）的解法：
+    误差由包络段内变化决定（与 THz 解耦）。默认 None = 原缺陷路径不变。
     """
     T = float(t[-1])
     N2 = N * N
     setup = _PairSambeSetup(E_pair_rot, N, groups, M, V, gamma_pair,
                             opt_terms=opt_terms, dense_max=dense_max)
     log(f'[pair_sambe] 扩展维 = {N2} × {setup.P} = {setup.dim}'
-        f'（{"稠密" if setup.dense else "稀疏 Krylov"}）')
+        f'（{"稠密" if setup.dense else "稀疏 Krylov"}）'
+        + (f'；纯冻结 h={frozen_h_ns}ns' if frozen_h_ns else ''))
 
     # ---- 全常数包络快速路径（稠密）：一次本征分解覆盖全部输出时刻 ----
     all_const = True
@@ -744,6 +751,25 @@ def _pair_propagate(E_pair_rot, N, groups, opt_terms, V, gamma_pair,
     def _propagate_seg(ta, tb, X):
         if progress_arr[1] != 0.0:
             raise RuntimeError('用户取消')
+        if frozen_h_ns is not None and frozen_h_ns > 0:
+            # t48：纯冻结——固定 h 内部细分（无缺陷修正；THz 对角由 eigh 精确
+            # 承载，误差 = 包络段内变化，与 THz 解耦）
+            nsub = max(1, int(np.ceil((tb - ta) / float(frozen_h_ns))))
+            hh = (tb - ta) / nsub
+            report['n_segments'] += nsub
+            for _s in range(nsub):
+                t1 = ta + _s * hh
+                K = seg_K(t1, t1 + hh)
+                if K[0] == 'sparse':
+                    # 冻结需稠密 eigh——稀疏 K 稠密化（frozen 场景维度受
+                    # dense_max 控制由调用方保证）
+                    Kd = K[1].toarray()
+                else:
+                    Kd = K[1]
+                evals, evecs, left = _dense_decomp(Kd)
+                X = evecs @ ((left @ X)
+                             * np.exp(-1j * _CONV * hh * evals))
+            return X
         K = seg_K(ta, tb)
         if setup.dense:
             dense_eig = _dense_decomp(K[1])
@@ -812,7 +838,8 @@ def evolve_sambe_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
                       vdd_matrix=None, R_um=None, theta_deg=0.0,
                       phi_deg=0.0, cache=None, tol=1e-6,
                       decays_A=None, decays_B=None,
-                      progress_arr=None, log=None, record_amp=False):
+                      progress_arr=None, log=None, record_amp=False,
+                      frozen_h_ns=None):
     """两体第一性原理含时演化（完整 V_dd，无 secular/RWA/旋转系）。
 
     签名与返回契约对齐 pair_evolve.pair_evolve（GUI 直接复用）；
@@ -890,7 +917,7 @@ def evolve_sambe_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
 
     pops_2d, X_final, report, setup = _pair_propagate(
         E_pair, N, groups, None, V, gamma_pair, psi0_2d, t, tol, M,
-        progress_arr, log, _DENSE_MAX)
+        progress_arr, log, _DENSE_MAX, frozen_h_ns)
 
     # ---- loss 曲线（NonHermitian 速率积分，同 pair_evolve 语义）----
     loss_A = np.zeros(len(t))
