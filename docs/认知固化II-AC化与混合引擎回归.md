@@ -3,14 +3,16 @@
 > 2026-09-05 船长整理。承接 docs/认知固化-引擎现状与全频段Sambe方向.md（t54 前快照）。
 > 本文固化 t55-t62 的关键认知链：norm 漂移根因 → t58 r 判据 → AC 化降维 →
 > 混合引擎"正确组合"回归。防中断：新会话读本文 + 前文即可快速上手当前状态。
+> 2026-09-06 更新：用例 2-7 全过（含用例 4 反旋过滤根因修复 e690304）+ EP6 稀疏路径卡死发现。
 
 ---
 
 ## 0. 当前状态一句话
 
-全频段两体 Sambe 的 norm 漂移 bug 已根治（AC 化降维，620ns norm 1.75e-5，600× 改善，
-dim 4356 vs 13068）；混合引擎（光 Sambe + 微波当场）理论推导完成、核心用例已验证
-（用例 2/3/5 过）——**t40-t44 五连败的"正确组合"首次落地**，t62 收尾中。
+混合引擎（光 Sambe + 微波当场）**用例 2/3/4/5/6/7 全过**（φ-帧 + 远对 AC 化 +
+微波当场"正确组合"落地，用例 4 STIRAP 链 3.1s ≡ frozen 1.56e-5）；用例 1/8
+（22 态两体 dim 1452 降维验收）收尾中。全频段两体 Sambe norm 漂移已根治
+（AC 化降维，620ns norm 1.75e-5，dim 4356 vs 13068）。
 
 ## 1. norm 漂移根因链（t55-t58）
 
@@ -70,16 +72,39 @@ dim 4356 vs 13068）；混合引擎（光 Sambe + 微波当场）理论推导完
 **五连败归因**：t40 无 φ-帧 / t41 Strang 多余 / t42 远对没 AC 化 / t43-44 AC 伪值
 ——从没有一次是"正确组合"。
 
-## 4. 混合引擎 t62 验证状态（进行中）
+## 4. 混合引擎 t62 验证状态（用例 2/3/4/5/6/7 全过；1/8 收尾中）
 
 - 用例 2（远对 AC 位移）：E_shift ±18.23 MHz ✓
 - 用例 3（光频移阻断微波）：60S 不转移 ✓（理论预期——t44 做错处的正确版）
 - 用例 5（微波当场 π 脉冲）：60S 转移完成 ✓（修复：微波不进光子块，原双处理 bug）
-- 待续：用例 1/4/6/7/8 + numba RHS（用例 4 STIRAP 链 Python-rhs 慢）+ 22 态两体
-  dim 1452 预期（5 倍降维）+ 回归
+- **用例 4（STIRAP 链——船长根因修复，e690304）**：3.1s/400ns（290× 提速），
+  普通版 max|Δpops|=6.66e-5、强转移 counterintuitive STIRAP（60S=0.933）≡ frozen
+  **1.56e-5 ✓**；用例 6（重构 THz 相位）norm 4.44e-16 ✓；用例 7（同频多场配对）
+  Δ=1.18e-13 ✓
+- 待续：用例 1（E 相位单次性 vs reference）+ 用例 8（22 态两体 620ns dim 1452
+  的 5 倍降维验收）+ ui_selftest
+
+**用例 4 卡死根因（重要实现经验）**：光场光子块耦合 Kcw **双向含 n→n±1**——
+近共振方向 ΔD≈失谐（MHz 慢），**反旋方向 ΔD≈±2ω_f（591 THz 快）**。φ-帧
+RHS 必须按 |ΔD|<BW_OPT=20GHz 过滤反旋对（evolve_mixed.L120 有，t62 原型
+_t62_hybrid.py 漏了）——否则 DOP853 步长被 THz 相位钉死（15min/300ns）。
+诊断：tempsimu/_t62_c4_diag.py（近共振 2 态光场一半 Kcw 对是 +591THz 反旋快对）。
+微波当场对也要近共振过滤 |ΔE|−ω<5GHz（evolve_mixed.L144）。
+另：run_case 的 pops[0] 初态行漏赋（loop 从 i=1 起）→ t=0 假差异 max|Δ|=1.0。
 
 **t62 独特价值**：φ-帧无参考 → STIRAP 链天然正确（hard rot_pick 链式盲区）；
 微波不进光子块 → 两体 dim 1452 vs 7260（5 倍降维）。
+
+## 4b. 发现：EP6 稀疏路径卡死（独立任务，t62 后排查）
+
+checks/evolve_exact_pair_selfcheck.py EP6（强制 _DENSE_MAX=0 → 稀疏 IP
+Volterra/GMRES）**卡死**（复现 tempsimu/_ep6_repro.py：2 态 1000MHz 光 + V_dd
+10MHz，稠密 0.2s OK；稀疏路径 >4min 无输出、faulthandler 无 segfault = GMRES/
+Volterra 不收敛）。t14 时 EP6 曾 12/12 PASS → 疑 t43-t61 某改动回归或 t46
+死局（GMRES 病态 est=inf）在非 THz 亦成立。影响：selftest_all 挂 EP6；
+**dim>700 真实大场景非 frozen 路径会撞**（frozen 是推荐路径不受影响）。
+回归遇 EP6 应跳过（EP1-5 全过即核心绿）。排查方向：_subspace_segment /
+_volterra_rhs 在 t48（frozen 接入 _pair_propagate）后的段选择改动。
 
 ## 5. 引擎能力边界（当前认知）
 
