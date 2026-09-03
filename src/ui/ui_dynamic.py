@@ -18,7 +18,8 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
                              QLabel, QPushButton, QSpinBox, QDoubleSpinBox,
                              QComboBox, QListWidget, QListWidgetItem,
                              QMessageBox, QDialog, QProgressBar, QRadioButton,
-                             QButtonGroup, QTabWidget, QFrame, QScrollArea)
+                             QButtonGroup, QTabWidget, QFrame, QScrollArea,
+                             QLineEdit)
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.colors import LogNorm
@@ -142,6 +143,32 @@ class DynamicPanel(QWidget):
         row_mode.addWidget(self._vdd_box)      # t25：紧跟"双原子"后，同一行
         row_mode.addStretch(1)
         p.addLayout(row_mode)
+
+        # ---- Sambe 高级参数行（t62：双原子 + sambe/auto 档显示——
+        # per_freq_M/frozen_h_ns——全频段两体 Sambe 的精度/性能参数，t54 待接线）----
+        self._sambe_adv_box = QWidget()
+        sa_lay = QHBoxLayout(self._sambe_adv_box)
+        sa_lay.setContentsMargins(0, 0, 0, 0)
+        sa_lay.setSpacing(4)
+        sa_lay.addWidget(QLabel('frozen_h(ns)'))
+        self.frozen_h_sb = QDoubleSpinBox()
+        self.frozen_h_sb.setRange(0.0, 100.0)
+        self.frozen_h_sb.setValue(0.0)
+        self.frozen_h_sb.setDecimals(2)
+        self.frozen_h_sb.setFixedWidth(72)
+        self.frozen_h_sb.setToolTip(
+            '全频段 Sambe 纯冻结段长（ns，包络变化尺度内）；0 = 默认路径')
+        sa_lay.addWidget(self.frozen_h_sb)
+        sa_lay.addWidget(QLabel('per_freq_M'))
+        self.perfreq_m_edit = QLineEdit('')
+        self.perfreq_m_edit.setPlaceholderText('[1,1] 或空=自动')
+        self.perfreq_m_edit.setFixedWidth(120)
+        self.perfreq_m_edit.setToolTip(
+            '逐载频光子块阶数（列表 [M1,M2,…] 或 int 全体）；空 = 自动探针')
+        sa_lay.addWidget(self.perfreq_m_edit)
+        sa_lay.addStretch(1)
+        self._sambe_adv_box.setVisible(False)
+        p.addLayout(sa_lay)
 
         # ---- 波形管理：单原子与双原子「原子A」共用同一面板 ----
         # 先在单原子模式校准波形 → 切到双原子时原子 A 原样迁移，无需重配。
@@ -315,6 +342,8 @@ class DynamicPanel(QWidget):
         self._is_two_body = (mode_id == 1)
         # V_dd 参数
         self._vdd_box.setVisible(self._is_two_body)
+        # Sambe 高级行（双原子 + sambe/auto）
+        self._update_sambe_adv_visibility()
         # 波形面板：共享面板（单原子 = 原子A）在槽位间迁移 + 容器显隐。
         # 注意：不再 setVisible 共享面板本身——它迁到哪个容器就由哪个容器
         # 展示（hidden 会让 tab-A"看起来没有波形"，且被布局压成最小高度）。
@@ -633,6 +662,9 @@ class DynamicPanel(QWidget):
                 't_max': self.tmax_sb.value(),
                 'npts': self.npts_sb.value(),
                 'method': self.method_cb.currentText(),
+                # t62：sambe 两体高级参数（frozen_h_ns / per_freq_M）
+                'frozen_h_ns': self.frozen_h_sb.value(),
+                'per_freq_M': self.perfreq_m_edit.text(),
                 'decay_mode': self.decay_mode_cb.currentIndex(),
                 # t25：显示选项（0 态布居 / 1 荧光读出）+ 读出态（身份文本）
                 'display_mode': self.display_mode_cb.currentIndex(),
@@ -694,6 +726,9 @@ class DynamicPanel(QWidget):
         if _m not in ('ip4', 'sambe', 'hard', 'mixed', 'auto'):
             _m = 'hard'
         self.method_cb.setCurrentText(_m)
+        # t62：sambe 两体高级参数恢复（缺省 = 默认 0/空）
+        self.frozen_h_sb.setValue(float(dyn.get('frozen_h_ns', 0.0)))
+        self.perfreq_m_edit.setText(str(dyn.get('per_freq_M', '')))
         # 显示选项 + 读出态（读出态文本在 _on_m_changed 填充时按 label 恢复）
         self.display_mode_cb.setCurrentIndex(
             int(dyn.get('display_mode', 0)))
@@ -796,10 +831,36 @@ class DynamicPanel(QWidget):
         fld = getattr(self.main, 'field', None)
         return float(fld.b_gauss()) if fld is not None else 0.0
 
+    def _sambe_adv_params(self):
+        """Sambe 高级参数 → (frozen_h_ns, per_freq_M)；None = 默认/自动。"""
+        fh = self.frozen_h_sb.value()
+        frozen = fh if fh > 0 else None
+        txt = self.perfreq_m_edit.text().strip()
+        pf = None
+        if txt:
+            try:
+                import ast
+                pf = ast.literal_eval(txt)
+                if isinstance(pf, list):
+                    pf = [int(x) for x in pf]
+                else:
+                    pf = int(pf)
+            except Exception:
+                pf = None
+                self.main.log(f'per_freq_M 解析失败：{txt!r}（用自动探针）')
+        return frozen, pf
+
     def _on_method_changed(self, method):
         """t25：方法切换（ip4/sambe/hard）；near_cutoff 控件已移除，
-        ip4 用内部默认 5 GHz。无额外 UI 联动。"""
-        pass
+        ip4 用内部默认 5 GHz。t62：sambe 两体高级参数行显隐联动。"""
+        self._update_sambe_adv_visibility()
+
+    def _update_sambe_adv_visibility(self):
+        """Sambe 高级行显隐：双原子 + sambe（或 auto 可能路由 sambe）时显示。"""
+        m = self.method_cb.currentText()
+        adv = getattr(self, '_sambe_adv_box', None)
+        if adv is not None:
+            adv.setVisible(self._is_two_body and m in ('sambe', 'auto'))
 
     def _on_display_mode(self, *_):
         """显示选项切换：态布居 → 显示态数 topn；荧光读出 → 读出态下拉。
@@ -1082,12 +1143,16 @@ class DynamicPanel(QWidget):
         from .evolve_worker import EvolveWorkerPair
         # t26：外部后端已退役归档（checks/_archive/）——
         # sambe 走 Python evolve_sambe_pair / evolve_exact_pair（同引擎）
+        # t62：sambe 两体高级参数（frozen_h_ns/per_freq_M——面板，目标 5）
+        frozen_h, per_freq_M = (self._sambe_adv_params()
+                                if method == 'sambe' else (None, None))
         self._worker = EvolveWorkerPair(
             states, fields_A, fields_B, psi0_A, psi0_B,
             t, self.progress_arr,
             vdd_matrix=vdd_matrix,
             decays_A=decays_A, decays_B=decays_B,
-            method=method)
+            method=method,
+            per_freq_M=per_freq_M, frozen_h_ns=frozen_h)
         self._worker._cache_ref = self.cache
         self._worker.done.connect(self._on_pair_evolve_done)
         self._worker.log_msg.connect(self.main.log)
