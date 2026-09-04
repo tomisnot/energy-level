@@ -37,6 +37,12 @@ _sys.modules[__name__ + '.evolve_exact_pair'] = evolve_exact_pair
 from . import evolve_twofield as evolve_two_field
 _sys.modules[__name__ + '.evolve_two_field'] = evolve_two_field
 
+from . import evolve_mixed as evolve_mixed       # 混合引擎（单原子）
+_sys.modules[__name__ + '.evolve_mixed'] = evolve_mixed
+
+from . import evolve_mixed_pair as evolve_mixed_pair   # 混合引擎（两体）
+_sys.modules[__name__ + '.evolve_mixed_pair'] = evolve_mixed_pair
+
 from . import hard as hard_numba      # hard_numba.py + hard_pair.py → hard.py
 _sys.modules[__name__ + '.hard_numba'] = hard_numba
 _sys.modules[__name__ + '.hard_pair'] = hard_numba
