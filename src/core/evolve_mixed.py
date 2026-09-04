@@ -233,13 +233,13 @@ def evolve_mixed(states, fields, psi0, t_grid, tol=1e-8, max_step=0.05,
         raise ValueError('evolve_mixed 需要光场（载频 > 1e5 MHz）')
     setup = _MixedSetup(E2, grps_opt, grps_mw, N)
     E_shift = E2 - E
+    n_ac = int(np.count_nonzero(np.abs(E_shift) > 1e-9))
     log(f'[mixed] AC 化位移范围 {E_shift.min():+.1f}..{E_shift.max():+.1f} MHz'
-        f'；P={setup.P} dim={setup.dim}')
+        f'（{n_ac} 态）；P={setup.P} dim={setup.dim}')
     T = float(t[-1])
     setup.make_env_tabs(T)
     log(f'[mixed] 波 {len(setup._wcos)}'
-        f'（mw {int(setup._is_mw.sum())}）；耦合对 {len(setup.iis)}'
-        f'；AC 注入远失谐对 {setup.n_ac_pairs}')
+        f'（mw {int(setup._is_mw.sum())}）；耦合对 {len(setup.iis)}')
 
     X0 = _embed(psi0v, setup.setup)
     prog = (np.zeros(2) if progress_arr is None

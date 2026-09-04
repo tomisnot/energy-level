@@ -222,7 +222,7 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
                       vdd_matrix=None, R_um=None, theta_deg=0.0,
                       phi_deg=0.0, cache=None, tol=1e-8, max_step=0.05,
                       progress_arr=None, log=None, record_amp=False,
-                      decays_A=None, decays_B=None):
+                      decays_A=None, decays_B=None, driver='numba'):
     """两体混合引擎（正式版）：光场光子块 + 微波/V_dd 当场，φ-帧单 DOP853。
 
     fields_A/B : kind='exact' 场列表（build_fields_exact 输出——光场 + 微波）
@@ -374,28 +374,47 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
 
     pops = np.zeros((len(t), N2))
     pops[0] = np.abs(psi0_2d) ** 2
-    X = X0.copy()
-    tprev = 0.0
     ns = np.array([-1, 0, 1])
-    n_dop = 0
-    for i in range(1, len(t)):
-        if progress_arr[1] != 0.0:
-            raise RuntimeError('用户取消')
-        tb = float(t[i])
-        sol = solve_ivp(rhs, (tprev, tb), X, method='DOP853', rtol=tol,
-                        atol=1e-11, max_step=max_step)
-        if not sol.success:
-            raise RuntimeError(f'两体混合积分失败: {sol.message}')
-        n_dop += int(sol.nfev)
-        X = sol.y[:, -1]
-        Xf = np.exp(-1j * Cv * K0 * tb) * X
-        psi = np.zeros(N2, complex)
-        for pn in range(P):
-            psi += np.exp(-1j * Cv * ns[pn] * om_o * tb) \
-                * Xf[pn * N2: (pn + 1) * N2]
-        pops[i] = np.abs(psi) ** 2
-        tprev = tb
-        progress_arr[0] = min(tprev / T, 0.999)
+    # t61：scipy solve_ivp 逐区间 → dop853 核心层单次贯穿（numba 全编译驱动）
+    if driver == 'numba':
+        from .dop853 import _dop853_driver
+        y_out = _dop853_driver(
+            _rhs_mixed_pair, X0, t, T, float(tol), 1e-11, max_step,
+            progress_arr, stat, pack['iis'], pack['jjs'], pack['vals'],
+            pack['dDs'], pack['is_mw'], pack['wcos'], pack['n_pairs_w'],
+            pack['env_tab'], pack['env_dt'], Cv)
+        for i in range(1, len(t)):
+            tb = float(t[i])
+            X = y_out[i]
+            Xf = np.exp(-1j * Cv * K0 * tb) * X
+            psi = np.zeros(N2, complex)
+            for pn in range(P):
+                psi += np.exp(-1j * Cv * ns[pn] * om_o * tb) \
+                    * Xf[pn * N2: (pn + 1) * N2]
+            pops[i] = np.abs(psi) ** 2
+        n_dop = int(stat[0]) if len(stat) > 0 else 0
+    else:
+        X = X0.copy()
+        tprev = 0.0
+        n_dop = 0
+        for i in range(1, len(t)):
+            if progress_arr[1] != 0.0:
+                raise RuntimeError('用户取消')
+            tb = float(t[i])
+            sol = solve_ivp(rhs, (tprev, tb), X, method='DOP853', rtol=tol,
+                            atol=1e-11, max_step=max_step)
+            if not sol.success:
+                raise RuntimeError(f'两体混合积分失败: {sol.message}')
+            n_dop += int(sol.nfev)
+            X = sol.y[:, -1]
+            Xf = np.exp(-1j * Cv * K0 * tb) * X
+            psi = np.zeros(N2, complex)
+            for pn in range(P):
+                psi += np.exp(-1j * Cv * ns[pn] * om_o * tb) \
+                    * Xf[pn * N2: (pn + 1) * N2]
+            pops[i] = np.abs(psi) ** 2
+            tprev = tb
+            progress_arr[0] = min(tprev / T, 0.999)
     if len(progress_arr) > 0:
         progress_arr[0] = 1.0
 
