@@ -190,7 +190,6 @@ class _MixedSetup:
         # 已删除——已被 t62 的 far_sos 注入物理能级 E_i 取代（混合引擎正确组合
         # docs/混合引擎理论推导-光Sambe微波当场.md：AC 化注入 E → K0/D 同步 → 光场
         # 失谐与微波共振自动含位移）。ac_diag 相关 RHS 分支同步移除。
-        self.ac_diag = None
 
     def make_env_tabs(self, T, n_tab=62001):
         self.env_dt = T / (n_tab - 1)
