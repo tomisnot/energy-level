@@ -32,8 +32,6 @@ from ..core import waveforms
 from .evolve_worker import EvolveWorker
 from .ui_waves import state_key, find_state_index
 
-# ip4 的近/远分流边界（原共振 cut 控件，t25 移除 UI 后内部默认，单位 MHz）
-_IP4_NEAR_CUTOFF_MHZ = 5000.0
 # readout_cb 末尾"复杂配置…"哨兵项 data（t30：全能级读出率加权）
 _COMPLEX_READOUT = -1
 _COMPLEX_LABEL = '复杂配置…'
@@ -249,15 +247,16 @@ class DynamicPanel(QWidget):
         rowt.addWidget(self.npts_sb)
         rowt.addWidget(QLabel('方法'))
         self.method_cb = QComboBox()
-        # t25：选项重构——ip4：RWA 相互作用绘景 RK4（近/远分流用内部默认
-        # 5 GHz，不暴露 UI）；sambe：第一性原理 Sambe 光子块（实验室系无
+        # t25→t71：方法选项收敛——sambe：第一性原理 Sambe 光子块（实验室系无
         # RWA/无旋转系/无近远分流，原 'exact' 更名，引擎 evolve_sambe）；
-        # hard：微波硬积分 DOP853 零近似 + 光场旋转系 + 耗散（numba 加速）。
-        # t62：加 mixed（混合引擎——光 Sambe 光子块 + 微波当场，强光近共振
-        # + 微波场景；两体 mixed 未验收前两体页退回 sambe）与 auto（智能
-        # 路由——route_auto 按场/能级选 hard/sambe/mixed）。
-        self.method_cb.addItems(['ip4', 'sambe', 'hard', 'mixed', 'auto'])
-        self.method_cb.setCurrentText('hard')      # t25：默认 hard
+        # hard：微波硬积分 DOP853 零近似 + 光场旋转系 + 耗散（numba 加速）；
+        # mixed（默认，t71）：混合引擎——光场 Sambe 光子块 + 微波/V_dd 当场
+        # （φ-帧，t62 起验证 ≡frozen 1e-5~1e-8 级；两体 5 倍降维 dim 1452）。
+        # t71：删除 ip4（RWA RK4 快速粗算档）与 auto（route_auto 智能路由）——
+        # 引擎层仍可用（evolve_rwa ip4 / route_auto 脚本调用），GUI 不再暴露；
+        # 默认 mixed；纯微波场景（mixed 需光场）UI 自动降级 hard。
+        self.method_cb.addItems(['sambe', 'hard', 'mixed'])
+        self.method_cb.setCurrentText('mixed')   # t71：默认 mixed
         self.method_cb.currentTextChanged.connect(self._on_method_changed)
         rowt.addWidget(self.method_cb)
         p.addLayout(rowt)
@@ -718,13 +717,16 @@ class DynamicPanel(QWidget):
         # 科学参数
         self.tmax_sb.setValue(float(dyn.get('t_max', 1500.0)))
         self.npts_sb.setValue(int(dyn.get('npts', 1501)))
-        # t25：旧档方法名映射（exact→sambe）；未知/缺省 → hard
-        # t62：白名单加 mixed/auto——'auto' 原样恢复（新智能路由语义；
-        # 极老档的 backend-auto 也落 auto——语义演进可接受）
-        _m = {'exact': 'sambe'}.get(
-            dyn.get('method', 'hard'), dyn.get('method', 'hard'))
-        if _m not in ('ip4', 'sambe', 'hard', 'mixed', 'auto'):
-            _m = 'hard'
+        # t25：旧档方法名映射（exact→sambe）
+        # t71：GUI 选项收敛为 sambe/hard/mixed——旧档 ip4/auto 归一：
+        #   ip4（RWA 快速粗算）→ hard（最接近的通用精确档）；
+        #   auto（智能路由）→ mixed（t71 起混合为推荐默认，与 route_auto 对
+        #   光+微波/两体场景的路由结论一致——route_auto 仍可脚本调用）；
+        # 未知/缺省 → mixed（默认）。
+        _m = {'exact': 'sambe', 'ip4': 'hard', 'auto': 'mixed'}.get(
+            dyn.get('method', 'mixed'), dyn.get('method', 'mixed'))
+        if _m not in ('sambe', 'hard', 'mixed'):
+            _m = 'mixed'
         self.method_cb.setCurrentText(_m)
         # t62：sambe 两体高级参数恢复（缺省 = 默认 0/空）
         self.frozen_h_sb.setValue(float(dyn.get('frozen_h_ns', 0.0)))
@@ -851,16 +853,16 @@ class DynamicPanel(QWidget):
         return frozen, pf
 
     def _on_method_changed(self, method):
-        """t25：方法切换（ip4/sambe/hard）；near_cutoff 控件已移除，
-        ip4 用内部默认 5 GHz。t62：sambe 两体高级参数行显隐联动。"""
+        """方法切换（sambe/hard/mixed——t71 删 ip4/auto）；sambe 两体高级
+        参数行显隐联动。"""
         self._update_sambe_adv_visibility()
 
     def _update_sambe_adv_visibility(self):
-        """Sambe 高级行显隐：双原子 + sambe（或 auto 可能路由 sambe）时显示。"""
+        """Sambe 高级行显隐：双原子 + sambe 时显示（t71：auto 档已删）。"""
         m = self.method_cb.currentText()
         adv = getattr(self, '_sambe_adv_box', None)
         if adv is not None:
-            adv.setVisible(self._is_two_body and m in ('sambe', 'auto'))
+            adv.setVisible(self._is_two_body and m == 'sambe')
 
     def _on_display_mode(self, *_):
         """显示选项切换：态布居 → 显示态数 topn；荧光读出 → 读出态下拉。
@@ -962,13 +964,16 @@ class DynamicPanel(QWidget):
         """单原子演化路径。"""
         waves = list(self.wave_panel.waves)
         method = self.method_cb.currentText()
-        if method == 'auto':
-            # t62 auto 智能路由（目标 4）：route_auto 按场/能级判 hard/sambe/
-            # mixed——缓存精确判据（失谐+强度）；reason 显示状态栏
-            from ..core.route import route_auto
-            method, reason = route_auto(states, waves, two_body=False,
-                                        cache=self.cache)
-            self.main.log(f'auto 路由 → {method}：{reason}')
+        # t71：mixed 需光场且不支持任意波形——无光场/含任意波自动降级 hard
+        # （原 auto 的纯微波→hard / 任意波→hard 判据内联；状态栏提示）
+        if method == 'mixed':
+            has_opt = any(getattr(w, 'freq_mhz', 0.0) > 1e5 for w in waves)
+            has_arb = any(isinstance(w, waveforms.ArbitraryWave)
+                          for w in waves)
+            if not has_opt or has_arb:
+                self.main.log('mixed 需光场且不支持任意波形'
+                              '（纯微波/任意波 → 自动改用 hard）')
+                method = 'hard'
         if method == 'sambe':
             # 第一性原理场（Sambe 光子块）：全部偶极对耦合，无近/远分流与
             # 静态 AC 注入（原 'exact' 更名，引擎 evolve_sambe）
@@ -979,8 +984,8 @@ class DynamicPanel(QWidget):
             fields = waveforms.build_fields_exact(self.cache, states, waves)
             self.main.log('mixed：光场 Sambe 光子块 + 微波当场'
                           '（φ-帧，t62 验证 ≡frozen 1e-5~1e-8 级）')
-        elif method == 'hard':
-            # t20：两场引擎 meta（光旋转 + 微波硬积分）——普通波走
+        else:
+            # hard：两场引擎 meta（光旋转 + 微波硬积分）——普通波走
             # build_two_field；ArbitraryWave 走 arbitrary_mw_group 并入
             # mw_groups（cos(φ_f(t)) 任意相位路径，t18）。
             from ..core.evolve_twofield import (build_two_field,
@@ -994,12 +999,6 @@ class DynamicPanel(QWidget):
                 meta['mw_groups'].append(
                     arbitrary_mw_group(self.cache, states, w))
             fields = meta
-        else:
-            # ip4：RWA 近/远分流用内部默认 5 GHz（t25 移除 UI 控件）
-            fields = waveforms.build_fields(
-                waves, states, self.cache,
-                near_cutoff_mhz=_IP4_NEAR_CUTOFF_MHZ,
-                B_gauss=self._field_B())
         self.wave_data = waveforms.waveforms_to_env(waves, t)
         psi0 = self.psi_combo.currentIndex()
 
@@ -1022,25 +1021,39 @@ class DynamicPanel(QWidget):
 
     def _run_two_body(self, states, t):
         """双原子演化路径（后台线程）。"""
-        from src.core import pair_evolve
         waves_A = list(self.wave_panel_A.waves)
         waves_B = list(self.wave_panel_B.waves)
         method = self.method_cb.currentText()
-        if method == 'auto':
-            # t62 auto：两体路由（route_auto two_body=True——mixed 两体未验收
-            # 前 route 判据保守回 sambe AC 化路径或 hard）
-            from ..core.route import route_auto
-            wa = list(self.wave_panel_A.waves) + list(self.wave_panel_B.waves)
-            method, reason = route_auto(states, wa, two_body=True,
-                                        cache=self.cache)
-            self.main.log(f'auto 路由（两体）→ {method}：{reason}')
+        # t71：mixed 需光场且不支持任意波形——A/B 均无光场/含任意波 → hard
+        if method == 'mixed':
+            all_w = waves_A + waves_B
+            has_opt = any(getattr(w, 'freq_mhz', 0.0) > 1e5
+                          for w in all_w)
+            has_arb = any(isinstance(w, waveforms.ArbitraryWave)
+                          for w in all_w)
+            if not has_opt or has_arb:
+                self.main.log('mixed 需光场且不支持任意波形'
+                              '（纯微波/任意波 → 自动改用 hard）')
+                method = 'hard'
         if method == 'mixed':
             # t62 两体混合引擎（正式版 evolve_mixed_pair——光场光子块 +
             # 微波/V_dd 当场，φ-帧；dim 1452 = 5 倍降维 vs 全 Sambe）
             self.main.log('mixed 两体：光场 Sambe 光子块 + 微波/V_dd 当场'
                           '（φ-帧，dim 5 倍降维）')
-        if method == 'hard':
-            # t21：pair hard——各原子两场 meta（普通波 build_two_field +
+            # 第一性两体（mixed 吃 kind='exact' fields——build_fields_exact；
+            # mixed 内部 AC 化远强对 + 当场微波）
+            fields_A = waveforms.build_fields_exact(self.cache, states,
+                                                    waves_A)
+            fields_B = waveforms.build_fields_exact(self.cache, states,
+                                                    waves_B)
+        elif method == 'sambe':
+            # 第一性两体（Sambe 吃 kind='exact' fields）
+            fields_A = waveforms.build_fields_exact(self.cache, states,
+                                                    waves_A)
+            fields_B = waveforms.build_fields_exact(self.cache, states,
+                                                    waves_B)
+        else:
+            # hard：pair hard——各原子两场 meta（普通波 build_two_field +
             # ArbitraryWave→arbitrary_mw_group）；V_dd 在主线程预计算
             from ..core.evolve_twofield import (build_two_field,
                                                 arbitrary_mw_group)
@@ -1058,23 +1071,6 @@ class DynamicPanel(QWidget):
 
             fields_A = _meta(waves_A)
             fields_B = _meta(waves_B)
-        elif method in ('sambe', 'mixed'):
-            # 第一性两体（Sambe/mixed 都吃 kind='exact' fields——
-            # build_fields_exact；mixed 内部 AC 化远强对 + 当场微波）
-            fields_A = waveforms.build_fields_exact(self.cache, states,
-                                                    waves_A)
-            fields_B = waveforms.build_fields_exact(self.cache, states,
-                                                    waves_B)
-        else:
-            # ip4：内部默认 5 GHz 近/远分流（t25）
-            fields_A = waveforms.build_fields(
-                waves_A, states, self.cache,
-                near_cutoff_mhz=_IP4_NEAR_CUTOFF_MHZ,
-                B_gauss=self._field_B())
-            fields_B = waveforms.build_fields(
-                waves_B, states, self.cache,
-                near_cutoff_mhz=_IP4_NEAR_CUTOFF_MHZ,
-                B_gauss=self._field_B())
         # 波形预览：合并 A+B
         env_A = waveforms.waveforms_to_env(waves_A, t)
         env_B = waveforms.waveforms_to_env(waves_B, t)

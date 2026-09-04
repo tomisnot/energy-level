@@ -145,12 +145,11 @@ def test_dynamic(app, win):
           0 in top and len(top) == min(8, N))
     dyn._draw_bot(states, res); app.processEvents()
 
-    # ---- t25：方法重构（默认 hard、无 auto/exact、无 near_cutoff 控件）----
-    # t62：加 mixed（混合引擎）与 auto（智能路由）两档
-    check('方法默认 hard', dyn.method_cb.currentText() == 'hard')
-    check('方法选项 ip4/sambe/hard/mixed/auto',
+    # ---- t71：方法选项收敛（默认 mixed、无 ip4/auto、无 near_cutoff 控件）----
+    check('方法默认 mixed', dyn.method_cb.currentText() == 'mixed')
+    check('方法选项 sambe/hard/mixed',
           [dyn.method_cb.itemText(i) for i in range(dyn.method_cb.count())]
-          == ['ip4', 'sambe', 'hard', 'mixed', 'auto'])
+          == ['sambe', 'hard', 'mixed'])
     check('无 near_cutoff 控件', not hasattr(dyn, 'near_cutoff_sb'))
 
     # ---- t25/t27/t30：显示选项 + 荧光读出（单原子绘制 + 双原子约化）----
@@ -255,7 +254,7 @@ def test_dynamic(app, win):
     dyn._add_decay()
     dyn.psi_combo.setCurrentIndex(0)
     dyn.tmax_sb.setValue(200.0); dyn.npts_sb.setValue(101)
-    dyn.method_cb.setCurrentText('ip4')    # t25：'auto' 移除；ip4+decays → lindblad
+    dyn.method_cb.setCurrentText('hard')   # t71：ip4 档已删——hard 亦 NonHermitian 落点=丢失
     dyn.wave_panel.waves.clear()       # 纯衰变场景：无波形
     dyn._run()
     t0 = time.perf_counter()
@@ -272,7 +271,9 @@ def test_dynamic(app, win):
     check(f"自定义纯衰变端到端：loss 曲线 + Σpops+loss=1"
           f"（loss[-1]={res['loss'][-1] if res is not None else None:g}"
           f"，cons={cons:g}，fresh={fresh}）",
-          loss_ok and fresh and cons < 1e-9)
+          loss_ok and fresh and cons < 1e-4)
+    # 注：t71 由 ip4(lindblad 解析) 改 hard(DOP853 数值)——loss 守恒精度从
+    # ~1e-9 降为 ~1e-5（DOP853 容差级），阈值相应放宽；物理语义不变
 
     # ---- 自动档端到端：6P 低激发态按 ARC 寿命自动衰减 ----
     dyn.decay_mode_cb.setCurrentIndex(0); app.processEvents()
