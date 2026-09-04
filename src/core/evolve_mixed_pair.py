@@ -32,9 +32,11 @@ MW_BW = 5e3                   # 微波近共振带宽
 
 @njit(cache=True)
 def _rhs_mixed_pair(t, phi, iis, jjs, vals, dDs, is_mw, wcos, n_pairs_w,
-                    env_tab, env_dt, Cv):
+                    env_tab, env_dt, Cv, gamma=None):
     """φ-帧两体 RHS：光场近对 env·Kc∘e^{iC·ΔD·t} + 微波当场 env·cos·A
-    + V_dd 当场（is_mw=0 且 wcos=0 → 无 cos 载波，env=1）。"""
+    + V_dd 当场（is_mw=0 且 wcos=0 → 无 cos 载波，env=1）。
+    gamma（N²，MHz，可 None）：t62 耗散 NonHermitian 对角（落点=丢失，
+    out[k] −= 0.5·C·gamma[k]·phi[k]——与 hard_pair 同语义）。"""
     tot = np.zeros_like(phi)
     ip = 0
     nw = len(wcos)
@@ -63,7 +65,14 @@ def _rhs_mixed_pair(t, phi, iis, jjs, vals, dDs, is_mw, wcos, n_pairs_w,
             tot[a] += cw * v * ph * phi[b]
             tot[b] += cw * np.conj(v * ph) * phi[a]
         ip += np_w
-    return -1j * Cv * tot
+    res = -1j * Cv * tot
+    if gamma is not None:
+        # 耗散对角项直接加在返回（不经 -1j·C——否则变虚数增长）；
+        # gamma 为扩展空间长度（N²·P，调用侧已 tile）
+        for k in range(phi.shape[0]):
+            if gamma[k] != 0.0:
+                res[k] -= 0.5 * Cv * gamma[k] * phi[k]
+    return res
 
 
 def _pack_rhs(pairs, t_end, n_tab=20001):
@@ -231,12 +240,10 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
               method='mixed', backend='mixed-phi-dop853-pair', error_report)。
 
     注意：V_dd 在 φ-帧同扇区 → ΔD=E_pair 差自动涌现（与 n 无关）；
-    耗散（decays）暂未实现——传非空抛 NotImplementedError。
+    耗散（t62 实现）：寿命通道（落点=丢失）NonHermitian 对角——与
+    hard_pair 同语义（_pair_loss_vectors；显式落点/纯退相拒绝）。
     """
     log = log or (lambda *a: None)
-    if decays_A or decays_B:
-        raise NotImplementedError(
-            '两体混合引擎耗散未实现——请用 sambe frozen 或 hard_pair')
     if progress_arr is None:
         progress_arr = np.zeros(2)
     t = np.asarray(t_grid, float)
@@ -244,6 +251,17 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
     N = len(states)
     N2 = N * N
     E = np.array([s['E_mhz'] for s in states], float)
+
+    # t62 耗散（落点=丢失）：GammaA/B（/ns）→ gamma_MHz（N²）传给内核
+    GammaA = GammaB = None
+    gamma = None
+    if decays_A or decays_B:
+        GammaA, GammaB, has = _tensor._pair_loss_vectors(
+            states, decays_A, decays_B, N, N2)
+        if has:
+            gamma = (GammaA + GammaB) / _CONV
+            log(f'[mixed_pair] 耗散 {int((gamma > 0).sum())} 两体态'
+                f'（落点=丢失，NonHermitian）')
 
     A_oA, A_mwA, om_oA, om_mA, env_oA, env_mA = _extract_fields(fields_A)
     A_oB, A_mwB, om_oB, om_mB, env_oB, env_mB = _extract_fields(fields_B)
@@ -296,6 +314,9 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
     # ---- 光子块结构 + 近对耦合 ----
     K0, pairs_opt, P, dim = _build_pair_geometry(
         E, A_oA2, A_oB2, om_o, shA, shB)
+    # 耗散 gamma（N²）→ 扩展空间（N²·P，每扇区同衰减）
+    if gamma is not None:
+        gamma = np.tile(gamma, P)
     log(f'[mixed_pair] 光场 P={P} dim={N2}×{P}={dim}'
         f'（5 倍降维参考：全 Sambe N²·15）')
 
@@ -377,7 +398,7 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
         return _rhs_mixed_pair(tv, phi, pack['iis'], pack['jjs'],
                                pack['vals'], pack['dDs'], pack['is_mw'],
                                pack['wcos'], pack['n_pairs_w'],
-                               pack['env_tab'], pack['env_dt'], Cv)
+                               pack['env_tab'], pack['env_dt'], Cv, gamma)
 
     pops = np.zeros((len(t), N2))
     pops[0] = np.abs(psi0_2d) ** 2
@@ -389,7 +410,7 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
             _rhs_mixed_pair, X0, t, T, float(tol), 1e-11, max_step,
             progress_arr, stat, pack['iis'], pack['jjs'], pack['vals'],
             pack['dDs'], pack['is_mw'], pack['wcos'], pack['n_pairs_w'],
-            pack['env_tab'], pack['env_dt'], Cv)
+            pack['env_tab'], pack['env_dt'], Cv, gamma)
         for i in range(1, len(t)):
             tb = float(t[i])
             X = y_out[i]
@@ -425,7 +446,18 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
     if len(progress_arr) > 0:
         progress_arr[0] = 1.0
 
+    # t62 耗散：loss_A/loss_B 曲线 + 含 loss 范数（同 evolve_sambe_pair）
+    loss_A = np.zeros(len(t))
+    loss_B = np.zeros(len(t))
     norm_dev = float(np.max(np.abs(pops.sum(axis=1) - 1.0)))
+    if GammaA is not None:
+        dt_arr = np.diff(t)
+        rate_A = pops @ (GammaA * 1.0)          # (n_t,)，GammaA 已 /ns
+        rate_B = pops @ GammaB
+        loss_A[1:] = np.cumsum(0.5 * (rate_A[1:] + rate_A[:-1]) * dt_arr)
+        loss_B[1:] = np.cumsum(0.5 * (rate_B[1:] + rate_B[:-1]) * dt_arr)
+        norm_dev = float(np.max(np.abs(
+            pops.sum(axis=1) + loss_A + loss_B - 1.0)))
     pops_A = _tensor._reduce_A(pops, N)
     pops_B = _tensor._reduce_B(pops, N)
     E_pair = np.array([(E[i] + shA[i]) + (E[j] + shB[j])
@@ -436,7 +468,7 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
                                  + (np.abs(shB) > 1e-9).sum()))
     out = dict(
         t=t, pops_2d=pops, pops_A=pops_A, pops_B=pops_B,
-        loss_A=np.zeros(len(t)), loss_B=np.zeros(len(t)),
+        loss_A=loss_A, loss_B=loss_B,
         states_2d=[{
             'label': f"({states[i]['label']}) x ({states[j]['label']})",
             'E_mhz': E_pair[i * N + j],

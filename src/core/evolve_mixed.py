@@ -63,11 +63,13 @@ def ac_ize_physical_E(E, f_opt, r_crit=R_CRIT):
 
 @njit(cache=True)
 def _rhs_phi(t, phi, iis, jjs, vals, dDs, wids, is_mw, wcos,
-             n_pairs_w, env_tab, env_dt, C):
+             n_pairs_w, env_tab, env_dt, C, gamma=None):
     """φ-帧统一 RHS：−iC·[光场 env·Kc + 微波 env·cos·A]∘e^{iC·ΔD·t}·φ。
 
     t 为绝对时间（φ=e^{iCDt}X 定义是绝对的）。wids[k] → 波索引；
-    is_mw[w]=1 时该项带 cos(C·w·t)。"""
+    is_mw[w]=1 时该项带 cos(C·w·t)。
+    gamma（N，MHz，可 None）：t62 耗散 NonHermitian 对角（落点=丢失，
+    与 hard 内核同语义——out[i] −= 0.5·C·gamma[i]·phi[i]）。"""
     tv = t
     tot = np.zeros_like(phi)
     ip = 0
@@ -95,7 +97,14 @@ def _rhs_phi(t, phi, iis, jjs, vals, dDs, wids, is_mw, wcos,
             tot[a] += cw * vals[ip + k] * np.exp(
                 1j * C * dDs[ip + k] * tv) * phi[b]
         ip += np_w
-    return -1j * C * tot
+    res = -1j * C * tot
+    if gamma is not None:
+        # 耗散对角项直接加在返回（不经 -1j·C——否则变虚数增长）；
+        # gamma 须为扩展空间长度（N·P，调用侧已按扇区 tile）
+        for i in range(phi.shape[0]):
+            if gamma[i] != 0.0:
+                res[i] -= 0.5 * C * gamma[i] * phi[i]
+    return res
 
 
 class _MixedSetup:
@@ -203,13 +212,15 @@ class _MixedSetup:
 
 def evolve_mixed(states, fields, psi0, t_grid, tol=1e-8, max_step=0.05,
                  progress_arr=None, log=None, record_amp=False,
-                 driver='numba'):
+                 driver='numba', decays=None):
     """混合引擎主入口：φ-帧单 DOP853（光场 Sambe 结构 + 微波 cos 硬积分）。
 
     fields : kind='exact' 场列表（build_fields_exact 输出；光场 + 微波混合）
     tol    : DOP853 相对容差
     max_step : DOP853 最大步长（ns；微波 17GHz 载波自动限步，0.05 保守）
     driver : 'numba'（dop853 核心层）| 'scipy'（对照）
+    decays : t62 耗散——寿命通道列表（落点=丢失，NonHermitian 对角；
+            与 hard 引擎同语义，_single_loss_rates；显式落点/纯退相拒绝）
     """
     log = log or (lambda *a: None)
     t = np.asarray(t_grid, float)
@@ -221,6 +232,15 @@ def evolve_mixed(states, fields, psi0, t_grid, tol=1e-8, max_step=0.05,
     psi0v = _evolve._as_vector(states, psi0)
     C = _CONV
 
+    # t62 耗散（落点=丢失）：Gamma_ns（/ns）→ gamma（MHz）传给内核
+    gamma = None
+    if decays:
+        from .hard import _single_loss_rates
+        Gamma_ns = _single_loss_rates(states, decays)
+        if np.any(Gamma_ns):
+            gamma = Gamma_ns / _CONV
+            log(f'[mixed] 耗散 {int((Gamma_ns > 0).sum())} 态'
+                f'（落点=丢失，NonHermitian）')
     f_opt = [f for f in fields if f['omega_L_mhz'] > 1e5]
     f_mw = [f for f in fields if f['omega_L_mhz'] <= 1e5]
     # t62 AC 化（正确组合）：远强对剔除 + far_sos 位移注入物理 E（非 ac_diag）
@@ -231,6 +251,9 @@ def evolve_mixed(states, fields, psi0, t_grid, tol=1e-8, max_step=0.05,
     if not grps_opt:
         raise ValueError('evolve_mixed 需要光场（载频 > 1e5 MHz）')
     setup = _MixedSetup(E2, grps_opt, grps_mw, N)
+    # 耗散 gamma（N）→ 扩展空间（N·P，每扇区同衰减）
+    if gamma is not None:
+        gamma = np.tile(gamma, setup.P)
     E_shift = E2 - E
     n_ac = int(np.count_nonzero(np.abs(E_shift) > 1e-9))
     log(f'[mixed] AC 化位移范围 {E_shift.min():+.1f}..{E_shift.max():+.1f} MHz'
@@ -251,7 +274,8 @@ def evolve_mixed(states, fields, psi0, t_grid, tol=1e-8, max_step=0.05,
                                max_step, prog, stat, setup.iis, setup.jjs,
                                setup.vals, setup.dDs, setup.wids,
                                setup._is_mw, setup._wcos, setup.n_pairs_w,
-                               setup.env_tab, setup.env_dt, float(C))
+                               setup.env_tab, setup.env_dt, float(C),
+                               gamma)
     else:
         from scipy.integrate import solve_ivp
 
@@ -259,7 +283,7 @@ def evolve_mixed(states, fields, psi0, t_grid, tol=1e-8, max_step=0.05,
             return _rhs_phi(tv, phi, setup.iis, setup.jjs, setup.vals,
                             setup.dDs, setup.wids, setup._is_mw,
                             setup._wcos, setup.n_pairs_w, setup.env_tab,
-                            setup.env_dt, C)
+                            setup.env_dt, C, gamma)
         sol = solve_ivp(rhs, (0.0, T), X0, method='DOP853', t_eval=t,
                         rtol=tol, atol=1e-10, max_step=max_step)
         if not sol.success:
@@ -275,12 +299,18 @@ def evolve_mixed(states, fields, psi0, t_grid, tol=1e-8, max_step=0.05,
         pops[i] = np.abs(Xt.conj().T @ Xt).diagonal().real
     if progress_arr is not None:
         progress_arr[0] = 1.0
-    norm_dev = float(np.max(np.abs(pops.sum(axis=1) - 1.0)))
+    # t62 耗散：loss 曲线（梯形积分）+ 含 loss 范数偏差（同 hard）
+    from .hard import _loss_and_norm
+    Gamma_ns = np.zeros(N)
+    if decays:
+        from .hard import _single_loss_rates
+        Gamma_ns = _single_loss_rates(states, decays)
+    loss, norm_dev = _loss_and_norm(pops, Gamma_ns, t)
     out = dict(t=t, pops=pops, states=states,
                om_mhz=[float(np.abs(np.asarray(g['As'][0])).max())
                        for g in grps_mw] if grps_mw else [],
                method='mixed', backend='mixed-phi-dop853',
-               loss=np.zeros(len(t)),
+               loss=loss,
                error_report=dict(n_segments=int(stat[1]),
                                  nfev=int(stat[0]), n_acc=int(stat[1]),
                                  n_rej=int(stat[2]), dt_min_hit=False,

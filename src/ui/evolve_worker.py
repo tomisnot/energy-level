@@ -52,7 +52,8 @@ class EvolveWorker(QThread):
                 res = evolve_mixed(
                     self.states, self.fields, self.psi0, self.t_grid,
                     tol=1e-8,
-                    progress_arr=self.progress_arr, log=self.log_msg.emit)
+                    progress_arr=self.progress_arr, log=self.log_msg.emit,
+                    decays=self.decays)
             else:
                 # ac_shift 已内嵌各 field（随包络时变），无需另传
                 # t25：显示名 'sambe' → 引擎 'exact'（Sambe 光子块）
