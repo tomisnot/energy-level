@@ -380,13 +380,13 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
                     continue
                 for jb in range(N):
                     if side == 'A':
-                        dE = ((E[ia] + shA[ia]) + (E[jb] + shB[jb])) \
-                            - ((E[ka] + shA[ka]) + (E[jb] + shB[jb]))
+                        # t62f：dE 用纯 E（C 点——位移由 RHS 时变对角承担；含
+                        # shA/shB 会在光关时仍污染配对共振——船长诊断残留）
+                        dE = (E[ia] + E[jb]) - (E[ka] + E[jb])
                         a0 = ia * N + jb
                         b0 = ka * N + jb
                     else:
-                        dE = ((E[jb] + shA[jb]) + (E[ia] + shB[ia])) \
-                            - ((E[jb] + shA[jb]) + (E[ka] + shB[ka]))
+                        dE = (E[jb] + E[ia]) - (E[jb] + E[ka])
                         a0 = jb * N + ia
                         b0 = jb * N + ka
                     if abs(abs(dE) - om_m) > MW_BW:
