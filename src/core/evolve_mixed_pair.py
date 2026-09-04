@@ -117,59 +117,49 @@ def _ac_ize_pair(E, A_o_A, A_o_B, omega_opt, r_crit=R_CRIT):
 
 
 def _build_pair_geometry(E, A_oA, A_oB, omega_opt, shA, shB):
-    """两体光子块结构（共享光场 M=1，P=3）：K0_pair + 近对耦合对。
+    """两体光子块结构（t66 收敛薄层 v2）：K0_pair + 近对耦合对——复用单原子
+    _SambeSetup + tensor_fields 分侧提升（K0 纯 E——t62f 语义；共享扇区 M=1）。
 
-    K0_pair[i,j,n] = (E_i+δA_i)+(E_j+δB_j) − n·ω_opt
-    近对耦合（|ΔD|<BW_OPT 过滤反旋）：A 原子 i→k（B 不动）+ B 原子 j→l。
+    K0_pair[i,j,n] = E_i+E_j − n·ω_opt（dim N²·3）
+    近对耦合（|ΔD|<BW_OPT 过滤反旋）：side-aware 提升（A_oA→A⊗I + A_oB→I⊗A）
+    后由 _SambeSetup 的 Kc_dense 提取——**全矩阵**（含 (a>b) 反向对——镜像
+    t67 修复后基线：旧 _add_opt 生成全矩阵 + 双侧 RHS 的组合为有效正确——
+    formal ② 1.6e-15 实证）。
     """
+    from .tensor_fields import lift_side_A
+    from .evolve_sambe import _SambeSetup, _group_by_freq
     N = len(E)
     N2 = N * N
     P = 3
-    ns = np.array([-1, 0, 1])
     dim = N2 * P
-    K0 = np.zeros(dim)
-    for i in range(N):
-        for j in range(N):
-            # t62e：K0 用纯 E（位移改由 RHS 时变对角承担——光关时 mw 配对
-            # dD 不被静态污染，船长设计 C 点）
-            base = E[i] + E[j]
-            for pn in range(P):
-                K0[(i * N + j) + pn * N2] = base - ns[pn] * omega_opt
+
+    def _one(t):
+        return np.ones_like(np.atleast_1d(t), float)
+
+    E_pair = np.array([E[i] + E[j] for i in range(N) for j in range(N)])
+    A_full = np.zeros((N2, N2))
+    if A_oA is not None:
+        A_full = A_full + lift_side_A(A_oA, N, 'A')
+    if A_oB is not None:
+        A_full = A_full + lift_side_A(A_oB, N, 'B')
+    setup = _SambeSetup(E_pair,
+                        _group_by_freq([dict(kind='exact', A=A_full,
+                                             omega_L_mhz=float(omega_opt),
+                                             waveform=_one)]), [1])
+    K0 = np.real(np.diag(setup.K0))
     pairs_opt = []
-
-    def _add_opt(A2, side):
-        for ia in range(N):
-            for ka in range(N):
-                if ia == ka or abs(A2[ia, ka]) < 1e-9:
-                    continue
-                v = A2[ia, ka] / 2.0
-                if side == 'A':
-                    for jb in range(N):
-                        for pn in range(P):
-                            for dn in (1, -1):
-                                p2 = pn + dn
-                                if not (0 <= p2 < P):
-                                    continue
-                                a = (ia * N + jb) + pn * N2
-                                b = (ka * N + jb) + p2 * N2
-                                dD = K0[a] - K0[b]
-                                if abs(dD) < BW_OPT:
-                                    pairs_opt.append((a, b, complex(v), dD))
-                else:
-                    for ib in range(N):
-                        for pn in range(P):
-                            for dn in (1, -1):
-                                p2 = pn + dn
-                                if not (0 <= p2 < P):
-                                    continue
-                                a = (ib * N + ia) + pn * N2
-                                b = (ib * N + ka) + p2 * N2
-                                dD = K0[a] - K0[b]
-                                if abs(dD) < BW_OPT:
-                                    pairs_opt.append((a, b, complex(v), dD))
-
-    _add_opt(A_oA, 'A')
-    _add_opt(A_oB, 'B')
+    Kcw_list = []
+    for Kcw in (setup.Kc_dense[0] or []) if setup.Kc_dense else []:
+        if Kcw is None:
+            continue
+        Kcw_list.append(np.asarray(Kcw, complex))
+    if Kcw_list:
+        Kcw = Kcw_list[0]
+        ii, jj = np.nonzero(np.abs(Kcw) > 1e-12)
+        for a, b in zip(ii, jj):
+            if abs(K0[a] - K0[b]) < BW_OPT:
+                pairs_opt.append((int(a), int(b), Kcw[a, b],
+                                  float(K0[a] - K0[b])))
     return K0, pairs_opt, P, dim
 
 
