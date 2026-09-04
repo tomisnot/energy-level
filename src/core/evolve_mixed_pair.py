@@ -166,13 +166,18 @@ def _build_pair_geometry(E, A_oA, A_oB, omega_opt, shA, shB):
 def _extract_fields(fields):
     """fields（kind='exact'）→ (A_opt, A_mw, omega_opt, omega_mw, env_opt, env_mw)。
 
-    同频场 A 累加（物理：同频多波 = 振幅叠加）；env 取第一个（同频场共享
-    包络——build_fields_exact 同频组包络一致）；无光场/无微波返回 None。
+    同频场 A 累加（物理：同频多波 = 振幅叠加）；**env 取逐波求和**（t68 修复：
+    波形3 square[120,280] + 波形4 square[280,1200] 同频——原只取第一个 → env
+    280ns 后 = 0 → 光场实际关闭 → 布居静止——env_o = Σ_f env_f 使光场在全窗
+    继续）。返回的 env 为求和函数（逐波独立门控的完整支持见后续统一轮次——
+    单原子 _MixedSetup 已逐波）。
     """
     A_opt = None
     A_mw = None
     om_o = om_m = None
     env_o = env_m = None
+    envs_o = []
+    envs_m = []
     for f in fields or []:
         A = np.asarray(f['A'], float)
         om = float(f['omega_L_mhz'])
@@ -180,14 +185,31 @@ def _extract_fields(fields):
             if A_opt is None:
                 A_opt = np.zeros_like(A)
                 om_o = om
-                env_o = f['waveform']
             A_opt = A_opt + A
+            envs_o.append(f['waveform'])
         else:
             if A_mw is None:
                 A_mw = np.zeros_like(A)
                 om_m = om
-                env_m = f['waveform']
             A_mw = A_mw + A
+            envs_m.append(f['waveform'])
+
+    def _sum_env(envs):
+        if not envs:
+            return None
+        if len(envs) == 1:
+            return envs[0]
+
+        def f(tv):
+            tv = np.asarray(tv, float)
+            out = np.zeros_like(tv, float)
+            for e in envs:
+                out = out + np.asarray(e(tv), float)
+            return out
+        return f
+
+    env_o = _sum_env(envs_o)
+    env_m = _sum_env(envs_m)
     return A_opt, A_mw, om_o, om_m, env_o, env_m
 
 
