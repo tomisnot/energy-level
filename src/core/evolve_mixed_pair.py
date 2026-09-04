@@ -99,32 +99,21 @@ def _pack_rhs(pairs, t_end, n_tab=20001):
 
 
 def _ac_ize_pair(E, A_o_A, A_o_B, omega_opt, r_crit=R_CRIT):
-    """远强对 AC 化：A/B 侧分别剔除 + far_sos 位移（A→δA、B→δB）。
-
-    返回 (A_oA2, A_oB2, E_shiftA, E_shiftB)——两体 K0_pair[i,j] 用
-    (E_i+δA_i)+(E_j+δB_j)（支持 A/B 异场）。
-    """
-    N = len(E)
-    A_a = np.asarray(A_o_A, float).copy()
-    A_b = np.asarray(A_o_B, float).copy()
-    shA = np.zeros(N)
-    shB = np.zeros(N)
-
-    def _ac(A2, sh, tag):
-        for i in range(N):
-            for k in range(i + 1, N):
-                if abs(A2[i, k]) < 1e-9:
-                    continue
-                if abs(A2[i, k]) <= r_crit * omega_opt:
-                    continue
-                nu = E[k] - E[i]
-                dE = -(A2[i, k] ** 2) * nu / (nu ** 2 - omega_opt ** 2) / 2.0
-                sh[i] += dE
-                sh[k] -= dE
-                A2[i, k] = A2[k, i] = 0.0
-
-    _ac(A_a, shA, 'A')
-    _ac(A_b, shB, 'B')
+    """t63 统一：公共层 acize.acize_physical（单/两体共用——env² 全量时变
+    语义 + K0 纯 E 唯一实现）。返回 (A_oA2, A_oB2, shA, shB)。"""
+    from .acize import acize_physical
+    # 构造光场列表（A_o_A/B 各算全位移——far_sos 双向对 E 无区别）
+    # 简化为：A_o_A 与 A_o_B 分别通过 acize_physical（同 E，不同 A 矩阵）
+    A_newA, shA_l = [], [np.zeros(len(E))]
+    A_newB, shB_l = [], [np.zeros(len(E))]
+    if A_o_A is not None and np.any(np.abs(A_o_A) > 1e-9):
+        A_newA, shA_l = acize_physical(E, [dict(kind='exact', A=A_o_A, omega_L_mhz=float(omega_opt))], r_crit)
+    if A_o_B is not None and np.any(np.abs(A_o_B) > 1e-9):
+        A_newB, shB_l = acize_physical(E, [dict(kind='exact', A=A_o_B, omega_L_mhz=float(omega_opt))], r_crit)
+    shA = shA_l[0] if shA_l else np.zeros(len(E))
+    shB = shB_l[0] if shB_l else np.zeros(len(E))
+    A_a = A_newA[0] if (A_newA and len(A_newA) > 0 and A_newA[0] is not None) else (np.asarray(A_o_A, float) if A_o_A is not None else None)
+    A_b = A_newB[0] if (A_newB and len(A_newB) > 0 and A_newB[0] is not None) else (np.asarray(A_o_B, float) if A_o_B is not None else None)
     return A_a, A_b, shA, shB
 
 
