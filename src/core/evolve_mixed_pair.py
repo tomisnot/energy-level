@@ -33,7 +33,7 @@ MW_BW = 5e3                   # 微波近共振带宽
 @njit(cache=True)
 def _rhs_mixed_pair(t, phi, iis, jjs, vals, dDs, is_mw, wcos, n_pairs_w,
                     env_tab, env_dt, Cv, gamma=None,
-                    ac_base=None, ac_env_row=-1):
+                    ac_base=None, ac_env_tab=None, ac_env_dt=1.0):
     """φ-帧两体 RHS：光场近对 env·Kc∘e^{iC·ΔD·t} + 微波当场 env·cos·A
     + V_dd 当场（is_mw=0 且 wcos=0 → 无 cos 载波，env=1）。
     gamma（N²，MHz，可 None）：t62 耗散 NonHermitian 对角（落点=丢失，
@@ -70,14 +70,13 @@ def _rhs_mixed_pair(t, phi, iis, jjs, vals, dDs, is_mw, wcos, n_pairs_w,
     # t62f：时变 AC 对角 −iC·(shA[i]+shB[j])·env_o(t)²∘φ（env 平方 = AC∝光强——
     # K0 已是纯 E（设计 C 点），无静态位移抵消 → 修正用 env² 全量（非 env²−1——
     # 单原子 _rhs_phi 同款；env²−1 只在 K0 含静态 E+Σ 时正确，船长 t62f 诊断）。
-    if ac_base is not None and ac_env_row >= 0:
-        ei = t / env_dt
+    if ac_base is not None and ac_env_tab is not None:
+        ei = t / ac_env_dt
         i0 = int(ei)
-        if i0 >= env_tab.shape[1] - 1:
-            i0 = env_tab.shape[1] - 2
+        if i0 >= ac_env_tab.shape[1] - 1:
+            i0 = ac_env_tab.shape[1] - 2
         f = ei - i0
-        envv = env_tab[ac_env_row, i0] * (1.0 - f) \
-            + env_tab[ac_env_row, i0 + 1] * f
+        envv = ac_env_tab[0, i0] * (1.0 - f) + ac_env_tab[0, i0 + 1] * f
         dev = envv * envv
         if dev != 0.0:
             for k in range(phi.shape[0]):
@@ -368,10 +367,13 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
     pack = _pack_rhs(pairs, T)
     Cv = _CONV
     stat = np.zeros(4)
-    # t62e：时变 AC——ac_base = (shA[i]+shB[j]) 逐物理对 × P 扇区；ac_env_row =
-    # 光学 env 在 env_tab 的行（pack 的 env 行序 = pairs 的分组序——取首个光场波）
+    # t62e：时变 AC——ac_base = (shA[i]+shB[j]) 逐物理对 × P 扇区；AC env 用
+    # **独立 env 表**（t67 修复：ac_env_row 从 pairs 推断在光场 AC 化剔除后
+    # 会 fallback 到微波 env（高斯）——AC 位移被错误门控——单原子 t62e 已修、
+    # 两体漏——统一后只改一处）
     ac_base = None
-    ac_env_row = -1
+    ac_env_tab = None
+    ac_env_dt = 1.0
     if np.any(shA != 0) or np.any(shB != 0):
         ac_base = np.zeros(dim, float)
         for i in range(N):
@@ -380,22 +382,21 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
                 if v != 0.0:
                     for pn in range(P):
                         ac_base[(i * N + j) + pn * N2] = v
-        # env 行：pairs 中第一个光学波（is_mw=0）在 env_tab 的行——按 pack 顺序
-        row = 0
-        for p in pairs:
-            if p[4] == 0 and p[5] == 0.0:
-                ac_env_row = row
-                break
-            row += 1
-        if ac_env_row < 0 and pack['env_tab'].shape[0] > 0:
-            ac_env_row = 0
+        # AC env：光场 waveform（env_oA 优先——共享光子块 A 侧光场包络）
+        ac_env_fn = env_oA if env_oA is not None else env_oB
+        if ac_env_fn is None:
+            ac_env_fn = _one
+        n_ac_tab = 4001
+        ts_ac = np.linspace(0.0, T, n_ac_tab)
+        ac_env_tab = np.asarray(ac_env_fn(ts_ac), float).reshape(1, -1)
+        ac_env_dt = T / (n_ac_tab - 1)
 
     def rhs(tv, phi):
         return _rhs_mixed_pair(tv, phi, pack['iis'], pack['jjs'],
                                pack['vals'], pack['dDs'], pack['is_mw'],
                                pack['wcos'], pack['n_pairs_w'],
                                pack['env_tab'], pack['env_dt'], Cv, gamma,
-                               ac_base, ac_env_row)
+                               ac_base, ac_env_tab, ac_env_dt)
 
     pops = np.zeros((len(t), N2))
     pops[0] = np.abs(psi0_2d) ** 2
@@ -408,7 +409,7 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
             progress_arr, stat, pack['iis'], pack['jjs'], pack['vals'],
             pack['dDs'], pack['is_mw'], pack['wcos'], pack['n_pairs_w'],
             pack['env_tab'], pack['env_dt'], Cv, gamma, ac_base,
-            ac_env_row)
+            ac_env_tab, ac_env_dt)
         for i in range(1, len(t)):
             tb = float(t[i])
             X = y_out[i]
