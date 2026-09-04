@@ -63,3 +63,24 @@ def lift_fields(fields_A, fields_B, N):
     opt_list = [dict(kind='exact', A=g['A'], omega_L_mhz=w, waves=g['waves'])
                 for w, g in sorted(opt_by_w.items())]
     return opt_list, mw_list
+
+
+def lift_side_A(A, N, side='A'):
+    """分侧提升（t66 收敛——pair 引擎 A/B 分侧语义）：
+    side='A'：A⊗I（只驱动 A 原子——B 不动）；side='B'：I⊗A（只驱动 B 原子）。
+    k = i·N + j（i = A 态，j = B 态）。
+    """
+    A = np.asarray(A, float)
+    N2 = N * N
+    M = np.zeros((N2, N2))
+    for i in range(N):
+        for ip in range(N):
+            v = A[i, ip]
+            if v == 0.0:
+                continue
+            for j in range(N):
+                if side == 'A':
+                    M[i * N + j, ip * N + j] += v      # A 原子 i→ip
+                else:
+                    M[j * N + i, j * N + ip] += v      # B 原子 i→ip
+    return M
