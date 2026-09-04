@@ -1154,6 +1154,7 @@ class DynamicPanel(QWidget):
             method=method,
             per_freq_M=per_freq_M, frozen_h_ns=frozen_h)
         self._worker._cache_ref = self.cache
+        self._worker._B_gauss = self._field_B()
         self._worker.done.connect(self._on_pair_evolve_done)
         self._worker.log_msg.connect(self.main.log)
         self._worker.start()

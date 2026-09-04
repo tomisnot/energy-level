@@ -103,13 +103,16 @@ def _pack_rhs(pairs, t_end, n_tab=20001):
 
 
 def _ac_ize_pair(E, A_o, omega_opt, r_crit=R_CRIT, cache=None, states=None,
-                 field=None):
+                 field=None, B_gauss=0.0):
     """AC 化（t69 修正——船长裁定）：剔除远强对 + **静态引擎位移**。
 
     位移来源：static_atom.direct_ac_stark_shifts（Floquet n_photon=4 完整
     对角化——用户调光强用的权威引擎，成熟、带缓存、不费时间）——**不是**
     far_sos 二阶近似（t69 发现：far_sos 在强光下 10 倍失真、符号都可能反，
     注入后交换对失谐 → 不共振——用户指认"为什么加 AC 位移不能正确共振"根因）。
+
+    B_gauss：场景磁场（Zeeman 分裂——影响近对失谐→位移；t69 教训：漏传
+    B 或漏 6P 组都会让 60S 频移算错——正确 −53 vs 错误 +8）。
 
     返回 (A_new, shifts)：A_new = 剔除远强对后的光场 A（近对保留）；
     shifts = N 维位移（env² 全量时变语义 + K0 纯 E——t62e/t62f 定案）。
@@ -125,11 +128,14 @@ def _ac_ize_pair(E, A_o, omega_opt, r_crit=R_CRIT, cache=None, states=None,
     # 静态引擎位移（优先）；cache/field 缺失时退回 far_sos（提示）
     if cache is not None and states is not None and field is not None:
         from . import static_atom
+        # groups = 全部 (n,l,j) 组（**含 6P 等 F 超精细态**——t69 教训：m==0.5
+        # 过滤会漏 6P（F 态 m 字段是 mF 范围 ±3 无 +0.5）→ 60S↔6P 近对丢失 →
+        # 60S 频移算错（+8 vs 正确 −53）→ 交换对 dressed 全错）
         groups = []
         seen = set()
         for s in states:
             k = (s['n'], s['l'], s['j'])
-            if k not in seen and s.get('m') == 0.5:
+            if k not in seen:
                 seen.add(k)
                 groups.append(dict(n=s['n'], l=s['l'], j=s['j']))
         cfg = dict(enabled=True,
@@ -137,7 +143,8 @@ def _ac_ize_pair(E, A_o, omega_opt, r_crit=R_CRIT, cache=None, states=None,
                    * 1e6,
                    intensity=float(field.get('intensity_mwcm2', 0.0)),
                    polarization=field.get('pol', 'π'), elliptical=False)
-        shifts = static_atom.direct_ac_stark_shifts(cache, groups, cfg)
+        shifts = static_atom.direct_ac_stark_shifts(cache, groups, cfg,
+                                                    B_gauss=float(B_gauss))
         sh = np.zeros(len(E))
         for i, s in enumerate(states):
             key = (s['n'], s['l'], s['j'], f"m_J={s['m']:+.1f}", 0)
@@ -229,10 +236,12 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
                       vdd_matrix=None, R_um=None, theta_deg=0.0,
                       phi_deg=0.0, cache=None, tol=1e-8, max_step=0.05,
                       progress_arr=None, log=None, record_amp=False,
-                      decays_A=None, decays_B=None, driver='numba'):
+                      decays_A=None, decays_B=None, driver='numba',
+                      B_gauss=0.0):
     """两体混合引擎（正式版）：光场光子块 + 微波/V_dd 当场，φ-帧单 DOP853。
 
     fields_A/B : kind='exact' 场列表（build_fields_exact 输出——光场 + 微波）
+    B_gauss    : 场景磁场（Zeeman——AC 位移/静态引擎必需；GUI 传 _field_B）
     vdd_matrix  : V_dd 稀疏/稠密矩阵（N²×N²）；None 且给 R_um/cache 时算
     返回 dict(t, pops_2d, pops_A, pops_B, states_2d, loss_A, loss_B,
               method='mixed', backend='mixed-phi-dop853-pair', error_report)。
@@ -306,13 +315,13 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
     for (A, om, env), fld in zip(optA, [f for f in fields_A
                                         if f['omega_L_mhz'] > 1e5]):
         A_new, shifts = _ac_ize_pair(E, A, om, cache=cache, states=states,
-                                     field=fld)
+                                     field=fld, B_gauss=B_gauss)
         optA_ac.append((A_new, env, shifts))
         shA = shA + shifts
     for (A, om, env), fld in zip(optB, [f for f in fields_B
                                         if f['omega_L_mhz'] > 1e5]):
         A_new, shifts = _ac_ize_pair(E, A, om, cache=cache, states=states,
-                                     field=fld)
+                                     field=fld, B_gauss=B_gauss)
         optB_ac.append((A_new, env, shifts))
         shB = shB + shifts
     if np.any(shA != 0) or np.any(shB != 0):

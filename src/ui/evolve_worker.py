@@ -144,7 +144,7 @@ class EvolveWorkerPair(QThread):
             elif self.method == 'mixed':
                 # t62 两体混合引擎（正式版）——光场光子块 + 微波/V_dd 当场；
                 # t69：AC 位移用静态引擎（direct_ac_stark_shifts——权威、带
-                # 缓存）——需 cache（GUI 已通过 _cache_ref 传入）
+                # 缓存）——需 cache + B_gauss（GUI 已通过 _cache_ref 传入）
                 from ..core.evolve_mixed_pair import evolve_mixed_pair
                 res = evolve_mixed_pair(
                     self.states, self.fields_A, self.fields_B,
@@ -154,6 +154,7 @@ class EvolveWorkerPair(QThread):
                     decays_A=self.decays_A, decays_B=self.decays_B,
                     progress_arr=self.progress_arr,
                     cache=self._cache_ref,
+                    B_gauss=getattr(self, '_B_gauss', 0.0),
                     log=self.log_msg.emit)
             elif self.method != 'hard':
                 # hard 分支已在上方赋值 res；此处排除，避免 pair_evolve 覆盖
