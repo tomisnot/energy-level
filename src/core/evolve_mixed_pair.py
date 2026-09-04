@@ -102,20 +102,59 @@ def _pack_rhs(pairs, t_end, n_tab=20001):
     return _pk(pairs, t_end, n_tab)
 
 
-def _ac_ize_pair(E, A_o, omega_opt, r_crit=R_CRIT):
-    """t63/t69 统一：公共层 acize.acize_physical——**单波** AC 化（每波形独立）。
+def _ac_ize_pair(E, A_o, omega_opt, r_crit=R_CRIT, cache=None, states=None,
+                 field=None):
+    """AC 化（t69 修正——船长裁定）：剔除远强对 + **静态引擎位移**。
+
+    位移来源：static_atom.direct_ac_stark_shifts（Floquet n_photon=4 完整
+    对角化——用户调光强用的权威引擎，成熟、带缓存、不费时间）——**不是**
+    far_sos 二阶近似（t69 发现：far_sos 在强光下 10 倍失真、符号都可能反，
+    注入后交换对失谐 → 不共振——用户指认"为什么加 AC 位移不能正确共振"根因）。
 
     返回 (A_new, shifts)：A_new = 剔除远强对后的光场 A（近对保留）；
-    shifts = N 维 far_sos 位移（env² 全量时变语义 + K0 纯 E 唯一实现）。
+    shifts = N 维位移（env² 全量时变语义 + K0 纯 E——t62e/t62f 定案）。
     """
     from .acize import acize_physical
     if A_o is None or not np.any(np.abs(A_o) > 1e-9):
         return (np.zeros_like(A_o, float) if A_o is not None else None,
                 np.zeros(len(E)))
-    A_new, sh_l = acize_physical(
+    A_new, _ = acize_physical(
         E, [dict(kind='exact', A=np.asarray(A_o, float),
                  omega_L_mhz=float(omega_opt))], r_crit)
-    return A_new[0], sh_l[0]
+    A_new = A_new[0]
+    # 静态引擎位移（优先）；cache/field 缺失时退回 far_sos（提示）
+    if cache is not None and states is not None and field is not None:
+        from . import static_atom
+        groups = []
+        seen = set()
+        for s in states:
+            k = (s['n'], s['l'], s['j'])
+            if k not in seen and s.get('m') == 0.5:
+                seen.add(k)
+                groups.append(dict(n=s['n'], l=s['l'], j=s['j']))
+        cfg = dict(enabled=True,
+                   frequency_hz=float(field.get('omega_L_mhz', omega_opt))
+                   * 1e6,
+                   intensity=float(field.get('intensity_mwcm2', 0.0)),
+                   polarization=field.get('pol', 'π'), elliptical=False)
+        shifts = static_atom.direct_ac_stark_shifts(cache, groups, cfg)
+        sh = np.zeros(len(E))
+        for i, s in enumerate(states):
+            key = (s['n'], s['l'], s['j'], f"m_J={s['m']:+.1f}", 0)
+            if key in shifts:
+                sh[i] += float(shifts[key])
+        return A_new, sh
+    sh_f = np.zeros(len(E))
+    for i in range(len(E)):
+        for k in range(i + 1, len(E)):
+            if abs(A_new[i, k]) < 1e-9:
+                continue
+            nu = E[k] - E[i]
+            dE1 = -(A_new[i, k] ** 2) * nu / (nu ** 2
+                                              - float(omega_opt) ** 2) / 2.0
+            sh_f[i] += dE1
+            sh_f[k] -= dE1
+    return A_new, sh_f
 
 
 def _build_pair_geometry(E, optA_ac, optB_ac, omega_opt):
@@ -257,19 +296,23 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
             V = sp.csr_matrix(np.asarray(V, complex))
     V_sp = V
 
-    # ---- AC 化逐波（每波独立剔除远强对 + far_sos 位移；env² 全量门控）----
-    # optA_ac/optB_ac 元素：(A_new, env, shifts)——shifts 为原始 A 的位移
-    # （A_new 已剔除远对——far_sos 为 0——位移必须在剔除前算，此处保留）
+    # ---- AC 化逐波（每波独立剔除远强对 + 静态引擎位移；env² 全量门控）----
+    # optA_ac/optB_ac 元素：(A_new, env, shifts)——shifts 为静态引擎位移
+    # （t69 修正：direct_ac_stark_shifts 权威值，非 far_sos 二阶近似）
     optA_ac = []
     optB_ac = []
     shA = np.zeros(N)
     shB = np.zeros(N)
-    for A, om, env in optA:
-        A_new, shifts = _ac_ize_pair(E, A, om)
+    for (A, om, env), fld in zip(optA, [f for f in fields_A
+                                        if f['omega_L_mhz'] > 1e5]):
+        A_new, shifts = _ac_ize_pair(E, A, om, cache=cache, states=states,
+                                     field=fld)
         optA_ac.append((A_new, env, shifts))
         shA = shA + shifts
-    for A, om, env in optB:
-        A_new, shifts = _ac_ize_pair(E, A, om)
+    for (A, om, env), fld in zip(optB, [f for f in fields_B
+                                        if f['omega_L_mhz'] > 1e5]):
+        A_new, shifts = _ac_ize_pair(E, A, om, cache=cache, states=states,
+                                     field=fld)
         optB_ac.append((A_new, env, shifts))
         shB = shB + shifts
     if np.any(shA != 0) or np.any(shB != 0):

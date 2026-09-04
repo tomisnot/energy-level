@@ -122,7 +122,9 @@ def build_fields_exact(cache, states, waves):
         out.append({'kind': 'exact', 'A': A,
                     'omega_L_mhz': float(w.freq_mhz),
                     'waveform': w.waveform,
-                    'label': getattr(w, 'name', '波')})
+                    'label': getattr(w, 'name', '波'),
+                    'intensity_mwcm2': float(w.intensity_mwcm2),
+                    'pol': w.pol})
     return out
 
 
