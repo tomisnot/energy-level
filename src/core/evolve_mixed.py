@@ -31,39 +31,10 @@ R_CRIT = 0.0135               # t58: M_max=2 的 r 判据（r>r_crit → AC 化�
 
 
 def ac_ize_physical_E(E, f_opt, r_crit=R_CRIT):
-    """远失谐强对 AC 化（t62 正确组合 + t62e 时变化）：剔除 + far_sos 位移。
-
-    t62 用例 2/3 验证：远强对（60S↔60P @ 295.7THz，r=Ω/ω>r_crit）不转移布居，
-    净效应 = AC 位移（far_sos 双向公式 ±18.23MHz）。t62e：位移改为**时变对角项**
-    δE_i(t)=Σ_f shifts_f[i]·env_f(t)²（AC ∝ 光强 ∝ env²——光关位移零，微波共振
-    恢复；常数包络 env=1 退化原行为）。**K0/D 用原始 E**（位移全由 RHS 对角承担——
-    否则光关时 mw 配对 dD 仍被静态位移污染，设计 C 点）。
-
-    返回 (E, A_list_new, shifts_list)：E 原样；A_list_new=剔除远强对后的光场 A；
-    shifts_list[f] = 第 f 个光场的 N 维位移向量。
-    """
-    N = len(E)
-    E_shift = np.zeros(N)
-    shifts_list = []
-    A_new = []
-    for f in f_opt:
-        A = np.asarray(f['A'], float).copy()
-        w = float(f['omega_L_mhz'])
-        sh_f = np.zeros(N)
-        for i in range(N):
-            for k in range(i + 1, N):
-                if abs(A[i, k]) < 1e-9:
-                    continue
-                if abs(A[i, k]) <= r_crit * w:
-                    continue            # 近对/弱对保留（光子块动态）
-                nu = E[k] - E[i]
-                dE1 = -(A[i, k] ** 2) * nu / (nu ** 2 - w ** 2) / 2.0
-                sh_f[i] += dE1
-                sh_f[k] -= dE1
-                A[i, k] = A[k, i] = 0.0
-        A_new.append(A)
-        shifts_list.append(sh_f)
-        E_shift = E_shift + sh_f
+    """t63 统一：公共层 acize.acize_physical（单/两体共用——env² 全量时变
+    语义 + K0 纯 E 唯一实现）。返回 (E, A_new_list, shifts_list)。"""
+    from .acize import acize_physical
+    A_new, shifts_list = acize_physical(E, f_opt, r_crit)
     return E, A_new, shifts_list
 
 
