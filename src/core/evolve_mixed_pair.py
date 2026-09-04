@@ -103,19 +103,27 @@ def _pack_rhs(pairs, t_end, n_tab=20001):
 
 
 def _ac_ize_pair(E, A_o, omega_opt, r_crit=R_CRIT, cache=None, states=None,
-                 field=None, B_gauss=0.0):
-    """AC 化（t69 修正——船长裁定）：剔除远强对 + **静态引擎位移**。
+                 field=None, B_gauss=0.0, inject=False):
+    """AC 化（t70 根因修复）：剔除远强对；**位移默认不注入**（inject=False）。
 
-    位移来源：static_atom.direct_ac_stark_shifts（Floquet n_photon=4 完整
-    对角化——用户调光强用的权威引擎，成熟、带缓存、不费时间）——**不是**
-    far_sos 二阶近似（t69 发现：far_sos 在强光下 10 倍失真、符号都可能反，
-    注入后交换对失谐 → 不共振——用户指认"为什么加 AC 位移不能正确共振"根因）。
+    位移语义（t70 决定性实验——375ns 交换窗 max|Δpops|=8.2e-5 ≡ hard）：
+    **近对（如 60S↔6P）保留在光子块 M=1 动态，AC 位移自然涌现**——与
+    hard 的 RWA 动态同物理（M=1 对角化涌现 −18.87 ≡ 静态引擎 −16.47，
+    M=1/2/3/4 收敛）。若再注入全量静态位移（direct_ac_stark_shifts 含
+    近对贡献 −61.6 等）→ 与光子块动态**双计** → 交换对过补偿不共振
+    （注入后 0.012 vs 全关 0.558 的根因；用户"代码写对物理自然涌现"
+    原则的直接体现——位移是近对动态的涌现量，不是可注入的外部量）。
 
-    B_gauss：场景磁场（Zeeman 分裂——影响近对失谐→位移；t69 教训：漏传
-    B 或漏 6P 组都会让 60S 频移算错——正确 −53 vs 错误 +8）。
+    被剔除的远强对（r>r_crit，本场景 = 60S↔60P 巨对 r=0.06-0.09）：
+    hard 的 build_two_field opt_terms 根本不含它们（RWA 光场只驱动
+    drive 近共振对）→ mix 剔除后**也不应注入**其位移（hard 无对应物理）。
+
+    inject=True 仅用于显式需要 AC 化补偿的场景（光子块 M=1 无法承载的
+    近强对——本场景无）；默认 False 与 hard 语义对齐。
 
     返回 (A_new, shifts)：A_new = 剔除远强对后的光场 A（近对保留）；
-    shifts = N 维位移（env² 全量时变语义 + K0 纯 E——t62e/t62f 定案）。
+    shifts = inject 时 N 维静态引擎位移（env² 全量时变语义 + K0 纯 E——
+    t62e/t62f 定案），否则全 0（t70 定案）。
     """
     from .acize import acize_physical
     if A_o is None or not np.any(np.abs(A_o) > 1e-9):
@@ -125,7 +133,9 @@ def _ac_ize_pair(E, A_o, omega_opt, r_crit=R_CRIT, cache=None, states=None,
         E, [dict(kind='exact', A=np.asarray(A_o, float),
                  omega_L_mhz=float(omega_opt))], r_crit)
     A_new = A_new[0]
-    # 静态引擎位移（优先）；cache/field 缺失时退回 far_sos（提示）
+    if not inject:
+        return A_new, np.zeros(len(E))
+    # ---- 以下仅 inject=True：静态引擎位移（优先）；无 cache 退回 far_sos ----
     if cache is not None and states is not None and field is not None:
         from . import static_atom
         # groups = 全部 (n,l,j) 组（**含 6P 等 F 超精细态**——t69 教训：m==0.5
@@ -209,6 +219,15 @@ def _build_pair_geometry(E, optA_ac, optB_ac, omega_opt):
                 Kcw = np.asarray(Kcw, complex)
                 ii, jj = np.nonzero(np.abs(Kcw) > 1e-12)
                 for a, b in zip(ii, jj):
+                    # 三角过滤（t70 根因修复）：Kcw 为 Hermitian 全矩阵
+                    # （构造 K[c,r]+=conj），np.nonzero 遍历上下三角——若
+                    # (a,b) 与 (b,a) 都打包，RHS 双向补齐（tot[a]+=v·ph·phi[b]
+                    # + conj 反向）会把同一耦合驱动两次 → Rabi 翻倍 →
+                    # AC 位移 ∝Rabi² 失真 4× → 交换对永不共振（T4/T6 同款
+                    # bug 第四次；V_dd/微波打包均有 a0>=b0 / ia>=ka 过滤，
+                    # 唯光场漏）。保留 a<b 单侧，反向由 RHS 厄米补齐自动。
+                    if a >= b:
+                        continue
                     if abs(K0[a] - K0[b]) < BW_OPT:
                         pairs_opt.append((int(a), int(b), Kcw[a, b],
                                           float(K0[a] - K0[b]), env))
@@ -237,11 +256,14 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
                       phi_deg=0.0, cache=None, tol=1e-8, max_step=0.05,
                       progress_arr=None, log=None, record_amp=False,
                       decays_A=None, decays_B=None, driver='numba',
-                      B_gauss=0.0):
+                      B_gauss=0.0, ac_inject=False):
     """两体混合引擎（正式版）：光场光子块 + 微波/V_dd 当场，φ-帧单 DOP853。
 
     fields_A/B : kind='exact' 场列表（build_fields_exact 输出——光场 + 微波）
-    B_gauss    : 场景磁场（Zeeman——AC 位移/静态引擎必需；GUI 传 _field_B）
+    B_gauss    : 场景磁场（Zeeman——静态引擎位移用；GUI 传 _field_B）
+    ac_inject  : t70 定案——默认 False：**不注入静态 AC 位移**（近对
+        60S↔6P 光子块 M=1 动态自然涌现 ≡ hard RWA；注入与动态双计 → 破坏
+        交换）。True = 旧 t69 语义（剔除远强对 + 注入全量静态位移）。
     vdd_matrix  : V_dd 稀疏/稠密矩阵（N²×N²）；None 且给 R_um/cache 时算
     返回 dict(t, pops_2d, pops_A, pops_B, states_2d, loss_A, loss_B,
               method='mixed', backend='mixed-phi-dop853-pair', error_report)。
@@ -315,19 +337,22 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
     for (A, om, env), fld in zip(optA, [f for f in fields_A
                                         if f['omega_L_mhz'] > 1e5]):
         A_new, shifts = _ac_ize_pair(E, A, om, cache=cache, states=states,
-                                     field=fld, B_gauss=B_gauss)
+                                     field=fld, B_gauss=B_gauss,
+                                     inject=ac_inject)
         optA_ac.append((A_new, env, shifts))
         shA = shA + shifts
     for (A, om, env), fld in zip(optB, [f for f in fields_B
                                         if f['omega_L_mhz'] > 1e5]):
         A_new, shifts = _ac_ize_pair(E, A, om, cache=cache, states=states,
-                                     field=fld, B_gauss=B_gauss)
+                                     field=fld, B_gauss=B_gauss,
+                                     inject=ac_inject)
         optB_ac.append((A_new, env, shifts))
         shB = shB + shifts
     if np.any(shA != 0) or np.any(shB != 0):
         log(f'[mixed_pair] AC 化：δA {shA.min():+.2f}..{shA.max():+.2f}'
             f' δB {shB.min():+.2f}..{shB.max():+.2f} MHz'
-            f'（{len(optA_ac)}+{len(optB_ac)} 光波逐波）')
+            f'（{len(optA_ac)}+{len(optB_ac)} 光波逐波，'
+            f'ac_inject={ac_inject}）')
 
     # ---- 光子块结构（K0 纯 E——t62f 语义；共享扇区 M=1）----
     K0, pairs_opt, P, dim = _build_pair_geometry(

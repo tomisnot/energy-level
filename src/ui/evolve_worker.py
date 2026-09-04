@@ -143,8 +143,10 @@ class EvolveWorkerPair(QThread):
                     per_freq_M=self.per_freq_M)
             elif self.method == 'mixed':
                 # t62 两体混合引擎（正式版）——光场光子块 + 微波/V_dd 当场；
-                # t69：AC 位移用静态引擎（direct_ac_stark_shifts——权威、带
-                # 缓存）——需 cache + B_gauss（GUI 已通过 _cache_ref 传入）
+                # t70 定案：ac_inject 默认 False——近对（60S↔6P）光子块
+                # M=1 动态自然涌现 AC 位移 ≡ hard RWA（375ns 交换窗
+                # max|Δpops|=8.2e-5 验收）；注入全量静态位移与动态双计会
+                # 破坏交换。cache + B_gauss 仍传（光子块/剔除需要）。
                 from ..core.evolve_mixed_pair import evolve_mixed_pair
                 res = evolve_mixed_pair(
                     self.states, self.fields_A, self.fields_B,
