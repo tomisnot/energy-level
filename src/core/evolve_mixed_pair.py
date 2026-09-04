@@ -305,7 +305,12 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
     def _one(tv):
         return np.ones_like(np.atleast_1d(tv))
 
-    # V_dd：同扇区全保留（env=恒 1——修复原型误乘光包络）
+    # V_dd：同扇区保留（env=恒 1——修复原型误乘光包络）；
+    # **ΔD 过滤（船长 2026-09-06 性能根因）**：vdd_sparse 含跨尺度对
+    # （60S/60P↔6P，|ΔD|≈591THz——4812 个）——若全打包进 φ-帧 RHS，
+    # DOP853 步长被钉死 ~1e-6ns → 620ns 需 1e9+ 步（半小时+ vs 51s）。
+    # 物理上 THz-dE 的 V_dd 是极离共振偶极耦合（净效应 V²/Δ 可忽略，
+    # hard_pair 的 vdd_rot_filter 同款剔除——t34 存活元素 |dE|≤34.7GHz）。
     if V_sp is not None:
         coo = V_sp.tocoo()
         for a0, b0, vv in zip(coo.row, coo.col, coo.data):
@@ -315,6 +320,8 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
                 a = a0 + pn * N2
                 b = b0 + pn * N2
                 dD = K0[a] - K0[b]
+                if abs(dD) >= BW_OPT:
+                    continue
                 pairs.append((int(a), int(b), complex(vv), dD, 0, 0.0,
                               _one))
 
