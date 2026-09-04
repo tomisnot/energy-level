@@ -31,21 +31,25 @@ R_CRIT = 0.0135               # t58: M_max=2 的 r 判据（r>r_crit → AC 化�
 
 
 def ac_ize_physical_E(E, f_opt, r_crit=R_CRIT):
-    """远失谐强对 AC 化（t62 正确组合）：剔除 + far_sos 位移注入**物理能级 E**。
+    """远失谐强对 AC 化（t62 正确组合 + t62e 时变化）：剔除 + far_sos 位移。
 
     t62 用例 2/3 验证：远强对（60S↔60P @ 295.7THz，r=Ω/ω>r_crit）不转移布居，
-    净效应 = AC 位移（far_sos 双向公式 ±18.23MHz）——加进物理 E_i（非扩展对角
-    ac_diag——t44 错误路径）→ K0/D 同步 → 光场失谐与微波共振自动含位移
-    （"光频移阻断微波"自动产生，用例 3）。
+    净效应 = AC 位移（far_sos 双向公式 ±18.23MHz）。t62e：位移改为**时变对角项**
+    δE_i(t)=Σ_f shifts_f[i]·env_f(t)²（AC ∝ 光强 ∝ env²——光关位移零，微波共振
+    恢复；常数包络 env=1 退化原行为）。**K0/D 用原始 E**（位移全由 RHS 对角承担——
+    否则光关时 mw 配对 dD 仍被静态位移污染，设计 C 点）。
 
-    返回 (E2, A_list_new)：E2 = E+E_shift；A_list_new = 剔除远强对后的光场 A。
+    返回 (E, A_list_new, shifts_list)：E 原样；A_list_new=剔除远强对后的光场 A；
+    shifts_list[f] = 第 f 个光场的 N 维位移向量。
     """
     N = len(E)
     E_shift = np.zeros(N)
+    shifts_list = []
     A_new = []
     for f in f_opt:
         A = np.asarray(f['A'], float).copy()
         w = float(f['omega_L_mhz'])
+        sh_f = np.zeros(N)
         for i in range(N):
             for k in range(i + 1, N):
                 if abs(A[i, k]) < 1e-9:
@@ -54,16 +58,19 @@ def ac_ize_physical_E(E, f_opt, r_crit=R_CRIT):
                     continue            # 近对/弱对保留（光子块动态）
                 nu = E[k] - E[i]
                 dE1 = -(A[i, k] ** 2) * nu / (nu ** 2 - w ** 2) / 2.0
-                E_shift[i] += dE1
-                E_shift[k] -= dE1
+                sh_f[i] += dE1
+                sh_f[k] -= dE1
                 A[i, k] = A[k, i] = 0.0
         A_new.append(A)
-    return E + E_shift, A_new
+        shifts_list.append(sh_f)
+        E_shift = E_shift + sh_f
+    return E, A_new, shifts_list
 
 
 @njit(cache=True)
 def _rhs_phi(t, phi, iis, jjs, vals, dDs, wids, is_mw, wcos,
-             n_pairs_w, env_tab, env_dt, C, gamma=None):
+             n_pairs_w, env_tab, env_dt, C, gamma=None,
+             ac_sh=None, ac_pos=None, ac_N=0):
     """φ-帧统一 RHS：−iC·[光场 env·Kc + 微波 env·cos·A]∘e^{iC·ΔD·t}·φ。
 
     t 为绝对时间（φ=e^{iCDt}X 定义是绝对的）。wids[k] → 波索引；
@@ -98,6 +105,25 @@ def _rhs_phi(t, phi, iis, jjs, vals, dDs, wids, is_mw, wcos,
                 1j * C * dDs[ip + k] * tv) * phi[b]
         ip += np_w
     res = -1j * C * tot
+    # t62e：时变 AC 对角修正 −iC·Σ_f ac_sh[f]·(env_f(t)²−1)∘φ——env 平方
+    # （AC ∝ 光强）：env=1 → 0（K0/E2 静态已含）；env=0 → −shift（光关位移归零，
+    # 微波共振恢复）。加在 res（不经 tot 的 -1jC——避免双乘）。
+    if ac_sh is not None:
+        dim = phi.shape[0]
+        for f in range(ac_sh.shape[0]):
+            w = ac_pos[f]
+            ei = tv / env_dt
+            i0 = int(ei)
+            if i0 >= env_tab.shape[1] - 1:
+                i0 = env_tab.shape[1] - 2
+            ff = ei - i0
+            envv = env_tab[w, i0] * (1.0 - ff) + env_tab[w, i0 + 1] * ff
+            dev = envv * envv
+            if dev == 0.0:
+                continue
+            for a in range(dim):
+                st = a % ac_N
+                res[a] += -1j * C * dev * ac_sh[f, st] * phi[a]
     if gamma is not None:
         # 耗散对角项直接加在返回（不经 -1j·C——否则变虚数增长）；
         # gamma 须为扩展空间长度（N·P，调用侧已按扇区 tile）
@@ -122,15 +148,16 @@ class _MixedSetup:
         self.D_full = np.real(np.diag(self.setup.K0))
 
         # 波清单（光场在前 + 微波）：is_mw 标志 + ω + env
+        # t62e：env 行含全部光学波（直接遍历 g['envs']——Kc_dense 空（AC 化后
+        # 零耦合）时 zip 会吞掉 env 行——RHS 时变 AC 对角需其 env 表）
         self._env_list = []
         self._is_mw = []
         self._wcos = []
         for gi, g in enumerate(grps_opt):
-            for wf, Kcw in zip(g['envs'], self.setup.Kc_dense[gi] or []):
-                if Kcw is not None:
-                    self._env_list.append(wf)
-                    self._is_mw.append(0)
-                    self._wcos.append(0.0)
+            for wf in g['envs']:
+                self._env_list.append(wf)
+                self._is_mw.append(0)
+                self._wcos.append(0.0)
         for g in grps_mw:
             w = float(g['omega_mhz'])
             for A, env in zip(g['As'], g['envs']):
@@ -144,7 +171,19 @@ class _MixedSetup:
         n_pairs_w = []
         wi = 0
         for gi, g in enumerate(grps_opt):
-            for wf, Kcw in zip(g['envs'], self.setup.Kc_dense[gi] or []):
+            for wf in g['envs']:
+                Kcw_list = self.setup.Kc_dense[gi] or []
+                Kcw = None
+                # 第 wi 个波对应该组的第 wi_local 个 Kcw——按序取
+                # （简化：env 与 Kcw 同序——直接按组内序 zip）
+                # t62e：Kc_dense 空（AC 化零耦合）时 Kcw=None → 波计入 wi
+                wi_in_g = 0
+                for wf2 in g['envs']:
+                    if wf2 is wf:
+                        break
+                    wi_in_g += 1
+                if wi_in_g < len(Kcw_list):
+                    Kcw = Kcw_list[wi_in_g]
                 if Kcw is None:
                     n_pairs_w.append(0)
                     wi += 1
@@ -199,6 +238,12 @@ class _MixedSetup:
         # 已删除——已被 t62 的 far_sos 注入物理能级 E_i 取代（混合引擎正确组合
         # docs/混合引擎理论推导-光Sambe微波当场.md：AC 化注入 E → K0/D 同步 → 光场
         # 失谐与微波共振自动含位移）。ac_diag 相关 RHS 分支同步移除。
+        # t62e：AC 位移时变化——per-field 位移 + 对应光学波索引（RHS 时变对角
+        # δE_i(t)=Σ_f shifts_f[i]·env_f(t)²——K0/E2 含静态 Σ，RHS 补 (env²−1)）
+        self.ac_shifts = []            # 每光学波的 N 维位移（无位移的光学波=None）
+        self.ac_wave_idx = []          # 对应 _env_list 波索引
+        self.ac_env_pos = []           # 波在 env_tab 的行号
+        self.ac_N = N
 
     def make_env_tabs(self, T, n_tab=62001):
         self.env_dt = T / (n_tab - 1)
@@ -243,14 +288,27 @@ def evolve_mixed(states, fields, psi0, t_grid, tol=1e-8, max_step=0.05,
                 f'（落点=丢失，NonHermitian）')
     f_opt = [f for f in fields if f['omega_L_mhz'] > 1e5]
     f_mw = [f for f in fields if f['omega_L_mhz'] <= 1e5]
-    # t62 AC 化（正确组合）：远强对剔除 + far_sos 位移注入物理 E（非 ac_diag）
-    E2, A_opt_new = ac_ize_physical_E(E, f_opt)
+    # t62 AC 化（正确组合）+ t62e 时变化：远强对剔除 + per-field far_sos 位移
+    E2, A_opt_new, shifts_list = ac_ize_physical_E(E, f_opt)
     f_opt_ac = [dict(f, A=A) for f, A in zip(f_opt, A_opt_new)]
     grps_opt = _group_by_freq(f_opt_ac)
     grps_mw = _group_by_freq(f_mw) if f_mw else []
     if not grps_opt:
         raise ValueError('evolve_mixed 需要光场（载频 > 1e5 MHz）')
     setup = _MixedSetup(E2, grps_opt, grps_mw, N)
+    # t62e：AC 时变数据——光学波在 env 序列的位置（对齐 _env_list 全波行）+
+    # per-field 位移（波形对象同一性映射——t62 分组教训）
+    ac_sh, ac_pos = [], []
+    wi = 0
+    for gi, g in enumerate(grps_opt):
+        for wf in g['envs']:
+            for f_idx, f in enumerate(f_opt):
+                if f['waveform'] is wf and np.any(shifts_list[f_idx]):
+                    ac_sh.append(shifts_list[f_idx])
+                    ac_pos.append(wi)
+            wi += 1
+    ac_sh = np.asarray(ac_sh, float) if ac_sh else None
+    ac_pos = np.asarray(ac_pos, np.int64) if ac_pos else None
     # 耗散 gamma（N）→ 扩展空间（N·P，每扇区同衰减）
     if gamma is not None:
         gamma = np.tile(gamma, setup.P)
@@ -275,7 +333,7 @@ def evolve_mixed(states, fields, psi0, t_grid, tol=1e-8, max_step=0.05,
                                setup.vals, setup.dDs, setup.wids,
                                setup._is_mw, setup._wcos, setup.n_pairs_w,
                                setup.env_tab, setup.env_dt, float(C),
-                               gamma)
+                               gamma, ac_sh, ac_pos, int(N))
     else:
         from scipy.integrate import solve_ivp
 
@@ -283,7 +341,7 @@ def evolve_mixed(states, fields, psi0, t_grid, tol=1e-8, max_step=0.05,
             return _rhs_phi(tv, phi, setup.iis, setup.jjs, setup.vals,
                             setup.dDs, setup.wids, setup._is_mw,
                             setup._wcos, setup.n_pairs_w, setup.env_tab,
-                            setup.env_dt, C, gamma)
+                            setup.env_dt, C, gamma, ac_sh, ac_pos, int(N))
         sol = solve_ivp(rhs, (0.0, T), X0, method='DOP853', t_eval=t,
                         rtol=tol, atol=1e-10, max_step=max_step)
         if not sol.success:
