@@ -63,18 +63,13 @@ def ac_ize_physical_E(E, f_opt, r_crit=R_CRIT):
 
 @njit(cache=True)
 def _rhs_phi(t, phi, iis, jjs, vals, dDs, wids, is_mw, wcos,
-             n_pairs_w, env_tab, env_dt, ac_diag, C):
-    """φ-帧统一 RHS：−iC·[光场 env·Kc + 微波 env·cos·A]∘e^{iC·ΔD·t}·φ
-    − iC·ac_diag∘φ（远失谐对 AC 位移解析注入）。
+             n_pairs_w, env_tab, env_dt, C):
+    """φ-帧统一 RHS：−iC·[光场 env·Kc + 微波 env·cos·A]∘e^{iC·ΔD·t}·φ。
 
     t 为绝对时间（φ=e^{iCDt}X 定义是绝对的）。wids[k] → 波索引；
     is_mw[w]=1 时该项带 cos(C·w·t)。"""
     tv = t
     tot = np.zeros_like(phi)
-    # AC 位移对角项（常数——远失谐对被 BW_OPT 过滤丢失的 dressed 二阶补齐）
-    for a in range(len(phi)):
-        if ac_diag[a] != 0.0:
-            tot[a] += ac_diag[a] * phi[a]
     ip = 0
     nw = len(wcos)
     for w in range(nw):
@@ -191,40 +186,11 @@ class _MixedSetup:
         self.n_pairs_w = np.asarray(n_pairs_w, np.int64)
         self._is_mw = np.asarray(self._is_mw, np.int64)
         self._wcos = np.asarray(self._wcos, np.float64)
-
-        # ---- 远失谐光场对净 AC 位移（t44：eigh 法——双向边带抵消后真实值）----
-        # t43 的单向 Ω²/4Δ（±156 GHz）是伪值：光子块含 60S↔60P 的 n→n±1 两个
-        # 边带方向，位移符号相反几乎抵消 → 净位移 ~±18 MHz（船长诊断：
-        # tempsimu/_t43_diag_ac.py——60S +18、60P −18，间隙失谐仅 −36 MHz）。
-        # 最可靠法：只含远对（|ΔD|≥BW_OPT）的 K 对角化，读中心扇区各物理态
-        # 的 dressed 位移（近对留在 RHS 作相干动力学，不进静态注入）。
-        K_far = np.array(self.setup.K0, complex)
-        for gi, g in enumerate(grps_opt):
-            for Kcw in self.setup.Kc_dense[gi] or []:
-                if Kcw is None:
-                    continue
-                Kcw = np.asarray(Kcw, complex)
-                mask = np.abs(self.D_full[:, None] - self.D_full[None, :]) \
-                    < BW_OPT
-                Kcw_far = np.where(mask, 0.0, Kcw)   # 近对清零，只留远对
-                np.fill_diagonal(Kcw_far, 0.0)
-                K_far = K_far + Kcw_far
-        ac = np.zeros(self.dim)
-        if np.any(K_far - np.diag(np.diag(K_far))):
-            evals_f, evecs_f = np.linalg.eigh(K_far)
-            pc = int(getattr(self.setup, 'p_center', 0))
-            for i in range(N):
-                ext = pc * N + i
-                w = np.abs(evecs_f[ext]) ** 2
-                k = int(np.argmax(w))
-                shift = float(evals_f[k]) - float(self.E[i])
-                for s in range(self.P):
-                    ac[s * N + i] = shift
-        self.ac_diag = np.zeros(self.dim)
-        self.n_ac_pairs = 0
-        # t44 结论：22 态净 AC ~±198 MHz（多 mJ 对叠加，非 2 态 ±18）——注入
-        # 破坏微波转移（60S末 0.52 vs ref 0.00016）→ 残差非远失谐 AC 单一来源，
-        # 默认关闭注入（置零）；ac_diag 保留供诊断。
+        # t61 清理：t44 的 eigh 法远对净 AC 位移块（K_far 对角化 + ac_diag）
+        # 已删除——已被 t62 的 far_sos 注入物理能级 E_i 取代（混合引擎正确组合
+        # docs/混合引擎理论推导-光Sambe微波当场.md：AC 化注入 E → K0/D 同步 → 光场
+        # 失谐与微波共振自动含位移）。ac_diag 相关 RHS 分支同步移除。
+        self.ac_diag = None
 
     def make_env_tabs(self, T, n_tab=62001):
         self.env_dt = T / (n_tab - 1)
@@ -286,8 +252,7 @@ def evolve_mixed(states, fields, psi0, t_grid, tol=1e-8, max_step=0.05,
                                max_step, prog, stat, setup.iis, setup.jjs,
                                setup.vals, setup.dDs, setup.wids,
                                setup._is_mw, setup._wcos, setup.n_pairs_w,
-                               setup.env_tab, setup.env_dt, setup.ac_diag,
-                               float(C))
+                               setup.env_tab, setup.env_dt, float(C))
     else:
         from scipy.integrate import solve_ivp
 
@@ -295,7 +260,7 @@ def evolve_mixed(states, fields, psi0, t_grid, tol=1e-8, max_step=0.05,
             return _rhs_phi(tv, phi, setup.iis, setup.jjs, setup.vals,
                             setup.dDs, setup.wids, setup._is_mw,
                             setup._wcos, setup.n_pairs_w, setup.env_tab,
-                            setup.env_dt, setup.ac_diag, C)
+                            setup.env_dt, C)
         sol = solve_ivp(rhs, (0.0, T), X0, method='DOP853', t_eval=t,
                         rtol=tol, atol=1e-10, max_step=max_step)
         if not sol.success:

@@ -279,9 +279,13 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
                            R_um, theta_deg, phi_deg)
     else:
         V = None
-    if V is not None and not hasattr(V, 'tocsr'):
-        V = None
-    V_sp = V.tocsr() if V is not None else None
+    if V is not None:
+        import scipy.sparse as sp
+        if sp.issparse(V):
+            V = V.tocsr()
+        else:
+            V = sp.csr_matrix(np.asarray(V, complex))
+    V_sp = V
 
     # ---- AC 化（远强对剔除 + far_sos 位移注入物理 E）----
     A_oA2, A_oB2, shA, shB = _ac_ize_pair(E, A_oA, A_oB, om_o)
