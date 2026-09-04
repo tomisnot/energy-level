@@ -67,9 +67,9 @@ def _rhs_mixed_pair(t, phi, iis, jjs, vals, dDs, is_mw, wcos, n_pairs_w,
             tot[b] += cw * np.conj(v * ph) * phi[a]
         ip += np_w
     res = -1j * Cv * tot
-    # t62e：时变 AC 对角 −iC·(shA[i]+shB[j])·(env_o(t)²−1)∘φ（env 平方 = AC∝
-    # 光强——光关位移零，微波恢复共振；env=1 退化静态阻断）。ac_base 为扩展
-    # 空间 (N²·P) 每元素位移；ac_env_row = 光学 env 在 env_tab 的行。
+    # t62f：时变 AC 对角 −iC·(shA[i]+shB[j])·env_o(t)²∘φ（env 平方 = AC∝光强——
+    # K0 已是纯 E（设计 C 点），无静态位移抵消 → 修正用 env² 全量（非 env²−1——
+    # 单原子 _rhs_phi 同款；env²−1 只在 K0 含静态 E+Σ 时正确，船长 t62f 诊断）。
     if ac_base is not None and ac_env_row >= 0:
         ei = t / env_dt
         i0 = int(ei)
@@ -78,7 +78,7 @@ def _rhs_mixed_pair(t, phi, iis, jjs, vals, dDs, is_mw, wcos, n_pairs_w,
         f = ei - i0
         envv = env_tab[ac_env_row, i0] * (1.0 - f) \
             + env_tab[ac_env_row, i0 + 1] * f
-        dev = envv * envv - 1.0
+        dev = envv * envv
         if dev != 0.0:
             for k in range(phi.shape[0]):
                 if ac_base[k] != 0.0:
