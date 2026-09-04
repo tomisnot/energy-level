@@ -7,7 +7,7 @@
 3. 弱光 + 微波 → hard
 4. 强光 + 微波（单原子）→ mixed
 5. 强光纯光场 → sambe
-6. 强光两体 → sambe
+6. 强光 + 微波 两体 → mixed（t62 两体混合正式化——5 倍降维）
 """
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -35,8 +35,8 @@ cases = [
      [w('光强', 295.7e6, I=5e7), w('微波', 17236.743)], False, 'mixed'),
     ('强光纯光场 单原子 → sambe',
      [w('光强', 295.7e6, I=5e7)], False, 'sambe'),
-    ('强光 + 微波 两体 → sambe',
-     [w('光强', 295.7e6, I=5e7), w('微波', 17236.743)], True, 'sambe'),
+    ('强光 + 微波 两体 → mixed（5 倍降维）',
+     [w('光强', 295.7e6, I=5e7), w('微波', 17236.743)], True, 'mixed'),
 ]
 
 npass = 0

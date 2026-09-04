@@ -140,6 +140,17 @@ class EvolveWorkerPair(QThread):
                     log=self.log_msg.emit,
                     frozen_h_ns=self.frozen_h_ns,
                     per_freq_M=self.per_freq_M)
+            elif self.method == 'mixed':
+                # t62 两体混合引擎（正式版）——光场光子块 + 微波/V_dd 当场
+                from ..core.evolve_mixed_pair import evolve_mixed_pair
+                res = evolve_mixed_pair(
+                    self.states, self.fields_A, self.fields_B,
+                    self.psi0_A, self.psi0_B,
+                    t_grid=self.t_grid,
+                    vdd_matrix=self.vdd_matrix,
+                    decays_A=self.decays_A, decays_B=self.decays_B,
+                    progress_arr=self.progress_arr,
+                    log=self.log_msg.emit)
             elif self.method != 'hard':
                 # hard 分支已在上方赋值 res；此处排除，避免 pair_evolve 覆盖
                 from ..core import pair_evolve

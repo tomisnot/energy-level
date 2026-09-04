@@ -86,7 +86,12 @@ def route_auto(states, waves, t_grid=None, two_body=False, cache=None):
 
     # 强光近共振：需无 RWA
     if two_body:
-        return ('sambe', '强光近共振 + 两体 → sambe（AC 化降维 M=1，无 RWA）')
+        if mw:
+            # t62 两体混合正式化（evolve_mixed_pair——微波/V_dd 当场，
+            # dim 5 倍降维 1452 vs 全 Sambe 7260）
+            return ('mixed', '强光近共振 + 两体 + 有微波 → mixed 两体'
+                    '（光光子块 + 微波/V_dd 当场，5 倍降维）')
+        return ('sambe', '强光近共振 + 两体纯光 → sambe（AC 化降维 M=1，无 RWA）')
     if mw:
         return ('mixed', '强光近共振 + 有微波 → 混合引擎（光无 RWA + 微波当场）')
     return ('sambe', '强光近共振纯光场 → sambe frozen（无 RWA 精确）')

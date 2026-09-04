@@ -1035,11 +1035,10 @@ class DynamicPanel(QWidget):
                                         cache=self.cache)
             self.main.log(f'auto 路由（两体）→ {method}：{reason}')
         if method == 'mixed':
-            # 两体 mixed（用例 8 dim 1452）未验收前：退回 sambe（全频段
-            # 两体 Sambe 可用）并提示
-            self.main.log('mixed 两体引擎验收中——本次退回 sambe'
-                          '（全频段两体 Sambe）')
-            method = 'sambe'
+            # t62 两体混合引擎（正式版 evolve_mixed_pair——光场光子块 +
+            # 微波/V_dd 当场，φ-帧；dim 1452 = 5 倍降维 vs 全 Sambe）
+            self.main.log('mixed 两体：光场 Sambe 光子块 + 微波/V_dd 当场'
+                          '（φ-帧，dim 5 倍降维）')
         if method == 'hard':
             # t21：pair hard——各原子两场 meta（普通波 build_two_field +
             # ArbitraryWave→arbitrary_mw_group）；V_dd 在主线程预计算
@@ -1059,8 +1058,9 @@ class DynamicPanel(QWidget):
 
             fields_A = _meta(waves_A)
             fields_B = _meta(waves_B)
-        elif method == 'sambe':
-            # 第一性两体（Sambe）：全部偶极对耦合，无近/远分流与静态 AC 注入
+        elif method in ('sambe', 'mixed'):
+            # 第一性两体（Sambe/mixed 都吃 kind='exact' fields——
+            # build_fields_exact；mixed 内部 AC 化远强对 + 当场微波）
             fields_A = waveforms.build_fields_exact(self.cache, states,
                                                     waves_A)
             fields_B = waveforms.build_fields_exact(self.cache, states,
