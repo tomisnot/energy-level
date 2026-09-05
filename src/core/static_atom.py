@@ -71,7 +71,6 @@ AC_NEAR_CUTOFF_MHZ = AC_FAR_DETUNE_CUTOFF_HZ / 1e6   # 同上，MHz（动态引�
 SOS_BASIS_N_MIN = 5                           # 远失谐 SOS 基组的 n 下限
 SOS_BASIS_N_MAX = 100                         # 远失谐 SOS 基组的 n 上限
 
-POLARIZATION_LABELS = ['σ+', 'π', 'σ-']
 POLARIZATION_Q = {'σ+': 1, 'π': 0, 'σ-': -1}
 
 

@@ -14,7 +14,8 @@ from .atomic_levels import gaussian, square, step, make_levels
 from .field_build import (field, group_field, real_field, arbitrary_field,
                           _env_samples, _sublevel_row, _floquet_ac_static,
                           _CONV, _POL_Q, _ENV_SAMPLES, _lifetime_cache)
-from .evolve_rwa import (hamiltonian, _field_geometry, _assign_reference,
+from .field_build import _field_geometry
+from .evolve_rwa import (hamiltonian, _assign_reference,
                          # t19 新名
                          _rwa_reference, _rwa_vtilde_impl, _rwa_vtilde_sp,
                          _rwa_vtilde, _rwa_rk4_core_numpy, _rwa_rk4_core,
@@ -31,7 +32,8 @@ from .evolve_rwa import (hamiltonian, _field_geometry, _assign_reference,
                          _lindblad_rhs, _lindblad_rk4_step, _lindblad_rk4_core,
                          _evolve_lindblad, _onehot, _as_vector, evolve,
                          rwa_error_estimate, group_pops, level_pops,
-                         IP4_RWA_THRESH, _CONV, _POL_Q, _ENV_SAMPLES,
-                         _lifetime_cache)
+                         IP4_RWA_THRESH, _CONV, _POL_Q)
+# t74：公用工具的单一来源是 evolve_util（上列 decay/_as_vector/... 经
+# evolve_rwa 再导出保持兼容）；_ENV_SAMPLES/_lifetime_cache 死副本已删。
 from .evolve_arbitrary import (_arb_interp, _arb_apply, _arb_rk4_core,
                                _evolve_arbitrary, _CONV)

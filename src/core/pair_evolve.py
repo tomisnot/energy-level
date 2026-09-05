@@ -787,7 +787,7 @@ def _scatter_loss_curve(fields, pops_atom, t, N):
         wf = f.get('waveform')
         if wf is None:
             continue
-        env2 = np.array([float(np.asarray(wf(np.atleast_1d(tt))).flat[0])
+        env2 = np.array([env_at(wf, tt)
                          ** 2 for tt in t], float)
         for i in range(N):
             rate = float(sc[i])
@@ -1038,5 +1038,3 @@ def pair_evolve(states, fields_A, fields_B, psi0_A, psi0_B,
 
 # ---- t19 函数级改名兼容别名（旧名 = 新名，外部零改动）----
 _pair_ip4 = _pair_rwa
-_pair_ip4_jit = _pair_rwa_jit
-_pair_rk4_jit = _pair_rwa_rk4_jit

@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
-"""两体驱动引擎（driver.py）——"关注跃迁"(driver) 驱动的 RWA 动力学。
+"""两体驱动引擎（driver.py，2026-09 归档：GUI 从未接线，唯一消费者
+ui_pair.py 一并归档）——"关注跃迁"(driver) 驱动的 RWA 动力学。
 
 设计（driver-centric，见 _misc/two_body_design.md §5）：
   用户选"关注跃迁"(driver)，软件自动分层：
@@ -18,8 +19,7 @@ if sys.stdout is not None:
 import numpy as np
 from scipy.integrate import solve_ivp
 from scipy.constants import epsilon_0, c as C_LIGHT, hbar
-from . import static_atom as core
-from . import pair_core
+from ..core import static_atom as core, pair_core
 
 _CONV = 2 * np.pi * 1e-3            # MHz·ns → 弧度
 

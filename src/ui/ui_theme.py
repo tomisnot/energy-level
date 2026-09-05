@@ -20,8 +20,6 @@ import os
 # ---------------- 主题常量（统一调整入口） ----------------
 FONT_FAMILY = 'Microsoft YaHei'
 FONT_SIZE = '10pt'
-FONT_SIZE_LG = '11pt'
-CHANNEL_COL_W = 124       # 时序/波形编辑器左侧通道列统一宽度（容纳"＋ 添加通道"）
 COL_BG = '#f2f3f5'          # 窗口背景
 COL_PANEL = '#ffffff'       # 面板/输入框背景
 COL_BORDER = '#c9ced6'
@@ -32,7 +30,6 @@ COL_ACCENT = '#7f93a8'      # 焦点/选中
 COL_HEAD = '#edf0f3'        # 表头
 COL_ROW_ALT = '#f7f8fa'     # 交替行
 COL_GRID = '#e4e6ea'
-COL_DANGER = '#c0392b'
 
 _ARROW_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                            'assets', 'down_arrow.png')

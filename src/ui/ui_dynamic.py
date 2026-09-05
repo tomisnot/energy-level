@@ -10,6 +10,7 @@
     演化方法 · 自发辐射 · 运行
 """
 import json
+import time
 
 import numpy as np
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QEvent
@@ -19,7 +20,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
                              QComboBox, QListWidget, QListWidgetItem,
                              QMessageBox, QDialog, QProgressBar, QRadioButton,
                              QButtonGroup, QTabWidget, QFrame, QScrollArea,
-                             QLineEdit)
+                             QLineEdit, QApplication)
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.colors import LogNorm
@@ -166,7 +167,10 @@ class DynamicPanel(QWidget):
         sa_lay.addWidget(self.perfreq_m_edit)
         sa_lay.addStretch(1)
         self._sambe_adv_box.setVisible(False)
-        p.addLayout(sa_lay)
+        # 修复（用户报告 QLayout::addChildLayout 警告）：sa_lay 已是
+        # _sambe_adv_box 的布局，不能重复加进 p——应加的是控件本身。
+        # 旧写法导致该行从未进入面板（双原子+sambe 下不可见）。
+        p.addWidget(self._sambe_adv_box)
 
         # ---- 波形管理：单原子与双原子「原子A」共用同一面板 ----
         # 先在单原子模式校准波形 → 切到双原子时原子 A 原样迁移，无需重配。
@@ -571,18 +575,20 @@ class DynamicPanel(QWidget):
             order = np.arange(len(states))[::-1]
         return list(order[:n])
 
-    def _current_states(self):
+    def _current_states(self, pump=None):
         """动态基组 = 全部子能级（与共用能级表一致，无需选择）：
         低激发态展开超精细 F/mF（用场面板磁场 B），里德堡态保持 mJ。
         能量 = 组中心 + Zeeman(B) + DC-Stark(E)，与静态页/两体页同基准。
-        label 含完整量子数，布居图/g/e 下拉共用。"""
+        label 含完整量子数，布居图/g/e 下拉共用。
+        pump：可选 callable(frac)——每个能级组完成后上报（组内 DC-Stark
+        的 dme/Numerov 首算可能很慢，给 GUI 预处理泵逐组反馈，t72）。"""
         fld = getattr(self.main, 'field', None)
         B = (fld.b_gauss() if fld is not None
              else getattr(self.main, 'field_B', 0.0))
         E_vpcm = (fld.e_vpcm() if fld is not None else 0.0)
         groups = list(self.main_groups)
         specs = []
-        for g in groups:
+        for gi, g in enumerate(groups):
             n, l, j = g['n'], g['l'], g['j']
             hf = core.get_hyperfine_levels(self.cache, n, l, j, B)
             if hf is None:
@@ -602,6 +608,8 @@ class DynamicPanel(QWidget):
                     specs.append(dict(n=n, l=l, j=j, kind='F', F=F, mF=mF,
                                       E_hf=float(e_hf), E_mhz=float(E0),
                                       amps=amps))
+            if pump is not None:
+                pump((gi + 1) / max(len(groups), 1))
         return evolve.make_levels(self.cache, specs)
 
     # ---------- 波形数据 ----------
@@ -786,47 +794,110 @@ class DynamicPanel(QWidget):
         if not self.main_groups:
             QMessageBox.information(self, '提示', '请先在主程序添加能级组。')
             return
-        states = self._current_states()
-        # 无波形时须有实际耗散/自动通道，否则就是空演化 → 提示
-        has_effect = self._has_waves()
-        if not has_effect:
+        # t72 进度协议（engines 经 coupling.stage_progress 写入，GUI 映射）：
+        #   prog[2]=阶段（0 准备 1 积分 2 收尾）、prog[0]=阶段内进度 0..1、
+        #   prog[1]=取消标志。定时器在主线程预处理（基组/场/V_dd）之前启动，
+        #   配合 _prep 的 processEvents 泵——预处理期间对话框同样显示阶段、
+        #   进度与耗时，且可取消（此前 V_dd 等长预处理完全无反馈）。
+        self.progress_arr = np.zeros(3)
+        self._run_active = True
+        self._prep_label = '准备'
+        self._run_t0 = time.perf_counter()
+        # 对话框控件先置 None——轮询定时器（100ms）先于对话框定时器
+        # （400ms）触发，_poll_progress 需要这些属性已存在（缺失会变成
+        # Qt 槽内 AttributeError → PyQt qFatal → 原生崩溃，无 Python 回溯）
+        self._dlg = None
+        self._pbar = None
+        self._stage_label = None
+        self.run_btn.setEnabled(False)
+        self._dlg_timer = QTimer(self)
+        self._dlg_timer.setSingleShot(True)
+        self._dlg_timer.timeout.connect(self._show_progress)
+        self._dlg_timer.start(400)
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._poll_progress)
+        self._timer.start(100)
+        try:
+            states = self._current_states(
+                pump=lambda f: self._prep('构建基组/子能级', 0.6 * f))
+            self._prep('基组就绪', 0.65)
+            # 无波形时须有实际耗散/自动通道，否则就是空演化 → 提示
+            has_effect = self._has_waves()
+            if not has_effect:
+                mode = self._decay_mode()
+                if mode == 'custom':
+                    has_effect = bool(self.decay_cfgs)
+                elif mode == 'auto':
+                    # 门槛只做廉价判断（基组是否含低激发态），不触发 ARC 寿命计算：
+                    # 此处的 auto_decays 曾致 Qt 原生堆损坏（0xC0000005，tab 切换后
+                    # 确定性复现；与百度网盘无关，网盘关闭后依然崩）。
+                    # auto_decays 仅在真正运行时计算一次。
+                    has_effect = any(s['n'] <= 15 for s in states)
+            if not has_effect:
+                QMessageBox.information(
+                    self, '提示',
+                    '请先在下方波形区添加光波形（频率/光强/包络），'
+                    '或开启/配置自发辐射（自动档需基组含 6P 等低激发态），'
+                    '再运行演化。')
+                return
             mode = self._decay_mode()
             if mode == 'custom':
-                has_effect = bool(self.decay_cfgs)
+                decays = self._resolve_decay_cfgs(states)
             elif mode == 'auto':
-                # 门槛只做廉价判断（基组是否含低激发态），不触发 ARC 寿命计算：
-                # 此处的 auto_decays 曾致 Qt 原生堆损坏（0xC0000005，tab 切换后
-                # 确定性复现；与百度网盘无关，网盘关闭后依然崩）。
-                # auto_decays 仅在真正运行时计算一次。
-                has_effect = any(s['n'] <= 15 for s in states)
-        if not has_effect:
-            QMessageBox.information(
-                self, '提示',
-                '请先在下方波形区添加光波形（频率/光强/包络），'
-                '或开启/配置自发辐射（自动档需基组含 6P 等低激发态），'
-                '再运行演化。')
-            return
-        mode = self._decay_mode()
-        if mode == 'custom':
-            decays = self._resolve_decay_cfgs(states)
-        elif mode == 'auto':
-            decays = evolve.auto_decays(self.cache, states)
-            if decays:
-                self.main.log(f'[动态] 自动自发辐射：{len(decays)} 通道'
-                              '（Γ=1/τ(ARC)，τ≤100µs，落点=丢失）')
-        else:
-            decays = []
-        t = np.linspace(0, self.tmax_sb.value(), self.npts_sb.value())
-        self._run_states = states
-        # t28：prog 3 元素——[0]=全程进度(0-1)、[1]=取消标志、[2]=阶段
-        # （0=准备/JIT、1=积分[driver 写 t/T]、2=收尾）；hard 的 JIT 装载
-        # ~19s 期间进度条不再死 0%（阶段标签提示）。
-        self.progress_arr = np.zeros(3)
+                self._prep('自动自发辐射（ARC 寿命）', 0.8)
+                decays = evolve.auto_decays(self.cache, states)
+                if decays:
+                    self.main.log(f'[动态] 自动自发辐射：{len(decays)} 通道'
+                                  '（Γ=1/τ(ARC)，τ≤100µs，落点=丢失）')
+            else:
+                decays = []
+            t = np.linspace(0, self.tmax_sb.value(), self.npts_sb.value())
+            self._run_states = states
 
-        if self._is_two_body:
-            self._run_two_body(states, t)
-        else:
-            self._run_single_body(states, t, decays)
+            if self._is_two_body:
+                self._run_two_body(states, t)
+            else:
+                self._run_single_body(states, t, decays)
+        except RuntimeError as e:
+            # 主线程预处理被取消（_prep 泵检测 prog[1]≠0）；worker 内的
+            # 取消走 done('cancelled') 信号，不经此处。
+            if '取消' in str(e):
+                return
+            raise
+        finally:
+            # worker 已启动（_worker 非 None）时定时器/对话框由 done 回调收尾；
+            # 其余返回路径（提示/取消/异常）在此统一清理。
+            if getattr(self, '_worker', None) is None:
+                self._finish_run_ui()
+
+    def _prep(self, label, frac):
+        """主线程预处理进度泵（t72）：写阶段 0 进度 + 泵事件 + 取消检查。
+
+        processEvents 让 400ms 对话框定时器/100ms 轮询定时器/重绘在长
+        预处理（dme 查询、V_dd 构建）期间照常运行——否则主线程阻塞，
+        对话框出不来、取消点不动。"""
+        pa = self.progress_arr
+        self._prep_label = label
+        pa[2] = 0.0
+        pa[0] = min(max(float(frac), 0.0), 1.0)
+        QApplication.processEvents()
+        if pa[1] != 0.0:
+            raise RuntimeError('用户取消')
+
+    def _finish_run_ui(self):
+        """运行结束（完成/失败/取消/预处理中止）统一的 UI 收尾。"""
+        if getattr(self, '_dlg_timer', None) is not None:
+            self._dlg_timer.stop()
+        if getattr(self, '_timer', None) is not None:
+            self._timer.stop()
+        if getattr(self, '_dlg', None) is not None:
+            self._dlg.close()
+        self._dlg = None
+        self._pbar = None
+        self._stage_label = None
+        self._run_active = False
+        self._worker = None
+        self.run_btn.setEnabled(True)
 
     def _field_B(self):
         """动态演化的磁场（从主窗口场面板取，供 Floquet AC 位移后端）。"""
@@ -950,18 +1021,23 @@ class DynamicPanel(QWidget):
         self._redraw_last()
 
     def _redraw_last(self):
-        """按当前显示选项重绘最近一次结果（无结果则不动）。"""
+        """按当前显示选项重绘最近一次结果（无结果则不动）。
+
+        修复（用户报告 KeyError: 'pops'）：按**结果自身的键**分派
+        （pops_2d=两体 / pops=单原子）——运行后切换单/双原子模式或恢复
+        存档时，_last_res 与当前 _is_two_body 可能不一致，旧逻辑按当前
+        模式取键会 KeyError；结果与模式不符时按其自身类型重绘。"""
         res = getattr(self, '_last_res', None)
         if res is None:
             return
         states = getattr(self, '_run_states', None)
-        if self._is_two_body:
+        if 'pops_2d' in res:
             self._draw_bot_pair(res)
-        elif states is not None:
+        elif 'pops' in res and states is not None:
             self._draw_bot(states, res)
 
     def _run_single_body(self, states, t, decays):
-        """单原子演化路径。"""
+        """单原子演化路径（定时器/对话框已在 _run 启动）。"""
         waves = list(self.wave_panel.waves)
         method = self.method_cb.currentText()
         # t71：mixed 需光场且不支持任意波形——无光场/含任意波自动降级 hard
@@ -974,6 +1050,7 @@ class DynamicPanel(QWidget):
                 self.main.log('mixed 需光场且不支持任意波形'
                               '（纯微波/任意波 → 自动改用 hard）')
                 method = 'hard'
+        self._prep('构造驱动场', 0.85)
         if method == 'sambe':
             # 第一性原理场（Sambe 光子块）：全部偶极对耦合，无近/远分流与
             # 静态 AC 注入（原 'exact' 更名，引擎 evolve_sambe）
@@ -1002,15 +1079,7 @@ class DynamicPanel(QWidget):
         self.wave_data = waveforms.waveforms_to_env(waves, t)
         psi0 = self.psi_combo.currentIndex()
 
-        self._dlg = None; self._pbar = None
-        self._dlg_timer = QTimer(self)
-        self._dlg_timer.setSingleShot(True)
-        self._dlg_timer.timeout.connect(self._show_progress)
-        self._dlg_timer.start(400)
-        self._timer = QTimer(self)
-        self._timer.timeout.connect(self._poll_progress)
-        self._timer.start(100)
-
+        self._prep('驱动场就绪', 1.0)
         self._worker = EvolveWorker(states, fields, psi0, t,
                                      method,
                                      'auto',
@@ -1020,7 +1089,7 @@ class DynamicPanel(QWidget):
         self._worker.start()
 
     def _run_two_body(self, states, t):
-        """双原子演化路径（后台线程）。"""
+        """双原子演化路径（后台线程；定时器/对话框已在 _run 启动）。"""
         waves_A = list(self.wave_panel_A.waves)
         waves_B = list(self.wave_panel_B.waves)
         method = self.method_cb.currentText()
@@ -1042,14 +1111,18 @@ class DynamicPanel(QWidget):
                           '（φ-帧，dim 5 倍降维）')
             # 第一性两体（mixed 吃 kind='exact' fields——build_fields_exact；
             # mixed 内部 AC 化远强对 + 当场微波）
+            self._prep('构造驱动场 A', 0.82)
             fields_A = waveforms.build_fields_exact(self.cache, states,
                                                     waves_A)
+            self._prep('构造驱动场 B', 0.87)
             fields_B = waveforms.build_fields_exact(self.cache, states,
                                                     waves_B)
         elif method == 'sambe':
             # 第一性两体（Sambe 吃 kind='exact' fields）
+            self._prep('构造驱动场 A', 0.82)
             fields_A = waveforms.build_fields_exact(self.cache, states,
                                                     waves_A)
+            self._prep('构造驱动场 B', 0.87)
             fields_B = waveforms.build_fields_exact(self.cache, states,
                                                     waves_B)
         else:
@@ -1057,6 +1130,7 @@ class DynamicPanel(QWidget):
             # ArbitraryWave→arbitrary_mw_group）；V_dd 在主线程预计算
             from ..core.evolve_twofield import (build_two_field,
                                                 arbitrary_mw_group)
+            self._prep('构造驱动场 A', 0.82)
 
             def _meta(wvs):
                 reg = [w for w in wvs
@@ -1070,6 +1144,7 @@ class DynamicPanel(QWidget):
                 return m
 
             fields_A = _meta(waves_A)
+            self._prep('构造驱动场 B', 0.87)
             fields_B = _meta(waves_B)
         # 波形预览：合并 A+B
         env_A = waveforms.waveforms_to_env(waves_A, t)
@@ -1086,6 +1161,7 @@ class DynamicPanel(QWidget):
 
         # ---- 自发辐射（寿命通道 v1：单原子 decay 列表，两原子共用 states）----
         # 在**主线程**构建：auto 档调 ARC getStateLifetime（SQLite 线程安全约束）。
+        self._prep('配置自发辐射', 0.9)
         decays_A = decays_B = None
         mode = self.decay_mode_cb.currentIndex()
         if mode == 0:                       # 自动（ARC 寿命，落点=丢失）
@@ -1121,20 +1197,15 @@ class DynamicPanel(QWidget):
         # 基组顺序 = 实际演化所用 states 顺序（与 pair_evolve 内部一致）。
         self.main.log(f'[双原子] 预计算 V_dd（R={R_um:g} μm, '
                       f'θ={theta_deg:g}°, φ={phi_deg:g}°）…')
+        # t72：progress 回调逐行上报（首次构建含 dme 查询/Numerov 计算，
+        # 可能几十秒——泵进程让对话框显示进度并保持可取消）
         vdd_matrix = pair_core.vdd_sparse(
             self.cache, [dict(s) for s in states],
-            R_um, theta_deg, phi_deg)
+            R_um, theta_deg, phi_deg,
+            progress=lambda f: self._prep('预计算 V_dd', 0.9 + 0.09 * f))
+        self._prep('V_dd 就绪', 1.0)
         n_dd = vdd_matrix.nnz
         self.main.log(f'[双原子] V_dd 非零元 {n_dd} 个，开始演化…')
-
-        self._dlg = None; self._pbar = None
-        self._dlg_timer = QTimer(self)
-        self._dlg_timer.setSingleShot(True)
-        self._dlg_timer.timeout.connect(self._show_progress)
-        self._dlg_timer.start(400)
-        self._timer = QTimer(self)
-        self._timer.timeout.connect(self._poll_progress)
-        self._timer.start(100)
 
         from .evolve_worker import EvolveWorkerPair
         # t26：外部后端已退役归档（checks/_archive/）——
@@ -1150,14 +1221,13 @@ class DynamicPanel(QWidget):
             method=method,
             per_freq_M=per_freq_M, frozen_h_ns=frozen_h)
         self._worker._cache_ref = self.cache
-        self._worker._B_gauss = self._field_B()
         self._worker.done.connect(self._on_pair_evolve_done)
         self._worker.log_msg.connect(self.main.log)
         self._worker.start()
 
     def _show_progress(self):
-        """延迟显示进度对话框（仅当计算仍在进行时）。"""
-        if getattr(self, '_worker', None) is None or not self._worker.isRunning():
+        """延迟显示进度对话框（仅当本轮运行仍在进行时——含主线程预处理）。"""
+        if not getattr(self, '_run_active', False):
             return
         dlg = QDialog(self)
         dlg.setWindowTitle('演化')
@@ -1183,30 +1253,36 @@ class DynamicPanel(QWidget):
             self._dlg.setWindowTitle('正在取消…')
 
     def _poll_progress(self):
-        """轮询进度数组更新进度条 + 阶段标签（t28：阶段化覆盖 hard 的
-        JIT 装载/积分/收尾全程——准备 5%、积分 5→95%、收尾 95%）。"""
+        """轮询进度数组（t72 阶段协议：prog[2]=0 准备/1 积分/2 收尾，
+        prog[0]=阶段内进度）：
+        - 准备（含 JIT 编译/装载与主线程 V_dd/基组）条 0→5%，标签带墙钟
+          耗时——JIT 编译本身无内部进度，耗时数字即活性；
+        - 积分条 5→95%（driver 逐步写 t/T；nogil 后轮询不再被编译内核
+          饿死——修复前 GIL 被 njit 持有，整段积分进度条纹丝不动且取消
+          按钮无响应）；
+        - 收尾（跨扇区投影/loss/约化）条 95→100%。"""
         pa = self.progress_arr
         stage = int(pa[2]) if len(pa) > 2 else 0
-        p0 = float(pa[0])
+        p0 = min(max(float(pa[0]), 0.0), 1.0)
+        el = time.perf_counter() - getattr(self, '_run_t0',
+                                           time.perf_counter())
         if stage == 2:
-            val, lab = 950, '收尾…'
-        elif p0 >= 0.002:                       # 积分中（driver 写 t/T）
-            val, lab = int(50 + 900 * p0), f'积分 {min(int(100 * p0), 100)}%'
+            val = 950 + int(50 * p0)
+            lab = f'收尾…（{el:.0f}s）'
+        elif stage == 1:
+            val = 50 + int(900 * p0)
+            lab = f'积分 {min(int(100 * p0), 100)}%'
         else:
-            val, lab = 50, 'JIT 编译/准备…'
-        if self._pbar is not None:
+            lab = getattr(self, '_prep_label', '') or '准备/JIT 编译'
+            val = int(50 * p0)
+            lab = f'{lab}…（{el:.0f}s）'
+        if getattr(self, '_pbar', None) is not None:
             self._pbar.setValue(val)
         if getattr(self, '_stage_label', None) is not None:
             self._stage_label.setText(lab)
 
     def _on_evolve_done(self, res, error):
-        self._dlg_timer.stop()
-        self._timer.stop()
-        if self._dlg is not None:
-            self._dlg.close()
-            self._dlg = None
-            self._pbar = None
-        self._worker = None
+        self._finish_run_ui()
         if error == 'cancelled':
             return                                  # 静默（用户主动取消）
         if error is not None:
@@ -1223,12 +1299,7 @@ class DynamicPanel(QWidget):
 
     def _on_pair_evolve_done(self, res, error):
         """双原子演化完成回调。"""
-        self._dlg_timer.stop()
-        self._timer.stop()
-        if self._dlg is not None:
-            self._dlg.close()
-            self._dlg = None; self._pbar = None
-        self._worker = None
+        self._finish_run_ui()
         if error == 'cancelled':
             return
         if error is not None:

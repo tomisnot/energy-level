@@ -13,76 +13,12 @@ try:
 except Exception:
     _njit = None
 
-_CONV = 2 * np.pi * 1e-3            # MHz·ns → rad
-_POL_Q = {'π': 0, 'σ+': +1, 'σ-': -1}
+from .evolve_util import _CONV             # t74：常量单源
+from .evolve_util import (_POL_Q, _onehot, _as_vector, decay, auto_decays,
+                          _resolve_state_idx, _decay_ops)  # t74 工具归位
+from .field_build import _field_geometry  # t74：ip4 场格式归一归位场层
 # 光频/微波分界：Ω/ωL < 此值 → RWA（反旋转误差 ~1e-7）；≥ → 非 RWA
 IP4_RWA_THRESH = 1e-4
-# 包络恒常判定采样点数
-_ENV_SAMPLES = 64
-# 上态总衰变率缓存（(n,l,j) → Γ MHz；远失谐散射损失用）
-_lifetime_cache = {}
-
-
-def _field_geometry(states, f):
-    """解析光场 → dict(A, g_idx, e_idx, omega0_mhz, omega_L_mhz, waveform)。"""
-    N = len(states)
-    if f['kind'] == 'multi':
-        # 多对驱动 + 对角位移统一算符：M = A + diag(ac)（Pulser 范式）。
-        # omega0=1 → 组装 H += env·M；A/ac_shift 保留供 ip4 稀疏优化与诊断。
-        M = f.get('M')
-        if M is None:                      # 旧格式兼容（只有 A 无 M）
-            M = f['A'] + np.diag(np.asarray(f.get('ac_shift', np.zeros(N)), float))
-        A = f.get('A')
-        if A is None:
-            A = M.copy()
-            np.fill_diagonal(A, 0.0)
-        ac = np.asarray(f.get('ac_shift', np.diag(M).real), float)
-        return dict(M=M, A=A, ac_shift=ac,
-                    g_idx=f['g_idx'], e_idx=f['e_idx'],
-                    omega0_mhz=1.0, real_omega0_mhz=float(np.abs(A).max()),
-                    omega_L_mhz=f['omega_L_mhz'],
-                    waveform=f['waveform'])
-    if f['kind'] == 'pair':
-        g, e = int(f['g']), int(f['e'])
-        Eg, Ee = states[g]['E_mhz'], states[e]['E_mhz']
-        if Eg <= Ee:
-            g_idx, e_idx = [g], [e]
-        else:
-            g_idx, e_idx = [e], [g]
-            Eg, Ee = Ee, Eg
-        A = np.zeros((N, N))
-        A[g_idx[0], e_idx[0]] = A[e_idx[0], g_idx[0]] = 1.0
-    else:
-        cache = f['cache']
-        ga, gb = f['group_a'], f['group_b']
-        q = _POL_Q.get(f['pol'], 0)
-        idx_a = [i for i, s in enumerate(states)
-                 if (s['n'], s['l'], s['j']) == (ga['n'], ga['l'], ga['j'])]
-        idx_b = [i for i, s in enumerate(states)
-                 if (s['n'], s['l'], s['j']) == (gb['n'], gb['l'], gb['j'])]
-        Ea = cache.E_mhz(int(ga['n']), int(ga['l']), float(ga['j']))
-        Eb = cache.E_mhz(int(gb['n']), int(gb['l']), float(gb['j']))
-        if Ea <= Eb:
-            g_idx, e_idx, Eg, Ee = idx_a, idx_b, Ea, Eb
-        else:
-            g_idx, e_idx, Eg, Ee = idx_b, idx_a, Eb, Ea
-        M = np.zeros((len(g_idx), len(e_idx)))
-        for ia, i in enumerate(g_idx):
-            for ib, j in enumerate(e_idx):
-                M[ia, ib] = abs(core.dipole_amplitude(
-                    cache, _sublevel_row(states[i]), _sublevel_row(states[j]),
-                    q))
-        mx = M.max()
-        if mx > 0:
-            M = M / mx
-        A = np.zeros((N, N))
-        for ia, i in enumerate(g_idx):
-            for ib, j in enumerate(e_idx):
-                A[i, j] = A[j, i] = M[ia, ib]
-    omega_L = (Ee - Eg) + float(f['detune_mhz'])
-    return dict(M=A.copy(), A=A, ac_shift=np.zeros(N),
-                g_idx=g_idx, e_idx=e_idx, omega0_mhz=f['omega0_mhz'],
-                omega_L_mhz=omega_L, waveform=f['waveform'])
 
 
 def _assign_reference(states, fields):
@@ -617,64 +553,6 @@ def _evolve_rwa(E, states, fields, psi0, t, frac=40.0, record_amp=False,
 # ============================================================
 # 算法 3：Lindblad 主方程（自发辐射等马尔可夫耗散，第一性原理）
 # ============================================================
-def decay(g, gamma_mhz, e=None):
-    """衰变通道工厂 → {'from': g, 'to': e, 'gamma_mhz': Γ}。
-
-    物理：跳变算符 L = √Γ |e⟩⟨g|（Lindblad），Γ 单位 MHz；时间单位 ns，
-    速率 = Γ×1e-3 /ns（与 tempsimu 的 2π 修复一致，L 不需乘 2π）。
-    g  ：衰变态（states 索引 | (n,l,j,m) | dict(n,l,j,m)）
-    e  ：落点（同上；None → 丢失：布居离开建模空间，累积为结果 loss）
-    g==e：纯退相（|g⟩⟨g| 型测量算符，相干衰减速率 Γ/2，布居不变）
-    """
-    return {'from': g, 'to': e, 'gamma_mhz': float(gamma_mhz)}
-
-
-def auto_decays(cache, states, tau_max_s=1e-4, temperature=0.0):
-    """按 ARC 权威寿命自动配置自发辐射（Γ = 1/τ，落点 = 丢失）。
-
-    对基组里每个态查 ARC `getStateLifetime(n,l,j,temperature)`——权威数据
-    （由偶极矩阵元对全部下能级求和得到），比逐通道算 A 系数更精准便捷。
-    只含寿命 τ ≤ tau_max_s 的态（默认 100 µs：5P/6S/6P/4D 等低激发态；
-    排除里德堡 ~0.1 ms+ 的慢自发衰变——需要里德堡/黑体辐射时请用自定义）。
-    每组 (n,l,j) 的每个子能级各一条通道（自发辐射率对 F/mJ 子能级相同）。
-    temperature=0 → 纯自发辐射（不含黑体）；返回 decay() 列表。
-    """
-    out = []
-    for i, s in enumerate(states):
-        try:
-            tau = cache.atom.getStateLifetime(int(s['n']), int(s['l']),
-                                              float(s['j']),
-                                              temperature=float(temperature))
-        except Exception:
-            continue                                   # 查不到 → 跳过
-        if tau is None or not np.isfinite(float(tau)) \
-                or float(tau) > tau_max_s:
-            continue
-        gam = 1e-6 / float(tau)                        # s⁻¹ → MHz
-        if gam >= 1e-6:
-            out.append(decay(i, gam, None))
-    return out
-
-
-def _resolve_state_idx(states, key):
-    """能级定位：索引 | (n,l,j,m) | dict(n,l,j,m) → 下标；None → None。"""
-    if key is None:
-        return None
-    if isinstance(key, (int, np.integer)):
-        i = int(key)
-        if not (0 <= i < len(states)):
-            raise ValueError(f'能级索引 {i} 越界（N={len(states)}）')
-        return i
-    if isinstance(key, dict):
-        key = (key['n'], key['l'], key['j'], key['m'])
-    n, l, j, m = key
-    for i, s in enumerate(states):
-        if (abs(s['n'] - n) < 1e-9 and abs(s['l'] - l) < 1e-9
-                and abs(s['j'] - j) < 1e-9 and abs(s['m'] - m) < 1e-9):
-            return i
-    raise ValueError(f'衰变端点 {key} 不在能级列表中')
-
-
 def _e_rot(E, ref_arr, states, rwa_g, non_g):
     """旋转系对角能（与 ip4 同款归一）：旁观态（无耦合）归零、
     耦合态减共同参考——避免光频量级 E_rot 使相位/步长爆炸。"""
@@ -1212,38 +1090,6 @@ def _evolve_reference_hybrid(E, states, fields, psi0, t, record_amp, thresh=1e-4
 # ============================================================
 # 初态与向量工具
 # ============================================================
-def _onehot(N, i):
-    v = np.zeros(N, complex)
-    v[i] = 1.0
-    return v
-
-
-def _as_vector(states, psi0):
-    """初态 → 复向量。psi0 为：索引 | (n,l,j,m) | dict(n,l,j,m) | 复数组。"""
-    N = len(states)
-    if isinstance(psi0, np.ndarray):
-        v = np.asarray(psi0, complex)
-        if v.shape != (N,):
-            raise ValueError(f'初态向量形状应为 ({N},)，实际 {v.shape}')
-        return v
-    if isinstance(psi0, (int, np.integer)):
-        return _onehot(N, int(psi0))
-    if isinstance(psi0, dict):
-        psi0 = (psi0['n'], psi0['l'], psi0['j'], psi0['m'])
-    if isinstance(psi0, (tuple, list)):
-        if len(psi0) == N:
-            return np.asarray(psi0, complex)
-        if len(psi0) == 4:
-            n, l, j, m = psi0
-            for i, s in enumerate(states):
-                if (abs(s['n'] - n) < 1e-9 and abs(s['l'] - l) < 1e-9
-                        and abs(s['j'] - j) < 1e-9 and abs(s['m'] - m) < 1e-9):
-                    return _onehot(N, i)
-            raise ValueError(f'初态 (n,l,j,m)={psi0} 不在能级列表中')
-        raise ValueError(f'无法解析初态 psi0: {psi0}')
-    raise ValueError(f'无法解析初态 psi0: {psi0}')
-
-
 def evolve(states, fields, psi0, t_grid, method='auto', backend='auto',
            record_amp=False, ac_shift_mhz=None, ip4_frac=20.0,
            progress_arr=None, log=None, decays=None, tol=None):

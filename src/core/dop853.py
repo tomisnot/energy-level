@@ -9,7 +9,7 @@ rhs 为任意 njit 编译的 RHS 回调（单体/两体通用）。
 - 系数（_A/_C/_B/_E3/_E5/_D）：**直接复用 hard**（scipy 1.15.2 逐行
   移植、2.9e-10 基线验证，t19：hard_numba→hard）——禁止手写重建
   （曾因手写系数 54 处错误）。
-- _rms_norm / _env_at / _env_tab  ：包络查表与范数（纯工具）
+- _rms_norm                 ：范数（纯工具；_env_at/_env_tab 单源在 hard.py）
 - _dop853_step / _dop853_dense_interp：单步与稠密插值（与 RHS 参数化解耦）
 - _dop853_driver                       ：主循环（rhs 参数化）
 
@@ -23,7 +23,7 @@ from .hard import _A, _C, _B, _E3, _E5, _D, _TAB_N  # 复用已验证系数
 _np = np
 
 
-@njit(cache=True)
+@njit(cache=True, nogil=True)
 def _rms_norm(x):
     """RMS 范数 sqrt(Σ|x|²/n)（scipy norm 移植）。"""
     n = x.size
@@ -33,27 +33,7 @@ def _rms_norm(x):
     return _np.sqrt(s / n)
 
 
-@njit(cache=True)
-def _env_at(tab, t, t0, dt):
-    """包络查表（均匀网格线性插值，t 绝对时间）。"""
-    x = (t - t0) / dt
-    i0 = int(x)
-    n = tab.size
-    if i0 < 0:
-        return tab[0]
-    if i0 >= n - 1:
-        return tab[n - 1]
-    f = x - i0
-    return tab[i0] * (1.0 - f) + tab[i0 + 1] * f
-
-
-def _env_tab(wf, T, n_pts=_TAB_N):
-    """包络在 [0,T] 均匀网格采样表（wf 为绝对时间 callable）。"""
-    ts = _np.linspace(0.0, float(T), n_pts)
-    return _np.asarray(wf(ts), float)
-
-
-@njit(cache=True)
+@njit(cache=True, nogil=True)
 def _dop853_step(t, y, f, h, K, rhs, *rargs):
     """单步：12 级显式 RK（rhs 为 njit 回调，rargs 为其附加参数）。"""
     n = y.size
@@ -83,7 +63,7 @@ def _dop853_step(t, y, f, h, K, rhs, *rargs):
     return y_new, f_new
 
 
-@njit(cache=True)
+@njit(cache=True, nogil=True)
 def _dop853_dense_interp(y_old, y_new, f_old, f_new, K, t_old, h, x,
                          rhs, *rargs):
     """Hairer contd8 稠密输出：补算 13..15 级 + 7 次多项式插值（scipy 移植，
@@ -126,7 +106,7 @@ def _dop853_dense_interp(y_old, y_new, f_old, f_new, K, t_old, h, x,
     return y
 
 
-@njit(cache=True)
+@njit(cache=True, nogil=True)
 def _dop853_driver(rhs, y0, t_eval, T, rtol, atol, max_step, prog, stat,
                    *rargs):
     """scipy solve_ivp(DOP853) 主循环的 numba 移植（rhs 参数化，任意 N）。
@@ -189,6 +169,18 @@ def _dop853_driver(rhs, y0, t_eval, T, rtol, atol, max_step, prog, stat,
 
     # ---- 主循环 ----
     t = t0
+    # t72 进度映射：自适应步长下 t/T 与墙钟严重不符（stiff 脉冲区步长比
+    # 自由区小 1-2 个量级 → 条在 stiff 区爬、末段瞬间冲满）。nogil 内核
+    # 中每次 RHS 求值开销恒定 → nfev ∝ 墙钟。用平滑的局部求值密度 rate
+    # （RHS 次数/模拟时间，EMA 0.7/0.3）外推剩余求值数：
+    #     p = nfev / (nfev + rate·(T−t))
+    # 条的移动速度跟随真实墙钟速度，未来变贵/变便宜时自动减速/加速；
+    # p 单调不减（钳制）、封顶 0.999（收尾阶段接管最后一段）。
+    rate_est = 0.0
+    prev_t = 0.0
+    prev_nfev = 1
+    p_max = 0.0
+    stage_set = False
     while t < T and i_eval < n_eval:
         step_accepted = False
         step_rejected = False
@@ -234,7 +226,29 @@ def _dop853_driver(rhs, y0, t_eval, T, rtol, atol, max_step, prog, stat,
                 n_rej += 1
         h_step = h
         n_acc += 1
-        prog[0] = min(t_new / T, 0.999)
+        # t72：首个接受步后置阶段=1（积分）——驱动调用内的 numba 装载/
+        # 编译期保持调用侧的阶段 0（"准备"标签 + 墙钟耗时），GUI 不失真
+        if (not stage_set) and prog.shape[0] > 2:
+            prog[2] = 1.0
+            stage_set = True
+        # t72：预测剩余工作量的进度映射（见循环前注释）
+        dt_loc = t_new - prev_t
+        if dt_loc > 0.0:
+            inst = (nfev - prev_nfev) / dt_loc
+            if rate_est == 0.0:
+                rate_est = inst
+            else:
+                rate_est = 0.7 * rate_est + 0.3 * inst
+        prev_t = t_new
+        prev_nfev = nfev
+        denom = nfev + rate_est * (T - t_new)
+        p_now = nfev / denom if denom > 0.0 else 0.0
+        if p_now > 0.999:
+            p_now = 0.999
+        if p_now < p_max:
+            p_now = p_max
+        p_max = p_now
+        prog[0] = p_now
         # t21：取消支持——GUI 置 prog[1]≠0 时抛 RuntimeError（numba njit 内
         # raise 已验证兼容），上层（worker）按 progress_arr[1]≠0 → 'cancelled'
         if prog[1] != 0.0:
@@ -266,11 +280,3 @@ def _dop853_driver(rhs, y0, t_eval, T, rtol, atol, max_step, prog, stat,
     stat[2] = n_rej
     stat[3] = n_dense
     return y_out
-
-
-def make_driver(rhs_njit):
-    """生成绑定 RHS 的驱动闭包（numba first-class 函数参数已在 njit 层支持，
-    此包装仅为调用方提供简洁接口）。"""
-    return lambda y0, t_eval, T, rtol, atol, max_step, prog, stat, *rargs: \
-        _dop853_driver(rhs_njit, y0, t_eval, T, rtol, atol, max_step,
-                       prog, stat, *rargs)

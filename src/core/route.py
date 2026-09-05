@@ -95,9 +95,3 @@ def route_auto(states, waves, t_grid=None, two_body=False, cache=None):
     if mw:
         return ('mixed', '强光近共振 + 有微波 → 混合引擎（光无 RWA + 微波当场）')
     return ('sambe', '强光近共振纯光场 → sambe frozen（无 RWA 精确）')
-
-
-def route_method_label(method):
-    """method → GUI 显示文案（auto 分支用）。"""
-    labels = {'hard': 'hard', 'sambe': 'sambe', 'mixed': 'mixed'}
-    return labels.get(method, method)

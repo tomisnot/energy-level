@@ -192,7 +192,18 @@ Rabi。设置时优先用波形辅助区"定光强/定频率"按目标 Ω/Δ 反
 
 1. 设置好波形/初态/时间范围（**t_max (ns)** 与 **点数**）/方法/显示选项；
 2. 点 **「运行演化」**；
-3. 弹出进度对话框：阶段标签（JIT 编译/准备 → 积分 → 收尾）+ 进度条 + **「取消」**；
+3. 弹出进度对话框：阶段标签（**准备 → 积分 → 收尾**）+ 进度条 + **「取消」**。
+   进度条按阶段映射（准备 0–5% / 积分 5–95% / 收尾 95–100%），且每个阶段
+   内部都有细粒度进度（t72）：
+   - **准备**（主线程预处理 + JIT）：基组构建逐能级组、驱动场逐原子、
+     双原子 V_dd 预计算**逐行**上报并可取消；numba JIT 编译/装载本身无
+     内部进度，标签附带的**墙钟耗时**即活性指示；
+   - **积分**：DOP853 内核逐步上报。进度按**预测剩余积分工作量**映射
+     （平滑的局部求值密度 × 剩余模拟时间）——自适应步长下比裸 t/T 更
+     贴近真实墙钟（stiff 脉冲区步长可比自由区小 1–2 个量级）；积分内核
+     全程释放 GIL（nogil），进度与「取消」在积分期间实时响应（修复前
+     njit 持有 GIL，整段积分进度条纹丝不动、取消按钮无响应）；
+   - **收尾**：跨扇区投影 / loss / 约化布居逐点上报；
 4. 完成自动关闭；失败会弹「演化失败」并建议降低光强/调整失谐/减小 t_max；
 5. 结果即时画在顶部（波形包络）与底部（布居/荧光曲线；有耗散时叠加 loss 虚线）。
 
@@ -239,7 +250,7 @@ Rabi。设置时优先用波形辅助区"定光强/定频率"按目标 Ω/Δ 反
 - **采样点数**：点数只管输出曲线密度；积分步长由 DOP853/自适应内部决定，不必担心
   点数太少导致不精确（只要别少到看不见振荡）。
 - **双原子 V_dd 预计算**：运行前软件会在主线程预计算 V_dd 稀疏矩阵并打印非零元数——
-  大基组下这一步要等一会儿属正常。
+  大基组下这一步要等一会儿属正常（t72 起该阶段在进度对话框内逐行显示进度，且可取消）。
 
 ---
 
@@ -709,22 +720,31 @@ src/
 │   ├── atomic_levels.py  # 能级构造 make_levels（states 列表）
 │   ├── field_build.py    # 场构造（field/group_field/real_field/arbitrary_field）
 │   ├── waveforms.py      # 波形数据层（Wave/GaussianEnv/SquareEnv/ArbitraryWave）
-│   ├── evolve_rwa.py     # 单原子 RWA 主引擎（evolve() 入口 / ip4 / Lindblad）
+│   ├── sambe.py          # Sambe 引擎总模块（t74：核心层+单体引擎+两体引擎
+│   │                     #   合一；原 evolve_sambe/evolve_sambe_pair 并入，
+│   │                     #   旧文件名留一行兼容 shim）
+│   ├── evolve_reference.py # 参考积分器（H0 相互作用绘景 + Lindblad BDF；
+│   │                     #   sambe 含耗散时的执行路径 + 全库权威参照）
+│   ├── evolve_util.py    # 演化公用工具单源（decay/auto_decays/_as_vector/
+│   │                     #   _decay_ops/_single_loss_rates/_loss_and_norm/
+│   │                     #   _CONV 常量——原散落 evolve_rwa/hard，经 shim 借用）
+│   ├── evolve_rwa.py     # ip4/Lindblad 遗留引擎（数值权威参照；工具已迁出）
 │   ├── evolve_arbitrary.py # 任意波形第一性原理演化（实验室系 RK4）
-│   ├── evolve_sambe.py   # 单原子 Sambe 光子块引擎（原 evolve_exact）+ reference
-│   ├── evolve_sambe_pair.py # 两体 Sambe（含两场变体 build_two_field_pair）
+│   ├── evolve_sambe.py   # 兼容 shim → sambe（过渡期后删）
+│   ├── evolve_sambe_pair.py # 兼容 shim → sambe（含两场名惰性转发）
 │   ├── evolve_sambe_pair_gpu.py # GPU 传播（研究原型）
-│   ├── evolve_twofield.py # 两场引擎单原子（build_two_field/evolve_hard）
-│   ├── hard.py           # hard 单/两体（numba DOP853，evolve_hard_fast/pair）
-│   ├── pair_evolve.py    # 两体 RWA（ip4，secular V_dd）
-│   ├── evolve_mixed.py   # 混合引擎单原子（φ-帧）
-│   ├── evolve_mixed_pair.py # 混合引擎两体（φ-帧 + AC 化，t70 修复）
+│   ├── evolve_twofield.py # 两场引擎家族（单/两体团聚：光旋转系+微波光子块）
+│   ├── hard.py           # hard 引擎单/两体同一内核（单原子=N_B=1 旁观维）
+│   │                     #   + 输入格式构造 build_two_field（t74 归位）
+│   ├── pair_evolve.py    # 两体 RWA（ip4，secular V_dd；遗留，权威自检）
+│   ├── evolve_mixed.py   # 混合引擎单原子（φ-帧；依赖 sambe+acize+coupling）
+│   ├── evolve_mixed_pair.py # 混合引擎两体（φ-帧）
 │   ├── evolve_engine.py  # 统一入口 evolve_engine(method, n_body)
 │   ├── route.py          # auto 路由 route_auto
-│   ├── driver.py         # 关注跃迁驱动引擎（driver-centric API）
-│   ├── sambe.py          # 光子块几何核心 photon_geometry（与 N 无关）
 │   ├── dop853.py         # DOP853 核心驱动（njit RHS 参数化）
-│   ├── coupling.py       # RHS 打包公共层 pack_rhs
+│   ├── coupling.py       # RHS 公共层（t73）：pack_rhs + φ-帧统一内核
+│   │                     #   rhs_phi_pairs（mixed 单/两体同一 RHS）
+│   │                     #   + 三槽进度协议 stage_progress
 │   ├── acize.py          # AC 化公共层（classify/far_sos/acize_physical）
 │   ├── project.py        # 跨扇区投影公共层 project_pops
 │   ├── tensor_fields.py  # 两体场提升（lift_single_A/lift_side_A/lift_fields）
@@ -736,7 +756,6 @@ src/
 │   ├── ui_single.py      # 能级图画布
 │   ├── ui_spectrum.py    # 静态分析面板
 │   ├── ui_radar.py       # 耦合强度雷达图
-│   ├── ui_pair.py        # 响应谱画布（计算层）
 │   ├── ui_waves.py       # 波形面板
 │   ├── ui_dynamic.py     # 动态演化页（核心）
 │   ├── evolve_worker.py  # 演化后台线程（EvolveWorker/Pair）
@@ -881,11 +900,11 @@ res = evolve_engine('mixed', states,
 | 引擎 | 模块 | 主函数 | 内部核心 |
 |---|---|---|---|
 | ip4 | evolve_rwa.py | `evolve()` | `_rwa_rk4_core`（相互作用绘景 RK4）|
-| sambe 单 | evolve_sambe.py | `evolve_sambe` | `_SambeSetup` + `_propagate_adaptive`（冻结+缺陷修正）/ `frozen` |
-| sambe 两体 | evolve_sambe_pair.py | `evolve_sambe_pair` | `_pair_propagate`（稠密 eigh / 稀疏 Volterra-GMRES）|
-| hard 单/两体 | hard.py | `evolve_hard_fast` / `evolve_hard_pair` | `_rhs_hard(_pair)` njit + `dop853._dop853_driver` |
-| mixed 单 | evolve_mixed.py | `evolve_mixed` | `_MixedSetup` + `_rhs_phi`（φ-帧）|
-| mixed 两体 | evolve_mixed_pair.py | `evolve_mixed_pair` | `_build_pair_geometry` + `_rhs_mixed_pair` |
+| sambe 单 | evolve_sambe.py | `evolve_sambe` | `_propagate_adaptive`（M 判定/探针 + 冻结/缺陷修正；结构走 sambe.SambeSetup——t73 单/两体同一实现） |
+| sambe 两体 | evolve_sambe_pair.py | `evolve_sambe_pair` | `_pair_propagate`（稠密 eigh / 稀疏 Volterra-GMRES；结构走 sambe.SambeSetup）|
+| hard 单/两体 | hard.py | `evolve_hard_fast`（别名 `evolve_hard`）/ `evolve_hard_pair` | 同一 `_pack_pair_hard` + `_rhs_hard_pair`（单原子 N_B=1 旁观维，t73b）+ `dop853._dop853_driver` |
+| mixed 单 | evolve_mixed.py | `evolve_mixed` | `_MixedSetup` + φ-帧统一内核 coupling.rhs_phi_pairs（t73 与两体同一 RHS）|
+| mixed 两体 | evolve_mixed_pair.py | `evolve_mixed_pair` | `_build_pair_geometry` + φ-帧统一内核 coupling.rhs_phi_pairs |
 
 > **backend 标识**（结果 dict 里可查实际走的路径）：`'sambe-dense'/'sambe-sparse'`
 > （单原子 Sambe）、`'reference-dop853'/'reference-bdf'`、`'hard-numba-dop853'`、
@@ -900,6 +919,23 @@ res = evolve_engine('mixed', states,
 
 - **`sambe.photon_geometry(E, groups, Ms)`**：光子块几何（P/dim/strides/nvecs/diag/
   nphase/p_center）——所有光子块引擎的地基。
+- **`sambe.SambeSetup`（t73 单/两体合并）**：扩展空间结构唯一实现——块对角
+  （含 V_dd 块对角嵌入与 −iΓ/2 NonHermitian 对角）、光子邻接耦合
+  kron(T, ½K)+转置厄米、非光子常数项（两场变体光场）、hamiltonian_seg(mid)
+  段装配、dense/sparse 按扩展维自动分流；`frozen_seg_propagate` 纯冻结段
+  传播（含 eigh 缓存，键含全部波形）与 embed/reconstruct/physical_pops/
+  dense_decomp 同收此处。单体（evolve_sambe/2200）与两体（700/两场 3000）
+  仅差 dense_max 与构造参数。
+- **`coupling.rhs_phi_pairs`（t73 mixed 单/两体合并）**：φ-帧统一 RHS 内核
+  （a<b 单侧打包 + 内核厄米补齐；is_mw 载波门控；逐波时变 AC 对角
+  ac_base×env²；NonHermitian gamma）——mixed 单/两体唯一差别只剩打包
+  维度（N·P vs N²·P）；重构统一走 `sambe.sector_sum_pops`（相干扇区和
+  Σ_p φ_p——光子相位在 φ-帧解析对消，旧单原子非相干版带 O(Ω/ω) 系统误差，
+  t73b 修复）。
+- **`hard`（t73b 单/两体合并）**：单原子 hard 合成 N_B=1 旁观维
+  （E_B=[0]→uB≡1）直接走两体的 `_pack_pair_hard`+`_rhs_hard_pair`——
+  旧单体内核/打包删除；`evolve_engine` 单原子 `method='hard'` 的
+  `evolve_hard` 断链就此修复。
 - **`dop853._dop853_driver`**：DOP853 全编译驱动（njit first-class RHS）。
 - **`coupling.pack_rhs(pairs, t_end)`**：把 (a,b,v,dD,is_mw,w,env) 对打包成 RHS 数组；
   分组键 (is_mw, ω, id(env))。

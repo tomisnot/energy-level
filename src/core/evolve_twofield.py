@@ -30,8 +30,10 @@ import scipy.sparse as sp
 
 from . import static_atom as core
 from . import evolve as _evolve
-from .evolve_sambe import (_CONV, _M_MAX, _M_ANALYTIC_BW_MHZ, _group_by_freq,
-                           _gl_nodes, _GL_CACHE, setup_P)
+from .sambe import (_CONV, _M_MAX, _M_ANALYTIC_BW_MHZ,
+                    _gl_nodes, _GL_CACHE, setup_P)
+from .field_build import _group_by_freq
+from .sambe import env_at
 
 # ---- 场分类 ----
 MW_MAX_MHZ = 1e5            # 载频 ≤ 100 GHz 视为微波，> 视为光场
@@ -370,7 +372,7 @@ class _TwoFieldSetup:
 
     def c_mid(self, groups, opt_terms, mid):
         """段中点：微波各包络和 + 光场各包络和。"""
-        c_mw = [sum(float(np.asarray(wf(np.atleast_1d(mid))).flat[0])
+        c_mw = [sum(env_at(wf, mid)
                     for wf in g['envs']) for g in groups]
         c_opt = [float(np.asarray(t_[1](np.atleast_1d(mid))).flat[0])
                  for t_ in opt_terms]
@@ -387,7 +389,7 @@ class _TwoFieldSetup:
                 if Kcw_list is None:
                     continue
                 for wf, Kcw in zip(g['envs'], Kcw_list):
-                    c_w = float(np.asarray(wf(np.atleast_1d(mid))).flat[0])
+                    c_w = env_at(wf, mid)
                     if c_w != 0.0:
                         K = K + c_w * Kcw
                         any_c = True
@@ -495,7 +497,7 @@ def evolve_two_field(states, fields_meta, psi0, t_grid, tol=1e-6,
     def seg_decomp(ta, tb):
         mid = 0.5 * (ta + tb)
         # 计算各波形单独包络（用于 hamiltonian_seg 逐波配对，修复合并 bug）
-        c_mw = [sum(float(np.asarray(wf(np.atleast_1d(mid))).flat[0])
+        c_mw = [sum(env_at(wf, mid)
                     for wf in g['envs']) for g in mw_groups]
         c_opt = [float(np.asarray(t_[1](np.atleast_1d(mid))).flat[0])
                  for t_ in opt_terms]
@@ -522,7 +524,7 @@ def evolve_two_field(states, fields_meta, psi0, t_grid, tol=1e-6,
             V_g = np.zeros_like(Psi)
             has_active = False
             for wf, Kcw in zip(g['envs'], Kcw_list):
-                dc_w = np.asarray(wf(nodes), float) - float(np.asarray(wf(np.atleast_1d(mid)), float).flat[0])
+                dc_w = np.asarray(wf(nodes), float) - env_at(wf, mid)
                 if np.max(np.abs(dc_w)) > 1e-14:
                     V_g = V_g + dc_w[:, None] * (Psi @ Kcw.T)
                     has_active = True
@@ -546,6 +548,9 @@ def evolve_two_field(states, fields_meta, psi0, t_grid, tol=1e-6,
 
     X = _embed(psi0v, setup)
     tprev = 0.0
+    if progress_arr is not None and len(progress_arr) > 2:
+        progress_arr[2] = 1.0                # 阶段 1：传播（逐输出区间写 t/T）
+        progress_arr[0] = 0.0
     for iout in range(1, len(t)):
         if progress_arr is not None:
             progress_arr[0] = min(tprev / T, 0.999)
@@ -717,7 +722,7 @@ def evolve_hard(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
             omega_f = float(tup[2])
             omega_ref = float(tup[4]) if len(tup) > 4 else omega_f
             m = tup[5] if len(tup) > 5 else None
-            c = float(np.asarray(wf(np.atleast_1d(tv))).flat[0])
+            c = env_at(wf, tv)
             if c != 0.0:
                 d = omega_f - omega_ref
                 if d != 0.0 and m is not None:
@@ -727,7 +732,7 @@ def evolve_hard(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
                 else:
                     V = V + c * A_opt
         for A, wL, wf, ph_fn in mw_terms:
-            env = float(np.asarray(wf(np.atleast_1d(tv))).flat[0])
+            env = env_at(wf, tv)
             if env != 0.0:
                 ph = (ph_fn(tv) if ph_fn is not None
                       else _CONV * wL * tv)
@@ -742,13 +747,17 @@ def evolve_hard(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
         return out
 
     if progress_arr is not None:
-        progress_arr[0] = 0.15
+        if len(progress_arr) > 2:
+            progress_arr[2] = 1.0            # 阶段 1：积分（scipy 无内部钩子）
+        progress_arr[0] = 0.0
     sol = solve_ivp(_rhs_twofield, (0.0, T), psi0v, method='DOP853',
                     t_eval=t, rtol=rtol, atol=atol)
     if not sol.success:
         raise RuntimeError(f'hard 积分失败: {sol.message}')
     pops = np.abs(sol.y).T ** 2
     if progress_arr is not None:
+        if len(progress_arr) > 2:
+            progress_arr[2] = 2.0
         progress_arr[0] = 1.0
     nfev = getattr(sol, 'nfev', None)
     log(f'[hard] DOP853 完成：{len(t)} 输出点'
@@ -779,3 +788,290 @@ def evolve_hard(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
 
 # ---- t19 函数级改名兼容别名（旧名 = 新名，外部零改动）----
 _TwoFieldSetup.K_at = _TwoFieldSetup.hamiltonian_seg
+
+
+
+# ============================================================
+# 两场两体变体（t74 自 evolve_sambe_pair 归位——两场家族团聚：
+# 光场旋转系 + 微波-only 光子块的单/两体在同一模块）
+# ============================================================
+_TF_DENSE_MAX = 3000
+# 微波近共振带宽（≡ evolve_twofield.MW_NRES_BW_MHZ）
+_TF_MW_NRES_BW_MHZ = 5e3
+# V_dd 旋转系保留判据：|ΔE_rot − ΔE_lab| ≤ 此值（MHz）视为静态
+_VDD_RWA_TOL_MHZ = 1.0
+
+
+def _embed2d(A, side, N):
+    """单原子 A（N×N）→ 两体嵌入（k=i·N+j）：'A' 侧 A⊗I，'B' 侧 I⊗A。"""
+    Asp = sp.csr_matrix(np.asarray(A, float))
+    I = sp.eye(N, format='csr')
+    return (sp.kron(Asp, I) if side == 'A' else sp.kron(I, Asp)).tocsr()
+
+
+def build_two_field_pair(meta_A, meta_B, log=None):
+    """A/B 两侧 build_two_field 输出 → 两体两场 meta。
+
+    返回 dict：
+      N, N2      : 单体 / 两体维度
+      E_pair_rot : (N²,) 旋转系两体能量 E_rot_A[i] + E_rot_B[j]（k = i·N+j）
+      mw_groups  : 微波组（A/B 按载频合并，同频共享光子维）
+                   dict(omega_mhz, K2_w=[两体稀疏], envs_w=[wf], labels=[])
+      opt_terms  : 光场项 [dict(Ko=两体稀疏(N²,N²), wf, label, side)]
+    """
+    log = log or (lambda *a: None)
+    N = int(meta_A['N'])
+    if int(meta_B['N']) != N:
+        raise ValueError('两侧 meta 的 N 不一致')
+    E_A = np.asarray(meta_A['E_rot'], float)
+    E_B = np.asarray(meta_B['E_rot'], float)
+    E_pair_rot = (E_A[:, None] + E_B[None, :]).ravel()
+
+    groups, opt_terms = [], []
+    for side, meta in (('A', meta_A), ('B', meta_B)):
+        # 光场：逐侧两体嵌入（旋转系内为常数矩阵，不占光子块）
+        for tup in meta['opt_terms']:
+            A_opt, wf = tup[0], tup[1]
+            omega_f = float(tup[2])
+            name = tup[3] if len(tup) > 3 else 'opt'
+            omega_ref = float(tup[4]) if len(tup) > 4 else omega_f
+            if abs(omega_f - omega_ref) > 1e-9 * max(abs(omega_f), 1.0):
+                raise NotImplementedError(
+                    f'两体两场 Sambe 不支持多光场拍频：光场 {name!r} '
+                    f'ω={omega_f:.6g} MHz 与共享旋转参考 {omega_ref:.6g} MHz '
+                    f'相差 {omega_f - omega_ref:+.6g} MHz（拍频相位 '
+                    'exp(i·C·δ·t) 无法在冻结段+包络缺陷修正中表示）。'
+                    '请改用 hard 引擎（evolve_hard_pair）。')
+            opt_terms.append(dict(Ko=_embed2d(A_opt, side, N), wf=wf,
+                                  label=f'{side}:{name}', side=side))
+        # 微波：按载频合并（A/B 同频共享光子维，同 _pair_groups 语义）
+        for g in meta['mw_groups']:
+            w = float(g['omega_mhz'])
+            labels = g.get('labels') or [''] * len(g['As'])
+            for A, wf, lab in zip(g['As'], g['envs'], labels):
+                hit = None
+                for hg in groups:
+                    if abs(hg['omega_mhz'] - w) <= 1e-9 * max(abs(w), 1.0):
+                        hit = hg
+                        break
+                if hit is None:
+                    hit = dict(omega_mhz=w, K2_w=[], envs_w=[], labels=[])
+                    groups.append(hit)
+                hit['K2_w'].append(_embed2d(A, side, N))
+                hit['envs_w'].append(wf)
+                hit['labels'].append(f'{side}:{lab}')
+    log(f'[two_field_pair] 微波组 {len(groups)}'
+        f'（{sum(len(g["envs_w"]) for g in groups)} 波形）'
+        f'，光场项 {len(opt_terms)}')
+    return dict(N=N, N2=N * N, E_pair_rot=E_pair_rot, mw_groups=groups,
+                opt_terms=opt_terms)
+
+
+def vdd_rot_filter(V, E_pair_rot, E_pair_lab, log=None,
+                   tol_mhz=_VDD_RWA_TOL_MHZ):
+    """V_dd 旋转系 RWA 筛选：只保留 ΔE_rot = ΔE_lab 的元素（旋转系内静态）。
+
+    返回 (V_filtered, info)；info 记录丢弃元素的数量 / max|V| / 净效应上界
+    （|V|²/Δ，Δ 取丢弃元素的实验室系失谐）——供调用方日志与自检核对。
+    """
+    info = dict(n_keep=0, n_drop=0, max_v_drop=0.0, max_effect_mhz=0.0)
+    if V is None:
+        return None, info
+    coo = (V.tocsr().astype(complex) if sp.issparse(V)
+           else sp.csr_matrix(np.asarray(V, complex))).tocoo()
+    if coo.nnz == 0:
+        return coo.tocsr(), info
+    d_rot = E_pair_rot[coo.row] - E_pair_rot[coo.col]
+    d_lab = E_pair_lab[coo.row] - E_pair_lab[coo.col]
+    keep = np.abs(d_rot - d_lab) <= tol_mhz
+    info['n_keep'] = int(keep.sum())
+    info['n_drop'] = int((~keep).sum())
+    if info['n_drop']:
+        v_drop = np.abs(coo.data[~keep])
+        det = np.abs(d_lab[~keep])
+        info['max_v_drop'] = float(v_drop.max())
+        info['max_effect_mhz'] = float(
+            np.max(v_drop ** 2 / np.maximum(det, 1e-9)))
+        if log is not None:
+            log(f'[two_field_pair] V_dd 旋转系 RWA：丢弃 {info["n_drop"]}/'
+                f'{coo.nnz} 个元素（旋转流形占据数变化 ±1 → 以 ω_opt 振荡；'
+                f'max|V|={info["max_v_drop"]:.3g} MHz，净效应 ≤ '
+                f'|V|²/Δ = {info["max_effect_mhz"]:.3g} MHz）')
+    Vf = sp.coo_matrix((coo.data[keep], (coo.row[keep], coo.col[keep])),
+                       shape=coo.shape).tocsr()
+    return Vf, info
+
+
+def _pair_mw_Ms(E_pair, groups, tol, bw=_TF_MW_NRES_BW_MHZ, m_min=2,
+                m_max=_M_MAX):
+    """逐微波载频解析光子块阶数（同单原子两场 evolve_two_field 的判据）。
+
+    近共振峰值 r = max|A_近共振| / ω；M 取满足 (r/4)^{2(M−1)} ≤ tol 的最小值，
+    下限 m_min=2（多光子显式保留）。
+    """
+    Ms = []
+    for g in groups:
+        r = 0.0
+        for K2 in g['K2_w']:
+            coo = K2.tocoo()
+            if coo.nnz == 0:
+                continue
+            det = np.abs((E_pair[coo.row] - E_pair[coo.col])
+                         - g['omega_mhz'])
+            m = det < bw
+            if m.any():
+                r = max(r, float(np.abs(coo.data[m]).max())
+                        / max(abs(g['omega_mhz']), 1e-9))
+        M = m_min
+        while (r / 4.0) ** (2 * (M - 1)) > tol and M < m_max:
+            M += 1
+        Ms.append(M)
+    return Ms
+
+
+def evolve_two_field_pair(states, fields_meta_A, fields_meta_B, psi0_A,
+                          psi0_B, t_grid, vdd_matrix=None, R_um=None,
+                          theta_deg=0.0, phi_deg=0.0, cache=None, tol=1e-6,
+                          mw_M=None, decays_A=None, decays_B=None,
+                          progress_arr=None, log=None, record_amp=False,
+                          dense_max=None, frozen_h_ns=None):
+    """两体两场引擎：光场旋转系 + 微波-only Sambe 光子块（t30，路径 A）。
+
+    与 evolve_sambe_pair 的差别只在"场怎么进扩展空间"：
+      - 光场（>100 GHz，自适应阈值见 evolve_twofield.split_by_freq）：载波由
+        旋转系解析吸收 → 不占光子块，耦合项为常数矩阵（RWA 共振项 ½Ω）；
+      - 微波：Sambe 光子块（M≥2，多光子显式），A/B 同频共享光子维。
+    ⟹ dim = N²·P_mw（22 态 = 484×5 = 2420，稠密可行），替代原两体 Sambe
+       把光场也塞进光子块导致的 60500 维不可用路径。
+
+    参数：
+      fields_meta_A/B : build_two_field(cache, states, waves) 的输出（各原子）
+      mw_M            : None → 逐载频解析判据（M≥2）；int/list → 强制指定
+      其余（vdd/R_um/decays/progress）与 evolve_sambe_pair 同义。
+
+    返回契约与 evolve_sambe_pair 完全同键（method='two_field'），
+    另附 error_report['vdd_rwa']（V_dd 旋转系筛选统计）。
+    """
+    from . import pair_core as _pc
+    from . import pair_evolve as _pe
+    log = log or (lambda *a: None)
+    if t_grid is None:
+        raise ValueError('t_grid 必须提供')
+    t = np.asarray(t_grid, float)
+    T = float(t[-1])
+    N = len(states)
+    N2 = N * N
+
+    meta = build_two_field_pair(fields_meta_A, fields_meta_B, log=log)
+    groups = meta['mw_groups']
+    opt_terms = meta['opt_terms']
+    E_pair_rot = meta['E_pair_rot']
+    E = np.array([s['E_mhz'] for s in states], float)
+    E_pair_lab = (E[:, None] + E[None, :]).ravel()
+
+    # ---- V_dd（同 evolve_sambe_pair；再做旋转系 RWA 筛选）----
+    if vdd_matrix is not None:
+        V = vdd_matrix
+    elif R_um is not None:
+        if cache is None:
+            raise ValueError('两体两场需要 cache（core.ArcCache 实例）来'
+                             '计算 V_dd；请传入 cache 或显式 vdd_matrix。')
+        V = _pc.vdd_sparse(cache, [dict(s) for s in states],
+                           R_um, theta_deg, phi_deg)
+    else:
+        V = None
+    if V is not None and not sp.issparse(V):
+        V = sp.csr_matrix(np.asarray(V, complex))
+    V, vdd_info = vdd_rot_filter(V, E_pair_rot, E_pair_lab, log=log)
+
+    # ---- 耗散（寿命通道 → NonHermitian，同 evolve_sambe_pair）----
+    GammaA = GammaB = None
+    has_decay = bool(decays_A or decays_B)
+    gamma_pair = None
+    if has_decay:
+        GammaA, GammaB, _ = _pe._pair_loss_vectors(
+            states, decays_A, decays_B, N, N2)
+        gamma_pair = (GammaA + GammaB) / _CONV
+        log('[two_field_pair] 两体耗散：NonHermitian 寿命通道（落点=丢失）')
+
+    # ---- 初态 ----
+    psi0_A_vec = _evolve._as_vector(states, psi0_A)
+    psi0_B_vec = _evolve._as_vector(states, psi0_B)
+    psi0_2d = _pe._as_product_psi(psi0_A_vec, psi0_B_vec, N)
+
+    if progress_arr is None:
+        progress_arr = np.zeros(3)
+    from .coupling import stage_progress
+    stage_progress(progress_arr, 0, 0.2)     # 阶段 0：装配
+
+    # ---- 微波光子块阶数（解析判据，M≥2 多光子显式）----
+    if mw_M is None:
+        Ms = _pair_mw_Ms(E_pair_rot, groups, tol)
+    elif isinstance(mw_M, (int, np.integer)):
+        Ms = [int(mw_M)] * len(groups)
+    else:
+        Ms = [int(m) for m in mw_M]
+        if len(Ms) != len(groups):
+            raise ValueError(f'mw_M 长度 {len(Ms)} ≠ 微波组数 {len(groups)}')
+    stage_progress(progress_arr, 0, 0.9)
+    if groups:
+        log(f'[two_field_pair] 微波光子块 M={Ms}'
+            f'（扇区 {int(np.prod([2 * m + 1 for m in Ms]))}）')
+
+    from .evolve_sambe_pair import _pair_propagate  # t74（P2 后改 sambe）
+    pops_2d, X_final, report, setup = _pair_propagate(
+        E_pair_rot, N, groups, opt_terms, V, gamma_pair, psi0_2d, t, tol,
+        Ms, progress_arr, log,
+        _TF_DENSE_MAX if dense_max is None else dense_max, frozen_h_ns)
+
+    # ---- loss 曲线（NonHermitian 速率积分）----
+    loss_A = np.zeros(len(t))
+    loss_B = np.zeros(len(t))
+    if has_decay:
+        dt_arr = np.diff(t)
+        rate_A = pops_2d @ GammaA
+        rate_B = pops_2d @ GammaB
+        loss_A[1:] = np.cumsum(0.5 * (rate_A[1:] + rate_A[:-1]) * dt_arr)
+        loss_B[1:] = np.cumsum(0.5 * (rate_B[1:] + rate_B[:-1]) * dt_arr)
+        norm_dev = float(np.max(np.abs(
+            pops_2d.sum(axis=1) + loss_A + loss_B - 1.0)))
+    else:
+        norm_dev = float(np.max(np.abs(pops_2d.sum(axis=1) - 1.0)))
+    report['max_norm_dev'] = max(report['max_norm_dev'], norm_dev)
+
+    pops_A = _pe._reduce_A(pops_2d, N)
+    pops_B = _pe._reduce_B(pops_2d, N)
+    stage_progress(progress_arr, 2, 1.0)
+
+    log(f'[two_field_pair] 完成：{report["n_segments"]} 段，'
+        f'最大残差 {report["max_richardson_diff"]:.2e}'
+        f'（tol={tol:.1e}），范数偏差 {report["max_norm_dev"]:.2e}')
+
+    report['photon_blocks'] = {f'{g["omega_mhz"]:.6g}MHz': 2 * m + 1
+                               for g, m in zip(groups, Ms)}
+    report['tol'] = float(tol)
+    report['vdd_rwa'] = vdd_info
+    report['opt_terms'] = len(opt_terms)
+
+    out = dict(
+        t=t,
+        pops_2d=pops_2d,
+        pops_A=pops_A,
+        pops_B=pops_B,
+        loss_A=loss_A,
+        loss_B=loss_B,
+        states_2d=[{
+            'label': f"({states[i]['label']}) x ({states[j]['label']})",
+            'E_mhz': E_pair_lab[i * N + j],
+            'ket_i': i,
+            'ket_j': j,
+        } for i in range(N) for j in range(N)],
+        method='two_field',
+        backend='sambe-pair-twofield',
+        error_report=report,
+    )
+    if record_amp:
+        Xm = np.asarray(X_final, complex).reshape(setup.P, setup.N2)
+        ph = np.exp(-1j * setup.nphase * T)
+        out['psi_amp'] = ph @ Xm
+    return out

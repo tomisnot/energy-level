@@ -26,7 +26,7 @@ def evolve_engine(method, states, fields=None, fields_A=None, fields_B=None,
             from .evolve_mixed import evolve_mixed
             return evolve_mixed(states, fields, psi0, t_grid, **kwargs)
         if method == 'sambe':
-            from .evolve_sambe import evolve_sambe
+            from .sambe import evolve_sambe
             return evolve_sambe(states, fields, psi0, t_grid, **kwargs)
         if method == 'hard':
             from .hard import evolve_hard
@@ -38,7 +38,7 @@ def evolve_engine(method, states, fields=None, fields_A=None, fields_B=None,
             return evolve_mixed_pair(states, fields_A, fields_B, psi0_A,
                                      psi0_B, t_grid, **kwargs)
         if method == 'sambe':
-            from .evolve_sambe_pair import evolve_sambe_pair
+            from .sambe import evolve_sambe_pair
             return evolve_sambe_pair(states, fields_A, fields_B, psi0_A,
                                      psi0_B, t_grid, **kwargs)
         if method == 'hard':

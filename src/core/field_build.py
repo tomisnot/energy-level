@@ -6,8 +6,8 @@ import numpy as np
 from . import static_atom as core
 from .atomic_levels import square
 
-_CONV = 2 * np.pi * 1e-3            # MHz·ns → rad
-_POL_Q = {'π': 0, 'σ+': +1, 'σ-': -1}
+from .evolve_util import _CONV              # t74：常量单源
+from .evolve_util import _POL_Q            # t74：工具归位
 _ENV_SAMPLES = 64
 # 上态总衰变率缓存（(n,l,j) → Γ MHz；远失谐散射损失用）
 _lifetime_cache = {}
@@ -76,6 +76,145 @@ def _sublevel_row(s):
 
 
 # ---------------- 光场 ----------------
+
+
+def _field_geometry(states, f):
+    """解析光场 → dict(A, g_idx, e_idx, omega0_mhz, omega_L_mhz, waveform)。
+
+    （t74 自 evolve_rwa 归位——ip4 族场格式的归一化与场构造同源。）
+    """
+    N = len(states)
+    if f['kind'] == 'multi':
+        # 多对驱动 + 对角位移统一算符：M = A + diag(ac)（Pulser 范式）。
+        M = f.get('M')
+        if M is None:                      # 旧格式兼容（只有 A 无 M）
+            M = f['A'] + np.diag(np.asarray(f.get('ac_shift', np.zeros(N)), float))
+        A = f.get('A')
+        if A is None:
+            A = M.copy()
+            np.fill_diagonal(A, 0.0)
+        ac = np.asarray(f.get('ac_shift', np.diag(M).real), float)
+        return dict(M=M, A=A, ac_shift=ac,
+                    g_idx=f['g_idx'], e_idx=f['e_idx'],
+                    omega0_mhz=1.0, real_omega0_mhz=float(np.abs(A).max()),
+                    omega_L_mhz=f['omega_L_mhz'],
+                    waveform=f['waveform'])
+    if f['kind'] == 'pair':
+        g, e = int(f['g']), int(f['e'])
+        Eg, Ee = states[g]['E_mhz'], states[e]['E_mhz']
+        if Eg <= Ee:
+            g_idx, e_idx = [g], [e]
+        else:
+            g_idx, e_idx = [e], [g]
+            Eg, Ee = Ee, Eg
+        A = np.zeros((N, N))
+        A[g_idx[0], e_idx[0]] = A[e_idx[0], g_idx[0]] = 1.0
+    else:
+        cache = f['cache']
+        ga, gb = f['group_a'], f['group_b']
+        q = _POL_Q.get(f['pol'], 0)
+        idx_a = [i for i, s in enumerate(states)
+                 if (s['n'], s['l'], s['j']) == (ga['n'], ga['l'], ga['j'])]
+        idx_b = [i for i, s in enumerate(states)
+                 if (s['n'], s['l'], s['j']) == (gb['n'], gb['l'], gb['j'])]
+        Ea = cache.E_mhz(int(ga['n']), int(ga['l']), float(ga['j']))
+        Eb = cache.E_mhz(int(gb['n']), int(gb['l']), float(gb['j']))
+        if Ea <= Eb:
+            g_idx, e_idx, Eg, Ee = idx_a, idx_b, Ea, Eb
+        else:
+            g_idx, e_idx, Eg, Ee = idx_b, idx_a, Eb, Ea
+        M = np.zeros((len(g_idx), len(e_idx)))
+        for ia, i in enumerate(g_idx):
+            for ib, j in enumerate(e_idx):
+                M[ia, ib] = abs(core.dipole_amplitude(
+                    cache, _sublevel_row(states[i]), _sublevel_row(states[j]),
+                    q))
+        mx = M.max()
+        if mx > 0:
+            M = M / mx
+        A = np.zeros((N, N))
+        for ia, i in enumerate(g_idx):
+            for ib, j in enumerate(e_idx):
+                A[i, j] = A[j, i] = M[ia, ib]
+    omega_L = (Ee - Eg) + float(f['detune_mhz'])
+    return dict(M=A.copy(), A=A, ac_shift=np.zeros(N),
+                g_idx=g_idx, e_idx=e_idx, omega0_mhz=f['omega0_mhz'],
+                omega_L_mhz=omega_L, waveform=f['waveform'])
+
+
+def build_fields_exact(cache, states, waves):
+    """波形列表 → 第一性原理场列表（每波形一个全偶极耦合算符）。
+
+    每个波形 (freq, intensity, pol, envelope) → A[i,j] = 峰值光强下该对的
+    Rabi 频率 Ω_ij = core.rabi_mhz（MHz，Ω/2π 周频约定：Sambe 子空间耦合取
+    Ω/2，共振布居振荡 sin²(π·Ω_MHz·t_µs)，π 脉冲 = 1/(2Ω) µs，与实验界
+    面 Rabi 定义一致），含选择定则；**全部**偶极允许对都进耦合矩阵——
+    远失谐对的效应由精确传播自动给出，不存在近/远分流边界，也不注入
+    任何静态能移。
+    """
+    out = []
+    N = len(states)
+    for w in waves:
+        if getattr(w, 'kind', None) == 'arb':
+            raise ValueError(
+                '第一性引擎（method=exact）暂不支持任意波形'
+                '（ArbitraryWave，无单载频概念）；请用 method=auto'
+                '（自动转 arbitrary 路径）。')
+        q = _POL_Q.get(w.pol, 0)
+        E0_sq = core.field_e0_sq(float(w.intensity_mwcm2))
+        A = np.zeros((N, N))
+        for i in range(N):
+            for j in range(i + 1, N):
+                d = core.dipole_amplitude(
+                    cache, _sublevel_row(states[i]), _sublevel_row(states[j]),
+                    q)
+                if abs(d) < 1e-12:
+                    continue
+                A[i, j] = A[j, i] = core.rabi_mhz(abs(d), E0_sq)
+        if not np.any(A != 0.0):
+            continue                       # 该偏振下无任何耦合 → 无效场
+        out.append({'kind': 'exact', 'A': A,
+                    'omega_L_mhz': float(w.freq_mhz),
+                    'waveform': w.waveform,
+                    'label': getattr(w, 'name', '波'),
+                    'intensity_mwcm2': float(w.intensity_mwcm2),
+                    'pol': w.pol})
+    return out
+
+
+def _validate_fields(fields):
+    N = None
+    for f in fields:
+        if (f or {}).get('kind') != 'exact':
+            raise ValueError(
+                "method='exact' 要求场为 kind='exact'（由 "
+                'waveforms.build_fields_exact 构造）——不消费 real_field/'
+                'multi 场（其近/远分流与静态 AC 注入与第一性模型冲突）。')
+        A = np.asarray(f['A'], float)
+        if N is None:
+            N = A.shape[0]
+        if A.shape != (N, N):
+            raise ValueError('exact 场 A 矩阵维度不一致')
+    return N
+
+
+def _group_by_freq(fields):
+    """相异载频分组（相对差 ≤1e-9 视为同频，共享一个光子维）。"""
+    groups = []
+    for f in fields:
+        w = float(f['omega_L_mhz'])
+        hit = None
+        for g in groups:
+            if abs(g['omega_mhz'] - w) <= 1e-9 * max(abs(w), 1.0):
+                hit = g
+                break
+        if hit is None:
+            hit = dict(omega_mhz=w, As=[], envs=[], labels=[])
+            groups.append(hit)
+        hit['As'].append(np.asarray(f['A'], float))
+        hit['envs'].append(f['waveform'])
+        hit['labels'].append(f.get('label', ''))
+    return groups
 
 
 def field(g, e, omega0_mhz=1.0, waveform=None, detune_mhz=0.0):

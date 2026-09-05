@@ -38,14 +38,10 @@ _HARTREE_HZ = pc['hartree-hertz relationship'][0]   # 6.5797e15 Hz
 _A0_M = pc['Bohr radius'][0]                        # 5.2918e-11 m
 # d(a.u.) 与 R(μm) → 能量 MHz：V_au = d1·d2/R_au³；V_MHz = V_au·Hartree_Hz/1e6
 _DD_CONV = _HARTREE_HZ / 1e6 / (1e-6 / _A0_M) ** 3   # MHz·μm³/(a.u.)²
-# V_dd 的球基系数 c_q（见 docstring）
-VDD_QCOEFF = {1: -1.0, -1: -1.0, 0: -2.0}
-
-# ---------------- 计算缓存（LRU，容量上限） ----------------
+# ---------------- 计算缓存（LRU，容量上限 32/64） ----------------
 # 同一 (groups, B, n_window, R, θ, φ, 截断) 的 pair 系统构建/对角化只做一次；
 # 物理上结果只依赖这些参数（ARC 数据与 cache 实例无关），故 key 不含 cache。
 # 返回一律给拷贝：build_system 会原地改 H[k,k]（加能移），污染缓存会导致错误。
-_CACHE_LIMIT = 64
 
 
 class _LRU:
@@ -97,13 +93,6 @@ _DIPOLE_CACHE = _LRU(64)
 _VDD_CACHE = _LRU(64)
 _HAM_CACHE = _LRU(32)
 _EIGEN_CACHE = _LRU(32)
-
-
-def _clear_pair_cache():
-    """清空全部 pair 计算缓存（测试隔离用）。"""
-    for c in (_BASIS_CACHE, _DIPOLE_CACHE, _VDD_CACHE,
-              _HAM_CACHE, _EIGEN_CACHE):
-        c._d.clear()
 
 
 # ---------------- 基组 ----------------
@@ -160,8 +149,11 @@ def pair_indices(single, m_total=None, energy_window_mhz=None,
 
 
 # ---------------- 偶极-偶极相互作用 ----------------
-def _dipole_sparse(cache, single, q):
-    """单原子偶极矩阵 D_q（N×N，CSR）：D_q[i,i2] = ⟨i2|d_q|i⟩（a.u.）。"""
+def _dipole_sparse(cache, single, q, progress=None):
+    """单原子偶极矩阵 D_q（N×N，CSR）：D_q[i,i2] = ⟨i2|d_q|i⟩（a.u.）。
+
+    progress：可选 callable(frac 0..1)——每 2 行上报一次（首次构建时
+    dme 查询/ARC Numerov 计算可能很慢，供 GUI 泵进度对话框，t72）。"""
     key = (_single_fp(single), int(q))
     hit = _DIPOLE_CACHE.get(key)
     if hit is not None:
@@ -169,6 +161,8 @@ def _dipole_sparse(cache, single, q):
     N = len(single)
     rows, cols, vals = [], [], []
     for i in range(N):
+        if progress is not None and (i % 2 == 0 or i == N - 1):
+            progress((i + 1) / N)
         si = single[i]
         for i2 in range(N):
             if i2 == i:
@@ -204,26 +198,39 @@ def _vdd_tensor(theta_deg, phi_deg):
     return T
 
 
-def vdd_sparse(cache, single, R_um, theta_deg=0.0, phi_deg=0.0):
+def vdd_sparse(cache, single, R_um, theta_deg=0.0, phi_deg=0.0,
+               progress=None):
     """偶极-偶极相互作用稀疏矩阵（MHz），pair 基为笛卡尔积 k=i*N+j。
 
     几何：间距 R，两原子连线方向 n=(θ,φ)（θ=0 → 沿 z 轴）。
     V[k,k2] = (1/R³) Σ_qq' T_qq' ⟨i2|d_q|i⟩⟨j2|d_q'|j⟩  （k=(i,j), k2=(i2,j2)）
+
+    progress：可选 callable(frac 0..1)——偶极矩阵构建占 0..0.6（逐行）、
+    张量收缩占 0.6..1.0；供 GUI 在主线程预处理期间泵进度对话框（t72）。
+    缓存命中时直接返回、不回调。
     """
     key = (_single_fp(single), _r(R_um), _r(theta_deg), _r(phi_deg))
     hit = _VDD_CACHE.get(key)
     if hit is not None:
         return hit
     N = len(single)
-    D = {q: _dipole_sparse(cache, single, q) for q in (-1, 0, 1)}
+    D = {}
+    for qi, q in enumerate((-1, 0, 1)):
+        cb = ((lambda f, _qi=qi: progress((f + _qi) / 3.0 * 0.6))
+              if progress is not None else None)
+        D[q] = _dipole_sparse(cache, single, q, progress=cb)
     T = _vdd_tensor(theta_deg, phi_deg)
     qs = (1, 0, -1)
     V = None
+    done = 0
     for a in range(3):
         for b in range(3):
             if abs(T[a, b]) > 1e-12:
                 term = T[a, b] * sp.kron(D[qs[a]], D[qs[b]])
                 V = term if V is None else V + term
+            done += 1
+            if progress is not None:
+                progress(0.6 + 0.4 * done / 9.0)
     V = V * (_DD_CONV / R_um ** 3)
     _VDD_CACHE.put(key, V)
     return V
@@ -415,12 +422,3 @@ def coupling_strength_map(cache, groups, R_grid, theta_grid, phi_deg=0.0,
         v = np.abs(np.sum(T * np.outer(da, db)))
         Z[:, t] = v * _DD_CONV / r3              # a.u. → MHz
     return R, theta, Z
-
-
-def pair_potential(cache, groups, R_scan, B_gauss=0.0, n_window=3,m_total=None):
-    """扫 R → (R 数组, 能级数组 [n_R, n_levels])。"""
-    evals_list = []
-    for R in R_scan:
-        res = pair_eigen(cache, groups, R, B_gauss, n_window, m_total=m_total)
-        evals_list.append(res['evals'])
-    return np.asarray(R_scan), np.asarray(evals_list)

@@ -12,6 +12,7 @@ A⊗I + I⊗A（每原子各驱动一次）。复用 tensor.py 的直积工具�
   B 侧场全提升（作用于 B 原子）——同频场自动合并（共享光子块语义）。
 """
 import numpy as np
+import scipy.sparse as sp
 
 
 def lift_single_A(A, N):
@@ -84,3 +85,46 @@ def lift_side_A(A, N, side='A'):
                 else:
                     M[j * N + i, j * N + ip] += v      # B 原子 i→ip
     return M
+
+
+# ============================================================
+# 两体场分组（t74 自 sambe 归位——A/B 场 kron 提升与同频分组同属
+# 两体场提升层）
+# ============================================================
+def _pair_groups(fields_A, fields_B):
+    """返回 groups：[dict(omega_mhz, K2(稀疏 N², 单位包络两体耦合), envs)]。
+
+    A 侧场嵌入为 A_f⊗I，B 侧为 I⊗A_f（kron 顺序 k=i·N+j）。
+    """
+    N = None
+    groups = []
+    for fields, side in ((fields_A or [], 'A'), (fields_B or [], 'B')):
+        for f in fields:
+            if (f or {}).get('kind') != 'exact':
+                raise ValueError(
+                    "method='exact' 两体要求场为 kind='exact'（由 "
+                    'waveforms.build_fields_exact 构造）。')
+            A = np.asarray(f['A'], float)
+            if N is None:
+                N = A.shape[0]
+            if A.shape != (N, N):
+                raise ValueError('exact 场 A 矩阵维度不一致')
+            if not np.any(np.abs(A) > 1e-15):
+                continue                       # 无耦合场 → 不占光子维
+            Asp = sp.csr_matrix(A)
+            I = sp.eye(N, format='csr')
+            K2 = (sp.kron(Asp, I) if side == 'A'
+                  else sp.kron(I, Asp)).tocsr()
+            w = float(f['omega_L_mhz'])
+            hit = None
+            for g in groups:
+                if abs(g['omega_mhz'] - w) <= 1e-9 * max(abs(w), 1.0):
+                    hit = g
+                    break
+            if hit is None:
+                hit = dict(omega_mhz=w, K2_w=[K2], envs_w=[f['waveform']])
+                groups.append(hit)
+            else:
+                hit['K2_w'].append(K2)
+                hit['envs_w'].append(f['waveform'])
+    return groups, N

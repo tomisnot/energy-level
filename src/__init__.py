@@ -2,8 +2,9 @@
 """Energy Level 软件包（入口为顶层 能级.py）。
 
 包结构：
-- src.core/   核心计算（无 UI 依赖）：core / pair_core / driver / evolve / waveforms
-- src.ui/     界面：fields / ui_theme / ui_single / ui_radar / ui_pair /
+- src.core/   核心计算（无 UI 依赖）：core / pair_core / evolve / waveforms
+              （driver 关注跃迁引擎已归档 _archive，t73b）
+- src.ui/     界面：fields / ui_theme / ui_single / ui_radar /
               ui_waves / ui_dynamic / evolve_worker / app_state / serialization / pages
 
 兼容导出：`from src import core, evolve, ...` 继续工作（委托到 src.core.* / src.ui.*），
@@ -104,7 +105,6 @@ _patch_arc_datafolder()
 # ---------------- 兼容导出（from src import X 委托到 core./ui.） ----------------
 from .core import core            # noqa: E402,F401
 from .core import pair_core       # noqa: E402,F401
-from .core import driver          # noqa: E402,F401
 from .core import evolve          # noqa: E402,F401
 from .core import evolve_exact    # noqa: E402,F401
 from .core import waveforms       # noqa: E402,F401
@@ -112,7 +112,6 @@ from .ui import fields            # noqa: E402,F401
 from .ui import ui_theme          # noqa: E402,F401
 from .ui import ui_single         # noqa: E402,F401
 from .ui import ui_radar          # noqa: E402,F401
-from .ui import ui_pair           # noqa: E402,F401
 from .ui import ui_waves          # noqa: E402,F401
 from .ui import ui_dynamic        # noqa: E402,F401
 from .ui import evolve_worker     # noqa: E402,F401

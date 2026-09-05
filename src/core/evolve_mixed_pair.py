@@ -19,7 +19,6 @@ loss_A, loss_B, method='mixed', backend, error_report)。
 """
 import numpy as np
 from scipy.integrate import solve_ivp
-from numba import njit
 
 from . import evolve as _evolve
 from . import tensor as _tensor
@@ -30,70 +29,10 @@ R_CRIT = 0.0135               # t58: M_max=2 的 r 判据
 MW_BW = 5e3                   # 微波近共振带宽
 
 
-@njit(cache=True)
-def _rhs_mixed_pair(t, phi, iis, jjs, vals, dDs, is_mw, wcos, n_pairs_w,
-                    env_tab, env_dt, Cv, gamma=None,
-                    ac_base=None, ac_env_tab=None, ac_env_dt=1.0):
-    """φ-帧两体 RHS：光场近对 env·Kc∘e^{iC·ΔD·t} + 微波当场 env·cos·A
-    + V_dd 当场（is_mw=0 且 wcos=0 → 无 cos 载波，env=1）。
-    gamma（N²，MHz，可 None）：t62 耗散 NonHermitian 对角（落点=丢失，
-    out[k] −= 0.5·C·gamma[k]·phi[k]——与 hard_pair 同语义）。"""
-    tot = np.zeros_like(phi)
-    ip = 0
-    nw = len(wcos)
-    for w in range(nw):
-        np_w = n_pairs_w[w]
-        if np_w == 0:
-            continue
-        ei = t / env_dt
-        i0 = int(ei)
-        if i0 >= env_tab.shape[1] - 1:
-            i0 = env_tab.shape[1] - 2
-        f = ei - i0
-        envv = env_tab[w, i0] * (1.0 - f) + env_tab[w, i0 + 1] * f
-        if envv == 0.0:
-            ip += np_w
-            continue
-        if is_mw[w]:
-            cw = envv * np.cos(Cv * wcos[w] * t)
-        else:
-            cw = envv
-        for k in range(np_w):
-            a = iis[ip + k]
-            b = jjs[ip + k]
-            v = vals[ip + k]
-            ph = np.exp(1j * Cv * dDs[ip + k] * t)
-            tot[a] += cw * v * ph * phi[b]
-            tot[b] += cw * np.conj(v * ph) * phi[a]
-        ip += np_w
-    res = -1j * Cv * tot
-    # t69 逐波时变 AC 对角 −iC·Σ_w shifts_w·env_w(t)²∘φ（env 平方 = AC∝光强——
-    # K0 已是纯 E（设计 C 点），无静态位移抵消 → 修正用 env² 全量（非 env²−1——
-    # 单原子 _rhs_phi 同款；env²−1 只在 K0 含静态 E+Σ 时正确，船长 t62f 诊断）。
-    # ac_base: (n_ac, dim)，ac_env_tab: (n_ac, n_tab)——每光波独立门控。
-    if ac_base is not None and ac_env_tab is not None:
-        n_ac = ac_base.shape[0]
-        for wi in range(n_ac):
-            ei = t / ac_env_dt
-            i0 = int(ei)
-            if i0 >= ac_env_tab.shape[1] - 1:
-                i0 = ac_env_tab.shape[1] - 2
-            f = ei - i0
-            envv = ac_env_tab[wi, i0] * (1.0 - f) \
-                + ac_env_tab[wi, i0 + 1] * f
-            dev = envv * envv
-            if dev != 0.0:
-                for k in range(phi.shape[0]):
-                    v = ac_base[wi, k]
-                    if v != 0.0:
-                        res[k] += -1j * Cv * dev * v * phi[k]
-    if gamma is not None:
-        # 耗散对角项直接加在返回（不经 -1j·C——否则变虚数增长）；
-        # gamma 为扩展空间长度（N²·P，调用侧已 tile）
-        for k in range(phi.shape[0]):
-            if gamma[k] != 0.0:
-                res[k] -= 0.5 * Cv * gamma[k] * phi[k]
-    return res
+# t73：φ-帧 RHS 内核上收 coupling.rhs_phi_pairs（单/两体同一实现——
+# t66 语义收敛：双方均 a<b 单侧打包 + 内核厄米补齐；AC 对角 pair 风格
+# ac_base (n_ac, dim) + 独立 env 表；gamma 扩展空间长度 NonHermitian）
+from .coupling import rhs_phi_pairs as _rhs_mixed_pair  # noqa: E402
 
 
 def _pack_rhs(pairs, t_end, n_tab=20001):
@@ -102,90 +41,33 @@ def _pack_rhs(pairs, t_end, n_tab=20001):
     return _pk(pairs, t_end, n_tab)
 
 
-def _ac_ize_pair(E, A_o, omega_opt, r_crit=R_CRIT, cache=None, states=None,
-                 field=None, B_gauss=0.0, inject=False):
-    """AC 化（t70 根因修复）：剔除远强对；**位移默认不注入**（inject=False）。
+def _ac_ize_pair(E, A_o, omega_opt, r_crit=R_CRIT):
+    """AC 化（t70 定案）：剔除远强对；**位移不注入**。
 
-    位移语义（t70 决定性实验——375ns 交换窗 max|Δpops|=8.2e-5 ≡ hard）：
-    **近对（如 60S↔6P）保留在光子块 M=1 动态，AC 位移自然涌现**——与
-    hard 的 RWA 动态同物理（M=1 对角化涌现 −18.87 ≡ 静态引擎 −16.47，
-    M=1/2/3/4 收敛）。若再注入全量静态位移（direct_ac_stark_shifts 含
-    近对贡献 −61.6 等）→ 与光子块动态**双计** → 交换对过补偿不共振
-    （注入后 0.012 vs 全关 0.558 的根因；用户"代码写对物理自然涌现"
-    原则的直接体现——位移是近对动态的涌现量，不是可注入的外部量）。
-
-    被剔除的远强对（r>r_crit，本场景 = 60S↔60P 巨对 r=0.06-0.09）：
-    hard 的 build_two_field opt_terms 根本不含它们（RWA 光场只驱动
-    drive 近共振对）→ mix 剔除后**也不应注入**其位移（hard 无对应物理）。
-
-    inject=True 仅用于显式需要 AC 化补偿的场景（光子块 M=1 无法承载的
-    近强对——本场景无）；默认 False 与 hard 语义对齐。
-
-    返回 (A_new, shifts)：A_new = 剔除远强对后的光场 A（近对保留）；
-    shifts = inject 时 N 维静态引擎位移（env² 全量时变语义 + K0 纯 E——
-    t62e/t62f 定案），否则全 0（t70 定案）。
+    近对（如 60S↔6P）保留在光子块 M=1 动态、AC 位移自然涌现——与 hard 的
+    RWA 动态同物理（M=1 对角化涌现 −18.87 ≡ 静态引擎 −16.47）。再注入全量
+    静态位移 = 与动态双计（375ns 交换 0.012 vs 0.558 的根因，t70 实验定案；
+    旧 inject=True 考古语义已随 t73b 深度清理移除）。
     """
     from .acize import acize_physical
     if A_o is None or not np.any(np.abs(A_o) > 1e-9):
-        return (np.zeros_like(A_o, float) if A_o is not None else None,
-                np.zeros(len(E)))
+        return None
     A_new, _ = acize_physical(
         E, [dict(kind='exact', A=np.asarray(A_o, float),
                  omega_L_mhz=float(omega_opt))], r_crit)
-    A_new = A_new[0]
-    if not inject:
-        return A_new, np.zeros(len(E))
-    # ---- 以下仅 inject=True：静态引擎位移（优先）；无 cache 退回 far_sos ----
-    if cache is not None and states is not None and field is not None:
-        from . import static_atom
-        # groups = 全部 (n,l,j) 组（**含 6P 等 F 超精细态**——t69 教训：m==0.5
-        # 过滤会漏 6P（F 态 m 字段是 mF 范围 ±3 无 +0.5）→ 60S↔6P 近对丢失 →
-        # 60S 频移算错（+8 vs 正确 −53）→ 交换对 dressed 全错）
-        groups = []
-        seen = set()
-        for s in states:
-            k = (s['n'], s['l'], s['j'])
-            if k not in seen:
-                seen.add(k)
-                groups.append(dict(n=s['n'], l=s['l'], j=s['j']))
-        cfg = dict(enabled=True,
-                   frequency_hz=float(field.get('omega_L_mhz', omega_opt))
-                   * 1e6,
-                   intensity=float(field.get('intensity_mwcm2', 0.0)),
-                   polarization=field.get('pol', 'π'), elliptical=False)
-        shifts = static_atom.direct_ac_stark_shifts(cache, groups, cfg,
-                                                    B_gauss=float(B_gauss))
-        sh = np.zeros(len(E))
-        for i, s in enumerate(states):
-            key = (s['n'], s['l'], s['j'], f"m_J={s['m']:+.1f}", 0)
-            if key in shifts:
-                sh[i] += float(shifts[key])
-        return A_new, sh
-    sh_f = np.zeros(len(E))
-    for i in range(len(E)):
-        for k in range(i + 1, len(E)):
-            if abs(A_new[i, k]) < 1e-9:
-                continue
-            nu = E[k] - E[i]
-            dE1 = -(A_new[i, k] ** 2) * nu / (nu ** 2
-                                              - float(omega_opt) ** 2) / 2.0
-            sh_f[i] += dE1
-            sh_f[k] -= dE1
-    return A_new, sh_f
+    return A_new[0]
 
 
 def _build_pair_geometry(E, optA_ac, optB_ac, omega_opt):
-    """两体光子块结构（t69 逐波最终形态）：K0 共享 + **每波独立 Kcw 提取**。
+    """两体光子块结构（t73b 单次装配）：全部光波（已按侧提升）入同一载频组
+    → 一个 _SambeSetup 同时给出 K0（纯 E）与逐波 Kcw（t69 逐波形态：
+    交叉项不可能出现；a<b 三角过滤 + |ΔD|<BW_OPT 反旋过滤）。
 
-    optA_ac / optB_ac：A/B 侧 AC 化后光波列表，元素 (A_new, env)——
-    每波独立 lift_side_A（A 侧 A⊗I / B 侧 I⊗A）→ _SambeSetup → Kcw 全矩阵
-    提取（含 (a>b) 反向对——镜像 t67 修复后基线；|ΔD|<BW_OPT 反旋过滤），
-    pairs 携带各自 env（交叉项不可能出现——t69 根因修复）。
-
-    K0_pair[i,j,n] = E_i+E_j − n·ω_opt（dim N²·3，A 无关——共享光子块）。
+    optA_ac / optB_ac 元素 (A_new, env)——A 侧 lift_side_A(A⊗I)、B 侧 I⊗A。
     """
     from .tensor_fields import lift_side_A
-    from .evolve_sambe import _SambeSetup, _group_by_freq
+    from .sambe import _SambeSetup
+    from .field_build import _group_by_freq
     N = len(E)
     N2 = N * N
     P = 3
@@ -194,43 +76,35 @@ def _build_pair_geometry(E, optA_ac, optB_ac, omega_opt):
     def _one(t):
         return np.ones_like(np.atleast_1d(t), float)
 
-    E_pair = np.array([E[i] + E[j] for i in range(N) for j in range(N)])
-    # K0 共享：A 无关（E_pair − n·ω_opt）——任取一 setup 的 K0
-    setup_ref = _SambeSetup(
-        E_pair, _group_by_freq([dict(kind='exact',
-                                     A=np.zeros((N2, N2)),
-                                     omega_L_mhz=float(omega_opt),
-                                     waveform=_one)]), [1])
-    K0 = np.real(np.diag(setup_ref.K0))
-
-    pairs_opt = []
+    E_pair = np.array([E[i] + E[j]
+                       for i in range(N) for j in range(N)])
+    flds = []
+    envs_out = []
     for side, lst in (('A', optA_ac), ('B', optB_ac)):
-        for A_new, env, _shifts in lst:
+        for A_new, env in lst:
             if A_new is None or not np.any(np.abs(A_new) > 1e-9):
                 continue
-            A_lift = lift_side_A(np.asarray(A_new, float), N, side)
-            setup = _SambeSetup(
-                E_pair, _group_by_freq([dict(kind='exact', A=A_lift,
-                                             omega_L_mhz=float(omega_opt),
-                                             waveform=_one)]), [1])
-            for Kcw in (setup.Kc_dense[0] or []) if setup.Kc_dense else []:
-                if Kcw is None:
-                    continue
-                Kcw = np.asarray(Kcw, complex)
-                ii, jj = np.nonzero(np.abs(Kcw) > 1e-12)
-                for a, b in zip(ii, jj):
-                    # 三角过滤（t70 根因修复）：Kcw 为 Hermitian 全矩阵
-                    # （构造 K[c,r]+=conj），np.nonzero 遍历上下三角——若
-                    # (a,b) 与 (b,a) 都打包，RHS 双向补齐（tot[a]+=v·ph·phi[b]
-                    # + conj 反向）会把同一耦合驱动两次 → Rabi 翻倍 →
-                    # AC 位移 ∝Rabi² 失真 4× → 交换对永不共振（T4/T6 同款
-                    # bug 第四次；V_dd/微波打包均有 a0>=b0 / ia>=ka 过滤，
-                    # 唯光场漏）。保留 a<b 单侧，反向由 RHS 厄米补齐自动。
-                    if a >= b:
-                        continue
-                    if abs(K0[a] - K0[b]) < BW_OPT:
-                        pairs_opt.append((int(a), int(b), Kcw[a, b],
-                                          float(K0[a] - K0[b]), env))
+            if env is None:
+                env = _one
+            flds.append(dict(kind='exact',
+                             A=lift_side_A(np.asarray(A_new, float), N, side),
+                             omega_L_mhz=float(omega_opt), waveform=env))
+            envs_out.append(env)
+    setup = _SambeSetup(E_pair, _group_by_freq(flds), [1])
+    K0 = np.real(np.asarray(setup.diag))
+    pairs_opt = []
+    for Kcw, env in zip(setup.Kc_dense[0] or [], envs_out):
+        Kcw = np.asarray(Kcw, complex)
+        ii, jj = np.nonzero(np.abs(Kcw) > 1e-12)
+        for a, b in zip(ii, jj):
+            # a<b 三角过滤（t70）：Kcw 为 Hermitian 全矩阵，双向打包会把
+            # 同一耦合驱动两次（Rabi 翻倍 → AC 位移失真 4×）；
+            # 反向由 RHS 厄米补齐自动。
+            if a >= b:
+                continue
+            if abs(K0[a] - K0[b]) < BW_OPT:
+                pairs_opt.append((int(a), int(b), Kcw[a, b],
+                                  float(K0[a] - K0[b]), env))
     return K0, pairs_opt, P, dim
 
 
@@ -255,15 +129,10 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
                       vdd_matrix=None, R_um=None, theta_deg=0.0,
                       phi_deg=0.0, cache=None, tol=1e-8, max_step=0.05,
                       progress_arr=None, log=None, record_amp=False,
-                      decays_A=None, decays_B=None, driver='numba',
-                      B_gauss=0.0, ac_inject=False):
+                      decays_A=None, decays_B=None, driver='numba'):
     """两体混合引擎（正式版）：光场光子块 + 微波/V_dd 当场，φ-帧单 DOP853。
 
     fields_A/B : kind='exact' 场列表（build_fields_exact 输出——光场 + 微波）
-    B_gauss    : 场景磁场（Zeeman——静态引擎位移用；GUI 传 _field_B）
-    ac_inject  : t70 定案——默认 False：**不注入静态 AC 位移**（近对
-        60S↔6P 光子块 M=1 动态自然涌现 ≡ hard RWA；注入与动态双计 → 破坏
-        交换）。True = 旧 t69 语义（剔除远强对 + 注入全量静态位移）。
     vdd_matrix  : V_dd 稀疏/稠密矩阵（N²×N²）；None 且给 R_um/cache 时算
     返回 dict(t, pops_2d, pops_A, pops_B, states_2d, loss_A, loss_B,
               method='mixed', backend='mixed-phi-dop853-pair', error_report)。
@@ -273,8 +142,10 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
     hard_pair 同语义（_pair_loss_vectors；显式落点/纯退相拒绝）。
     """
     log = log or (lambda *a: None)
+    from .coupling import stage_progress
     if progress_arr is None:
-        progress_arr = np.zeros(2)
+        progress_arr = np.zeros(3)
+    stage_progress(progress_arr, 0, 0.0)     # 阶段 0：装配/JIT 装载
     t = np.asarray(t_grid, float)
     T = float(t[-1])
     N = len(states)
@@ -327,34 +198,18 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
             V = sp.csr_matrix(np.asarray(V, complex))
     V_sp = V
 
-    # ---- AC 化逐波（每波独立剔除远强对 + 静态引擎位移；env² 全量门控）----
-    # optA_ac/optB_ac 元素：(A_new, env, shifts)——shifts 为静态引擎位移
-    # （t69 修正：direct_ac_stark_shifts 权威值，非 far_sos 二阶近似）
-    optA_ac = []
-    optB_ac = []
-    shA = np.zeros(N)
-    shB = np.zeros(N)
-    for (A, om, env), fld in zip(optA, [f for f in fields_A
-                                        if f['omega_L_mhz'] > 1e5]):
-        A_new, shifts = _ac_ize_pair(E, A, om, cache=cache, states=states,
-                                     field=fld, B_gauss=B_gauss,
-                                     inject=ac_inject)
-        optA_ac.append((A_new, env, shifts))
-        shA = shA + shifts
-    for (A, om, env), fld in zip(optB, [f for f in fields_B
-                                        if f['omega_L_mhz'] > 1e5]):
-        A_new, shifts = _ac_ize_pair(E, A, om, cache=cache, states=states,
-                                     field=fld, B_gauss=B_gauss,
-                                     inject=ac_inject)
-        optB_ac.append((A_new, env, shifts))
-        shB = shB + shifts
-    if np.any(shA != 0) or np.any(shB != 0):
-        log(f'[mixed_pair] AC 化：δA {shA.min():+.2f}..{shA.max():+.2f}'
-            f' δB {shB.min():+.2f}..{shB.max():+.2f} MHz'
-            f'（{len(optA_ac)}+{len(optB_ac)} 光波逐波，'
-            f'ac_inject={ac_inject}）')
+    # ---- AC 化逐波（每波独立剔除远强对；位移不注入——t70 定案，见
+    # _ac_ize_pair docstring。t73b：shifts 全 0 → 时变 AC 对角路径移除）----
+    optA_ac = [(A_new, env) for (A, om, env) in optA
+               if (A_new := _ac_ize_pair(E, A, om)) is not None]
+    optB_ac = [(A_new, env) for (A, om, env) in optB
+               if (A_new := _ac_ize_pair(E, A, om)) is not None]
+    if optA_ac or optB_ac:
+        log(f'[mixed_pair] AC 化：剔除远强对'
+            f'（{len(optA_ac)}+{len(optB_ac)} 光波逐波，位移不注入）')
 
     # ---- 光子块结构（K0 纯 E——t62f 语义；共享扇区 M=1）----
+    stage_progress(progress_arr, 0, 0.2)     # AC 化完成 → 光子块几何
     K0, pairs_opt, P, dim = _build_pair_geometry(
         E, optA_ac, optB_ac, om_o)
     # 耗散 gamma（N²）→ 扩展空间（N²·P，每扇区同衰减）
@@ -404,7 +259,7 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
                     for jb in range(N):
                         if side == 'A':
                             # t62f：dE 用纯 E（C 点——位移由 RHS 时变对角承担；
-                            # 含 shA/shB 会在光关时仍污染配对共振）
+                            # 位移不注入（t70）——配对共振不被静态位移污染）
                             dE = (E[ia] + E[jb]) - (E[ka] + E[jb])
                             a0 = ia * N + jb
                             b0 = ka * N + jb
@@ -436,33 +291,10 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
     pack = _pack_rhs(pairs, T)
     Cv = _CONV
     stat = np.zeros(4)
-    # t69 逐波 AC 对角：ac_base (n_ac, dim) + ac_env_tab (n_ac, n_tab)——
-    # **每光波独立**（shifts_f × env_f(t)²；交叉项不可能出现）。A 侧波位移
-    # 作用于 i 侧、B 侧波作用于 j 侧（两体 |i,j⟩ 各取各的）。
-    ac_base = None
-    ac_env_tab = None
+    stage_progress(progress_arr, 0, 0.9)     # 打包/env 表完成（JIT 在驱动首调）
+    ac_base = None          # t73b：位移不注入（t70 定案）→ AC 对角恒关；
+    ac_env_tab = None       # 内核 AC 分支保留供单原子 mixed 使用
     ac_env_dt = 1.0
-    ac_waves = ([(shifts, env_f, 'A') for (_A, env_f, shifts) in optA_ac]
-                + [(shifts, env_f, 'B') for (_A, env_f, shifts) in optB_ac])
-    ac_waves = [w for w in ac_waves if w[0] is not None
-                and np.any(np.abs(w[0]) > 0.0)]
-    if ac_waves:
-        n_ac = len(ac_waves)
-        n_ac_tab = 4001
-        ac_base = np.zeros((n_ac, dim), float)
-        ac_env_tab = np.zeros((n_ac, n_ac_tab), float)
-        ts_ac = np.linspace(0.0, T, n_ac_tab)
-        for wi, (sh_f, env_f, side) in enumerate(ac_waves):
-            for i in range(N):
-                for j in range(N):
-                    v = sh_f[i] if side == 'A' else sh_f[j]
-                    if v != 0.0:
-                        for pn in range(P):
-                            ac_base[wi, (i * N + j) + pn * N2] = v
-            if env_f is None:
-                env_f = _one
-            ac_env_tab[wi] = np.asarray(env_f(ts_ac), float)
-        ac_env_dt = T / (n_ac_tab - 1)
 
     def rhs(tv, phi):
         return _rhs_mixed_pair(tv, phi, pack['iis'], pack['jjs'],
@@ -475,6 +307,8 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
     pops[0] = np.abs(psi0_2d) ** 2
     ns = np.array([-1, 0, 1])
     # t61：scipy solve_ivp 逐区间 → dop853 核心层单次贯穿（numba 全编译驱动）
+    # 阶段 1（积分）由驱动在首个接受步置位——调用内的 numba 装载/编译期
+    # 保持阶段 0（"准备"标签 + 墙钟耗时），GUI 显示不失真
     if driver == 'numba':
         from .dop853 import _dop853_driver
         y_out = _dop853_driver(
@@ -483,20 +317,19 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
             pack['dDs'], pack['is_mw'], pack['wcos'], pack['n_pairs_w'],
             pack['env_tab'], pack['env_dt'], Cv, gamma, ac_base,
             ac_env_tab, ac_env_dt)
+        stage_progress(progress_arr, 2, 0.0)  # 阶段 2：收尾（跨扇区投影）
+        from .sambe import sector_sum_pops
         for i in range(1, len(t)):
-            tb = float(t[i])
-            X = y_out[i]
-            Xf = np.exp(-1j * Cv * K0 * tb) * X
-            psi = np.zeros(N2, complex)
-            for pn in range(P):
-                psi += np.exp(-1j * Cv * ns[pn] * om_o * tb) \
-                    * Xf[pn * N2: (pn + 1) * N2]
-            pops[i] = np.abs(psi) ** 2
+            # t73b：与单原子同一重构（= 旧 Xf/ns 相位式——e^{-iC·E·t} 全局
+            # 相位后光子相位恰对消，布居相同）
+            pops[i] = sector_sum_pops(y_out[i], P, N2)
+            stage_progress(progress_arr, 2, i / max(len(t) - 1, 1))
         n_dop = int(stat[0]) if len(stat) > 0 else 0
     else:
         X = X0.copy()
         tprev = 0.0
         n_dop = 0
+        stage_progress(progress_arr, 1, 0.0)  # 阶段 1：积分（scipy 逐区间）
         for i in range(1, len(t)):
             if progress_arr[1] != 0.0:
                 raise RuntimeError('用户取消')
@@ -515,8 +348,7 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
             pops[i] = np.abs(psi) ** 2
             tprev = tb
             progress_arr[0] = min(tprev / T, 0.999)
-    if len(progress_arr) > 0:
-        progress_arr[0] = 1.0
+    stage_progress(progress_arr, 2, 1.0)
 
     # t62 耗散：loss_A/loss_B 曲线 + 含 loss 范数（同 evolve_sambe_pair）
     loss_A = np.zeros(len(t))
@@ -532,12 +364,11 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
             pops.sum(axis=1) + loss_A + loss_B - 1.0)))
     pops_A = _tensor._reduce_A(pops, N)
     pops_B = _tensor._reduce_B(pops, N)
-    E_pair = np.array([(E[i] + shA[i]) + (E[j] + shB[j])
+    E_pair = np.array([E[i] + E[j]
                        for i in range(N) for j in range(N)])
     report = dict(nfev=n_dop, max_norm_dev=norm_dev,
                   P=P, dim=dim, photon_blocks={f'{om_o:.6g}MHz': 3},
-                  n_ac_pairs=int((np.abs(shA) > 1e-9).sum()
-                                 + (np.abs(shB) > 1e-9).sum()))
+                  ac_shifts=None)
     out = dict(
         t=t, pops_2d=pops, pops_A=pops_A, pops_B=pops_B,
         loss_A=loss_A, loss_B=loss_B,
@@ -550,11 +381,7 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
         error_report=report,
     )
     if record_amp:
-        Xf = np.exp(-1j * Cv * K0 * T) * X
-        psi = np.zeros(N2, complex)
-        for pn in range(P):
-            psi += np.exp(-1j * Cv * ns[pn] * om_o * T) \
-                * Xf[pn * N2: (pn + 1) * N2]
-        out['psi_amp'] = psi
+        from .sambe import sector_sum_amp
+        out['psi_amp'] = sector_sum_amp(X, P, N2)
     log(f'[mixed_pair] 完成：norm {norm_dev:.2e}，DOP853 求值 {n_dop}')
     return out

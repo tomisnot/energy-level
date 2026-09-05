@@ -18,7 +18,7 @@
 import numpy as np
 
 from . import evolve
-from .evolve_sambe import build_fields_exact      # noqa: F401（第一性引擎场）
+from .field_build import build_fields_exact       # noqa: F401（第一性场构造，t74 归位）
 
 # 与旧 pulse.py 一致的包络形状（数据类抽离 UI，纯计算）
 POLS = ['σ+', 'π', 'σ-', '椭圆偏']

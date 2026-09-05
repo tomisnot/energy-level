@@ -23,10 +23,11 @@
 """
 
 # ============================================================
-# hard 单/两体合并（t19：hard_numba + hard_pair → hard.py）。
-# 单原子：_rhs_hard / _pack_hard / build_hard_rhs / evolve_hard_fast；
-# 两体：_rhs_hard_pair / _pack_pair_hard / evolve_hard_pair（k=i·N+j 张量
-# + V_dd 相位扭曲 + njit DOP853）。系数 _A.._D 供 dop853 核心层 import。
+# hard 单/两体同一内核（t19 合并文件；t73b 单原子并入两体路径）。
+# 单原子：evolve_hard_fast（= evolve_hard）——合成 N_B=1 旁观维走
+#         _pack_pair_hard + _rhs_hard_pair（旧单体内核已删）；
+# 两体：  evolve_hard_pair（k=i·N+j 张量 + V_dd 相位扭曲 + njit DOP853）。
+# 系数 _A.._D 供 dop853 核心层 import；_env_at/_env_tab 单源在本模块。
 # ============================================================
 
 import numpy as np
@@ -34,13 +35,14 @@ from numba import njit
 
 from . import evolve as _evolve
 from . import pair_evolve as _pe
+from .evolve_util import (_single_loss_rates, _loss_and_norm)  # t74 工具归位
 from .evolve_sambe import _CONV
 
 # 包络查表点数（620ns → h≈0.0047ns；插值误差 ~3e-10）
 _TAB_N = 2 ** 17
 
 
-@njit(cache=True)
+@njit(cache=True, nogil=True)
 def _env_at(tab, t, t0, dt):
     """均匀网格线性插值（端点 clamp）。"""
     x = (t - t0) / dt
@@ -54,159 +56,10 @@ def _env_at(tab, t, t0, dt):
     return tab[i0] * (1.0 - f) + tab[i0 + 1] * f
 
 
-@njit(cache=True)
-def _rhs_hard(t, y, E, opt_As, opt_tabs, opt_deltas, opt_masks,
-              mw_As, mw_ws, mw_tabs, mw_phases, t0, dt, CONV, gamma=None):
-    """单原子 hard RHS（光场旋转系 + 微波 cos(φ_f(t)) 硬积分，零近似）。
-
-    y' = −iC·u·(Ṽ·(conj(u)∘y))，u = exp(iC·E·t)。
-    光场拍频（§2.3/§8）：δ=ω_f−ω_ref ≠ 0 的光场耦合项乘
-    exp(iC·δ·t·(m[i]−m[k]))（m=旋转流形掩码，t10 验证 exp 拍频正确）；
-    δ=0（首场/旧元组）逐位退化为 c·A 原行为。
-    微波（t18 统一 cos(φ_f(t)) 任意相位）：相位表 mw_phases 线性插值求值
-    ——定频 φ=C·ω·t 为线性表（插值精确，逐位≈直算）；变频/任意相位由
-    phase_fn 采样。步长随 φ' 自适应（物理必然）。
-    所有矩阵按非零元跳过（A 稀疏，光学只耦合 6P↔60S 等少数对）。
-    """
-    N = E.shape[0]
-    V = np.zeros((N, N), np.complex128)
-    n_opt = opt_As.shape[0]
-    for oi in range(n_opt):
-        c = _env_at(opt_tabs[oi], t, t0, dt)
-        if c != 0.0:
-            A = opt_As[oi]
-            d = opt_deltas[oi]
-            if d != 0.0:
-                p1 = np.exp(1j * CONV * d * t)
-                p2 = p1.conjugate()
-                mask = opt_masks[oi]
-                for i in range(N):
-                    mi = mask[i]
-                    for k in range(N):
-                        a = A[i, k]
-                        if a != 0.0:
-                            ph = p1 if (mi - mask[k]) > 0 else p2
-                            V[i, k] += c * a * ph
-            else:
-                for i in range(N):
-                    for k in range(N):
-                        a = A[i, k]
-                        if a != 0.0:
-                            V[i, k] += c * a
-    n_mw = mw_As.shape[0]
-    for mi in range(n_mw):
-        env = _env_at(mw_tabs[mi], t, t0, dt)
-        if env != 0.0:
-            cw = env * np.cos(_env_at(mw_phases[mi], t, t0, dt))
-            A = mw_As[mi]
-            for i in range(N):
-                for k in range(N):
-                    a = A[i, k]
-                    if a != 0.0:
-                        V[i, k] += cw * a
-    u = np.exp(1j * CONV * E * t)
-    z = np.empty(N, np.complex128)
-    for k in range(N):
-        z[k] = u[k].conjugate() * y[k]
-    out = np.empty(N, np.complex128)
-    for i in range(N):
-        acc = 0.0j
-        for k in range(N):
-            vik = V[i, k]
-            if vik != 0.0:
-                acc += vik * z[k]
-        out[i] = -1j * CONV * u[i] * acc
-    # t24：耗散 NonHermitian 对角 −iΓ_MHz/2 → RHS −(C·Γ)/2·y
-    # （gamma 为 MHz；落点=丢失，与两体 hard 同语义）
-    if gamma is not None:
-        for i in range(N):
-            out[i] -= 0.5 * CONV * gamma[i] * y[i]
-    return out
-
-
 def _env_tab(_env_sample, T, n_pts):
     """包络在 [0,T] 均匀网格上的采样表（_env_sample 为绝对时间 callable）。"""
     ts = np.linspace(0.0, float(T), n_pts)
     return np.asarray(_env_sample(ts), float)
-
-
-def _pack_hard(fields_meta, T, n_tab=_TAB_N):
-    """fields_meta（build_two_field 输出）→ 内核打包数组。
-
-    返回 (E, opt_As, opt_tabs, opt_deltas, opt_masks,
-          mw_As, mw_ws, mw_tabs, t0, dt, CONV)，
-    供 njit 内核直接消费（打包/查表在热循环外做一次）。
-    opt_deltas：光场拍频 δ=ω_f−ω_ref（首场/旧 4 元组 = 0 → 逐位退化）；
-    opt_masks：旋转流形掩码（拍频相位符号 m[i]−m[k]）。
-    """
-    E_rot = np.asarray(fields_meta['E_rot'], float)
-    E = E_rot - float(E_rot.min())
-    opt_terms = fields_meta['opt_terms']
-    mw_groups = fields_meta['mw_groups']
-    n0 = E.size
-    if opt_terms:
-        opt_As = np.stack([np.asarray(t[0], float) for t in opt_terms])
-        opt_tabs = np.stack([_env_tab(t[1], T, n_tab) for t in opt_terms])
-        opt_deltas = np.array(
-            [float(t[2]) - float(t[4]) if len(t) > 4 else 0.0
-             for t in opt_terms], float)
-        opt_masks = np.stack(
-            [np.asarray(t[5], int) if len(t) > 5
-             else np.zeros(n0, int)
-             for t in opt_terms])
-    else:
-        opt_As = np.zeros((0, n0, n0))
-        opt_tabs = np.zeros((0, n_tab))
-        opt_deltas = np.zeros(0)
-        opt_masks = np.zeros((0, n0), int)
-    mw_As_list, mw_ws_list, mw_tabs_list, mw_phase_list = [], [], [], []
-    for g in mw_groups:
-        w = float(g['omega_mhz'])
-        # t18：hard 统一 cos(φ_f(t)) 任意相位路径——定频 φ=C·ω·t（线性，
-        # 插值精确退化）；变频/任意相位由 mw_groups 的 phase_fn 提供
-        # （如 ArbitraryWave 解析信号相位；无则默认定频）。
-        ph_fn = g.get('phase_fn')
-        for A, wf in zip(g['As'], g['envs']):
-            mw_As_list.append(np.asarray(A, float))
-            mw_ws_list.append(w)
-            mw_tabs_list.append(_env_tab(wf, T, n_tab))
-            if ph_fn is None:
-                ts = np.linspace(0.0, float(T), n_tab)
-                mw_phase_list.append(_CONV * w * ts)
-            else:
-                mw_phase_list.append(_env_tab(ph_fn, T, n_tab))
-    if mw_As_list:
-        mw_As = np.stack(mw_As_list)
-        mw_ws = np.asarray(mw_ws_list, float)
-        mw_tabs = np.stack(mw_tabs_list)
-        mw_phases = np.stack(mw_phase_list)
-    else:
-        mw_As = np.zeros((0, n0, n0))
-        mw_ws = np.zeros(0)
-        mw_tabs = np.zeros((0, n_tab))
-        mw_phases = np.zeros((0, n_tab))
-    t0 = 0.0
-    dt = float(T) / (n_tab - 1) if n_tab > 1 else 1.0
-    CONV = float(_CONV)
-    return (E, opt_As, opt_tabs, opt_deltas, opt_masks,
-            mw_As, mw_ws, mw_tabs, mw_phases, t0, dt, CONV)
-
-
-def build_hard_rhs(fields_meta, T, n_tab=_TAB_N, gamma=None):
-    """fields_meta（build_two_field 输出）→ njit RHS 闭包（供 solve_ivp 使用）。
-
-    数组在闭包外预打包（打包/查表在热循环外做一次）。
-    gamma（N，MHz，可 None）：t24 耗散 NonHermitian 对角（落点=丢失）。
-    """
-    (E, opt_As, opt_tabs, opt_deltas, opt_masks,
-     mw_As, mw_ws, mw_tabs, mw_phases, t0, dt, CONV) = \
-        _pack_hard(fields_meta, T, n_tab=n_tab)
-
-    def _rhs_hard_pack(tv, y):
-        return _rhs_hard(tv, y, E, opt_As, opt_tabs, opt_deltas, opt_masks,
-                         mw_As, mw_ws, mw_tabs, mw_phases, t0, dt, CONV,
-                         gamma)
-    return _rhs_hard_pack
 
 
 # ============================================================
@@ -334,131 +187,81 @@ def _mw_terms_of(fields_meta):
     return mw_terms
 
 
-def _single_loss_rates(states, decays):
-    """单原子寿命通道 → 每态耗散率向量 Gamma_ns（/ns，落点=丢失）。
-
-    与两体 _pair_loss_vectors 同语义：from 解析到索引，Γ（MHz）×1e-3
-    = 速率 /ns；显式落点（to 在空间）/纯退相 → NotImplementedError
-    （落点=丢失的确定性 NonHermitian 演化；其他请用 lindblad 引擎）。
-    """
-    Gamma = np.zeros(len(states))
-    for ch in decays or []:
-        g_idx = _evolve._resolve_state_idx(states, ch['from'])
-        if g_idx is None:
-            raise ValueError(
-                f'hard 耗散：通道 from 无法解析到基组 ({ch["from"]!r})')
-        to = ch.get('to')
-        if to is not None and _evolve._resolve_state_idx(states, to) is not None:
-            raise NotImplementedError(
-                'hard 耗散仅支持落点=丢失（寿命通道）；显式落点 / 纯退相'
-                '请用单原子 lindblad 引擎')
-        gam_ns = float(ch['gamma_mhz']) * 1e-3          # MHz → /ns
-        if gam_ns <= 0:
-            continue
-        Gamma[g_idx] += gam_ns
-    return Gamma
-
-
-def _loss_and_norm(pops, Gamma_ns, t):
-    """从布居 + 耗散率（/ns）× 时间数组 → loss 数组 + 含 loss 范数偏差。
-
-    loss(t) = ∫₀ᵗ pops(τ)·Gamma_ns dτ（梯形积分），
-    norm_dev = max|Σpops(t) + loss(t) − 1|（无耗散时 Σpops≡1）。
-    """
-    if not np.any(Gamma_ns):
-        return np.zeros(len(t)), float(np.max(np.abs(pops.sum(axis=1) - 1.0)))
-    rate = pops @ Gamma_ns
-    dt = np.diff(t)
-    loss = np.zeros(len(t))
-    loss[1:] = np.cumsum(0.5 * (rate[1:] + rate[:-1]) * dt)
-    norm_dev = float(np.max(np.abs(pops.sum(axis=1) + loss - 1.0)))
-    return loss, norm_dev
-
-
 def evolve_hard_fast(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
                      progress_arr=None, log=None, record_amp=False,
                      n_tab=_TAB_N, driver='numba', decays=None):
-    """evolve_hard 的 numba 加速版：同数学、同 DOP853、同返回契约。
+    """单原子 hard（t73b：与两体同一打包/内核/驱动——N_B=1 旁观维）。
 
-    driver='numba'（默认）：复用 dop853 核心层全编译 DOP853 主循环
-      （dop853._dop853_driver(_rhs_hard, ...)，njit first-class RHS 参数
-      化——t11 验证与旧驱动逐位一致）；RHS 在内核内直接调用——无 Python
-      派发开销（~10µs/RHS 而非 ~59µs）；
-    driver='scipy'：njit RHS + scipy solve_ivp（对照用）。
-    backend='hard-numba-dop853'。唯一差异：包络按查表线性插值求值
-    （误差 ~3e-10 ≪ rtol），其余逐位同构。
+    数学与旧单体内核逐项一致：u = exp(iC·E·t) 相互作用绘景、光场旋转系
+    RWA（拍频 exp(iC·δ·t·sign)）、微波 cos(φ_f(t)) 硬积分零近似、
+    NonHermitian gamma（落点=丢失）；差异仅在 RHS 求和的结合顺序
+    （三元组累加 vs 全矩阵装配，~1e-16/步舍入级，DOP853 容差内）。
+    driver='numba'（默认，dop853 核心层全编译主循环）| 'scipy'（对照）。
+    backend='hard-numba-dop853'。
     """
     log = log or (lambda *a: None)
+    from .coupling import stage_progress
     t = np.asarray(t_grid, float)
-    N = fields_meta['N']
+    T = float(t[-1])
+    N = len(states)
     E_rot = np.asarray(fields_meta['E_rot'], float)
+    E = E_rot - float(E_rot.min())
     opt_terms = fields_meta['opt_terms']
     mw_terms = _mw_terms_of(fields_meta)
-    psi0v = _evolve._as_vector(states, psi0)
-    T = float(t[-1])
-    E = E_rot - float(E_rot.min())
-    pack = _pack_hard(fields_meta, T, n_tab=n_tab)
+    stage_progress(progress_arr, 0, 0.3)     # 阶段 0：打包/装载
+    # t73b：合成 N_B=1 旁观侧（E_B=[0] → uB≡1，B 侧无场项、无 V_dd）——
+    # 单原子 hard 与 evolve_hard_pair 共用 _pack_pair_hard + _rhs_hard_pair
+    meta_B = dict(E_rot=np.zeros(1), opt_terms=[], mw_groups=[], N=1)
+    pack = _pack_pair_hard(fields_meta, meta_B, T, None, n_tab)
     # t24：耗散（落点=丢失）——Gamma_ns（/ns）→ gamma（MHz）传给内核
     has_decay = bool(decays)
     Gamma_ns = (_single_loss_rates(states, decays) if has_decay
                 else np.zeros(N))
     gamma = Gamma_ns / _CONV if has_decay else None
+    psi0v = _evolve._as_vector(states, psi0)
+    psi0_2d = np.kron(psi0v, np.ones(1, complex))   # 旁观振幅 1
 
     if driver == 'numba':
-        # 函数级 import：dop853 从本模块 import 系数（_A.._D），模块级
-        # 互引会成环——驱动只在运行期需要，函数级加载零开销（sys.modules）。
-        from .dop853 import _dop853_driver
-        prog = (np.zeros(2) if progress_arr is None
+        prog = (np.zeros(3) if progress_arr is None
                 else np.asarray(progress_arr, float))
         stat = np.zeros(4)
-        y_out = _dop853_driver(_rhs_hard, psi0v, t, T, float(rtol),
+        stage_progress(prog, 0, 0.9)
+        y_out = _dop853_driver(_rhs_hard_pair, psi0_2d, t, T, float(rtol),
                                float(atol), np.inf, prog, stat, *pack, gamma)
         pops = np.abs(y_out) ** 2
         nfev = int(stat[0])
         n_acc = int(stat[1])
         n_rej = int(stat[2])
-        if progress_arr is not None:
-            progress_arr[0] = 1.0
+        stage_progress(prog, 2, 0.5)         # 阶段 2：收尾（loss/统计）
         log(f'[hard-numba] DOP853 完成：{len(t)} 输出点，{nfev} 次 RHS 求值'
             f'（{n_acc} 接受步 / {n_rej} 拒绝步）'
             + (f'（微波载波 {max((abs(w) for _, w, _ in mw_terms), default=0):.4g}'
                ' MHz 硬积分，零微波近似）'))
-        loss, norm_dev = _loss_and_norm(pops, Gamma_ns, t)
-        report = dict(n_segments=n_acc, max_richardson_diff=0.0,
-                      dt_min_hit=False,
-                      max_norm_dev=float(norm_dev))
-        if report['max_norm_dev'] > 1e-6:
-            log(f'[hard-numba] ⚠ 范数偏差 {report["max_norm_dev"]:.2e}'
-                '（DOP853 容差不足或 RHS 非厄米）')
-        out = dict(t=t, pops=pops, states=states,
-                   om_mhz=[float(np.abs(A).max()) for A, _, _ in mw_terms]
-                   + [float(np.abs(A_opt).max()) for A_opt, *_ in opt_terms],
-                   method='hard', backend='hard-numba-dop853',
-                   loss=loss, error_report=report)
-        if record_amp:
-            uT = np.exp(1j * _CONV * E * T)
-            out['psi_amp'] = np.conj(uT) * y_out[-1]
-        return out
+    else:
+        # ---- driver='scipy'：njit RHS + scipy solve_ivp（对照用）----
+        from scipy.integrate import solve_ivp
 
-    # ---- driver='scipy'：njit RHS + scipy solve_ivp ----
-    from scipy.integrate import solve_ivp
-    rhs = build_hard_rhs(fields_meta, T, n_tab=n_tab, gamma=gamma)
-    if progress_arr is not None:
-        progress_arr[0] = 0.15
-    sol = solve_ivp(rhs, (0.0, T), psi0v, method='DOP853',
-                    t_eval=t, rtol=rtol, atol=atol)
-    if not sol.success:
-        raise RuntimeError(f'hard(numba) 积分失败: {sol.message}')
-    pops = np.abs(sol.y).T ** 2
-    if progress_arr is not None:
-        progress_arr[0] = 1.0
-    nfev = getattr(sol, 'nfev', None)
-    log(f'[hard-numba(scipy)] DOP853 完成：{len(t)} 输出点'
-        + (f'，{nfev} 次 RHS 求值' if nfev else '')
-        + (f'（微波载波 {max((abs(w) for _, w, _ in mw_terms), default=0):.4g}'
-           ' MHz 硬积分，零微波近似）'))
+        def _rhs_pack(tv, y):
+            return _rhs_hard_pair(tv, y, *pack, gamma)
+        stage_progress(progress_arr, 1, 0.0)
+        sol = solve_ivp(_rhs_pack, (0.0, T), psi0_2d, method='DOP853',
+                        t_eval=t, rtol=rtol, atol=atol)
+        if not sol.success:
+            raise RuntimeError(f'hard(numba) 积分失败: {sol.message}')
+        y_out = sol.y.T
+        nfev = getattr(sol, 'nfev', None)
+        n_acc = -1
+        n_rej = -1
+        pops = np.abs(y_out) ** 2
+        stage_progress(progress_arr, 2, 0.5)
+        log(f'[hard-numba(scipy)] DOP853 完成：{len(t)} 输出点'
+            + (f'，{nfev} 次 RHS 求值' if nfev else '')
+            + (f'（微波载波 {max((abs(w) for _, w, _ in mw_terms), default=0):.4g}'
+               ' MHz 硬积分，零微波近似）'))
     loss, norm_dev = _loss_and_norm(pops, Gamma_ns, t)
-    report = dict(n_segments=1, max_richardson_diff=0.0, dt_min_hit=False,
+    stage_progress(progress_arr, 2, 1.0)
+    report = dict(n_segments=n_acc, max_richardson_diff=0.0,
+                  dt_min_hit=False,
                   max_norm_dev=float(norm_dev))
     if report['max_norm_dev'] > 1e-6:
         log(f'[hard-numba] ⚠ 范数偏差 {report["max_norm_dev"]:.2e}'
@@ -470,9 +273,8 @@ def evolve_hard_fast(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
                loss=loss, error_report=report)
     if record_amp:
         uT = np.exp(1j * _CONV * E * T)
-        out['psi_amp'] = np.conj(uT) * sol.y[:, -1]
+        out['psi_amp'] = np.conj(uT) * y_out[-1]
     return out
-
 
 
 # ============================================================
@@ -486,10 +288,11 @@ def evolve_hard_fast(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
 _VDD_MIN_FRAC = 1e-4
 
 
-def _embed_triplets(A, side, N, mask=None):
-    """单原子 A（N×N）→ 两体嵌入三元组 (rows, cols, vals[, signs])。
+def _embed_triplets(A, side, n_self, n_other, mask=None):
+    """单原子 A（n_self×n_self）→ 两体嵌入三元组 (rows, cols, vals[, signs])。
 
-    side='A'：A⊗I（k=(i,j)→i·N+j，仅 i 变化）；side='B'：I⊗A（仅 j 变化）。
+    side='A'：A⊗I（k=(i,j)→i·n_other+j）；side='B'：I⊗A（j·n_self+i）。
+    旁观维 n_other=1 时退化为单体三元组（rows=a）——t73b 单/两体同一内核。
     返回按 row 排序（写顺序化，numba 标量循环更快）。
     mask 提供时（光场拍频）：signs[每元素] = mask[单原子行]−mask[单原子列]
     ∈{±1,0}——旋转系内拍频相位 exp(iC·δ·t·sign) 的符号（t10：exp 非 cos）。
@@ -501,18 +304,18 @@ def _embed_triplets(A, side, N, mask=None):
     if side == 'A':
         for a, b in zip(ii, jj):
             s = mask[a] - mask[b] if has_mask else 0
-            for j in range(N):
-                rows.append(a * N + j)
-                cols.append(b * N + j)
+            for j in range(n_other):
+                rows.append(a * n_other + j)
+                cols.append(b * n_other + j)
                 vals.append(float(A[a, b]))
                 if has_mask:
                     signs.append(s)
     else:
         for a, b in zip(ii, jj):
             s = mask[a] - mask[b] if has_mask else 0
-            for i in range(N):
-                rows.append(i * N + a)
-                cols.append(i * N + b)
+            for i in range(n_other):
+                rows.append(i * n_self + a)
+                cols.append(i * n_self + b)
                 vals.append(float(A[a, b]))
                 if has_mask:
                     signs.append(s)
@@ -531,29 +334,33 @@ def _embed_triplets(A, side, N, mask=None):
     return rows, cols, vals
 
 
-def _pack_pair_hard(fields_meta_A, fields_meta_B, states, T, vdd_sp, n_tab):
+def _pack_pair_hard(fields_meta_A, fields_meta_B, T, vdd_sp, n_tab,
+                    E_lab=None):
     """→ (E_A, E_B, fld_rows, fld_cols, fld_vals, fld_envs, fld_phase_tabs,
          fld_ptr, fld_deltas, fld_sgns,
          vdd_rows, vdd_cols, vdd_vals, vdd_grp_start, vdd_grp_dE, t0, dt, CONV)
-    E_A/E_B：每原子 IP 能量（各自减 min）；fld_*：全部场项三元组
-    （光场相位表=0 → cos(0)=1，微波相位表=C·ω·t 或 phase_fn——t18 统一
-    cos(φ_f(t)) 任意相位）；fld_deltas：光场拍频 δ=ω_f−ω_ref（微波/首场=0）；
-    fld_sgns：每三元组相位符号 m[i]−m[k]（δ=0 项为 0）；
-    vdd_*：V_dd 按 dE 排序分组。
+    E_A/E_B：每原子 IP 能量（各自减 min；单体旁观模式 N_B=1、E_B=[0]）；
+    fld_*：全部场项三元组（光场相位表=0 → cos(0)=1，微波相位表=C·ω·t 或
+    phase_fn——t18 统一 cos(φ_f(t)) 任意相位）；fld_deltas：光场拍频
+    δ=ω_f−ω_ref（微波/首场=0）；fld_sgns：每三元组相位符号 m[i]−m[k]；
+    vdd_*：V_dd 按 dE 排序分组（E_lab 仅此时需要）。
+    t73b：N_A/N_B 由两侧 meta 的 E_rot 长度推断——单/两体同一打包。
     """
-    N = len(states)
-    E_lab = np.array([s['E_mhz'] for s in states], float)
     E_A = np.asarray(fields_meta_A['E_rot'], float)
     E_B = np.asarray(fields_meta_B['E_rot'], float)
     E_A = E_A - float(E_A.min())
     E_B = E_B - float(E_B.min())
-    E_lab_pair = np.array([E_lab[i] + E_lab[j]
-                           for i in range(N) for j in range(N)])
+    N_A = E_A.size
+    N_B = E_B.size
+    E_lab_pair = (np.array([E_lab[i] + E_lab[j]
+                            for i in range(N_A) for j in range(N_B)])
+                  if vdd_sp is not None else None)
 
     # ---- 场项 ----
     fld_rows_l, fld_cols_l, fld_vals_l, fld_env_l = [], [], [], []
     fld_phase_l, fld_delta_l, fld_sgn_l = [], [], []
     for side, meta in (('A', fields_meta_A), ('B', fields_meta_B)):
+        n_self, n_other = ((N_A, N_B) if side == 'A' else (N_B, N_A))
         for tup in meta['opt_terms']:
             A_opt, wf = tup[0], tup[1]
             omega_f = float(tup[2])
@@ -561,10 +368,11 @@ def _pack_pair_hard(fields_meta_A, fields_meta_B, states, T, vdd_sp, n_tab):
             mask = tup[5] if len(tup) > 5 else None
             delta = omega_f - omega_ref
             if delta != 0.0 and mask is not None:
-                r, c, v, sg = _embed_triplets(A_opt, side, N, mask)
+                r, c, v, sg = _embed_triplets(A_opt, side, n_self, n_other,
+                                              mask)
                 fld_sgn_l.append(sg)
             else:
-                r, c, v = _embed_triplets(A_opt, side, N)
+                r, c, v = _embed_triplets(A_opt, side, n_self, n_other)
                 fld_sgn_l.append(np.zeros(r.size, np.int8))
             fld_rows_l.append(r)
             fld_cols_l.append(c)
@@ -576,7 +384,7 @@ def _pack_pair_hard(fields_meta_A, fields_meta_B, states, T, vdd_sp, n_tab):
             w = float(g['omega_mhz'])
             ph_fn = g.get('phase_fn')
             for A, wf in zip(g['As'], g['envs']):
-                r, c, v = _embed_triplets(A, side, N)
+                r, c, v = _embed_triplets(A, side, n_self, n_other)
                 fld_rows_l.append(r)
                 fld_cols_l.append(c)
                 fld_vals_l.append(v)
@@ -662,7 +470,7 @@ def _pack_pair_hard(fields_meta_A, fields_meta_B, states, T, vdd_sp, n_tab):
 # ============================================================
 # njit 内核（_env_at 查表来自 dop853 核心层）
 # ============================================================
-@njit(cache=True)
+@njit(cache=True, nogil=True)
 def _rhs_hard_pair(t, y, E_A, E_B, fld_rows, fld_cols, fld_vals, fld_envs,
                    fld_phase_tabs, fld_ptr, fld_deltas, fld_sgns,
                    vdd_rows, vdd_cols, vdd_vals,
@@ -675,16 +483,17 @@ def _rhs_hard_pair(t, y, E_A, E_B, fld_rows, fld_cols, fld_vals, fld_envs,
     → cos(0)=1），变频/任意相位由 phase_fn 采样。
     耗散（t24）：gamma（N²，MHz）NonHermitian 对角 −iΓ/2。
     """
-    N = E_A.size
-    N2 = N * N
+    N_A = E_A.size
+    N_B = E_B.size
+    N2 = N_A * N_B
     uA = np.exp(1j * CONV * E_A * t)
     uB = np.exp(1j * CONV * E_B * t)
-    # zu[k] = conj(uA[i])·conj(uB[j])·y[k]
+    # zu[k] = conj(uA[i])·conj(uB[j])·y[k]（旁观 N_B=1 → uB≡1，单体动力学）
     zu = np.empty(N2, np.complex128)
-    for i in range(N):
+    for i in range(N_A):
         ui = uA[i].conjugate()
-        for j in range(N):
-            zu[i * N + j] = ui * uB[j].conjugate() * y[i * N + j]
+        for j in range(N_B):
+            zu[i * N_B + j] = ui * uB[j].conjugate() * y[i * N_B + j]
     # 场项累加器（后续 ×u_pair）与 V_dd 累加器（相位已含 u·conj(u)，
     # **不再**乘 u_pair）分开——混用会把 V_dd 项多乘一个 u[k]。
     dy_f = np.zeros(N2, np.complex128)
@@ -714,10 +523,10 @@ def _rhs_hard_pair(t, y, E_A, E_B, fld_rows, fld_cols, fld_vals, fld_envs,
             dy_v[vdd_rows[m]] += vdd_vals[m] * ph * y[vdd_cols[m]]
     # out = −iC·[u_pair∘dy_f + dy_v]
     out = np.empty(N2, np.complex128)
-    for i in range(N):
+    for i in range(N_A):
         ui = uA[i]
-        for j in range(N):
-            k = i * N + j
+        for j in range(N_B):
+            k = i * N_B + j
             out[k] = -1j * CONV * (ui * uB[j] * dy_f[k] + dy_v[k])
     # t24：耗散 NonHermitian 对角 −iΓ_MHz/2 → RHS −(C·Γ)/2·y
     if gamma is not None:
@@ -729,6 +538,10 @@ def _rhs_hard_pair(t, y, E_A, E_B, fld_rows, fld_cols, fld_vals, fld_envs,
 # DOP853 驱动已上收至 src/core/dop853.py（first-class RHS 参数化，
 # t11 实验验证与旧两体驱动逐位一致）。本模块只保留内核与打包。
 # ============================================================
+
+# t73b：统一入口别名（evolve_engine 单原子 method='hard' 走本名——
+# 此前 evolve_engine 引用的 evolve_hard 不存在，属潜伏断链，已修复）
+evolve_hard = evolve_hard_fast
 
 
 
@@ -782,16 +595,22 @@ def evolve_hard_pair(states, fields_meta_A, fields_meta_B, psi0_A, psi0_B,
     psi0_B_vec = _evolve._as_vector(states, psi0_B)
     psi0_2d = _pe._as_product_psi(psi0_A_vec, psi0_B_vec, N)
 
-    pack = _pack_pair_hard(fields_meta_A, fields_meta_B, states, T, V, n_tab)
+    E_lab = np.array([st['E_mhz'] for st in states], float)
+    pack = _pack_pair_hard(fields_meta_A, fields_meta_B, T, V, n_tab,
+                           E_lab=E_lab)
     E_A, E_B = pack[0], pack[1]
     E_lab = np.array([s['E_mhz'] for s in states], float)
     E_pair = np.array([E_lab[i] + E_lab[j]
                        for i in range(N) for j in range(N)])
 
+    from .coupling import stage_progress
+    stage_progress(progress_arr, 0, 0.9)     # 打包完成（JIT 装载在驱动首调）
+
     if driver == 'numba':
-        prog = (np.zeros(2) if progress_arr is None
+        prog = (np.zeros(3) if progress_arr is None
                 else np.asarray(progress_arr, float))
         stat = np.zeros(4)
+        # 阶段 1（积分）由驱动在首个接受步置位（同 evolve_hard_fast）
         # 复用 dop853 核心层（first-class RHS 参数化，t11 验证逐位一致）
         # t24：gamma_MHz 传入内核（落点=丢失 NonHermitian，此前只算不用）
         y_out = _dop853_driver(_rhs_hard_pair, psi0_2d, t, T,
@@ -800,14 +619,14 @@ def evolve_hard_pair(states, fields_meta_A, fields_meta_B, psi0_A, psi0_B,
         nfev = int(stat[0])
         n_acc = int(stat[1])
         n_rej = int(stat[2])
-        if progress_arr is not None:
-            progress_arr[0] = 1.0
+        stage_progress(prog, 2, 0.5)         # 阶段 2：收尾（loss/约化）
     else:
         # driver='scipy'：njit RHS + scipy solve_ivp（对照用）
         from scipy.integrate import solve_ivp
 
         def _rhs_hard_pack(tv, y):
             return _rhs_hard_pair(tv, y, *pack, gamma_MHz)
+        stage_progress(progress_arr, 1, 0.0)
         sol = solve_ivp(_rhs_hard_pack, (0.0, T), psi0_2d, method='DOP853',
                         t_eval=t, rtol=rtol, atol=atol)
         if not sol.success:
@@ -815,6 +634,7 @@ def evolve_hard_pair(states, fields_meta_A, fields_meta_B, psi0_A, psi0_B,
         y_out = sol.y.T
         nfev = int(getattr(sol, 'nfev', 0))
         n_acc = -1
+        stage_progress(progress_arr, 2, 0.5)
 
     pops_2d = np.abs(y_out) ** 2
 
@@ -834,6 +654,7 @@ def evolve_hard_pair(states, fields_meta_A, fields_meta_B, psi0_A, psi0_B,
 
     pops_A = _pe._reduce_A(pops_2d, N)
     pops_B = _pe._reduce_B(pops_2d, N)
+    stage_progress(progress_arr, 2, 1.0)
     report = dict(n_segments=n_acc, max_richardson_diff=0.0, dt_min_hit=False,
                   max_norm_dev=norm_dev, nfev=nfev)
     if report['max_norm_dev'] > 1e-6:
@@ -854,3 +675,375 @@ def evolve_hard_pair(states, fields_meta_A, fields_meta_B, psi0_A, psi0_B,
         uT = np.exp(1j * _CONV * (E_A[:, None] + E_B[None, :]).ravel() * T)
         out['psi_amp'] = np.conj(uT) * y_out[-1]
     return out
+
+
+
+# ============================================================
+# 输入格式构造（t74 自 evolve_twofield 归位——hard 的输入格式属于 hard）
+# build_two_field / arbitrary_mw_group / split_by_freq / evolve_hard(scipy 参考)
+# ============================================================
+MW_MAX_MHZ = 1e5            # 载频 ≤ 100 GHz 视为微波，> 视为光场
+OPT_NRES_BW_MHZ = 2e3       # 旋转后近共振对筛选带宽（2 GHz）
+MW_NRES_BW_MHZ = 5e3        # 微波近共振对筛选带宽（5 GHz）
+
+
+def arbitrary_mw_group(cache, states, wave):
+    """ArbitraryWave → hard 兼容 mw_group（t18：旧任意波形重构适配 hard）。
+
+    解析信号分解（Hilbert）：amp(t) = env(t)·cos(φ(t)) 精确（env=|z|,
+    φ=unwrap arg z，重构误差 ~1e-11）；env/φ 以绝对时间插值函数给出，
+    经 hard 打包为查表（cos(φ_f(t)) 任意相位路径，内核插值求值）。
+    A 为全偶极实振幅（|d|·rabi）——复杂偶极相位（多通道干涉）暂以 |d|
+    吸收，单通道驱动精确（多通道场景为后续扩展）。
+    用法：meta = dict(E_rot=…, N=N, opt_terms=[], disc_times=[],
+                      mw_groups=[arbitrary_mw_group(cache, states, wave)])。
+    """
+    from scipy.signal import hilbert
+    q = {'σ+': +1, 'π': 0, 'σ-': -1}.get(wave.pol, 0)
+    E0_sq = core.field_e0_sq(float(wave.intensity_mwcm2))
+    N = len(states)
+    A = np.zeros((N, N))
+    for i in range(N):
+        for j in range(i + 1, N):
+            d = core.dipole_amplitude(cache, _crow(states[i]),
+                                      _crow(states[j]), q)
+            if abs(d) < 1e-12:
+                continue
+            A[i, j] = A[j, i] = core.rabi_mhz(abs(d), E0_sq)
+    if not np.any(A):
+        raise ValueError('arbitrary_mw_group：偏振下无任何偶极耦合')
+    ts = wave.t_ns + wave.offset_ns          # 绝对时间样品
+    z = hilbert(wave.amp)
+    env_h, phi_h = np.abs(z), np.unwrap(np.angle(z))
+    return dict(omega_mhz=0.0, As=[A],
+                envs=[lambda tv: np.interp(np.asarray(tv, float), ts, env_h,
+                                           left=0.0, right=0.0)],
+                phase_fn=lambda tv: np.interp(
+                    np.asarray(tv, float), ts, phi_h,
+                    left=phi_h[0], right=phi_h[-1]),
+                labels=[wave.name])
+
+
+def _crow(s):  # t74：与 field_build._sublevel_row 同构（保留旧名以免连带改动）
+    """states 元素 → core.dipole_amplitude 子能级行。"""
+    return dict(n=s['n'], l=s['l'], j=s['j'], kind=s['kind'],
+                mj=s.get('mj'), mF=s.get('mF'), amps=s.get('amps'))
+
+
+def _build_A(cache, states, freq_mhz, intensity_mwcm2, pol, det_selector):
+    """按失谐条件构造 Rabi 矩阵 A[i,j]（峰值，MHz）。
+
+    det_selector(i, j, E) → bool：是否把该对收入（近共振筛选）。
+    E 为 states 能量数组（旋转前）。"""
+    q = {'σ+': +1, 'π': 0, 'σ-': -1}.get(pol, 0)
+    E0_sq = core.field_e0_sq(float(intensity_mwcm2))
+    N = len(states)
+    E = np.array([s['E_mhz'] for s in states], float)
+    A = np.zeros((N, N))
+    for i in range(N):
+        for j in range(i + 1, N):
+            if not det_selector(i, j, E):
+                continue
+            d = core.dipole_amplitude(cache, _crow(states[i]),
+                                      _crow(states[j]), q)
+            if abs(d) < 1e-12:
+                continue
+            A[i, j] = A[j, i] = core.rabi_mhz(abs(d), E0_sq)
+    return A
+
+
+def adaptive_split_threshold(states, default_mhz=MW_MAX_MHZ):
+    """能级间隔分布 → 微波/光场自适应分界阈值（MHz）。
+
+    物理：旋转系 RWA 只在载频 ≫ 里德堡尺度跃迁时有效；微波硬积分受
+    DOP853 载波可行性约束。能级间隙在 log 尺度成簇（里德堡带 vs 光学
+    带），取最大对数间隔比的几何中点作阈值；clamp 到 [1e4, 1e6]
+    （DOP853 载波可行性安全带）。鲁棒性：无清晰两簇（单簇/退化）或
+    孤立离群点（某侧间隙占比 < 5%）时回退 default_mhz。
+    """
+    E = np.array([s['E_mhz'] for s in states], float)
+    if E.size < 2:
+        return default_mhz
+    d = np.abs(E[:, None] - E[None, :])
+    gaps = np.unique(d[np.triu_indices(E.size, 1)])
+    gaps = gaps[gaps > 0]
+    if gaps.size < 2:
+        return default_mhz
+    ratios = gaps[1:] / gaps[:-1]
+    k = int(np.argmax(ratios))
+    r = ratios[k]
+    thr = np.sqrt(gaps[k] * gaps[k + 1])
+    # 双侧最小占比（孤立离群点不干扰聚类）：各侧 ≥ 5%（且 ≥ 3 个间隙）
+    n = gaps.size
+    lo = int(np.searchsorted(gaps, thr, side='right'))
+    if (r >= 1e3 and lo >= max(3, 0.05 * n)
+            and (n - lo) >= max(3, 0.05 * n)):
+        return float(np.clip(thr, 1e4, 1e6))
+    return default_mhz
+
+
+def split_by_freq(waves, states=None):
+    """波形列表 → (opt_waves, mw_waves)。
+
+    states 提供时按能级间隔分布自适应分界（adaptive_split_threshold）；
+    否则回退固定 MW_MAX_MHZ（向后兼容）。
+    """
+    thr = (adaptive_split_threshold(states)
+           if states is not None else MW_MAX_MHZ)
+    opt, mw = [], []
+    for w in waves:
+        if w.freq_mhz > thr:
+            opt.append(w)
+        else:
+            mw.append(w)
+    return opt, mw
+
+
+def build_two_field(cache, states, waves, mw_M=2):
+    """构造两场引擎所需结构。
+
+    返回 dict:
+      E_rot      : 旋转后对角能（MHz）——6P 等被光场耦合的低能流形 +ω_opt
+      opt_terms  : [(A_opt(N×N), waveform, omega_opt)] 光场（不占光子块）
+      mw_groups  : _group_by_freq 格式的微波组（每载频一个，As 为其驱动矩阵）
+      N          : 物理态数
+    """
+    opt_w, mw_w = split_by_freq(waves, states)   # t20：自适应阈值（states 驱动）
+    N = len(states)
+    E = np.array([s['E_mhz'] for s in states], float)
+
+    # ---- 光场：确定低能流形与旋转参考 ----
+    # 对每个光场，先按"旋转前载频近共振"找耦合对（|ΔE−ω|<2GHz），
+    # 再取其中能量较低的一侧流形作为旋转对象（该流形整体 +ω）。
+    rot_pick = {}            # 流形 (n,l,j) → 是否已定参考
+    ref_add = np.zeros(N)
+    opt_terms = []
+    for w in opt_w:
+        # 近共振对（旋转前，以跃迁频率 ≈ ω 判）
+        def _sel(i, j, E, w=w):
+            return abs(abs(E[i] - E[j]) - w.freq_mhz) < OPT_NRES_BW_MHZ
+        A = _build_A(cache, states, w.freq_mhz, w.intensity_mwcm2, w.pol,
+                     _sel)
+        if not np.any(A):
+            continue
+        # 该场耦合的所有流形对中的低能流形
+        ii, jj = np.nonzero(A)
+        keys = [(states[i]['n'], states[i]['l'], states[i]['j'])
+                for i in set(ii.tolist() + jj.tolist())]
+        # 按平均能量排序，取最低流形作为旋转对象（6P 场景）
+        eavg = {}
+        for k in keys:
+            idxs = [i for i, s in enumerate(states)
+                    if (s['n'], s['l'], s['j']) == k]
+            eavg[k] = float(np.mean([E[i] for i in idxs]))
+        low_k = min(keys, key=lambda k: eavg[k])
+        if low_k not in rot_pick:
+            rot_pick[low_k] = w.freq_mhz
+        omega_ref = rot_pick[low_k]
+        # 旋转参考 = 第一个耦合该流形的光场载频（多光场共享流形取首个）
+        for i, s in enumerate(states):
+            if (s['n'], s['l'], s['j']) == low_k:
+                ref_add[i] = omega_ref
+        # 拍频信息（任务书 §2.3 / §8 多光场；t10 验证：exp 非 cos）：
+        # 第 2+ 个光场相对共享参考 ω_ref 失谐 δ=ω_f−ω_ref，其耦合项在旋转
+        # 系内带 exp(i·C·δ·t) 相位（本场自身 δ=0 → 逐位退化为旧行为）。
+        # 元组扩展为 (A, wf, omega, name, omega_ref, mask)；mask 标记被本
+        # 参考旋转的流形（用于相位符号 m[i]−m[k]）。路径 A（Sambe）复用
+        # omega_ref，路径 B（hard）用 δ。
+        mask = np.array([(s['n'], s['l'], s['j']) == low_k
+                         for s in states], int)
+        # RWA 振幅 ×0.5（t17 船长裁决：两场引擎光场项此前用全 Rabi（rabi_mhz），
+        # 物理错误 2×——cos(ωt)=½(e^{iωt}+e^{−iωt}) 旋转系只留共振项 → 耦合
+        # = ½·rabi_mhz。与 exact 引擎 SambeSetup 的 0.5·A 对齐（evolve_exact.py:
+        # 226）。此前 AC-Stark 位移偏 4×（Ω²/Δ）——"AC 位移调交换共振"是本场景
+        # 核心物理。微波项保持 1.0（实验室系全 cos，硬积分无 RWA，正确）。
+        # 单点修复：所有消费方（Sambe opt_ext / defect / hard coupling_at / numba /
+        # pair 打包）自动获得 ½。om_mhz 报告随之变为 RWA 耦合振幅。
+        A = 0.5 * A
+        opt_terms.append((A, w.waveform, w.freq_mhz, w.name,
+                          float(omega_ref), mask))
+    E_rot = E + ref_add
+
+    # ---- 收集光学包络不连续点（SquareEnv 上升沿/下降沿边界） ----
+    # C¹ 连续的缓变方波在二阶导数处有 kink，Gauss-Legendre 求积收敛慢；
+    # 必须将不连续点作为段边界，避免段内包络突变导致缺陷修正非幺正。
+    disc_times = []
+    for w in opt_w:
+        env = w.envelope
+        if hasattr(env, 'start_ns'):       # SquareEnv（有 start_ns；GaussianEnv 没有）
+            abs_off = float(w.offset_ns)
+            s0 = abs_off + float(env.start_ns)
+            s1 = abs_off + float(env.start_ns) + float(env.edge_ns)
+            s2 = abs_off + float(env.fall_start_ns)
+            s3 = abs_off + float(env.fall_start_ns) + float(env.edge_ns)
+            for v in (s0, s1, s2, s3):
+                if v not in disc_times:      # dedup via list (small N)
+                    disc_times.append(v)
+    # 去重（相邻 < 1μs 视为同一点）并排序
+    if len(disc_times) > 1:
+        disc_times.sort()
+        filtered = [disc_times[0]]
+        for dt in disc_times[1:]:
+            if dt - filtered[-1] > 1e-6:
+                filtered.append(dt)
+        disc_times = filtered
+
+    # ---- 微波场：近共振对筛选（60S↔60P 等，|ΔE−ω|<5GHz）----
+    mw_groups = []
+    for w in mw_w:
+        def _selm(i, j, E, w=w):
+            return abs(abs(E[i] - E[j]) - w.freq_mhz) < MW_NRES_BW_MHZ
+        A = _build_A(cache, states, w.freq_mhz, w.intensity_mwcm2, w.pol,
+                     _selm)
+        if not np.any(A):
+            continue
+        hit = None
+        for g in mw_groups:
+            if abs(g['omega_mhz'] - w.freq_mhz) <= 1e-9 * max(abs(w.freq_mhz), 1.0):
+                hit = g
+                break
+        if hit is None:
+            hit = dict(omega_mhz=w.freq_mhz, As=[], envs=[], labels=[])
+            mw_groups.append(hit)
+        hit['As'].append(A)
+        hit['envs'].append(w.waveform)
+        hit['labels'].append(w.name)
+    return dict(E_rot=E_rot, opt_terms=opt_terms, mw_groups=mw_groups,
+                N=N, disc_times=disc_times)
+
+
+def evolve_hard(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
+                progress_arr=None, log=None, record_amp=False, numba=False,
+                decays=None):
+    """微波硬算 + 光场旋转系（第一性原理，**零微波近似**）——method='hard'。
+
+    numba=True 时委托 hard_numba.evolve_hard_fast（同数学、同 DOP853、
+    同返回契约，620ns 22 态 173s → ~4s；包络查表误差 ~3e-10 ≪ rtol）。
+
+    核心思想（用户提议，2026-08-29）：
+    - **光场**：旋转系解析吸收载波（6P 流形 ref=ω_opt，耦合对停在失谐），
+      光学项为常数矩阵 c(t)·A_opt——唯一近似是光学 RWA（反旋项全场
+      Bloch–Siegert 相位 4.4e-5 rad ≪ tol，可忽略；光学多光子即电离无落点）。
+    - **微波**：**不做任何变换**。H(t) 保留完整 cos(ω_mw·t) 载波，
+      solve_ivp DOP853 自适应硬积分：
+        H(t) = diag(E_rot) + Σ_opt c(t)·A_opt + Σ_mw c(t)·cos(C·ω_mw·t)·A_mw
+      → 微波多光子、Bloch–Siegert、任意谐波**天然全含**，零近似零截断；
+      → 步长由 17 GHz 载波（周期 58 ps）决定：1500 ns ≈ 2.6 万周期 × ~15 步
+        ≈ 4×10⁵ 步 × 22 维 ≈ 10⁹ flop → 秒级；两体 484 维 ~10¹¹ flop → 分钟级；
+      → **支持任意波动的微波场**（不只包络：任意时域信号、多频、啁啾都行，
+        因为 RHS 直接逐个时刻求值，无周期结构假设）。
+    - 误差：DOP853 自适应（rtol/atol 显式）；RHS 厄米 → 范数机器精度守恒
+      （对比 Sambe 路径的重构相位 bug——两种变换拼合容易出错，硬算从结构上免疫）。
+
+    返回与 evolve_exact 同构 dict（method='hard'）。
+    """
+    if numba:
+        from .hard import evolve_hard_fast
+        return evolve_hard_fast(states, fields_meta, psi0, t_grid,
+                                rtol=rtol, atol=atol,
+                                progress_arr=progress_arr, log=log,
+                                record_amp=record_amp, decays=decays)
+    from scipy.integrate import solve_ivp
+    log = log or (lambda *a: None)
+    t = np.asarray(t_grid, float)
+    N = fields_meta['N']
+    E_rot = np.asarray(fields_meta['E_rot'], float)
+    opt_terms = fields_meta['opt_terms']
+    mw_groups = fields_meta['mw_groups']
+    psi0v = _evolve._as_vector(states, psi0)
+    T = float(t[-1])
+    # t24：耗散（落点=丢失）——Gamma_ns（/ns），RHS 加 −Γ/2·y
+    has_decay = bool(decays)
+    if has_decay:
+        Gamma_ns = _single_loss_rates(states, decays)
+    else:
+        Gamma_ns = None
+
+    E = E_rot - float(E_rot.min())          # 公共偏移=全局相位（精确等价）
+
+    # 微波：A 与 (ω, env, 相位函数) 列表；t18 统一 cos(φ_f(t)) 任意相位——
+    # 定频 φ=C·ω·t（默认），变频/任意相位由 mw_groups['phase_fn'] 提供。
+    mw_terms = []
+    for g in mw_groups:
+        w = float(g['omega_mhz'])
+        ph_fn = g.get('phase_fn')
+        for A, wf in zip(g['As'], g['envs']):
+            mw_terms.append((np.asarray(A, float), w, wf, ph_fn))
+
+    def coupling_at(tv):
+        """旋转系相互作用绘景：H0=diag(E) 精确，Ṽ = u·(光+微波 cos(φ))·u†。
+
+        光场拍频（§2.3/§8）：第 2+ 光场相对共享参考失谐 δ=ω_f−ω_ref，
+        耦合项乘 exp(i·C·δ·t·(m[i]−m[k]))（m=旋转流形掩码；t10 验证：
+        exp 拍频正确、cos 错误）。首场 δ=0 → 乘 1，逐位退化为旧行为。
+        微波（t18）：cos(φ_f(t))，φ 任意（定频=chirp 特例）。
+        """
+        V = np.zeros((N, N), complex)
+        for tup in opt_terms:
+            A_opt, wf = tup[0], tup[1]
+            omega_f = float(tup[2])
+            omega_ref = float(tup[4]) if len(tup) > 4 else omega_f
+            m = tup[5] if len(tup) > 5 else None
+            c = env_at(wf, tv)
+            if c != 0.0:
+                d = omega_f - omega_ref
+                if d != 0.0 and m is not None:
+                    ph = np.exp(1j * _CONV * d * tv
+                                * (m[:, None] - m[None, :]))
+                    V = V + c * ph * A_opt
+                else:
+                    V = V + c * A_opt
+        for A, wL, wf, ph_fn in mw_terms:
+            env = env_at(wf, tv)
+            if env != 0.0:
+                ph = (ph_fn(tv) if ph_fn is not None
+                      else _CONV * wL * tv)
+                V = V + env * np.cos(float(np.asarray(ph).flat[0])) * A
+        u = np.exp(1j * _CONV * E * tv)
+        return u[:, None] * V * np.conj(u)[None, :]
+
+    def _rhs_twofield(tv, y):
+        out = -1j * _CONV * (coupling_at(tv) @ y)
+        if Gamma_ns is not None:                 # 落点=丢失 NonHermitian
+            out = out - 0.5 * Gamma_ns * y
+        return out
+
+    if progress_arr is not None:
+        if len(progress_arr) > 2:
+            progress_arr[2] = 1.0            # 阶段 1：积分（scipy 无内部钩子）
+        progress_arr[0] = 0.0
+    sol = solve_ivp(_rhs_twofield, (0.0, T), psi0v, method='DOP853',
+                    t_eval=t, rtol=rtol, atol=atol)
+    if not sol.success:
+        raise RuntimeError(f'hard 积分失败: {sol.message}')
+    pops = np.abs(sol.y).T ** 2
+    if progress_arr is not None:
+        if len(progress_arr) > 2:
+            progress_arr[2] = 2.0
+        progress_arr[0] = 1.0
+    nfev = getattr(sol, 'nfev', None)
+    log(f'[hard] DOP853 完成：{len(t)} 输出点'
+        + (f'，{nfev} 次 RHS 求值' if nfev else '')
+        + f'（微波载波 {max((abs(w) for _, w, _, _ in mw_terms), default=0):.4g} MHz'
+        f' 硬积分，零微波近似）')
+    report = dict(n_segments=1, max_richardson_diff=0.0, dt_min_hit=False,
+                  max_norm_dev=float(np.max(np.abs(pops.sum(axis=1) - 1.0))))
+    if has_decay:
+        from .hard import _loss_and_norm
+        loss, norm_dev = _loss_and_norm(pops, Gamma_ns, t)
+        report['max_norm_dev'] = norm_dev
+    else:
+        loss = np.zeros(len(t))
+    if report['max_norm_dev'] > 1e-6:
+        log(f'[hard] ⚠ 范数偏差 {report["max_norm_dev"]:.2e}'
+            '（DOP853 容差不足或 RHS 非厄米）')
+    out = dict(t=t, pops=pops, states=states,
+               om_mhz=[float(np.abs(A).max()) for A, _, _, _ in mw_terms]
+               + [float(np.abs(A_opt).max()) for A_opt, *_ in opt_terms],
+               method='hard', backend='hard-dop853',
+               loss=loss, error_report=report)
+    if record_amp:
+        uT = np.exp(1j * _CONV * E * T)
+        out['psi_amp'] = np.conj(uT) * sol.y[:, -1]
+    return out
+
