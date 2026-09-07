@@ -117,7 +117,8 @@ def rhs_phi_pairs(t, phi, iis, jjs, vals, dDs, is_mw, wcos, n_pairs_w,
             if i0 >= ac_env_tab.shape[1] - 1:
                 i0 = ac_env_tab.shape[1] - 2
             f = ei - i0
-            envv = ac_env_tab[wi, i0] * (1.0 - f)                 + ac_env_tab[wi, i0 + 1] * f
+            envv = (ac_env_tab[wi, i0] * (1.0 - f)
+                    + ac_env_tab[wi, i0 + 1] * f)
             dev = envv * envv
             if dev != 0.0:
                 for k in range(phi.shape[0]):

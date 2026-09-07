@@ -28,7 +28,16 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 from arc import Rubidium87
-from src import core, evolve
+from src import core
+# t74：evolve shim 已删——按新家直连
+from src.core.atomic_levels import gaussian, square, make_levels
+from src.core.field_build import (field, real_field, group_field,
+                                  _field_geometry, _sublevel_row)
+from src.core.evolve_util import (decay, auto_decays, _as_vector,
+                                  _CONV)
+from src.core.evolve_rwa import (evolve, _e_rot, _evolve_full,
+                                 _evolve_full_hybrid)
+
 from src._archive.evolve_floquet_pwc import _evolve_pwc, evolve_pwc
 
 T_A = float(sys.argv[1]) if len(sys.argv) > 1 else 20.0
@@ -50,7 +59,7 @@ def old_rwa_evolve(states, fields, psi0, t):
 
 
 # ================= 场景 A：纯微波两能级 =================
-statesA = evolve.make_levels(cache, [
+statesA = make_levels(cache, [
     dict(n=60, l=0, j=0.5, m=+0.5, label='60S'),
     dict(n=60, l=1, j=0.5, m=+0.5, label='60P'),
 ])
@@ -63,7 +72,7 @@ print('-' * 80)
 EA = np.array([s['E_mhz'] for s in statesA])
 psiA = evolve._as_vector(statesA, 0)
 for om in (30.0, 100.0, 300.0):
-    fields = [evolve.field(0, 1, omega0_mhz=om)]
+    fields = [field(0, 1, omega0_mhz=om)]
     geoms = [evolve._field_geometry(statesA, f) for f in fields]
     t0 = time.time()
     _, ref, _ = evolve._evolve_full(EA, geoms, psiA, tA, False)
@@ -78,7 +87,7 @@ for om in (30.0, 100.0, 300.0):
           f'{e_rwa:9.2e} | {e_bs:10.2e} | {dt_alg:6.2f}s')
 
 # ================= 场景 B：阶梯三能级（光频+微波同开，共享 60S） =================
-statesB = evolve.make_levels(cache, [
+statesB = make_levels(cache, [
     dict(n=6, l=1, j=1.5, m=+0.5, label='6P'),
     dict(n=60, l=0, j=0.5, m=+0.5, label='60S'),
     dict(n=60, l=1, j=0.5, m=+0.5, label='60P'),
@@ -90,9 +99,9 @@ print(f'{"Ω_mw,Δ_mw":>12} | {"参考耗时":>7} | {"独立RWA":>9} | '
       f'{"级联RWA":>9} | {"级联+BS":>9} | {"算法耗时":>8}')
 print('-' * 88)
 for om_mw, det_mw in ((30.0, 0.0), (100.0, 0.0), (300.0, 0.0)):
-    fields = [evolve.field(0, 1, omega0_mhz=20.0, waveform=evolve.square(0, T_B)),
-              evolve.field(1, 2, omega0_mhz=om_mw, detune_mhz=det_mw,
-                           waveform=evolve.square(0, T_B))]
+    fields = [field(0, 1, omega0_mhz=20.0, waveform=square(0, T_B)),
+              field(1, 2, omega0_mhz=om_mw, detune_mhz=det_mw,
+                           waveform=square(0, T_B))]
     EB = np.array([s['E_mhz'] for s in statesB])
     psiB = evolve._as_vector(statesB, 1)
     t0 = time.time()

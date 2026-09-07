@@ -1,5 +1,9 @@
 # -*- coding: utf-8 -*-
-"""任意波形演化（t19：evolve.py 拆分）——实验室系 RK4，无 RWA/旋转系。"""
+"""任意波形演化（t74 归档：唯一入口是零消费者的 build_fields 旧管线——
+GUI 的 ArbitraryWave 走 hard 的 cos(φ_f(t)) 任意相位路径）。实验室系 RK4，
+无 RWA/旋转系。"""
+
+# 归档说明：src.core.evolv_rwa 的 method='arbitrary' 分支已同步移除。
 import numpy as np
 
 try:

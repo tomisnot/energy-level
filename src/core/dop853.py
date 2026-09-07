@@ -18,7 +18,8 @@ rhs 为任意 njit 编译的 RHS 回调（单体/两体通用）。
 import numpy as np
 from numba import njit
 
-from .hard import _A, _C, _B, _E3, _E5, _D, _TAB_N  # 复用已验证系数
+from .hard import _A, _C, _B, _E3, _E5, _D  # 复用已验证系数
+from .params import _TAB_N  # t74c 参数单源
 
 _np = np
 

@@ -24,9 +24,10 @@ pwc（RWA 分段常数，最快预览）同样不用于日常分析。为减少 
 """
 import numpy as np
 
-from ..core import evolve as _evolve
-from ..core.evolve import (_assign_reference, _env_samples, _field_geometry,
-                           _as_vector, IP4_RWA_THRESH)
+from ..core.evolve_rwa import _assign_reference
+from ..core.evolve_util import _as_vector, _decay_ops
+from ..core.evolve_rwa import IP4_RWA_THRESH
+from ..core.field_build import _env_samples, _field_geometry
 
 _CONV = 2 * np.pi * 1e-3          # MHz·ns → rad
 

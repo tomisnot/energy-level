@@ -5,7 +5,6 @@ import scipy.linalg
 
 from . import static_atom as core
 from .field_build import _env_samples, _sublevel_row
-from .evolve_arbitrary import _evolve_arbitrary
 
 # numba JIT（可选）：加速 ip4 主循环（强耦合/长时窗时步数可达 10^6~10^7）
 try:
@@ -17,8 +16,8 @@ from .evolve_util import _CONV             # t74：常量单源
 from .evolve_util import (_POL_Q, _onehot, _as_vector, decay, auto_decays,
                           _resolve_state_idx, _decay_ops)  # t74 工具归位
 from .field_build import _field_geometry  # t74：ip4 场格式归一归位场层
+from .params import IP4_RWA_THRESH  # t74c 参数单源
 # 光频/微波分界：Ω/ωL < 此值 → RWA（反旋转误差 ~1e-7）；≥ → 非 RWA
-IP4_RWA_THRESH = 1e-4
 
 
 def _assign_reference(states, fields):
@@ -1140,7 +1139,7 @@ def evolve(states, fields, psi0, t_grid, method='auto', backend='auto',
     if method == 'exact':
         # 第一性原理引擎：实验室系无 RWA/无旋转系/无近远分流；ac_shift 作为
         # H0 常数对角修正传入（旧接口兼容）；场须为 kind='exact'
-        from . import evolve_sambe as _exact
+        from .sambe import evolve_sambe as _exact
         return _exact.evolve_exact(
             states, fields, psi0v, t, tol=(1e-6 if tol is None else tol),
             decays=decays, progress_arr=progress_arr, log=log,
@@ -1175,45 +1174,13 @@ def evolve(states, fields, psi0, t_grid, method='auto', backend='auto',
                 'Lindblad 主方程，第一性原理）')
         else:
             method = 'ip4'
-            log('[evolve] auto → ip4（相互作用绘景 RK4，第一性原理）')
-    elif decays and method == 'ip4':
-        # 纯幺正方法不能含耗散：自动切换 Lindblad 路径（保兼容，不静默改行为）
-        log(f'[evolve] 检测到 {len(decays)} 个衰变通道：ip4 为纯幺正'
-            '方法，已自动切换 Lindblad 路径')
-        method = ('lindblad_eig' if _lindblad_eligible(states, fields, t[-1])
-                  else 'lindblad')
+            log('[evolve] auto → ip4（无衰变：相互作用绘景 RK4，第一性原理）')
 
-    # ---- 任意波形（第一性原理）：auto 检测/显式指定 ----
-    has_arb = any((f or {}).get('kind') == 'arb' for f in fields)
-    if has_arb and method == 'auto':
-        if decays:
-            raise NotImplementedError(
-                '任意波形求解（arbitrary）为纯幺正方法，暂不支持衰减通道；'
-                '请先关闭自发辐射。')
-        method = 'arbitrary'
-        log('[evolve] 检测到任意波形场 → arbitrary'
-            '（实验室系相互作用绘景 RK4，第一性原理，无 RWA/旋转系）')
     if method == 'arbitrary':
-        if not has_arb:
-            raise ValueError(
-                "method='arbitrary' 要求至少一个任意波形场（kind='arb'，"
-                '由 waveforms.build_fields 生成）')
-        if decays:
-            raise NotImplementedError(
-                '任意波形求解（arbitrary）为纯幺正方法，暂不支持衰减通道。')
-        t, pops, psi = _evolve_arbitrary(
-            E, states, fields, psi0v, t,
-            frac=max(int(ip4_frac), 80),      # 任意波形默认精度门（RK4 4 阶）
-            progress_arr=progress_arr)
-        log(f'[evolve] arbitrary frac={max(int(ip4_frac), 80)}'
-            '（RK4 4 阶；信号采样请保证快载波 ≥4~8 点/周期）')
-        out = dict(t=t, pops=pops, states=states,
-                   om_mhz=[f.get('omega0_mhz', 0.0) for f in fields],
-                   method='arbitrary', backend='numpy',
-                   loss=np.zeros(len(t)))
-        if record_amp:
-            out['psi_amp'] = psi
-        return out
+        raise ValueError(
+            "method='arbitrary' 已随旧 build_fields 管线归档（t74，"
+            "src/_archive/evolve_arbitrary.py）——GUI 的 ArbitraryWave 走 "
+            "hard 的 cos(φ_f(t)) 任意相位路径；脚本请改用 method='hard'。")
 
     if method == 'ip4':
         t, pops, psi = _evolve_rwa(E, states, fields, psi0v, t,

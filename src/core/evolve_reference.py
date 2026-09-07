@@ -10,10 +10,11 @@
 import numpy as np
 from scipy.integrate import solve_ivp
 
-from .sambe import _CONV, env_at
+from .sambe import _CONV
+from .evolve_util import env_at
 from .evolve_util import _as_vector, _decay_ops
 from .field_build import _validate_fields
-from . import evolve as _evolve  # t74 过渡：_as_vector/_decay_ops 经 shim（P0 后切 evolve_util）
+from .evolve_util import _as_vector, _decay_ops
 
 
 def evolve_reference(states, fields, psi0, t_grid, decays=None,
@@ -29,14 +30,13 @@ def evolve_reference(states, fields, psi0, t_grid, decays=None,
               loss, [psi_amp | rho, verify_diff])。
     """
     from scipy.integrate import solve_ivp
-    from . import evolve as _evolve
     log = log or (lambda *a: None)
     if progress_arr is None:
         progress_arr = np.zeros(2)
     t = np.asarray(t_grid, float)
     T = float(t[-1])
     _validate_fields(fields)
-    psi0v = _evolve._as_vector(states, psi0)
+    psi0v = _as_vector(states, psi0)
     N = len(states)
     E = np.array([s['E_mhz'] for s in states], float)
     E = E - float(E.min())
@@ -84,7 +84,7 @@ def evolve_reference(states, fields, psi0, t_grid, decays=None,
         return out
 
     # ---- Lindblad（同绘景密度矩阵；L 时不变） ----
-    Ls, N_eff = _evolve._decay_ops(decays, states)
+    Ls, N_eff = _decay_ops(decays, states)
     rho0 = np.zeros((N_eff, N_eff), complex)
     rho0[:N, :N] = np.outer(psi0v, psi0v.conj())
 

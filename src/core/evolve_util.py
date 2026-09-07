@@ -1,19 +1,23 @@
 # -*- coding: utf-8 -*-
-"""演化公用工具层（t74）：全引擎共享的衰变/初态/耗散率工具的唯一家园。
+"""演化公用工具层（t74）：全引擎共享的衰变/初态/耗散率/包络取值工具的唯一家园。
 
-历史：这些函数原散落在 evolve_rwa.py（ip4 遗留引擎）并经 evolve.py shim
-被全库借用——"公用工具住在退役引擎里"是 import 迷宫的根源；t74 斩枢纽，
-工具归位本模块，evolve_rwa / hard / mixed 等改为直接导入。
+历史：原散落在 evolve_rwa.py 并经已删除的 evolve.py shim 被全库借用，
+t74 归位本模块。
 
 单位约定（与各引擎一致）：Γ 用 MHz；时间 ns；速率 = Γ×1e-3 /ns
 （Lindblad 跳变算符不乘 2π，与 tempsimu 的 2π 修复一致）。
 """
 import numpy as np
 
-# 单位换算单源：MHz·ns → rad（t74 前散落 6 份，现全库经本模块取用）
 _CONV = 2 * np.pi * 1e-3
 
 _POL_Q = {'π': 0, 'σ+': +1, 'σ-': -1}
+
+
+def env_at(wf, t):
+    """标量包络取值——收敛各引擎反复出现的
+    float(np.asarray(wf(np.atleast_1d(t))[, float]).flat[0]) 惯用式。"""
+    return float(np.asarray(wf(np.atleast_1d(t)), float).flat[0])
 
 
 def _onehot(N, i):

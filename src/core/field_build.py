@@ -7,8 +7,8 @@ from . import static_atom as core
 from .atomic_levels import square
 
 from .evolve_util import _CONV              # t74：常量单源
+from .params import _ENV_SAMPLES, AC_NEAR_CUTOFF_MHZ  # t74c
 from .evolve_util import _POL_Q            # t74：工具归位
-_ENV_SAMPLES = 64
 # 上态总衰变率缓存（(n,l,j) → Γ MHz；远失谐散射损失用）
 _lifetime_cache = {}
 

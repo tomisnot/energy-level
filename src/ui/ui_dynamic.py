@@ -27,7 +27,9 @@ from matplotlib.colors import LogNorm
 from matplotlib import colormaps
 from matplotlib.ticker import MaxNLocator
 
-from ..core import core, evolve, pair_core
+from ..core import core, pair_core
+from ..core.atomic_levels import make_levels
+from ..core.evolve_util import decay, auto_decays  # t74 工具归位
 from . import ui_waves
 from ..core import waveforms
 from .evolve_worker import EvolveWorker
@@ -252,7 +254,7 @@ class DynamicPanel(QWidget):
         rowt.addWidget(QLabel('方法'))
         self.method_cb = QComboBox()
         # t25→t71：方法选项收敛——sambe：第一性原理 Sambe 光子块（实验室系无
-        # RWA/无旋转系/无近远分流，原 'exact' 更名，引擎 evolve_sambe）；
+        # RWA/无旋转系/无近远分流，引擎 sambe.evolve_sambe）；
         # hard：微波硬积分 DOP853 零近似 + 光场旋转系 + 耗散（numba 加速）；
         # mixed（默认，t71）：混合引擎——光场 Sambe 光子块 + 微波/V_dd 当场
         # （φ-帧，t62 起验证 ≡frozen 1e-5~1e-8 级；两体 5 倍降维 dim 1452）。
@@ -561,7 +563,7 @@ class DynamicPanel(QWidget):
                 self.main.log(f'[动态] 衰变态 {c["from"]!r} 已不在能级列表中，'
                               '该通道被跳过')
                 continue
-            out.append(evolve.decay(fi, c['gamma_mhz'], ti))
+            out.append(decay(fi, c['gamma_mhz'], ti))
         return out
 
     # ---------- 布居图：内部筛选（前 N 个平均布居最大的态） ----------
@@ -610,7 +612,7 @@ class DynamicPanel(QWidget):
                                       amps=amps))
             if pump is not None:
                 pump((gi + 1) / max(len(groups), 1))
-        return evolve.make_levels(self.cache, specs)
+        return make_levels(self.cache, specs)
 
     # ---------- 波形数据 ----------
     def _has_waves(self):
@@ -845,7 +847,7 @@ class DynamicPanel(QWidget):
                 decays = self._resolve_decay_cfgs(states)
             elif mode == 'auto':
                 self._prep('自动自发辐射（ARC 寿命）', 0.8)
-                decays = evolve.auto_decays(self.cache, states)
+                decays = auto_decays(self.cache, states)
                 if decays:
                     self.main.log(f'[动态] 自动自发辐射：{len(decays)} 通道'
                                   '（Γ=1/τ(ARC)，τ≤100µs，落点=丢失）')
@@ -1053,7 +1055,7 @@ class DynamicPanel(QWidget):
         self._prep('构造驱动场', 0.85)
         if method == 'sambe':
             # 第一性原理场（Sambe 光子块）：全部偶极对耦合，无近/远分流与
-            # 静态 AC 注入（原 'exact' 更名，引擎 evolve_sambe）
+            # 静态 AC 注入（引擎 sambe.evolve_sambe）
             fields = waveforms.build_fields_exact(self.cache, states, waves)
         elif method == 'mixed':
             # t62 混合引擎（光 Sambe 光子块 + 微波当场）——fields 同构
@@ -1165,8 +1167,8 @@ class DynamicPanel(QWidget):
         decays_A = decays_B = None
         mode = self.decay_mode_cb.currentIndex()
         if mode == 0:                       # 自动（ARC 寿命，落点=丢失）
-            decays_A = evolve.auto_decays(self.cache, states)
-            decays_B = evolve.auto_decays(self.cache, states)
+            decays_A = auto_decays(self.cache, states)
+            decays_B = auto_decays(self.cache, states)
             if decays_A or decays_B:
                 self.main.log(f'[双原子] 自动寿命：A {len(decays_A)}'
                               f'/B {len(decays_B)} 条通道（落点=丢失）')
@@ -1182,7 +1184,7 @@ class DynamicPanel(QWidget):
                         '双原子自定义衰变 v1 仅支持「丢失」落点'
                         '（spontaneous radiation 按寿命处理）；'
                         '显式落点请用单原子模式。')
-                ch = evolve.decay(fi, float(c['gamma_mhz']), None)
+                ch = decay(fi, float(c['gamma_mhz']), None)
                 outA.append(ch)
                 outB.append(ch)
             decays_A, decays_B = outA, outB

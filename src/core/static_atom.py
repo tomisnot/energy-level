@@ -52,6 +52,9 @@
 
 import numpy as np
 from scipy.constants import physical_constants as pc, h, hbar, c, epsilon_0
+from .params import (AC_FAR_DETUNE_CUTOFF_HZ, AC_NEAR_CUTOFF_MHZ,  # t74c
+                     DIRECT_SOS_N_WINDOW, AC_EFFECT_THRESHOLD_MHZ,
+                     RYDBERG_N_MIN)
 
 # ---------------- 物理常数与单位换算 ----------------
 # ARC 的 getEnergy 返回的是能量相对电离阈的绑定能，单位是 eV（见 ARC 源码 docstring）。
@@ -62,12 +65,8 @@ MU_B_MHZ_PER_G = MU_B / h / 1e4 / 1e6        # MHz/G（1 T = 1e4 G）
 E_CHARGE = pc['elementary charge'][0]        # C
 A0 = pc['Bohr radius'][0]                    # m
 MW_PER_CM2_TO_W_PER_M2 = 10.0                # 1 mW/cm^2 = 10 W/m^2
-AC_EFFECT_THRESHOLD_MHZ = 0.05               # |AC| > 50 kHz 视为受寻址光影响
 DEFAULT_NUCLEAR_SPIN_I = 1.5                  # 兜底默认：仅当 ARC 原子类无 I 属性时使用
                                               # （正常情况下从 atom.I 读取，换原子无需改）
-RYDBERG_N_MIN = 20                            # n >= 20 视为里德堡态（超精细可忽略）
-AC_FAR_DETUNE_CUTOFF_HZ = 5e9                # |Δ| >= max(此值, Rabi) 视为远失谐 → SOS 背景
-AC_NEAR_CUTOFF_MHZ = AC_FAR_DETUNE_CUTOFF_HZ / 1e6   # 同上，MHz（动态引擎复用）
 SOS_BASIS_N_MIN = 5                           # 远失谐 SOS 基组的 n 下限
 SOS_BASIS_N_MAX = 100                         # 远失谐 SOS 基组的 n 上限
 
@@ -132,7 +131,6 @@ def address_pol_coeffs(address_cfg):
 # （|Δn|=0 的同 n 细结构伙伴，如 60P3/2 距 60P1/2 仅 ~461 MHz，也会被纳入；
 #  保证亚 MHz 精度。典型寻址强度 Ω~10~100 MHz 下默认 3 足够；
 #  极强驱动/宽扫描可调大。）
-DIRECT_SOS_N_WINDOW = 3
 
 _SPECTROSCOPIC_LETTERS = 'SPDFGHIKLMNOQRT'
 

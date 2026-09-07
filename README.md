@@ -721,31 +721,29 @@ src/
 │   ├── field_build.py    # 场构造（field/group_field/real_field/arbitrary_field）
 │   ├── waveforms.py      # 波形数据层（Wave/GaussianEnv/SquareEnv/ArbitraryWave）
 │   ├── sambe.py          # Sambe 引擎总模块（t74：核心层+单体引擎+两体引擎
-│   │                     #   合一；原 evolve_sambe/evolve_sambe_pair 并入，
-│   │                     #   旧文件名留一行兼容 shim）
+│   │                     #   合一；evolve_sambe/evolve_sambe_pair 同收此处，
+│   │                     #   t74b 已删旧文件名 shim）
 │   ├── evolve_reference.py # 参考积分器（H0 相互作用绘景 + Lindblad BDF；
 │   │                     #   sambe 含耗散时的执行路径 + 全库权威参照）
 │   ├── evolve_util.py    # 演化公用工具单源（decay/auto_decays/_as_vector/
 │   │                     #   _decay_ops/_single_loss_rates/_loss_and_norm/
 │   │                     #   _CONV 常量——原散落 evolve_rwa/hard，经 shim 借用）
 │   ├── evolve_rwa.py     # ip4/Lindblad 遗留引擎（数值权威参照；工具已迁出）
-│   ├── evolve_arbitrary.py # 任意波形第一性原理演化（实验室系 RK4）
-│   ├── evolve_sambe.py   # 兼容 shim → sambe（过渡期后删）
-│   ├── evolve_sambe_pair.py # 兼容 shim → sambe（含两场名惰性转发）
 │   ├── evolve_sambe_pair_gpu.py # GPU 传播（研究原型）
 │   ├── evolve_twofield.py # 两场引擎家族（单/两体团聚：光旋转系+微波光子块）
 │   ├── hard.py           # hard 引擎单/两体同一内核（单原子=N_B=1 旁观维）
-│   │                     #   + 输入格式构造 build_two_field（t74 归位）
-│   ├── pair_evolve.py    # 两体 RWA（ip4，secular V_dd；遗留，权威自检）
-│   ├── evolve_mixed.py   # 混合引擎单原子（φ-帧；依赖 sambe+acize+coupling）
-│   ├── evolve_mixed_pair.py # 混合引擎两体（φ-帧）
+│   │                     #   + 输入格式构造 build_two_field（t74 归位）；
+│   │                     #   任意波形走 cos(φ_f(t)) 任意相位路径
+│   ├── evolve_mixed.py   # 混合引擎总模块（t74 单/两体合一；t74b acize 并入）
+│   │                     #   evolve_mixed / evolve_mixed_pair /
+│   │                     #   acize_physical 同收此处（φ-帧；依赖 sambe+coupling）
+│   ├── params.py         # t74c 引擎参数单源（全库硬编码参数唯一定义点）
 │   ├── evolve_engine.py  # 统一入口 evolve_engine(method, n_body)
 │   ├── route.py          # auto 路由 route_auto
 │   ├── dop853.py         # DOP853 核心驱动（njit RHS 参数化）
 │   ├── coupling.py       # RHS 公共层（t73）：pack_rhs + φ-帧统一内核
 │   │                     #   rhs_phi_pairs（mixed 单/两体同一 RHS）
 │   │                     #   + 三槽进度协议 stage_progress
-│   ├── acize.py          # AC 化公共层（classify/far_sos/acize_physical）
 │   ├── project.py        # 跨扇区投影公共层 project_pops
 │   ├── tensor_fields.py  # 两体场提升（lift_single_A/lift_side_A/lift_fields）
 │   ├── tensor.py         # 两体张量化（tensor_states/_reduce_*/_pair_loss_vectors）
@@ -765,6 +763,11 @@ src/
 ├── _archive/             # 退役模块（floquet/pwc/ttl 等）
 └── __init__.py           # ARC 数据目录重定向 + 顶层兼容导出
 ```
+
+> t74b 拆除兼容层后的归属变化：`acize.py` 并入 evolve_mixed.py（唯一消费者
+> 家族是 mixed）；`evolve_mixed_pair.py` 并入 evolve_mixed.py；`pair_evolve.py`
+> （两体 RWA 自检引擎）迁至 checks/；`evolve_arbitrary.py` 迁至 _archive/
+> （GUI 的任意波形由 hard 的任意相位路径承接）。
 
 三层结构：
 1. **静态物理层**（static_atom / static_pair）：能级、偶极、频移、V_dd——不含时；
@@ -858,7 +861,7 @@ from arc import Rubidium87
 from src.core import static_atom as core
 from src.core.atomic_levels import make_levels
 from src.core.waveforms import Wave, GaussianEnv
-from src.core.evolve_sambe import build_fields_exact
+from src.core.hard import build_two_field
 from src.core.evolve_engine import evolve_engine
 
 cache = core.ArcCache(Rubidium87())
@@ -876,7 +879,7 @@ states = make_levels(cache, specs)
 # 2) 波形 → 场（微波 σ−，17.236 GHz）
 w = Wave('mw', 17236.743, GaussianEnv(70, 20), pol='σ-',
          intensity_mwcm2=5.5e-5)
-fields = build_fields_exact(cache, states, [w])
+fields = build_two_field(cache, states, [w])   # hard 消费两场 meta
 # 3) 演化（hard：微波硬积分精确）
 res = evolve_engine('hard', states, fields=fields, psi0=0,
                     t_grid=np.linspace(0, 300, 301), n_body=1)
@@ -900,17 +903,17 @@ res = evolve_engine('mixed', states,
 | 引擎 | 模块 | 主函数 | 内部核心 |
 |---|---|---|---|
 | ip4 | evolve_rwa.py | `evolve()` | `_rwa_rk4_core`（相互作用绘景 RK4）|
-| sambe 单 | evolve_sambe.py | `evolve_sambe` | `_propagate_adaptive`（M 判定/探针 + 冻结/缺陷修正；结构走 sambe.SambeSetup——t73 单/两体同一实现） |
-| sambe 两体 | evolve_sambe_pair.py | `evolve_sambe_pair` | `_pair_propagate`（稠密 eigh / 稀疏 Volterra-GMRES；结构走 sambe.SambeSetup）|
+| sambe 单 | sambe.py | `evolve_sambe` | `_propagate_adaptive`（M 判定/探针 + 冻结/缺陷修正；结构走 sambe.SambeSetup——t73 单/两体同一实现） |
+| sambe 两体 | sambe.py | `evolve_sambe_pair` | `_pair_propagate`（稠密 eigh / 稀疏 Volterra-GMRES；结构走 sambe.SambeSetup）|
 | hard 单/两体 | hard.py | `evolve_hard_fast`（别名 `evolve_hard`）/ `evolve_hard_pair` | 同一 `_pack_pair_hard` + `_rhs_hard_pair`（单原子 N_B=1 旁观维，t73b）+ `dop853._dop853_driver` |
 | mixed 单 | evolve_mixed.py | `evolve_mixed` | `_MixedSetup` + φ-帧统一内核 coupling.rhs_phi_pairs（t73 与两体同一 RHS）|
-| mixed 两体 | evolve_mixed_pair.py | `evolve_mixed_pair` | `_build_pair_geometry` + φ-帧统一内核 coupling.rhs_phi_pairs |
+| mixed 两体 | evolve_mixed.py | `evolve_mixed_pair` | `_build_pair_geometry` + φ-帧统一内核 coupling.rhs_phi_pairs |
 
 > **backend 标识**（结果 dict 里可查实际走的路径）：`'sambe-dense'/'sambe-sparse'`
 > （单原子 Sambe）、`'reference-dop853'/'reference-bdf'`、`'hard-numba-dop853'`、
 > `'mixed-phi-dop853'`、`'mixed-phi-dop853-pair'`、`'hard-numba-pair'`、`'ip4'` 等。
 
-> **两场变体与 GPU**：`evolve_sambe_pair.build_two_field_pair(meta_A, meta_B)` +
+> **两场变体与 GPU**：`evolve_twofield.build_two_field_pair(meta_A, meta_B)` +
 > `evolve_two_field_pair(...)`（光场旋转系、只微波占光子维）与
 > `evolve_sambe_pair_gpu.gpu_propagate_pair(...)`（CUDA，研究原型）已实现但未进
 > GUI 主路径；一般开发用上表的六组入口即可。
@@ -939,7 +942,8 @@ res = evolve_engine('mixed', states,
 - **`dop853._dop853_driver`**：DOP853 全编译驱动（njit first-class RHS）。
 - **`coupling.pack_rhs(pairs, t_end)`**：把 (a,b,v,dD,is_mw,w,env) 对打包成 RHS 数组；
   分组键 (is_mw, ω, id(env))。
-- **`acize.acize_physical(E, fields_opt, r_crit)`**：AC 化唯一实现——r 判据分类 +
+- **`evolve_mixed.acize_physical(E, fields_opt, r_crit)`**（t74b 自 acize.py
+  并入）：AC 化唯一实现——r 判据分类 +
   远强对剔除 + per-field far_sos 位移。
 - **`project.project_pops(X_t, P, N_phys, ns, ω, t)`**：跨扇区投影。
 - **`tensor_fields.lift_side_A / lift_fields`**：两体场提升（A⊗I / I⊗A）。
@@ -966,7 +970,7 @@ V = vdd_sparse(cache, singles, R_um, theta_deg, phi_deg)
 
 ## 3.7 耗散（寿命通道，落点=丢失）
 
-- 单原子：`evolve.decay(from_idx, gamma_mhz, None)`、`evolve.auto_decays(cache, states)`
+- 单原子：`evolve_util.decay(from_idx, gamma_mhz, None)`、`evolve_util.auto_decays(cache, states)`
   （ARC 寿命，τ≤100 µs）。
 - 两体：`tensor._pair_loss_vectors(states, decays_A, decays_B, N, K)` → NonHermitian
   对角 −iΓ/2。显式落点/纯退相 → NotImplementedError（语义=离开建模空间即丢失）。

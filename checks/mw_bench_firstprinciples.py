@@ -34,7 +34,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 from arc import Rubidium87
-from src import core, evolve
+from src import core
+# t74：evolve shim 已删——按新家直连
+from src.core.atomic_levels import gaussian, square, make_levels
+from src.core.field_build import field, real_field, _sublevel_row
+from src.core.evolve_util import decay, _as_vector
+from src.core.evolve_rwa import (_rwa_reference, _evolve_full,
+                                 _evolve_full_hybrid, evolve, _field_geometry)
 
 _CONV = 2 * np.pi * 1e-3          # MHz·ns → rad
 B_FIELD = 22.0                    # G
@@ -53,7 +59,7 @@ def make_states(cache, B):
             E = cache.E_mhz(n, l, j) + gJ * core.MU_B_MHZ_PER_G * m * B
             specs.append(dict(n=n, l=l, j=j, m=float(m), E_mhz=float(E),
                               label=f'{n}{"SPD"[l]}{j:g} mJ={m:+.1f}'))
-    return evolve.make_levels(cache, specs)
+    return make_levels(cache, specs)
 
 
 def make_states_ladder(cache, B):
@@ -65,7 +71,7 @@ def make_states_ladder(cache, B):
             E = cache.E_mhz(n, l, j) + gJ * core.MU_B_MHZ_PER_G * m * B
             specs.append(dict(n=n, l=l, j=j, m=float(m), E_mhz=float(E),
                               label=f'{n}{"SPD"[l]}{j:g} mJ={m:+.1f}'))
-    return evolve.make_levels(cache, specs)
+    return make_levels(cache, specs)
 
 
 # ---------------- 积分器 1：固定步长中点法（实验室系非 RWA） ----------------
@@ -253,10 +259,10 @@ def build_s1(cache, B, envelope=None):
                for si in states if si['n'] == 60 and si['l'] == 0
                for sj in states if sj['l'] == 1)
     I = core.intensity_mwcm2_from_rabi(dmax, 100.0)
-    fld, ac = evolve.real_field(cache, states, freq_mhz, I, pol='π',
+    fld, ac = real_field(cache, states, freq_mhz, I, pol='π',
                                 waveform=envelope)
     assert fld is not None
-    geoms = [evolve._field_geometry(states, fld)]
+    geoms = [_field_geometry(states, fld)]
     E = np.array([s['E_mhz'] for s in states]) + np.asarray(ac)
     om_max = float(fld['A'].max())
     w_mhz = float(fld['omega_L_mhz'])
@@ -275,13 +281,13 @@ def build_s3(cache, B):
                 for sj in states if sj['n'] == 60 and sj['l'] == 0)
     I_opt = core.intensity_mwcm2_from_rabi(d_opt, 20.0)
     f_opt = cache.E_mhz(60, 0, 0.5) - cache.E_mhz(6, 1, 1.5)
-    fld_o, ac_o = evolve.real_field(cache, states, f_opt, I_opt, pol='σ+')
+    fld_o, ac_o = real_field(cache, states, f_opt, I_opt, pol='σ+')
     d_mw = max(abs(core.dipole_amplitude(cache, si, sj, 0))
                for si in states if si['n'] == 60 and si['l'] == 0
                for sj in states if sj['n'] == 60 and sj['l'] == 1)
     I_mw = core.intensity_mwcm2_from_rabi(d_mw, 100.0)
     f_mw = cache.E_mhz(60, 1, 0.5) - cache.E_mhz(60, 0, 0.5)
-    fld_m, ac_m = evolve.real_field(cache, states, f_mw, I_mw, pol='π')
+    fld_m, ac_m = real_field(cache, states, f_mw, I_mw, pol='π')
     E = (np.array([s['E_mhz'] for s in states])
          + np.asarray(ac_o) + np.asarray(ac_m))
     fields = [f for f in (fld_o, fld_m) if f is not None]
@@ -295,7 +301,7 @@ def build_hybrid_terms(states, fields, t, dt):
     返回 (ref_arr, rwa_terms, non_terms, w_mw_mhz)。
     """
     N = len(states)
-    geoms = [evolve._field_geometry(states, f) for f in fields]
+    geoms = [_field_geometry(states, f) for f in fields]
 
     def _key(i):
         s = states[i]
@@ -421,10 +427,10 @@ def run_scenario_s1(cache, envelope, name, dt_list):
     # 生产：full（solve_ivp 非 RWA，旧第一性原理参考）——仅在方波（S1）跑，
     # 高斯（S2）由 RK4 收敛表验证（积分器一致性已在 S1 与 Floquet 交叉验证）
     if envelope is None:
-        geoms_r = [evolve._field_geometry(states, f) for f in fields]
-        psi0v = evolve._as_vector(states, i0)
+        geoms_r = [_field_geometry(states, f) for f in fields]
+        psi0v = _as_vector(states, i0)
         t0 = time.perf_counter()
-        _, pops_full, _ = evolve._evolve_full(E, geoms_r, psi0v, t, False)
+        _, pops_full, _ = _evolve_full(E, geoms_r, psi0v, t, False)
         dt_full = time.perf_counter() - t0
         print(f'[生产] full solve_ivp: {dt_full:7.2f} s   '
               f'vs 参考 max|Δpops| = {maxdiff(pops_full, ref):.3e}')
@@ -458,9 +464,9 @@ def run_scenario_s3(cache):
           f'（N={N}，B={B_FIELD} G，T={T_TOTAL} ns）=====')
 
     # 参考：_evolve_full_hybrid（solve_ivp 混合，光频 RWA + 微波非 RWA）
-    psi0v = evolve._as_vector(states, i0)
+    psi0v = _as_vector(states, i0)
     t0 = time.perf_counter()
-    _, pops_ref, _ = evolve._evolve_full_hybrid(E, states, fields, psi0v, t,
+    _, pops_ref, _ = _evolve_full_hybrid(E, states, fields, psi0v, t,
                                                 False)
     dt_ff = time.perf_counter() - t0
     print(f'[参考] _evolve_full_hybrid（solve_ivp 混合）: {dt_ff:7.2f} s')
@@ -468,7 +474,7 @@ def run_scenario_s3(cache):
     # 内置 ip4（相互作用绘景 RK4，第一性原理）
     ac3 = E - np.array([s['E_mhz'] for s in states])
     t0 = time.perf_counter()
-    r = evolve.evolve(states, fields, i0, t, method='ip4', ac_shift_mhz=ac3)
+    r = evolve(states, fields, i0, t, method='ip4', ac_shift_mhz=ac3)
     dt_ip = time.perf_counter() - t0
     print(f'[内置] ip4（默认 frac=40）: {dt_ip:7.2f} s   '
           f'vs 参考 max|Δpops| = {maxdiff(r["pops"], pops_ref):.3e}')
@@ -477,7 +483,7 @@ def run_scenario_s3(cache):
     # 显式调用应报错并指向封存模块；需要时用封存模块 evolve_floquet/evolve_pwc
     from src._archive.evolve_floquet_pwc import evolve_pwc as _evolve_pwc_arch
     try:
-        evolve.evolve(states, fields, i0, t, method='floquet')
+        evolve(states, fields, i0, t, method='floquet')
         print('[内置] floquet：意外成功（应报错指向封存模块）')
     except ValueError as e:
         print(f'[内置] floquet 显式调用正确拒绝（封存）：{str(e)[:60]}…')
@@ -497,7 +503,7 @@ def main():
     if which in ('all', 'S1'):
         run_scenario_s1(cache, None, 'S1（方波）', dt_list=(20.0, 40.0))
     if which in ('all', 'S2'):
-        env = evolve.gaussian(T_TOTAL / 2.0, 100.0)
+        env = gaussian(T_TOTAL / 2.0, 100.0)
         run_scenario_s1(cache, env, 'S2（高斯）', dt_list=(20.0, 40.0, 80.0))
     if which in ('all', 'S3'):
         run_scenario_s3(cache)

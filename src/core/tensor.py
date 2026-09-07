@@ -13,7 +13,8 @@
 """
 import numpy as np
 
-from . import evolve as _evolve  # noqa: E402  （_pair_loss_vectors 依赖 decay）
+from .evolve_util import _resolve_state_idx  # t74 工具归位
+from .field_build import _field_geometry
 
 
 def tensor_states(states):
@@ -58,7 +59,7 @@ def _tensor_field_atom(field_raw, states, N, atom='A'):
     atom='B'：场作用在原子 B 上
     """
     # 先归一化：pair/group 场 → multi 格式（含 M, A, ac_shift, g_idx, e_idx）
-    g = _evolve._field_geometry(states, field_raw)
+    g = _field_geometry(states, field_raw)
     M = g['M']
     A = g['A']
     ac = g['ac_shift']
@@ -158,13 +159,13 @@ def _pair_loss_vectors(states, decays_A, decays_B, N, K):
     for decays, atom, target in ((decays_A or [], 'A', GammaA),
                                  (decays_B or [], 'B', GammaB)):
         for ch in decays:
-            g_idx = _evolve._resolve_state_idx(states, ch['from'])
+            g_idx = _resolve_state_idx(states, ch['from'])
             if g_idx is None:
                 raise ValueError(
                     f'两体耗散：{atom} 通道 from 无法解析到基组 '
                     f'({ch["from"]!r})')
             to = ch.get('to')
-            if to is not None and _evolve._resolve_state_idx(states, to) \
+            if to is not None and _resolve_state_idx(states, to) \
                     is not None:
                 raise NotImplementedError(
                     '两体 Lindblad v1 仅支持落点=丢失（寿命通道/auto_decays）；'

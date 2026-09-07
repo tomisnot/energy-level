@@ -48,7 +48,7 @@ def gpu_propagate_pair(setup, groups, psi0_2d, t_grid, frozen_h_ns=8.0,
         return np.array([float(np.asarray(wf(np.atleast_1d(tv))).flat[0])
                          for wf, _ in envs_all])
 
-    from .evolve_sambe_pair import _embed_pair
+    from .sambe import _embed_pair
     X0_ext = _embed_pair(psi0_2d, setup)
     X = torch.from_numpy(np.ascontiguousarray(X0_ext)) \
         .to(torch.complex128).cuda()

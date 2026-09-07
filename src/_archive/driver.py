@@ -57,7 +57,8 @@ def full_evolve(H0_mhz, D, omega_rad_ns, om_mhz, psi0, t_ns):
         Ht = H0 + (om_mhz / 2.0) * (Dm * ph + Dd * np.conj(ph))
         return (-1j * _CONV) * (Ht @ psi)
 
-    sol = solve_ivp(rhs, (t_ns[0], t_ns[-1]), np.asarray(psi0, complex),
+    sol = solve_ivp(_rhs_amp, (t_ns[0], t_ns[-1]),
+                    np.asarray(psi0, complex),
                     t_eval=t_ns, rtol=1e-8, atol=1e-10)
     return t_ns, np.abs(sol.y) ** 2
 

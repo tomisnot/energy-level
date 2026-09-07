@@ -30,9 +30,18 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np
 from arc import Rubidium87
 from scipy.integrate import solve_ivp
-from src import core, evolve, pulse
+from src import core, pulse
+# t74：evolve shim 已删——按新家直连
+from src.core.atomic_levels import gaussian, square, make_levels
+from src.core.field_build import (field, real_field, group_field,
+                                  _field_geometry, _sublevel_row)
+from src.core.evolve_util import (decay, auto_decays, _as_vector,
+                                  _CONV)
+from src.core.evolve_rwa import (evolve, _e_rot, _evolve_full,
+                                 _evolve_full_hybrid)
 
-_CONV = evolve._CONV
+
+_CONV = _CONV
 B = 22.0
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                    '_matrix_result.json')
@@ -55,7 +64,7 @@ def make_states_s1(cache, B):
         for m in np.arange(-j, j + 1e-9, 1.0):
             E = cache.E_mhz(n, l, j) + cache.gJ(l, j) * core.MU_B_MHZ_PER_G * m * B
             specs.append(dict(n=n, l=l, j=j, m=float(m), E_mhz=float(E)))
-    return evolve.make_levels(cache, specs)
+    return make_levels(cache, specs)
 
 
 def make_states_ladder(cache, B):
@@ -64,7 +73,7 @@ def make_states_ladder(cache, B):
         for m in (-0.5, 0.5):
             E = cache.E_mhz(n, l, j) + cache.gJ(l, j) * core.MU_B_MHZ_PER_G * m * B
             specs.append(dict(n=n, l=l, j=j, m=float(m), E_mhz=float(E)))
-    return evolve.make_levels(cache, specs)
+    return make_levels(cache, specs)
 
 
 def make_states_prep(cache, B=21.7):
@@ -81,7 +90,7 @@ def make_states_prep(cache, B=21.7):
             for F, mF, e_hf, _w, amps in hf:
                 specs.append(dict(n=n, l=l, j=j, kind='F', F=F, mF=mF,
                                   E_hf=float(e_hf), amps=amps))
-    return evolve.make_levels(cache, specs)
+    return make_levels(cache, specs)
 
 
 def build_s1(cache, envelope=None):
@@ -95,7 +104,7 @@ def build_s1(cache, envelope=None):
                for si in states if si['n'] == 60 and si['l'] == 0
                for sj in states if sj['l'] == 1)
     I = core.intensity_mwcm2_from_rabi(dmax, 100.0)
-    fld, ac = evolve.real_field(cache, states, freq, I, pol='π',
+    fld, ac = real_field(cache, states, freq, I, pol='π',
                                 waveform=envelope)
     return states, [fld], i0
 
@@ -111,14 +120,14 @@ def build_s3(cache):
                 for sj in states if sj['n'] == 60 and sj['l'] == 0)
     I_opt = core.intensity_mwcm2_from_rabi(d_opt, 20.0)
     f_opt = cache.E_mhz(60, 0, 0.5) - cache.E_mhz(6, 1, 1.5)
-    fld_o, ac_o = evolve.real_field(cache, states, f_opt, I_opt, pol='σ+')
+    fld_o, ac_o = real_field(cache, states, f_opt, I_opt, pol='σ+')
     d_mw = max(abs(core.dipole_amplitude(cache, evolve._sublevel_row(si),
                                          evolve._sublevel_row(sj), 0))
                for si in states if si['n'] == 60 and si['l'] == 0
                for sj in states if sj['n'] == 60 and sj['l'] == 1)
     I_mw = core.intensity_mwcm2_from_rabi(d_mw, 100.0)
     f_mw = cache.E_mhz(60, 1, 0.5) - cache.E_mhz(60, 0, 0.5)
-    fld_m, ac_m = evolve.real_field(cache, states, f_mw, I_mw, pol='π')
+    fld_m, ac_m = real_field(cache, states, f_mw, I_mw, pol='π')
     fields = [f for f in (fld_o, fld_m) if f is not None]
     return states, fields, i0
 
@@ -127,13 +136,13 @@ def build_s4(cache):
     """初态制备（时变 AC 阻塞）：微波1 π 脉冲 + 光场频移 + 微波2。"""
     states = make_states_prep(cache)
     i0 = 1                                     # 60S m=+0.5
-    mw_wf = evolve.gaussian(150.0, 41.7)
-    mw1, _ = evolve.real_field(cache, states, 17236.743, 1.29051816e-5,
+    mw_wf = gaussian(150.0, 41.7)
+    mw1, _ = real_field(cache, states, 17236.743, 1.29051816e-5,
                                'σ-', waveform=mw_wf)
-    mw2, _ = evolve.real_field(cache, states, 17236.743, 1.29051816e-5,
-                               'σ-', waveform=evolve.gaussian(430.0, 41.7))
+    mw2, _ = real_field(cache, states, 17236.743, 1.29051816e-5,
+                               'σ-', waveform=gaussian(430.0, 41.7))
     opt = pulse.SmoothSquareEnv(200.0, 40.0, height=1.0, fall_start_ns=420.0)
-    f_opt, ac_opt = evolve.real_field(cache, states, 295723987.476,
+    f_opt, ac_opt = real_field(cache, states, 295723987.476,
                                       126849894.0, 'π', waveform=opt)
     fields = [mw1, mw2]
     if f_opt is not None:
@@ -150,14 +159,14 @@ def build_s4(cache):
 
 def build_s5(cache):
     """时变 AC 位移正确性：两态 + 微波 + 时变光场位移（独立可积分）。"""
-    states = evolve.make_levels(cache, [
+    states = make_levels(cache, [
         dict(n=60, l=0, j=0.5, m=0.5,
              E_mhz=core._sublevel_energy(cache, 60, 0, 0.5, 0.5, B)),
         dict(n=60, l=1, j=1.5, m=-0.5,
              E_mhz=core._sublevel_energy(cache, 60, 1, 1.5, -0.5, B))])
     i0 = 0
-    mw_wf = evolve.gaussian(150.0, 41.7)
-    mw, _ = evolve.real_field(cache, states,
+    mw_wf = gaussian(150.0, 41.7)
+    mw, _ = real_field(cache, states,
                               states[1]['E_mhz'] - states[0]['E_mhz'],
                               1.29051816e-5, 'σ-', waveform=mw_wf)
     opt = pulse.SmoothSquareEnv(200.0, 40.0, height=1.0, fall_start_ns=420.0)
@@ -221,7 +230,7 @@ def solve_ivp_ref(states, fields, psi0, t, thresh=1e-4):
 def ip4_conv_ref(states, fields, psi0, t, frac=80.0):
     """高 frac ip4 收敛参考（长窗替代 solve_ivp：非 RWA cos 快项下
     solve_ivp 自适应步长不可行，改用更高阶收敛验证时变 ac 一致性）。"""
-    r = evolve.evolve(states, fields, psi0, t, method='ip4', ip4_frac=frac)
+    r = evolve(states, fields, psi0, t, method='ip4', ip4_frac=frac)
     return r['pops']
 
 
@@ -236,24 +245,24 @@ def run_case(args):
     try:
         if name == 'S1':
             states, fields, i0 = build_s1(cache)
-            r = evolve.evolve(states, fields, i0, t, method=method,
+            r = evolve(states, fields, i0, t, method=method,
                               ip4_frac=ip4_frac)
         elif name == 'S2':
-            env = evolve.gaussian(200.0, 100.0)
+            env = gaussian(200.0, 100.0)
             states, fields, i0 = build_s1(cache, envelope=env)
-            r = evolve.evolve(states, fields, i0, t, method=method,
+            r = evolve(states, fields, i0, t, method=method,
                               ip4_frac=ip4_frac)
         elif name == 'S3':
             states, fields, i0 = build_s3(cache)
-            r = evolve.evolve(states, fields, i0, t, method=method,
+            r = evolve(states, fields, i0, t, method=method,
                               ip4_frac=ip4_frac)
         elif name == 'S4':
             states, fields, i0 = build_s4(cache)
-            r = evolve.evolve(states, fields, i0, t, method=method,
+            r = evolve(states, fields, i0, t, method=method,
                               ip4_frac=ip4_frac)
         elif name == 'S5':
             states, fields, i0 = build_s5(cache)
-            r = evolve.evolve(states, fields, i0, t, method=method,
+            r = evolve(states, fields, i0, t, method=method,
                               ip4_frac=ip4_frac)
         else:
             out['note'] = 'unknown scenario'

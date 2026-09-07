@@ -33,13 +33,14 @@
 import numpy as np
 from numba import njit
 
-from . import evolve as _evolve
-from . import pair_evolve as _pe
-from .evolve_util import (_single_loss_rates, _loss_and_norm)  # t74 工具归位
-from .evolve_sambe import _CONV
+from . import tensor as _tensor
+from . import static_atom as core  # t74：build_two_field 系列归位所需
+from .params import (_TAB_N, _VDD_MIN_FRAC, MW_MAX_MHZ,  # t74c 参数单源
+                     OPT_NRES_BW_MHZ, MW_NRES_BW_MHZ)
+from .evolve_util import (_single_loss_rates, _loss_and_norm,
+                          _as_vector, env_at, _CONV)  # t74 工具归位
 
 # 包络查表点数（620ns → h≈0.0047ns；插值误差 ~3e-10）
-_TAB_N = 2 ** 17
 
 
 @njit(cache=True, nogil=True)
@@ -218,7 +219,7 @@ def evolve_hard_fast(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
     Gamma_ns = (_single_loss_rates(states, decays) if has_decay
                 else np.zeros(N))
     gamma = Gamma_ns / _CONV if has_decay else None
-    psi0v = _evolve._as_vector(states, psi0)
+    psi0v = _as_vector(states, psi0)
     psi0_2d = np.kron(psi0v, np.ones(1, complex))   # 旁观振幅 1
 
     if driver == 'numba':
@@ -285,7 +286,6 @@ def evolve_hard_fast(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
 # 效应 ≤ V²/Δ ≤ 1e-8 MHz，集体位移 ≤ ~1e-7 MHz ≪ rtol——硬算表示下省略
 # （每元素逐个 exp 相位是 RHS 主开销：5184 MACs ≈ 59µs/RHS）。144 个物理活性
 # 元素全保留（|dE|·C ≤ 218 rad/ns，精确相位）。
-_VDD_MIN_FRAC = 1e-4
 
 
 def _embed_triplets(A, side, n_self, n_other, mask=None):
@@ -539,10 +539,6 @@ def _rhs_hard_pair(t, y, E_A, E_B, fld_rows, fld_cols, fld_vals, fld_envs,
 # t11 实验验证与旧两体驱动逐位一致）。本模块只保留内核与打包。
 # ============================================================
 
-# t73b：统一入口别名（evolve_engine 单原子 method='hard' 走本名——
-# 此前 evolve_engine 引用的 evolve_hard 不存在，属潜伏断链，已修复）
-evolve_hard = evolve_hard_fast
-
 
 
 # ============================================================
@@ -583,7 +579,7 @@ def evolve_hard_pair(states, fields_meta_A, fields_meta_B, psi0_A, psi0_B,
     GammaA = GammaB = None
     has_decay = bool(decays_A or decays_B)
     if has_decay:
-        GammaA, GammaB, _ = _pe._pair_loss_vectors(
+        GammaA, GammaB, _ = _tensor._pair_loss_vectors(
             states, decays_A, decays_B, N, N2)
     gamma_MHz = np.zeros(N2)
     if has_decay:
@@ -591,9 +587,9 @@ def evolve_hard_pair(states, fields_meta_A, fields_meta_B, psi0_A, psi0_B,
                      + np.asarray(GammaB, float)) / _CONV
 
     # ---- 初态 ----
-    psi0_A_vec = _evolve._as_vector(states, psi0_A)
-    psi0_B_vec = _evolve._as_vector(states, psi0_B)
-    psi0_2d = _pe._as_product_psi(psi0_A_vec, psi0_B_vec, N)
+    psi0_A_vec = _as_vector(states, psi0_A)
+    psi0_B_vec = _as_vector(states, psi0_B)
+    psi0_2d = _tensor._as_product_psi(psi0_A_vec, psi0_B_vec, N)
 
     E_lab = np.array([st['E_mhz'] for st in states], float)
     pack = _pack_pair_hard(fields_meta_A, fields_meta_B, T, V, n_tab,
@@ -652,8 +648,8 @@ def evolve_hard_pair(states, fields_meta_A, fields_meta_B, psi0_A, psi0_B,
     else:
         norm_dev = float(np.max(np.abs(pops_2d.sum(axis=1) - 1.0)))
 
-    pops_A = _pe._reduce_A(pops_2d, N)
-    pops_B = _pe._reduce_B(pops_2d, N)
+    pops_A = _tensor._reduce_A(pops_2d, N)
+    pops_B = _tensor._reduce_B(pops_2d, N)
     stage_progress(progress_arr, 2, 1.0)
     report = dict(n_segments=n_acc, max_richardson_diff=0.0, dt_min_hit=False,
                   max_norm_dev=norm_dev, nfev=nfev)
@@ -950,7 +946,7 @@ def evolve_hard(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
     E_rot = np.asarray(fields_meta['E_rot'], float)
     opt_terms = fields_meta['opt_terms']
     mw_groups = fields_meta['mw_groups']
-    psi0v = _evolve._as_vector(states, psi0)
+    psi0v = _as_vector(states, psi0)
     T = float(t[-1])
     # t24：耗散（落点=丢失）——Gamma_ns（/ns），RHS 加 −Γ/2·y
     has_decay = bool(decays)

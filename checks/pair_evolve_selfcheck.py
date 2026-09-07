@@ -35,7 +35,16 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(_HERE)
 sys.path.insert(0, _ROOT)
 import src  # noqa: F401
-from src.core import evolve, core, pair_core
+from src.core import core, pair_core
+# t74：evolve shim 已删——按新家直连
+from src.core.atomic_levels import gaussian, square, make_levels
+from src.core.field_build import (field, real_field, group_field,
+                                  _field_geometry, _sublevel_row)
+from src.core.evolve_util import (decay, auto_decays, _as_vector,
+                                  _CONV)
+from src.core.evolve_rwa import (evolve, _e_rot, _evolve_full,
+                                 _evolve_full_hybrid)
+
 from arc import Rubidium87
 
 try:
@@ -193,7 +202,7 @@ def t3():
     if not _HAS_PI:
         print('  [SKIP] pairinteraction 未安装'); return
 
-    from src.core import pair_evolve
+    import pair_evolve  # t74：引擎随自检迁居 checks/
     cache = core.ArcCache(Rubidium87())
     qnums = [(60, 0, 0.5, 0.5), (60, 1, 0.5, 0.5)]
     R = 5.0
@@ -205,7 +214,7 @@ def t3():
     # 用 pairinteraction 能量构造 states（旋转系与参考完全一致）
     specs = [dict(n=60, l=0, j=0.5, m=0.5, E_mhz=E_pi[0]),
              dict(n=60, l=1, j=0.5, m=0.5, E_mhz=E_pi[1])]
-    states = evolve.make_levels(cache, specs)
+    states = make_levels(cache, specs)
     psi0_A = np.zeros(N, complex); psi0_A[0] = 1.0   # |60S⟩
     psi0_B = np.zeros(N, complex); psi0_B[1] = 1.0   # |60P⟩
     t = np.linspace(0.0, 200.0, 1001)
@@ -241,22 +250,22 @@ def t3():
 # ==================================================================
 def t4():
     print('T4 单体一致性：V_dd=0 两原子独立 ≡ 单原子引擎')
-    from src.core import pair_evolve
+    import pair_evolve  # t74：引擎随自检迁居 checks/
     cache = core.ArcCache(Rubidium87())
     specs = [dict(n=6, l=0, j=0.5, m=0.5),      # g: 6S
              dict(n=60, l=0, j=0.5, m=0.5),     # e1: 60S
              dict(n=60, l=1, j=0.5, m=0.5)]     # e2: 60P
-    states = evolve.make_levels(cache, specs)
+    states = make_levels(cache, specs)
     N = len(states)
-    field = evolve.field(0, 1, omega0_mhz=10.0,
-                         waveform=evolve.square(0.0, 1e12))
+    fld = field(0, 1, omega0_mhz=10.0,
+                waveform=square(0.0, 1e12))
     psi0 = np.zeros(N, complex); psi0[0] = 1.0
     t = np.linspace(0, 100.0, 201)
 
-    res1 = evolve.evolve(states, [field], psi0, t, method='ip4',
+    res1 = evolve(states, [fld], psi0, t, method='ip4',
                          progress_arr=np.zeros(2))
     res2 = pair_evolve.pair_evolve(
-        states, [field], [], psi0, psi0,
+        states, [fld], [], psi0, psi0,
         vdd_matrix=None, t_grid=t, method='ip4',
         progress_arr=np.zeros(2))
     err = np.max(np.abs(res2['pops_A'] - res1['pops']))
@@ -269,12 +278,12 @@ def t4():
 # ==================================================================
 def t5():
     print('T5 secular 判据：远失谐丢弃 / 近简并保留')
-    from src.core import pair_evolve
+    import pair_evolve  # t74：引擎随自检迁居 checks/
     cache = core.ArcCache(Rubidium87())
     specs = [dict(n=60, l=0, j=0.5, m=0.5),      # 60S
              dict(n=60, l=1, j=0.5, m=0.5),      # 60P1/2
              dict(n=59, l=1, j=0.5, m=0.5)]      # 59P1/2（vdW 中间态）
-    states = evolve.make_levels(cache, specs)
+    states = make_levels(cache, specs)
     N = len(states)
     E = np.array([s['E_mhz'] for s in states])
     E_rot_2d = np.kron(E, np.ones(N)) + np.kron(np.ones(N), E)  # 无光场 ref=0

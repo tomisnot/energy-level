@@ -17,8 +17,8 @@
 """
 import numpy as np
 
-from . import evolve
-from .field_build import build_fields_exact       # noqa: F401（第一性场构造，t74 归位）
+from .field_build import (build_fields_exact, real_field,  # noqa: F401
+                          arbitrary_field)
 
 # 与旧 pulse.py 一致的包络形状（数据类抽离 UI，纯计算）
 POLS = ['σ+', 'π', 'σ-', '椭圆偏']
@@ -218,28 +218,36 @@ def waveforms_to_env(waves, t_grid):
     return out
 
 
+# ================= 数据源（动态页演化输入） =================
+def waveforms_to_env(waves, t_grid):
+    """各波形的光强曲线数据（画光强，不画载波）。
+
+    返回 [(label, t, env, freq_mhz, intensity_mwcm2), ...]——每波形一条。
+    env 为 0~1 包络，光强曲线 = intensity × env。采样直接用输出网格 t_grid。
+    """
+    t = np.asarray(t_grid, float)
+    out = []
+    for w in waves:
+        out.append((w.name, t, np.asarray(w.waveform(t), float),
+                    float(w.freq_mhz), float(w.intensity_mwcm2)))
+    return out
+
+
 def build_fields(waves, states, cache, near_cutoff_mhz=None, B_gauss=None,
                  n_photon=None, sos_n_window=None):
-    """由波形列表的「真实光场参数」生成演化输入。
+    """由波形列表的「真实光场参数」生成演化输入（ip4/Lindblad 管线）。
 
-    每波形 (freq_mhz, intensity_mwcm2, pol, waveform) → evolve.real_field：
-    自动按自适应失谐判据展开近共振驱动对（Ω 真实、Δ 相对裸差）；
-    **AC 位移**：B_gauss 提供时统一走静态页同款 Floquet 引擎
-    （core.direct_ac_stark_shifts，含全部偶极伙伴、不分近/远）；B_gauss
-    None（旧调用）回退 far_sos 逐对求和。返回 fields 列表（每波形一个
-    多对驱动场，含时变 ac）。
-
-    ArbitraryWave（任意波形，无单频）→ evolve.arbitrary_field（第一性原理
-    求解，无 RWA/旋转系/近远分流；见 evolve.arbitrary_field docstring）。
+    每波形 (freq_mhz, intensity_mwcm2, pol, waveform) → evolve.real_field；
+    ArbitraryWave（任意波形，无单频）→ evolve.arbitrary_field。
     """
     fields = []
     for w in waves:
         if isinstance(w, ArbitraryWave):
-            fields.append(evolve.arbitrary_field(
+            fields.append(arbitrary_field(
                 cache, states, w.t_ns, w.amp, w.pol,
                 w.intensity_mwcm2, w.offset_ns))
             continue
-        fld, a, sc = evolve.real_field(
+        fld, a, sc = real_field(
             cache, states, w.freq_mhz, w.intensity_mwcm2, w.pol,
             waveform=w.waveform, near_cutoff_mhz=near_cutoff_mhz,
             return_scatter=True, B_gauss=B_gauss, n_photon=n_photon,

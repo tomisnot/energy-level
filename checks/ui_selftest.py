@@ -32,7 +32,11 @@ QMessageBox.information = staticmethod(lambda *a, **k: None)
 QMessageBox.warning = staticmethod(lambda *a, **k: None)
 
 import 能级 as main_mod
-from src import waveforms, evolve, core, ui_theme
+from src import waveforms, core, ui_theme
+from src.core.evolve_util import decay, auto_decays
+from src.core.field_build import field
+from src.core.atomic_levels import make_levels, gaussian, square
+from src.core.evolve_rwa import evolve
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _RESULTS = []
@@ -279,7 +283,7 @@ def test_dynamic(app, win):
     dyn.decay_mode_cb.setCurrentIndex(0); app.processEvents()
     st_now = dyn._current_states()
     i6p = next(i for i, s in enumerate(st_now) if '6P' in s['label'])
-    auto_ch = evolve.auto_decays(dyn.cache, st_now)
+    auto_ch = auto_decays(dyn.cache, st_now)
     check('自动档按 ARC 寿命出 6P 通道（排除里德堡）',
           len(auto_ch) > 0
           and all(a['gamma_mhz'] > 1.0 for a in auto_ch)
@@ -322,7 +326,7 @@ def test_wave_serde(app):
     cache = core.ArcCache(__import__('arc').Rubidium87())
     specs = [dict(n=60, l=0, j=0.5, kind='mJ', m=float(m)) for m in (-0.5, 0.5)]
     specs += [dict(n=60, l=1, j=0.5, kind='mJ', m=float(m)) for m in (-0.5, 0.5)]
-    states = evolve.make_levels(cache, specs)
+    states = make_levels(cache, specs)
     fields = waveforms.build_fields(waves, states, cache)
     check('波形 → real_field 场（近共振驱动对）', len(fields) >= 2)
 
@@ -400,7 +404,7 @@ def test_progress(app):
             for F, mF, e_hf, _w, amps in hf:
                 specs.append(dict(n=n, l=l, j=j, kind='F', F=F, mF=mF,
                                   E_hf=float(e_hf), amps=amps))
-    states = evolve.make_levels(cache, specs)
+    states = make_levels(cache, specs)
     waves = waveforms.restore_waves(data.get('waves', []))
     fields = waveforms.build_fields(waves, states, cache)
     # 取消测试用更慢的网格：大 t_max + 高点数，保证 1s 内跑不完（取消才可测）
@@ -414,7 +418,7 @@ def test_progress(app):
 
     def run():
         try:
-            evolve.evolve(states, fields, psi0, t, method='ip4',
+            evolve(states, fields, psi0, t, method='ip4',
                           progress_arr=pa)
             result['ok'] = True
         except RuntimeError as e:
@@ -435,12 +439,12 @@ def test_progress(app):
 
     # ---- 正常完成：进度到 1.0 + 归一 ----
     import mw_bench_firstprinciples as mb
-    env = evolve.gaussian(200.0, 100.0)
+    env = gaussian(200.0, 100.0)
     st2, i02, E2, fld2, _, om2, w2, _, _, _ = mb.build_s1(cache, 22.0, env)
     t2 = np.linspace(0, 400.0, 2001)
     ac2 = E2 - np.array([s['E_mhz'] for s in st2])
     pa2 = np.zeros(2)
-    r2 = evolve.evolve(st2, [fld2], i02, t2, method='ip4', ac_shift_mhz=ac2,
+    r2 = evolve(st2, [fld2], i02, t2, method='ip4', ac_shift_mhz=ac2,
                        progress_arr=pa2)
     check('正常完成 + 进度到 1.0 + 归一',
           pa2[0] == 1.0
@@ -468,7 +472,7 @@ def test_stir_states(app):
             for F, mF, e_hf, _w, amps in hf:
                 specs.append(dict(n=n, l=l, j=j, kind='F', F=F, mF=mF,
                                   E_hf=float(e_hf), amps=amps))
-    states = evolve.make_levels(cache, specs)
+    states = make_levels(cache, specs)
     waves = waveforms.restore_waves(data.get('waves', []))
     cut = 5000.0          # t25：near_cutoff 控件移除，ip4 用内部默认 5 GHz
     fields = waveforms.build_fields(waves, states, cache,

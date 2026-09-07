@@ -6,7 +6,7 @@
 """
 from PyQt5.QtCore import QThread, pyqtSignal
 
-from ..core import evolve
+from ..core.evolve_util import decay, auto_decays  # t74 工具归位
 
 
 class EvolveWorker(QThread):
@@ -55,16 +55,14 @@ class EvolveWorker(QThread):
                     progress_arr=self.progress_arr, log=self.log_msg.emit,
                     decays=self.decays)
             else:
-                # ac_shift 已内嵌各 field（随包络时变），无需另传
-                # t25：显示名 'sambe' → 引擎 'exact'（Sambe 光子块）
-                res = evolve.evolve(self.states, self.fields, self.psi0,
-                                    self.t_grid,
-                                    method={'sambe': 'exact'}.get(
-                                        self.method, self.method),
-                                    backend=self.backend,
-                                    progress_arr=self.progress_arr,
-                                    log=self.log_msg.emit,
-                                    decays=self.decays)
+                # t74：'sambe'（GUI 唯一可达档）直连 sambe 引擎——
+                # 不再经由 evolve.evolve 调度器（ip4/Lindblad 为 checks 参照）
+                from ..core.sambe import evolve_sambe
+                res = evolve_sambe(self.states, self.fields, self.psi0,
+                                   self.t_grid,
+                                   progress_arr=self.progress_arr,
+                                   log=self.log_msg.emit,
+                                   decays=self.decays)
             self.done.emit(res, None)
         except RuntimeError as e:
             # 用户取消：progress_arr[1]≠0 → 不算错误，静默
@@ -130,7 +128,7 @@ class EvolveWorkerPair(QThread):
                     self.progress_arr[2] = 2
                     self.progress_arr[0] = 1.0
             if self.method == 'exact':
-                from ..core.evolve_exact_pair import evolve_exact_pair
+                from ..core.sambe import evolve_sambe_pair as evolve_exact_pair
                 res = evolve_exact_pair(
                     self.states, self.fields_A, self.fields_B,
                     self.psi0_A, self.psi0_B,
@@ -146,7 +144,7 @@ class EvolveWorkerPair(QThread):
                 # t70 定案：位移不注入——近对（60S↔6P）光子块 M=1
                 # 动态自然涌现 AC 位移 ≡ hard RWA（375ns 交换窗
                 # max|Δpops|=8.2e-5 验收）。t73b：B_gauss/ac_inject 链已移除。
-                from ..core.evolve_mixed_pair import evolve_mixed_pair
+                from ..core.evolve_mixed import evolve_mixed_pair
                 res = evolve_mixed_pair(
                     self.states, self.fields_A, self.fields_B,
                     self.psi0_A, self.psi0_B,
@@ -155,17 +153,6 @@ class EvolveWorkerPair(QThread):
                     decays_A=self.decays_A, decays_B=self.decays_B,
                     progress_arr=self.progress_arr,
                     cache=self._cache_ref,
-                    log=self.log_msg.emit)
-            elif self.method != 'hard':
-                # hard 分支已在上方赋值 res；此处排除，避免 pair_evolve 覆盖
-                from ..core import pair_evolve
-                res = pair_evolve.pair_evolve(
-                    self.states, self.fields_A, self.fields_B,
-                    self.psi0_A, self.psi0_B,
-                    t_grid=self.t_grid, method='ip4',
-                    vdd_matrix=self.vdd_matrix,
-                    decays_A=self.decays_A, decays_B=self.decays_B,
-                    progress_arr=self.progress_arr,
                     log=self.log_msg.emit)
             self.done.emit(res, None)
         except RuntimeError as e:

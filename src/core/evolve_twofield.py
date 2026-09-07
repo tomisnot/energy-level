@@ -29,16 +29,18 @@ import numpy as np
 import scipy.sparse as sp
 
 from . import static_atom as core
-from . import evolve as _evolve
+from .evolve_util import _as_vector
+from .tensor import (_pair_loss_vectors, _as_product_psi, _reduce_A,
+                     _reduce_B)
 from .sambe import (_CONV, _M_MAX, _M_ANALYTIC_BW_MHZ,
                     _gl_nodes, _GL_CACHE, setup_P)
 from .field_build import _group_by_freq
+from .params import (MW_MAX_MHZ, OPT_NRES_BW_MHZ, MW_NRES_BW_MHZ,  # t74c
+                     _TF_MW_NRES_BW_MHZ, _TF_DENSE_MAX, _VDD_RWA_TOL_MHZ,
+                     _M_MAX)
 from .sambe import env_at
 
 # ---- 场分类 ----
-MW_MAX_MHZ = 1e5            # 载频 ≤ 100 GHz 视为微波，> 视为光场
-OPT_NRES_BW_MHZ = 2e3       # 旋转后近共振对筛选带宽（2 GHz）
-MW_NRES_BW_MHZ = 5e3        # 微波近共振对筛选带宽（5 GHz）
 
 
 def arbitrary_mw_group(cache, states, wave):
@@ -435,7 +437,7 @@ def evolve_two_field(states, fields_meta, psi0, t_grid, tol=1e-6,
     E_rot = fields_meta['E_rot']
     opt_terms = fields_meta['opt_terms']
     mw_groups = fields_meta['mw_groups']
-    psi0v = _evolve._as_vector(states, psi0)
+    psi0v = _as_vector(states, psi0)
     T = float(t[-1])
     tol = float(tol)
     # 多光场拍频防护（t30）：Sambe 冻结段只能承载"段内慢变"的项，而第 2+
@@ -687,7 +689,7 @@ def evolve_hard(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
     E_rot = np.asarray(fields_meta['E_rot'], float)
     opt_terms = fields_meta['opt_terms']
     mw_groups = fields_meta['mw_groups']
-    psi0v = _evolve._as_vector(states, psi0)
+    psi0v = _as_vector(states, psi0)
     T = float(t[-1])
     # t24：耗散（落点=丢失）——Gamma_ns（/ns），RHS 加 −Γ/2·y
     has_decay = bool(decays)
@@ -795,11 +797,8 @@ _TwoFieldSetup.K_at = _TwoFieldSetup.hamiltonian_seg
 # 两场两体变体（t74 自 evolve_sambe_pair 归位——两场家族团聚：
 # 光场旋转系 + 微波-only 光子块的单/两体在同一模块）
 # ============================================================
-_TF_DENSE_MAX = 3000
 # 微波近共振带宽（≡ evolve_twofield.MW_NRES_BW_MHZ）
-_TF_MW_NRES_BW_MHZ = 5e3
 # V_dd 旋转系保留判据：|ΔE_rot − ΔE_lab| ≤ 此值（MHz）视为静态
-_VDD_RWA_TOL_MHZ = 1.0
 
 
 def _embed2d(A, side, N):
@@ -953,7 +952,6 @@ def evolve_two_field_pair(states, fields_meta_A, fields_meta_B, psi0_A,
     另附 error_report['vdd_rwa']（V_dd 旋转系筛选统计）。
     """
     from . import pair_core as _pc
-    from . import pair_evolve as _pe
     log = log or (lambda *a: None)
     if t_grid is None:
         raise ValueError('t_grid 必须提供')
@@ -989,15 +987,15 @@ def evolve_two_field_pair(states, fields_meta_A, fields_meta_B, psi0_A,
     has_decay = bool(decays_A or decays_B)
     gamma_pair = None
     if has_decay:
-        GammaA, GammaB, _ = _pe._pair_loss_vectors(
+        GammaA, GammaB, _ = _pair_loss_vectors(
             states, decays_A, decays_B, N, N2)
         gamma_pair = (GammaA + GammaB) / _CONV
         log('[two_field_pair] 两体耗散：NonHermitian 寿命通道（落点=丢失）')
 
     # ---- 初态 ----
-    psi0_A_vec = _evolve._as_vector(states, psi0_A)
-    psi0_B_vec = _evolve._as_vector(states, psi0_B)
-    psi0_2d = _pe._as_product_psi(psi0_A_vec, psi0_B_vec, N)
+    psi0_A_vec = _as_vector(states, psi0_A)
+    psi0_B_vec = _as_vector(states, psi0_B)
+    psi0_2d = _as_product_psi(psi0_A_vec, psi0_B_vec, N)
 
     if progress_arr is None:
         progress_arr = np.zeros(3)
@@ -1018,7 +1016,7 @@ def evolve_two_field_pair(states, fields_meta_A, fields_meta_B, psi0_A,
         log(f'[two_field_pair] 微波光子块 M={Ms}'
             f'（扇区 {int(np.prod([2 * m + 1 for m in Ms]))}）')
 
-    from .evolve_sambe_pair import _pair_propagate  # t74（P2 后改 sambe）
+    from .sambe import _pair_propagate
     pops_2d, X_final, report, setup = _pair_propagate(
         E_pair_rot, N, groups, opt_terms, V, gamma_pair, psi0_2d, t, tol,
         Ms, progress_arr, log,
@@ -1039,8 +1037,8 @@ def evolve_two_field_pair(states, fields_meta_A, fields_meta_B, psi0_A,
         norm_dev = float(np.max(np.abs(pops_2d.sum(axis=1) - 1.0)))
     report['max_norm_dev'] = max(report['max_norm_dev'], norm_dev)
 
-    pops_A = _pe._reduce_A(pops_2d, N)
-    pops_B = _pe._reduce_B(pops_2d, N)
+    pops_A = _reduce_A(pops_2d, N)
+    pops_B = _reduce_B(pops_2d, N)
     stage_progress(progress_arr, 2, 1.0)
 
     log(f'[two_field_pair] 完成：{report["n_segments"]} 段，'

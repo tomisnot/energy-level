@@ -8,7 +8,16 @@ os.environ['QT_QPA_PLATFORM'] = 'offscreen'
 import numpy as np
 from PyQt5.QtWidgets import QApplication
 from arc import Rubidium87
-from src import core, evolve, waveforms
+from src import core, waveforms
+# t74：evolve shim 已删——按新家直连
+from src.core.atomic_levels import gaussian, square, make_levels
+from src.core.field_build import (field, real_field, group_field,
+                                  _field_geometry, _sublevel_row)
+from src.core.evolve_util import (decay, auto_decays, _as_vector,
+                                  _CONV)
+from src.core.evolve_rwa import (evolve, _e_rot, _evolve_full,
+                                 _evolve_full_hybrid)
+
 import mw_bench_firstprinciples as mb
 
 cache = core.ArcCache(Rubidium87())
@@ -30,7 +39,7 @@ for g in data['groups']:
         for F, mF, e_hf, _w, amps in hf:
             specs.append(dict(n=n, l=l, j=j, kind='F', F=F, mF=mF,
                               E_hf=float(e_hf), amps=amps))
-states = evolve.make_levels(cache, specs)
+states = make_levels(cache, specs)
 waves = waveforms.restore_waves(data.get('waves', []))
 fields = waveforms.build_fields(waves, states, cache)
 t = np.linspace(0, float(data['dynamic']['t_max']), int(data['dynamic']['npts']))
@@ -38,12 +47,12 @@ psi0 = int(data['dynamic']['psi'])
 print(f'===== 验收 1：真实保存状态（N={len(states)}，光场 {len(fields)}，'
       f't_max={t[-1]:.0f} ns，auto）=====')
 t0 = time.perf_counter()
-r = evolve.evolve(states, fields, psi0, t, method='auto', backend='auto')
+r = evolve(states, fields, psi0, t, method='auto', backend='auto')
 dt_auto = time.perf_counter() - t0
 norm_err = np.max(np.abs(r['pops'].sum(axis=1) - 1.0))
 print(f'[auto → {r["method"]}] 耗时 {dt_auto:.1f}s；归一误差 {norm_err:.2e}')
 # 收敛参考：ip4 frac=80
-r80 = evolve.evolve(states, fields, psi0, t, method='ip4', ip4_frac=80.0)
+r80 = evolve(states, fields, psi0, t, method='ip4', ip4_frac=80.0)
 diff = np.max(np.abs(r['pops'] - r80['pops']))
 print(f'[ip4 frac=80 参考] 耗时 {time.perf_counter()-t0-dt_auto:.0f}s；'
       f'auto vs 参考 max|Δpops| = {diff:.3e}')
@@ -65,7 +74,7 @@ d1 = mb.maxdiff(r1['pops'], ref1)
 print(f'  S1 floquet(封存): {d1:.2e}  {"PASS" if d1<1e-4 else "FAIL"}')
 ok &= d1 < 1e-4
 # S2 高斯 ip4
-env = evolve.gaussian(200.0, 100.0)
+env = gaussian(200.0, 100.0)
 st2, i02, E2, fld2, _, om2, w2, _, _, _ = mb.build_s1(cache, 22.0, env)
 t2 = np.linspace(0, 400.0, 2001)
 ac2 = E2 - np.array([s['E_mhz'] for s in st2])
@@ -75,7 +84,7 @@ s_g = lambda tt: (np.asarray(env(np.asarray(tt, float)), float)
 ref2 = mb.integrate_rk4_ip(E2, [(fld2['A'].astype(float), s_g)],
                            evolve._as_vector(st2, i02), t2,
                            2 * np.pi / w / 40.0)
-r2 = evolve.evolve(st2, [fld2], i02, t2, method='ip4', ac_shift_mhz=ac2)
+r2 = evolve(st2, [fld2], i02, t2, method='ip4', ac_shift_mhz=ac2)
 d2 = mb.maxdiff(r2['pops'], ref2)
 print(f'  S2 ip4: {d2:.2e}  {"PASS" if d2<1e-4 else "FAIL"}')
 ok &= d2 < 1e-4
@@ -85,7 +94,7 @@ t3 = np.linspace(0, 20.0, 201)
 ac3 = E3 - np.array([s['E_mhz'] for s in st3])
 _, pops_hy, _ = evolve._evolve_full_hybrid(
     E3, st3, fields3, evolve._as_vector(st3, i03), t3, False)
-r3 = evolve.evolve(st3, fields3, i03, t3, method='ip4', ac_shift_mhz=ac3)
+r3 = evolve(st3, fields3, i03, t3, method='ip4', ac_shift_mhz=ac3)
 d3 = mb.maxdiff(r3['pops'], pops_hy)
 print(f'  S3 ip4: {d3:.2e}  {"PASS" if d3<1e-4 else "FAIL"}')
 ok &= d3 < 1e-4

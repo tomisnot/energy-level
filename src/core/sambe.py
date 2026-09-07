@@ -11,8 +11,8 @@
      （稠密缺陷 / 稀疏 IP Volterra-GMRES / frozen）。
 物理模型（唯一定义）：实验室系 H(t)=H0+Σ env·cos(ω t)·A，无 RWA、
 无旋转系、无近/远分流；AC 位移 / Bloch–Siegert / 远失谐效应全部由
-精确传播自然涌现。旧文件名 evolve_sambe / evolve_sambe_pair 为
-一行兼容 shim（一个过渡期后移除）。
+精确传播自然涌现。旧文件名 evolve_sambe / evolve_sambe_pair 已删
+（t74b 拆除兼容层），调用方一律 `from .sambe import …`。
 """
 import numpy as np
 import scipy.sparse as sp
@@ -20,7 +20,9 @@ import time as _time
 from scipy.sparse.linalg import expm_multiply, LinearOperator, gmres
 
 from .evolve_util import (_CONV, _POL_Q, _as_vector)  # t74 工具/常量单源
-from .field_build import _group_by_freq, _validate_fields  # t74 场分组/校验归位场层
+from .field_build import _group_by_freq, _validate_fields
+from .tensor import (_pair_loss_vectors, _as_product_psi,
+                     _reduce_A, _reduce_B)  # t74：两体工具, _validate_fields  # t74 场分组/校验归位场层
 from .tensor_fields import _pair_groups               # t74 两体场分组归位
 
 
@@ -395,22 +397,21 @@ def sector_sum_pops(phi, P, n_phys):
 # ============================================================
 # 单体引擎（t74 自 evolve_sambe 并入）
 # ============================================================
-_M_START = 2
-_M_MAX = 8
+from .params import (_M_START, _M_MAX, _M_ANALYTIC_BW_MHZ,
+                     _DENSE_MAX, _DENSE_MAX_PAIR, _ENV_PROBE_N,
+                     _DT_MIN_FRAC, _SPARSE_SEG_MAX, _SPARSE_MAX_DEPTH,
+                     _NODE_LADDER, _VOLT_MAX_ITER, _VOLT_PICARD_FRAC,
+                     _VOLT_PRE_SWEEPS, MW_MAX_MHZ, R_CRIT)  # t74c 参数单源
 # M 判定的近共振带宽（MHz）：离共振 Rydberg-Rydberg 巨矩阵元（如光学频下
 # 60S↔60P 的 Ω~19 GHz）不参与 r 判定——其物理贡献是二阶微扰（~1e-9 相对），
 # 光子块阶数由与载频近共振的对决定（Mizuta 2025 / Kuwahara–Mori–Saito 2016
 # 收敛界针对共振耦合算子范数；离共振对的 Sambe 收敛在 M=1 已足够）。
-_M_ANALYTIC_BW_MHZ = 2e4   # 20 GHz
 # 扩展维 ≤ 此值走稠密 eigh，否则稀疏 expm_multiply
 # （2026-08-29 提到 2200：逐载频 M 后 22 态 3 载频 = 45 扇区×22 = 990 维，
 #  M+1 探针 setup 75 扇区×22 = 1650 维——仍须稠密，否则掉进 expm_multiply
 #  THz 对角爆炸。2200 维实对称 eigh ~0.5 s，可接受。）
-_DENSE_MAX = 2200
 # 包络采样（活性判断/恒常判断）
-_ENV_PROBE_N = 2001
 # Richardson 递归深度保护
-_DT_MIN_FRAC = 2e5
 # 临时调试日志（非 None 时记录 (ta, dt, rms)）
 _DBG_LOG = None
 
@@ -667,7 +668,7 @@ def _propagate_adaptive(setup, groups, psi0, t_grid, tol, progress_arr, log,
             # 的相邻段共享分解；稀疏段仍走单体 expm_multiply 策略）
             nsub = max(1, int(np.ceil((tb - ta) / float(frozen_h_ns))))
             report['n_segments'] += nsub
-            return sambe.frozen_seg_propagate(
+            return frozen_seg_propagate(
                 setup, ta, tb, X, frozen_h_ns, groups,
                 sparse_step=lambda K, dt, Xk: expm_multiply(
                     -1j * _CONV * dt * K, Xk))
@@ -797,7 +798,6 @@ def evolve_sambe(states, fields, psi0, t_grid, tol=1e-6, decays=None,
     返回 dict(t, pops, states, om_mhz, method='exact', backend, loss,
               error_report, [psi_amp | rho])——与 evolve.evolve 同构。
     """
-    from . import evolve as _evolve
     from .coupling import stage_progress
     log = log or (lambda *a: None)
     t = np.asarray(t_grid, float)
@@ -914,15 +914,8 @@ evolve_exact = evolve_sambe
 # ============================================================
 # 两体引擎（t74 自 evolve_sambe_pair 并入）
 # ============================================================
-_DENSE_MAX_PAIR = 700
-_SPARSE_SEG_MAX = 50000         # EP6 保护：稀疏自适应细分总段数上限（防爆炸卡死）
-_SPARSE_MAX_DEPTH = 4           # EP6 保护：稀疏自适应二分递归深度上限（正常 est 深度 ≤3）
 # 缺陷求积节点阶梯
-_NODE_LADDER = (16, 32, 64, 128)
 # 包络采样（活性判断/恒常判断）
-_VOLT_MAX_ITER = 60
-_VOLT_PICARD_FRAC = 0.05
-_VOLT_PRE_SWEEPS = 8
 
 
 # ============================================================
@@ -1273,7 +1266,7 @@ def _pair_propagate(E_pair_rot, N, groups, opt_terms, V, gamma_pair,
             # 变体光场 env——修复旧键漏光场的隐患）
             nsub = max(1, int(np.ceil((tb - ta) / float(frozen_h_ns))))
             report['n_segments'] += nsub
-            return sambe.frozen_seg_propagate(
+            return frozen_seg_propagate(
                 setup, ta, tb, X, frozen_h_ns, groups,
                 eigh_cache=_eigh_cache)
         K = seg_K(ta, tb)
@@ -1377,7 +1370,6 @@ def evolve_sambe_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
         A/B 场同构（交换全过程场景）；异构场用 A 侧位移近似（log 提示）。
         默认 False 零行为变化。
     """
-    from . import pair_evolve as _pe
     from . import pair_core as _pc
     log = log or (lambda *a: None)
     if t_grid is None:
@@ -1444,7 +1436,7 @@ def evolve_sambe_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
     GammaA = GammaB = None
     has_decay = bool(decays_A or decays_B)
     if has_decay:
-        GammaA, GammaB, _ = _pe._pair_loss_vectors(
+        GammaA, GammaB, _ = _pair_loss_vectors(
             states, decays_A, decays_B, N, N2)
         log('[pair_exact] 两体耗散：NonHermitian 寿命通道'
             + (f'（A {int((GammaA > 0).sum())} 态'
@@ -1462,7 +1454,7 @@ def evolve_sambe_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
     # ---- 初态与能量 ----
     psi0_A_vec = _as_vector(states, psi0_A)
     psi0_B_vec = _as_vector(states, psi0_B)
-    psi0_2d = _pe._as_product_psi(psi0_A_vec, psi0_B_vec, N)
+    psi0_2d = _as_product_psi(psi0_A_vec, psi0_B_vec, N)
     E = np.array([s['E_mhz'] for s in states], float)
     if ac_ize:
         # 目标 6：AC 位移注入物理能级——E_pair[i,j] 含 δ_i+δ_j（A/B 同构）
@@ -1534,8 +1526,8 @@ def evolve_sambe_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
     report['max_norm_dev'] = max(report['max_norm_dev'], norm_dev)
 
     # ---- 约化布居 ----
-    pops_A = _pe._reduce_A(pops_2d, N)
-    pops_B = _pe._reduce_B(pops_2d, N)
+    pops_A = _reduce_A(pops_2d, N)
+    pops_B = _reduce_B(pops_2d, N)
     stage_progress(progress_arr, 2, 1.0)
 
     log(f'[pair_exact] 完成：{report["n_segments"]} 段，'

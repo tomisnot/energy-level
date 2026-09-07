@@ -51,9 +51,11 @@ def pair_reference_dense(states, vdd, psi0_2d, t, fields=None):
 # ============================================================
 def ep1():
     from arc import Rubidium87
-    from src import core, evolve, waveforms
-    from src.core import evolve_exact as ex
-    from src.core.evolve_exact_pair import evolve_exact_pair
+    from src import core, waveforms
+    from src.core.evolve_util import decay
+    from src.core.atomic_levels import make_levels
+    from src.core.sambe import evolve_sambe as ex  # t74：ex.evolve_exact → evolve_sambe
+    from src.core.sambe import evolve_sambe_pair as evolve_exact_pair
 
     cache = core.ArcCache(Rubidium87())
     B = 22.0
@@ -64,7 +66,7 @@ def ep1():
             E = cache.E_mhz(n, l, j) + gJ * core.MU_B_MHZ_PER_G * m * B
             specs.append(dict(n=n, l=l, j=j, m=m, E_mhz=float(E),
                               label=f'{n}{"SP"[l]} mJ={m:+.1f}'))
-    states = evolve.make_levels(cache, specs)
+    states = make_levels(cache, specs)
     freq = cache.E_mhz(60, 1, 0.5) - cache.E_mhz(60, 0, 0.5)
     d = abs(core.dipole_amplitude(cache, states[0], states[1], 0))
     I = core.intensity_mwcm2_from_rabi(d, 20.0)
@@ -74,7 +76,7 @@ def ep1():
     t = np.linspace(0, 200.0, 201)
     r = evolve_exact_pair(states, fA, [], 0, 0, t,
                           vdd_matrix=np.zeros((4, 4)), tol=1e-7)
-    rA = ex.evolve_exact(states, fA, 0, t, tol=1e-7)
+    rA = ex(states, fA, 0, t, tol=1e-7)
     dA = float(np.max(np.abs(r['pops_A'] - rA['pops'])))
     dB = float(np.max(np.abs(r['pops_B'][:, 0] - 1.0)))
     ck.check(f'EP1a V_dd=0：约化 A ≡ 单原子 exact（Δ={dA:.2e} ≤ 5e-6）',
@@ -89,9 +91,10 @@ def ep1():
 # EP2 近简并交换：真实 vdd_sparse，周期/幅度 ≡ 解析
 # ============================================================
 def ep2(states, cache):
-    from src import evolve
+    from src.core.evolve_util import decay
+    from src.core.atomic_levels import make_levels
     from src.core import pair_core
-    from src.core.evolve_exact_pair import evolve_exact_pair
+    from src.core.sambe import evolve_sambe_pair as evolve_exact_pair
     N = len(states)
     R_um, theta_deg = 5.0, 0.0
     V = pair_core.vdd_sparse(cache, [dict(s) for s in states],
@@ -129,7 +132,7 @@ def ep2(states, cache):
 # EP3 vdW 通道捕获（超 secular）：|gg⟩↔|ee⟩ 远失谐
 # ============================================================
 def ep3():
-    from src.core.evolve_exact_pair import evolve_exact_pair
+    from src.core.sambe import evolve_sambe_pair as evolve_exact_pair
     states = [
         dict(n=60, l=0, j=0.5, kind='mJ', mj=-0.5, m=-0.5, E_mhz=0.0,
              label='g', index=0, amps=None, F=None, mF=None),
@@ -184,8 +187,9 @@ def ep3():
 # EP4 寿命耗散：解析指数 + 守恒
 # ============================================================
 def ep4():
-    from src import evolve
-    from src.core.evolve_exact_pair import evolve_exact_pair
+    from src.core.evolve_util import decay
+    from src.core.atomic_levels import make_levels
+    from src.core.sambe import evolve_sambe_pair as evolve_exact_pair
     states = [
         dict(n=60, l=0, j=0.5, kind='mJ', mj=-0.5, m=-0.5, E_mhz=0.0,
              label='g', index=0, amps=None, F=None, mF=None),
@@ -196,7 +200,7 @@ def ep4():
     t = np.linspace(0, 400.0, 201)
     r = evolve_exact_pair(states, [], [], 1, 0, t,
                           vdd_matrix=np.zeros((4, 4)), tol=1e-8,
-                          decays_A=[evolve.decay(1, G)])
+                          decays_A=[decay(1, G)])
     exp_dec = np.exp(-G * 1e-3 * t)
     ddec = float(np.max(np.abs(r['pops_A'][:, 1] - exp_dec)))
     cons = float(np.max(np.abs(r['pops_2d'].sum(axis=1)
@@ -211,7 +215,7 @@ def ep4():
 # EP5 收敛性：tol 单调 + 幺正范数（人工场景 + 高斯驱动 + V_dd）
 # ============================================================
 def ep5():
-    from src.core.evolve_exact_pair import evolve_exact_pair
+    from src.core.sambe import evolve_sambe_pair as evolve_exact_pair
     states = [
         dict(n=60, l=0, j=0.5, kind='mJ', mj=-0.5, m=-0.5, E_mhz=0.0,
              label='g', index=0, amps=None, F=None, mF=None),
@@ -278,10 +282,6 @@ def ep6():
     ck.check('EP6a/b 稀疏 IP Volterra vs 稠密 —— SKIP'
              '（光子块场景病态，frozen 为正解，船长 2026-09-06）',
              True)
-    return
-    nd = float(np.max(np.abs(r_sp['pops_2d'].sum(axis=1) - 1.0)))
-    ck.check(f'EP6b 稀疏路径范数守恒（|Σp−1|={nd:.2e} ≤ 2e-3，研究级）',
-             nd <= 2e-3, f'nd={nd}')
 
 
 def main():

@@ -1,12 +1,10 @@
 # -*- coding: utf-8 -*-
-"""evolve_engine.py（t63 第 3 层）：统一接口——n_body=1|2 调度。
+"""evolve_engine.py：统一接口——method × n_body 调度。
 
-GUI/上层零改动目标：evolve_engine(states, fields, psi0, ..., method, n_body)
-- n_body=1：单原子（fields = 单场列表）→ evolve_mixed / evolve_sambe / evolve_hard
+- n_body=1：单原子（fields = 单场列表）→ evolve_mixed / sambe.evolve_sambe /
+  hard.evolve_hard
 - n_body=2：两体（fields_A/fields_B + psi0_A/psi0_B）→ evolve_mixed_pair /
-  evolve_sambe_pair / evolve_hard_pair
-内部路由到现有引擎（第 2 层的核心收敛为单原子核心 + tensor_fields 提升在后续
-轮次落地——本模块先统一入口，行为委托现有实现保证重构安全）。
+  sambe.evolve_sambe_pair / hard.evolve_hard_pair
 """
 import numpy as np
 
@@ -34,7 +32,7 @@ def evolve_engine(method, states, fields=None, fields_A=None, fields_B=None,
         raise ValueError(f'未知单原子方法 {method}')
     if n_body == 2:
         if method == 'mixed':
-            from .evolve_mixed_pair import evolve_mixed_pair
+            from .evolve_mixed import evolve_mixed_pair
             return evolve_mixed_pair(states, fields_A, fields_B, psi0_A,
                                      psi0_B, t_grid, **kwargs)
         if method == 'sambe':
@@ -42,7 +40,7 @@ def evolve_engine(method, states, fields=None, fields_A=None, fields_B=None,
             return evolve_sambe_pair(states, fields_A, fields_B, psi0_A,
                                      psi0_B, t_grid, **kwargs)
         if method == 'hard':
-            from .hard_pair import evolve_hard_pair
+            from .hard import evolve_hard_pair
             return evolve_hard_pair(states, fields_A, fields_B, psi0_A,
                                     psi0_B, t_grid, **kwargs)
         raise ValueError(f'未知两体方法 {method}')

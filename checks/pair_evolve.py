@@ -21,16 +21,22 @@ V_dd 在旋转系下做缓变近似（secular RWA）：仅保留旋转系振荡�
   - RWA 场步长只计旋转系失谐 |ΔE|；非 RWA 场加载波 ω_L；ω_L=0 常数场
     （V_dd secular）计 |ΔE|（保留项振荡必须被步长解析）
   - 全 RWA + 常数包络 + 无振荡非 RWA 场 → 一次对角化精确解
-  - 旁观态 E_rot 归零、耦合态减公共参考（同 evolve._e_rot，防相位爆炸）
+  - 旁观态 E_rot 归零、耦合态减公共参考（同 _e_rot，防相位爆炸）
 
 单位：与 evolve.py 一致（MHz, ns, rad/ns）。
 """
 import numpy as np
 import scipy.sparse as sp
 
-from . import evolve
-from . import static_atom as core
-from . import tensor as _tensor  # noqa: E402  （t14张量化调度层搬移）
+from src.core.atomic_levels import gaussian, square, step
+from src.core.evolve_util import _as_vector, _decay_ops, _resolve_state_idx
+from src.core.sambe import env_at
+from src.core.field_build import _env_samples
+from src.core.evolve_rwa import (_evolve_rwa, _rwa_reference, _e_rot,
+                                 _assign_reference, _field_geometry,
+                                 IP4_RWA_THRESH)
+from src.core import static_atom as core
+from src.core import tensor as _tensor  # noqa: E402  （t14张量化调度层搬移）
 
 _CONV = 2 * np.pi * 1e-3  # MHz·ns → rad
 
@@ -144,7 +150,7 @@ def vdd_secular(cache, single, R_um, theta_deg, phi_deg, ref_A, ref_B, N,
       V_sec  : (N², N²) 稀疏矩阵——secular 非对角项
       n_kept : 保留的非对角矩阵元数
     """
-    from .static_pair import vdd_sparse
+    from src.core.static_pair import vdd_sparse
     V_sparse = vdd_sparse(cache, single, R_um, theta_deg, phi_deg)
     V_dense = V_sparse.toarray() if sp.issparse(V_sparse) else np.asarray(V_sparse)
     if E_rot_2d is None:
@@ -162,16 +168,16 @@ def vdd_secular(cache, single, R_um, theta_deg, phi_deg, ref_A, ref_B, N,
 # ============================================================
 
 def pair_rotate_frame(states, fields_A, fields_B):
-    """分别为原子 A/B 计算旋转参考（复用 evolve._rwa_reference）。
+    """分别为原子 A/B 计算旋转参考（复用 _rwa_reference）。
 
     返回 ref_A, ref_B（各 N 元数组）。
     """
     if fields_A:
-        ref_A, _, _ = evolve._rwa_reference(states, fields_A)
+        ref_A, _, _ = _rwa_reference(states, fields_A)
     else:
         ref_A = np.zeros(len(states))
     if fields_B:
-        ref_B, _, _ = evolve._rwa_reference(states, fields_B)
+        ref_B, _, _ = _rwa_reference(states, fields_B)
     else:
         ref_B = np.zeros(len(states))
     return ref_A, ref_B
@@ -184,7 +190,7 @@ def pair_rotate_frame(states, fields_A, fields_B):
 
 _as_product_psi = _tensor._as_product_psi
 # ============================================================
-# 自包含 RK4 主循环（独立于 evolve._evolve_ip4）
+# 自包含 RK4 主循环（独立于 _evolve_rwa）
 # ============================================================
 
 # ============================================================
@@ -213,7 +219,7 @@ def _pack_pair_terms(fields_2d, N2, G, dt, t_end):
         wL = float(f['omega_L_mhz'])
         ratio = (f.get('real_omega0_mhz', f['omega0_mhz'])
                  / max(wL, 1e-9))
-        is_rwa = wL > 0 and ratio < evolve.IP4_RWA_THRESH
+        is_rwa = wL > 0 and ratio < IP4_RWA_THRESH
         env_arr = _env_samples(f['waveform'])
 
         def _push(csr, tt, coef, omg, env):
@@ -515,7 +521,7 @@ _pair_loss_vectors = _tensor._pair_loss_vectors
 def _pair_rwa(E_rot_2d, fields_2d, psi0, t, frac=20.0,
               progress_arr=None, decays=None,
               gamma_A=None, gamma_B=None, decay_out=False):
-    """两体相互作用绘景 RK4（自包含，不调用 evolve._evolve_ip4）。
+    """两体相互作用绘景 RK4（自包含，不调用 _evolve_rwa）。
 
     E_rot_2d: 两体旋转系能量（N²），已含 V_dd 对角位移
     fields_2d: 两体场列表（omega_L_mhz 为旋转频率；V_dd 常数场 omega_L=0）
@@ -550,12 +556,12 @@ def _pair_rwa(E_rot_2d, fields_2d, psi0, t, frac=20.0,
         wL = f['omega_L_mhz']
         ratio = (f.get('real_omega0_mhz', f['omega0_mhz'])
                  / max(wL, 1e-9))
-        return wL > 0 and ratio < evolve.IP4_RWA_THRESH
+        return wL > 0 and ratio < IP4_RWA_THRESH
 
     # ---- 全 RWA 且包络恒常且无振荡非 RWA 场 → 对角化精确解 ----
     # 非 RWA 场（微波）即使包络恒常也含 cos(ω_L t) 载波，哈密顿量时变，
     # 不能走对角化路径。
-    all_const = all(evolve._env_samples(f['waveform'], t_out[-1])[1]
+    all_const = all(_env_samples(f['waveform'], t_out[-1])[1]
                     for f in fields_2d)
     has_osc = any(f['omega_L_mhz'] > 0 and not _is_rwa(f)
                   for f in fields_2d)
@@ -566,7 +572,7 @@ def _pair_rwa(E_rot_2d, fields_2d, psi0, t, frac=20.0,
         H0 = np.diag(E_rot_2d).astype(complex)
         for f in fields_2d:
             if _is_rwa(f):
-                c_val, _ = evolve._env_samples(f['waveform'], t[-1])
+                c_val, _ = _env_samples(f['waveform'], t[-1])
                 H0 += (f['omega0_mhz'] / 2.0 * c_val) * f['A']
                 ac = np.asarray(f.get('ac_shift', np.zeros(N2)), float)
                 if np.any(ac != 0.0):
@@ -822,7 +828,7 @@ def pair_evolve(states, fields_A, fields_B, psi0_A, psi0_B,
     """两原子含时演化。
 
     参数：
-      states      : 单原子能级列表（evolve.make_levels 输出），两原子共用
+      states      : 单原子能级列表（make_levels 输出），两原子共用
       fields_A/B  : 各自的 evolve field 列表
       psi0_A/B    : 各自初态（states 索引 / (n,l,j,m) dict / 复向量）
       vdd_matrix  : V_dd 矩阵（N²×N²，complex）——若提供则直接使用
@@ -956,7 +962,7 @@ def pair_evolve(states, fields_A, fields_B, psi0_A, psi0_B,
             'e_idx': [],
             'omega0_mhz': 1.0,
             'omega_L_mhz': 0.0,
-            'waveform': evolve.square(0.0, 1e12),
+            'waveform': square(0.0, 1e12),
         }
         fields_2d.append(V_field)
 
@@ -978,8 +984,8 @@ def pair_evolve(states, fields_A, fields_B, psi0_A, psi0_B,
             E_rot_2d[k] = 0.0
 
     # ---- 两体初态 ----
-    psi0_A_vec = evolve._as_vector(states, psi0_A)
-    psi0_B_vec = evolve._as_vector(states, psi0_B)
+    psi0_A_vec = _as_vector(states, psi0_A)
+    psi0_B_vec = _as_vector(states, psi0_B)
     psi0_2d = _as_product_psi(psi0_A_vec, psi0_B_vec, N)
 
     if progress_arr is None:

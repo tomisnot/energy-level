@@ -40,9 +40,9 @@ def _mJ_state(n, l, j, m, E, label):
 # TP1 无光场退化 ≡ evolve_sambe_pair（同 M、同 groups）
 # ============================================================
 def tp1():
-    from src.core.evolve_sambe_pair import (build_two_field_pair,
-                                            evolve_sambe_pair,
-                                            evolve_two_field_pair)
+    from src.core.sambe import evolve_sambe_pair
+    from src.core.evolve_twofield import (build_two_field_pair,
+                                          evolve_two_field_pair)
     states = [_mJ_state(60, 0, 0.5, -0.5, 0.0, 'g'),
               _mJ_state(60, 0, 0.5, +0.5, 1000.0, 'e')]
     N = 2
@@ -87,7 +87,7 @@ def tp1():
 # TP2 V_dd=0 直积 ≡ 单原子两场引擎
 # ============================================================
 def tp2(states, meta_A, meta_B):
-    from src.core.evolve_sambe_pair import evolve_two_field_pair
+    from src.core.evolve_twofield import evolve_two_field_pair
     from src.core.evolve_twofield import evolve_two_field
     t = np.linspace(0, 200.0, 101)
     # 两侧都用解析判据选 M（单原子两场与两体两场同一公式 → 同 M）
@@ -108,7 +108,7 @@ def tp2(states, meta_A, meta_B):
 # TP3 光场旋转系 + V_dd ≡ 实验室系两体稠密 DOP853（第一性对拍）
 # ============================================================
 def tp3():
-    from src.core.evolve_sambe_pair import (build_two_field_pair,
+    from src.core.evolve_twofield import (build_two_field_pair,
                                             evolve_two_field_pair)
     # 人工三态：L（低能流形，被光场旋转）、S、P（里德堡，微波驱动）
     W_OPT, DET, W_MW = 3.0e5, 200.0, 2000.0     # MHz
@@ -202,7 +202,7 @@ def tp3():
 # TP4 多光场拍频 → 显式拒绝（单原子与两体一致）
 # ============================================================
 def tp4():
-    from src.core.evolve_sambe_pair import (build_two_field_pair,
+    from src.core.evolve_twofield import (build_two_field_pair,
                                             evolve_two_field_pair)
     from src.core.evolve_twofield import evolve_two_field
     N = 2
@@ -239,8 +239,8 @@ def tp4():
 # ============================================================
 def tp5(states, meta_A, meta_B):
     """寿命耗散：无场场景（有微波驱动时 e 布居还受 Rabi 混合，不能对 e^{-Γt}）。"""
-    from src import evolve
-    from src.core.evolve_sambe_pair import evolve_two_field_pair
+    from src.core.evolve_util import decay
+    from src.core.evolve_twofield import evolve_two_field_pair
     G = 10.0
     meta0_A = dict(N=2, E_rot=np.array([0.0, 1000.0]), opt_terms=[],
                    mw_groups=[])
@@ -249,7 +249,7 @@ def tp5(states, meta_A, meta_B):
     t = np.linspace(0, 400.0, 201)
     r = evolve_two_field_pair(states, meta0_A, meta0_B, 1, 0, t,
                               vdd_matrix=np.zeros((4, 4)), tol=1e-8,
-                              decays_A=[evolve.decay(1, G)])
+                              decays_A=[decay(1, G)])
     exp_dec = np.exp(-G * 1e-3 * t)
     ddec = float(np.max(np.abs(r['pops_A'][:, 1] - exp_dec)))
     cons = float(np.max(np.abs(r['pops_2d'].sum(axis=1)
