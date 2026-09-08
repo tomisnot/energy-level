@@ -874,7 +874,9 @@ specs = [
 ]
 for F, mF, _e, _w, amps in core.get_hyperfine_levels(cache, 6, 1, 1.5, B):
     specs.append(dict(n=6, l=1, j=1.5, kind='F', F=F, mF=mF,
-                      amps=amps, E_mhz=float(_e)))
+                      E_mhz=cache.E_mhz(6, 1, 1.5),   # 组中心绝对能量
+                      E_hf=float(_e),                  # 超精细相对能（勿混用）
+                      amps=amps))
 states = make_levels(cache, specs)
 # 2) 波形 → 场（微波 σ−，17.236 GHz）
 w = Wave('mw', 17236.743, GaussianEnv(70, 20), pol='σ-',

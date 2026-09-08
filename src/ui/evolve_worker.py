@@ -16,7 +16,7 @@ class EvolveWorker(QThread):
     log_msg = pyqtSignal(str)               # 算法提示/警告 → 状态栏
 
     def __init__(self, states, fields, psi0, t_grid, method, backend,
-                 progress_arr, decays=None, parent=None):
+                 progress_arr, decays=None, engine_kwargs=None, parent=None):
         super().__init__(parent)
         self.states = states
         self.fields = fields          # method='hard' 时为两场 meta（build_two_field）
@@ -27,6 +27,7 @@ class EvolveWorker(QThread):
         self.backend = backend
         self.progress_arr = progress_arr
         self.decays = list(decays or [])
+        self.engine_kwargs = dict(engine_kwargs or {})   # t75 上帝模式覆写
 
 
     def run(self):
@@ -48,12 +49,15 @@ class EvolveWorker(QThread):
                 # t62：混合引擎（光 Sambe 光子块 + 微波当场，φ-帧单 DOP853）
                 # ——fields 为 kind='exact' 场列表（build_fields_exact 输出，
                 # 与 sambe 同构——正式版已含 far_sos AC 化注入物理 E，ae04d11）
+                # t75：engine_kwargs 透传上帝模式覆写（tol/max_step/
+                # per_freq_M/r_crit/diag）
                 from ..core.evolve_mixed import evolve_mixed
+                ek = dict(self.engine_kwargs)
+                ek.setdefault('tol', 1e-8)
                 res = evolve_mixed(
                     self.states, self.fields, self.psi0, self.t_grid,
-                    tol=1e-8,
                     progress_arr=self.progress_arr, log=self.log_msg.emit,
-                    decays=self.decays)
+                    decays=self.decays, **ek)
             else:
                 # t74：'sambe'（GUI 唯一可达档）直连 sambe 引擎——
                 # 不再经由 evolve.evolve 调度器（ip4/Lindblad 为 checks 参照）
@@ -91,7 +95,7 @@ class EvolveWorkerPair(QThread):
     def __init__(self, states, fields_A, fields_B, psi0_A, psi0_B,
                  t_grid, progress_arr, vdd_matrix=None, parent=None,
                  decays_A=None, decays_B=None, method='ip4',
-                 per_freq_M=None, frozen_h_ns=None):
+                 per_freq_M=None, frozen_h_ns=None, engine_kwargs=None):
         super().__init__(parent)
         # t25/t26：显示名 'sambe' → 引擎 'exact'（Sambe 光子块；分支调度统一）
         self.method = {'sambe': 'exact'}.get(method, method)
@@ -108,6 +112,7 @@ class EvolveWorkerPair(QThread):
         # t56：全频段两体 Sambe 可调参数（逐载频光子数 + 纯冻结段长）
         self.per_freq_M = per_freq_M
         self.frozen_h_ns = frozen_h_ns
+        self.engine_kwargs = dict(engine_kwargs or {})   # t75 上帝模式覆写
         self._cache_ref = None
 
     def run(self):
@@ -144,7 +149,10 @@ class EvolveWorkerPair(QThread):
                 # t70 定案：位移不注入——近对（60S↔6P）光子块 M=1
                 # 动态自然涌现 AC 位移 ≡ hard RWA（375ns 交换窗
                 # max|Δpops|=8.2e-5 验收）。t73b：B_gauss/ac_inject 链已移除。
+                # t75：engine_kwargs 透传（r_crit/max_step/tol/diag）
                 from ..core.evolve_mixed import evolve_mixed_pair
+                ek = dict(self.engine_kwargs)
+                ek.setdefault('tol', 1e-8)
                 res = evolve_mixed_pair(
                     self.states, self.fields_A, self.fields_B,
                     self.psi0_A, self.psi0_B,
@@ -153,7 +161,7 @@ class EvolveWorkerPair(QThread):
                     decays_A=self.decays_A, decays_B=self.decays_B,
                     progress_arr=self.progress_arr,
                     cache=self._cache_ref,
-                    log=self.log_msg.emit)
+                    log=self.log_msg.emit, **ek)
             self.done.emit(res, None)
         except RuntimeError as e:
             if self.progress_arr[1] != 0.0:

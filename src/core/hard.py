@@ -228,7 +228,8 @@ def evolve_hard_fast(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
         stat = np.zeros(4)
         stage_progress(prog, 0, 0.9)
         y_out = _dop853_driver(_rhs_hard_pair, psi0_2d, t, T, float(rtol),
-                               float(atol), np.inf, prog, stat, *pack, gamma)
+                               float(atol), np.inf, prog, stat, None,
+                               *pack, gamma)
         pops = np.abs(y_out) ** 2
         nfev = int(stat[0])
         n_acc = int(stat[1])
@@ -611,7 +612,7 @@ def evolve_hard_pair(states, fields_meta_A, fields_meta_B, psi0_A, psi0_B,
         # t24：gamma_MHz 传入内核（落点=丢失 NonHermitian，此前只算不用）
         y_out = _dop853_driver(_rhs_hard_pair, psi0_2d, t, T,
                                float(rtol), float(atol), np.inf,
-                               prog, stat, *pack, gamma_MHz)
+                               prog, stat, None, *pack, gamma_MHz)
         nfev = int(stat[0])
         n_acc = int(stat[1])
         n_rej = int(stat[2])

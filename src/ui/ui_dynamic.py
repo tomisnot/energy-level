@@ -20,7 +20,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
                              QComboBox, QListWidget, QListWidgetItem,
                              QMessageBox, QDialog, QProgressBar, QRadioButton,
                              QButtonGroup, QTabWidget, QFrame, QScrollArea,
-                             QLineEdit, QApplication)
+                             QLineEdit, QCheckBox, QApplication)
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.colors import LogNorm
@@ -32,6 +32,7 @@ from ..core.atomic_levels import make_levels
 from ..core.evolve_util import decay, auto_decays  # t74 工具归位
 from . import ui_waves
 from ..core import waveforms
+from . import ui_theme
 from .evolve_worker import EvolveWorker
 from .ui_waves import state_key, find_state_index
 
@@ -54,6 +55,8 @@ class DynamicPanel(QWidget):
         # 能级组增删由主程序事件驱动刷新（统一机制，不散布同步调用）
         main.groups_changed.connect(self.refresh_groups)
         self._is_two_body = False
+        self._inspector = None         # t75：求解检视器（上帝模式，惰性创建）
+        self._last_god_kwargs = None   # t75：最近一次覆写（回填检视器旋钮）
         self._build_canvases()
         self.dynamic_widget = self._build_controls()
         self._build_module()
@@ -265,6 +268,21 @@ class DynamicPanel(QWidget):
         self.method_cb.setCurrentText('mixed')   # t71：默认 mixed
         self.method_cb.currentTextChanged.connect(self._on_method_changed)
         rowt.addWidget(self.method_cb)
+        # t75：上帝模式开关——开启即弹求解检视器（精度旋钮内嵌检视器各页，
+        # 不占主界面空间）；简单模式（默认关）行为完全不变。
+        self.god_cb = QCheckBox('上帝模式')
+        self.god_cb.setToolTip('求解过程可视化 + 精度旋钮（内嵌检视器各页，'
+                               '改完点「应用并重跑」）')
+        self.god_cb.setStyleSheet(
+            'QCheckBox{color:%s; font-weight:500;}' % ui_theme.COL_ACCENT)
+        rowt.addWidget(self.god_cb)
+        self.inspect_btn = QPushButton('检视器…')
+        self.inspect_btn.setToolTip('打开求解检视器（上帝模式）')
+        self.inspect_btn.setVisible(False)
+        # clicked 信号携带 checked bool——lambda 隔离，避免 bool 被当 diag
+        self.inspect_btn.clicked.connect(lambda: self._open_inspector())
+        rowt.addWidget(self.inspect_btn)
+        self.god_cb.toggled.connect(self._on_god_toggled)
         p.addLayout(rowt)
 
         # ---- 自发辐射（t27：档位选择移入初态行右侧；自定义折叠区保留原位）----
@@ -1082,10 +1100,15 @@ class DynamicPanel(QWidget):
         psi0 = self.psi_combo.currentIndex()
 
         self._prep('驱动场就绪', 1.0)
+        # t75：上帝模式覆写（mixed）——空输入=默认；diag 随上帝模式开启
+        engine_kwargs = None
+        if method == 'mixed' and self.god_cb.isChecked():
+            engine_kwargs = self._collect_god_kwargs()
         self._worker = EvolveWorker(states, fields, psi0, t,
                                      method,
                                      'auto',
-                                     self.progress_arr, decays=decays)
+                                     self.progress_arr, decays=decays,
+                                     engine_kwargs=engine_kwargs)
         self._worker.done.connect(self._on_evolve_done)
         self._worker.log_msg.connect(self.main.log)
         self._worker.start()
@@ -1215,13 +1238,18 @@ class DynamicPanel(QWidget):
         # t62：sambe 两体高级参数（frozen_h_ns/per_freq_M——面板，目标 5）
         frozen_h, per_freq_M = (self._sambe_adv_params()
                                 if method == 'sambe' else (None, None))
+        # t75：上帝模式覆写（mixed 两体——r_crit/max_step/tol/diag）
+        engine_kwargs = None
+        if method == 'mixed' and self.god_cb.isChecked():
+            engine_kwargs = self._collect_god_kwargs(pair=True)
         self._worker = EvolveWorkerPair(
             states, fields_A, fields_B, psi0_A, psi0_B,
             t, self.progress_arr,
             vdd_matrix=vdd_matrix,
             decays_A=decays_A, decays_B=decays_B,
             method=method,
-            per_freq_M=per_freq_M, frozen_h_ns=frozen_h)
+            per_freq_M=per_freq_M, frozen_h_ns=frozen_h,
+            engine_kwargs=engine_kwargs)
         self._worker._cache_ref = self.cache
         self._worker.done.connect(self._on_pair_evolve_done)
         self._worker.log_msg.connect(self.main.log)
@@ -1283,6 +1311,56 @@ class DynamicPanel(QWidget):
         if getattr(self, '_stage_label', None) is not None:
             self._stage_label.setText(lab)
 
+    def _collect_god_kwargs(self, pair=False):
+        """t75：从检视器旋钮读取覆写 kwargs（空=默认不传；diag 恒开）。
+
+        pair=True 时排除 per_freq_M（两体 P=3 固定，暂不支持覆写）。
+        """
+        if self._inspector is None:
+            ek = {'diag': True}
+        else:
+            ek = self._inspector.god_values(pair=pair)
+        self._last_god_kwargs = dict(ek)
+        return ek
+
+    def _on_god_toggled(self, checked):
+        """t75：上帝模式开关——开启即弹检视器（精度旋钮内嵌其中）。"""
+        self.inspect_btn.setVisible(checked)
+        if checked:
+            self._open_inspector()
+
+    def _on_inspector_rerun(self):
+        """t75：检视器「应用并重跑」→ 用旋钮当前值重跑演化。"""
+        if not self.god_cb.isChecked():
+            self.god_cb.setChecked(True)      # 会触发 _on_god_toggled 弹窗
+            return
+        self.main.log('上帝模式：按检视器旋钮重跑…')
+        self._run()
+
+    def _open_inspector(self, diag=None):
+        """t75 上帝模式：打开求解检视器（非模态）。
+
+        打开时把最近一次覆写回填进旋钮（无则全默认）。
+        非 dict 入参（如 Qt 信号误传的 bool）一律按 None 处理。
+        """
+        from .solver_inspector import SolverInspector
+        if not isinstance(diag, dict):
+            diag = None
+        if self._inspector is None:
+            self._inspector = SolverInspector(self)
+            self._inspector.rerun_requested.connect(self._on_inspector_rerun)
+        self._inspector.set_god_params(self._last_god_kwargs)
+        if diag is not None:
+            self._inspector.load_diag(diag)
+        else:
+            self._inspector.set_placeholder(
+                '本次运行未产出诊断数据——diag 仅 mixed 引擎（单/两体）'
+                '且方法未被自动降级时产出；hard / sambe 暂未接线。')
+        self._inspector.show()
+        self._inspector.raise_()
+        self._inspector.activateWindow()
+        return self._inspector
+
     def _on_evolve_done(self, res, error):
         self._finish_run_ui()
         if error == 'cancelled':
@@ -1294,6 +1372,8 @@ class DynamicPanel(QWidget):
                 '或减小 t_max/点数。')
             return
         self._last_res = res
+        if self.god_cb.isChecked():                 # t75：上帝模式 → 检视器
+            self._open_inspector((res or {}).get('diag'))
         self._draw_top(self.wave_data)
         states = getattr(self, '_run_states', None)
         if states is not None:
@@ -1308,6 +1388,8 @@ class DynamicPanel(QWidget):
             QMessageBox.warning(self, '演化失败', f'{error}')
             return
         self._last_res = res
+        if self.god_cb.isChecked():                 # t75：上帝模式 → 检视器
+            self._open_inspector((res or {}).get('diag'))
         self._draw_top(self.wave_data)
         self._draw_bot_pair(res)
 

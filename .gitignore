@@ -6,13 +6,16 @@ tempsimu/
 .dsh-vision-toolkit/
 microwave_pulse/
 
-# PyInstaller ¹¹½¨²úÎïÓë¹¹½¨ĞéÄâ»·¾³£¨²»Èë¿â£©
+# PyInstaller æ„å»ºäº§ç‰©ä¸æ„å»ºè™šæ‹Ÿç¯å¢ƒï¼ˆä¸å…¥åº“ï¼‰
 build_venv/
 build/
 dist/
 
-# AgentTeams ÔËĞĞÊ±×´Ì¬£¨²»Èë¿â£©
+# AgentTeams è¿è¡Œæ—¶çŠ¶æ€ï¼ˆä¸å…¥åº“ï¼‰
 .agent-teams/
 
-# WorkBuddy »á»°Êı¾İ£¨²»Èë¿â£©
+# WorkBuddy ä¼šè¯æ•°æ®ï¼ˆä¸å…¥åº“ï¼‰
 .workbuddy/
+
+# UI è®¾è®¡æ£€æŸ¥çš„ä¸´æ—¶äº§ç‰©ï¼ˆå¯éšæ—¶ç”± ui_design/*.py é‡ç”Ÿæˆï¼Œä¸å…¥åº“ï¼‰
+ui_design/screenshots/

@@ -87,15 +87,71 @@ def ac_ize_physical_E(E, f_opt, r_crit=R_CRIT):
     return E, A_new, shifts_list
 
 
+def _assemble_H_snapshot(D_full, pairs, t, C, ac_base=None, ac_waves=None,
+                         gamma=None, tags=None):
+    """t75 诊断：重组 t 时刻的扩展空间哈密顿 H（MHz，数值显示用）。
+
+    H(t) = diag(K0) + Σ_光场 env·Kc∘e^{iCΔD·t} + Σ_微波 env·cos(Cωt)·A∘e^{iCΔD·t}
+           + AC 对角 env² + 耗散 −iΓ/2——与 rhs_phi_pairs 逐项同语义
+    （v 已含光子块 ½ 约定；不在 njit 内核里插桩，事后重建即交叉验证）。
+    tags：与 pairs 等长的分项名列表（两体用，区分 V_dd/光场/微波）；
+    None 时按 is_mw 二分。返回分项 dict（键按实际内容懒建）。
+    """
+    t = float(t)
+    dim = np.asarray(D_full).size
+    terms = dict(
+        K0=np.diag(np.asarray(D_full, complex)),
+        AC对角=np.zeros((dim, dim), complex),
+        耗散=np.zeros((dim, dim), complex),
+    )
+    for k, (a, b, v, dD, is_mw, w, env) in enumerate(pairs):
+        e = float(np.atleast_1d(env(np.array([t])))[0])
+        if e == 0.0:
+            continue
+        ph = np.exp(1j * C * dD * t)
+        cw = e * (np.cos(C * w * t) if is_mw else 1.0)
+        name = tags[k] if tags is not None else ('微波' if is_mw else '光场')
+        if name not in terms:
+            terms[name] = np.zeros((dim, dim), complex)
+        val = cw * v * ph
+        terms[name][a, b] += val
+        terms[name][b, a] += np.conj(val)
+    if ac_base is not None and ac_waves:
+        for wi, (sh, wf) in enumerate(ac_waves):
+            dev = float(np.atleast_1d(wf(np.array([t])))[0]) ** 2
+            if dev != 0.0:
+                terms['AC对角'] += np.diag(dev * np.asarray(ac_base[wi], float))
+    if gamma is not None:
+        g = np.asarray(gamma, float)
+        if np.any(g):
+            terms['耗散'] = np.diag(-0.5j * g)
+    return terms
+
+
 class _MixedSetup:
     """混合引擎预计算：光场光子块 + φ-帧耦合对统一打包。"""
 
-    def __init__(self, E, grps_opt, grps_mw, N):
+    def __init__(self, E, grps_opt, grps_mw, N, M_override=None,
+                 bw_opt=None, mw_nres_bw=None):
         self.N = N
         self.E = np.asarray(E, float)
         self.grps_opt = grps_opt
         self.grps_mw = grps_mw
-        Ms = _m_analytic(grps_opt, 1e-6, self.E)
+        # t75：M 覆写（上帝模式自定义）——int 全组 / list 逐组；None=自动探针
+        if M_override is None:
+            Ms = _m_analytic(grps_opt, 1e-6, self.E)
+        elif np.isscalar(M_override):
+            Ms = [int(M_override)] * len(grps_opt)
+        else:
+            Ms = [int(m) for m in M_override]
+            if len(Ms) != len(grps_opt):
+                raise ValueError(
+                    f'per_freq_M 长度 {len(Ms)} != 载频组数 {len(grps_opt)}')
+        self.M_used = list(Ms)
+        # t75：过滤带宽覆写（上帝模式）——None=params.py 默认
+        self.bw = float(bw_opt) if bw_opt is not None else BW_OPT
+        self.mw_nres = (float(mw_nres_bw) if mw_nres_bw is not None
+                        else MW_NRES_BW_MHZ)
         self.setup = _SambeSetup(self.E, grps_opt, Ms)
         self.P = self.setup.P
         self.dim = self.setup.dim
@@ -129,7 +185,7 @@ class _MixedSetup:
                 for a, b in zip(ii, jj):
                     if a >= b:
                         continue
-                    if abs(self.D_full[a] - self.D_full[b]) < BW_OPT:
+                    if abs(self.D_full[a] - self.D_full[b]) < self.bw:
                         self.pairs.append(
                             (int(a), int(b), Kcw[a, b],
                              float(self.D_full[a] - self.D_full[b]),
@@ -146,7 +202,7 @@ class _MixedSetup:
                             a = sa * N + i
                             b = sa * N + k
                             dE = float(self.D_full[a] - self.D_full[b])
-                            if abs(abs(dE) - w) > MW_NRES_BW_MHZ:
+                            if abs(abs(dE) - w) > self.mw_nres:
                                 continue
                             self.pairs.append((a, b, complex(A[i, k]), dE,
                                                1, w, env))
@@ -164,7 +220,9 @@ class _MixedSetup:
 
 def evolve_mixed(states, fields, psi0, t_grid, tol=1e-8, max_step=0.05,
                  progress_arr=None, log=None, record_amp=False,
-                 driver='numba', decays=None):
+                 driver='numba', decays=None,
+                 per_freq_M=None, r_crit=None, diag=False,
+                 bw_opt=None, mw_nres_bw=None, mw_max=None):
     """混合引擎主入口：φ-帧单 DOP853（光场 Sambe 结构 + 微波 cos 硬积分）。
 
     fields : kind='exact' 场列表（build_fields_exact 输出；光场 + 微波混合）
@@ -173,6 +231,15 @@ def evolve_mixed(states, fields, psi0, t_grid, tol=1e-8, max_step=0.05,
     driver : 'numba'（dop853 核心层）| 'scipy'（对照）
     decays : t62 耗散——寿命通道列表（落点=丢失，NonHermitian 对角；
             与 hard 引擎同语义，_single_loss_rates；显式落点/纯退相拒绝）
+    per_freq_M : t75 上帝模式覆写——逐载频光子块阶数（int 全组/list 逐组；
+            None=自动探针 _m_analytic）
+    r_crit : t75 上帝模式覆写——AC 化 r=Ω/ω 阈值（None=默认 R_CRIT）
+    diag   : t75 诊断快照——True 时 out['diag'] 附结构化中间产物
+    bw_opt / mw_nres_bw / mw_max : t75 上帝模式覆写——φ-帧过滤带宽 /
+            微波近共振带宽 / 微波-光场分界（None=params.py 默认）
+            （能级/AC 化/光子块几何/耦合对/H(t) 快照/步长历史/扇区轨迹）
+    bw_opt / mw_nres_bw / mw_max : t75 上帝模式覆写——φ-帧光场过滤带宽 /
+            微波近共振带宽 / 微波-光场分界（None=params.py 默认）
     """
     log = log or (lambda *a: None)
     from .coupling import stage_progress, rhs_phi_pairs
@@ -195,16 +262,20 @@ def evolve_mixed(states, fields, psi0, t_grid, tol=1e-8, max_step=0.05,
             gamma = Gamma_ns / _CONV
             log(f'[mixed] 耗散 {int((Gamma_ns > 0).sum())} 态'
                 f'（落点=丢失，NonHermitian）')
-    f_opt = [f for f in fields if f['omega_L_mhz'] > 1e5]
-    f_mw = [f for f in fields if f['omega_L_mhz'] <= 1e5]
+    mm = float(mw_max) if mw_max is not None else MW_MAX_MHZ
+    f_opt = [f for f in fields if f['omega_L_mhz'] > mm]
+    f_mw = [f for f in fields if f['omega_L_mhz'] <= mm]
     # t62 AC 化（正确组合）+ t62e 时变化：远强对剔除 + per-field far_sos 位移
-    E2, A_opt_new, shifts_list = ac_ize_physical_E(E, f_opt)
+    # t75：r_crit 可由上帝模式覆写（None=R_CRIT 默认）
+    rc = float(r_crit) if r_crit is not None else R_CRIT
+    E2, A_opt_new, shifts_list = ac_ize_physical_E(E, f_opt, rc)
     f_opt_ac = [dict(f, A=A) for f, A in zip(f_opt, A_opt_new)]
     grps_opt = _group_by_freq(f_opt_ac)
     grps_mw = _group_by_freq(f_mw) if f_mw else []
     if not grps_opt:
-        raise ValueError('evolve_mixed 需要光场（载频 > 1e5 MHz）')
-    setup = _MixedSetup(E2, grps_opt, grps_mw, N)
+        raise ValueError('evolve_mixed 需要光场（载频 > %.0e MHz）' % mm)
+    setup = _MixedSetup(E2, grps_opt, grps_mw, N, M_override=per_freq_M,
+                        bw_opt=bw_opt, mw_nres_bw=mw_nres_bw)
     # t62e/t73：AC 时变对角——per-wave (n_ac, dim) + 独立 env 表（与两体
     # mixed 同款；波形对象同一性映射——t62 分组教训）
     ac_waves = []
@@ -245,7 +316,8 @@ def evolve_mixed(states, fields, psi0, t_grid, tol=1e-8, max_step=0.05,
     X0 = _embed(psi0v, setup.setup)
     prog = (np.zeros(3) if progress_arr is None
             else np.asarray(progress_arr, float))
-    stat = np.zeros(4)
+    stat = np.zeros(6) if diag else np.zeros(4)
+    dt_hist = (np.zeros((100000, 2)) if diag else None)
     stage_progress(prog, 0, 0.9)             # 装配完成（JIT 装载在驱动首调）
 
     if driver == 'numba':
@@ -253,7 +325,8 @@ def evolve_mixed(states, fields, psi0, t_grid, tol=1e-8, max_step=0.05,
         # 阶段 1（积分）由驱动在首个接受步置位——调用内的 numba 装载/
         # 编译期保持阶段 0（"准备"标签 + 耗时），GUI 显示不失真
         y_out = _dop853_driver(rhs_phi_pairs, X0, t, T, float(tol), 1e-10,
-                               max_step, prog, stat, pack['iis'], pack['jjs'],
+                               max_step, prog, stat, dt_hist,
+                               pack['iis'], pack['jjs'],
                                pack['vals'], pack['dDs'], pack['is_mw'],
                                pack['wcos'], pack['n_pairs_w'],
                                pack['env_tab'], pack['env_dt'], float(C),
@@ -293,11 +366,65 @@ def evolve_mixed(states, fields, psi0, t_grid, tol=1e-8, max_step=0.05,
         from .evolve_util import _single_loss_rates
         Gamma_ns = _single_loss_rates(states, decays)
     loss, norm_dev = _loss_and_norm(pops, Gamma_ns, t)
+    # ---- t75 诊断快照（diag=True 才采集；数值路径零改动）----
+    if diag:
+        pr = setup.pairs
+        diag_pairs = dict(
+            a=np.array([p[0] for p in pr], int),
+            b=np.array([p[1] for p in pr], int),
+            v=np.array([p[2] for p in pr], complex),
+            dD=np.array([p[3] for p in pr], float),
+            is_mw=np.array([p[4] for p in pr], int),
+            w=np.array([p[5] for p in pr], float))
+        acize_fields = []
+        for f0, f1, sh in zip(f_opt, A_opt_new, shifts_list):
+            n0 = int((np.abs(np.asarray(f0['A'], float)) > 1e-9).sum() // 2)
+            n1 = int((np.abs(np.asarray(f1, float)) > 1e-9).sum() // 2)
+            acize_fields.append(dict(
+                omega=float(f0['omega_L_mhz']), n_before=n0, n_kept=n1,
+                n_acized=n0 - n1,
+                shift_min=float(sh.min()), shift_max=float(sh.max())))
+        idx = np.linspace(0, len(t) - 1, min(len(t), 240)).astype(int)
+        sector_amps = {p: np.abs(y_out[idx][:, p * N:(p + 1) * N])
+                       for p in range(setup.P)}
+        ts_snap = sorted(set(float(x) for x in
+                             np.linspace(0.0, T, 5)))
+        snaps = {}
+        for t0 in ts_snap:
+            snaps[t0] = _assemble_H_snapshot(
+                setup.D_full, pr, t0, C, ac_base=ac_base,
+                ac_waves=ac_waves if ac_base is not None else None,
+                gamma=gamma)
+        diag_dt = (dt_hist[:int(stat[4])] if dt_hist is not None
+                   else np.zeros((0, 2)))
+        out_diag = dict(
+            meta=dict(method='mixed', backend='mixed-phi-dop853', N=N,
+                      P=setup.P, dim=setup.dim, t_end=T,
+                      M=list(setup.M_used), M_user=(per_freq_M is not None),
+                      r_crit=float(rc), n_pairs=len(pr), tol=float(tol),
+                      max_step=float(max_step), bw=float(setup.bw),
+                      mw_nres=float(setup.mw_nres), mw_max=float(mm),
+                      labels=[s['label'] for s in states], stride=N),
+            photon=dict(Ms=list(setup.M_used), P=setup.P, dim=setup.dim,
+                        strides=list(setup.setup.strides),
+                        nvecs=np.asarray(setup.setup.nvecs),
+                        D_full=np.asarray(setup.D_full, float).copy()),
+            acize=dict(r_crit=float(rc), fields=acize_fields,
+                       shift=np.asarray(E2 - E, float).copy()),
+            pairs=diag_pairs,
+            solver=dict(t_steps=diag_dt[:, 0].copy(),
+                        dt=diag_dt[:, 1].copy(),
+                        nfev=int(stat[0]), n_acc=int(stat[1]),
+                        n_rej=int(stat[2]), norm_dev=norm_dev),
+            trajectory=dict(t=t[idx].copy(), sector_amps=sector_amps),
+            H_snapshots=snaps,
+        )
     out = dict(t=t, pops=pops, states=states,
                om_mhz=[float(np.abs(np.asarray(g['As'][0])).max())
                        for g in grps_mw] if grps_mw else [],
                method='mixed', backend='mixed-phi-dop853',
                loss=loss,
+               diag=out_diag if diag else None,
                error_report=dict(n_segments=int(stat[1]),
                                  nfev=int(stat[0]), n_acc=int(stat[1]),
                                  n_rej=int(stat[2]), dt_min_hit=False,
@@ -330,7 +457,7 @@ def _ac_ize_pair(E, A_o, omega_opt, r_crit=R_CRIT):
     return A_new[0]
 
 
-def _build_pair_geometry(E, optA_ac, optB_ac, omega_opt):
+def _build_pair_geometry(E, optA_ac, optB_ac, omega_opt, bw_opt=None):
     """两体光子块结构（t73b 单次装配）：全部光波（已按侧提升）入同一载频组
     → 一个 _SambeSetup 同时给出 K0（纯 E）与逐波 Kcw（t69 逐波形态：
     交叉项不可能出现；a<b 三角过滤 + |ΔD|<BW_OPT 反旋过滤）。
@@ -338,6 +465,7 @@ def _build_pair_geometry(E, optA_ac, optB_ac, omega_opt):
     optA_ac / optB_ac 元素 (A_new, env)——A 侧 lift_side_A(A⊗I)、B 侧 I⊗A。
     """
     from .tensor_fields import lift_side_A
+    bw_opt = BW_OPT if bw_opt is None else float(bw_opt)
     from .sambe import _SambeSetup
     from .field_build import _group_by_freq
     N = len(E)
@@ -374,13 +502,13 @@ def _build_pair_geometry(E, optA_ac, optB_ac, omega_opt):
             # 反向由 RHS 厄米补齐自动。
             if a >= b:
                 continue
-            if abs(K0[a] - K0[b]) < BW_OPT:
+            if abs(K0[a] - K0[b]) < bw_opt:
                 pairs_opt.append((int(a), int(b), Kcw[a, b],
                                   float(K0[a] - K0[b]), env))
     return K0, pairs_opt, P, dim
 
 
-def _split_waves(fields):
+def _split_waves(fields, mw_max=MW_MAX_MHZ):
     """fields（kind='exact'）→ (opt_waves, mw_waves)：**逐波列表，不合并**。
 
     每波形独立 (A, omega, env) 元组——最终形态（t69 船长裁定）：废除 t68 的
@@ -393,7 +521,7 @@ def _split_waves(fields):
     for f in fields or []:
         A = np.asarray(f['A'], float)
         om = float(f['omega_L_mhz'])
-        (opt if om > 1e5 else mw).append((A, om, f.get('waveform')))
+        (opt if om > mw_max else mw).append((A, om, f.get('waveform')))
     return opt, mw
 
 
@@ -401,11 +529,17 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
                       vdd_matrix=None, R_um=None, theta_deg=0.0,
                       phi_deg=0.0, cache=None, tol=1e-8, max_step=0.05,
                       progress_arr=None, log=None, record_amp=False,
-                      decays_A=None, decays_B=None, driver='numba'):
+                      decays_A=None, decays_B=None, driver='numba',
+                      r_crit=None, diag=False,
+                      bw_opt=None, mw_nres_bw=None, mw_max=None):
     """两体混合引擎（正式版）：光场光子块 + 微波/V_dd 当场，φ-帧单 DOP853。
 
     fields_A/B : kind='exact' 场列表（build_fields_exact 输出——光场 + 微波）
     vdd_matrix  : V_dd 稀疏/稠密矩阵（N²×N²）；None 且给 R_um/cache 时算
+    r_crit : t75 上帝模式覆写——AC 化 r=Ω/ω 阈值（None=默认 R_CRIT）
+    diag   : t75 诊断快照——True 时 out['diag'] 附结构化中间产物
+    bw_opt / mw_nres_bw / mw_max : t75 上帝模式覆写——φ-帧过滤带宽 /
+            微波近共振带宽 / 微波-光场分界（None=params.py 默认）
     返回 dict(t, pops_2d, pops_A, pops_B, states_2d, loss_A, loss_B,
               method='mixed', backend='mixed-phi-dop853-pair', error_report)。
 
@@ -436,8 +570,9 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
                 f'（落点=丢失，NonHermitian）')
 
     # ---- t69 最终形态：逐波拆分（每波形独立 A/ω/env——废除合并模型）----
-    optA, mwA = _split_waves(fields_A)
-    optB, mwB = _split_waves(fields_B)
+    mm = float(mw_max) if mw_max is not None else MW_MAX_MHZ
+    optA, mwA = _split_waves(fields_A, mm)
+    optB, mwB = _split_waves(fields_B, mm)
 
     # 光场载频一致性（共享光子块要求所有光波同频；异频 → 各自光子块未实现）
     om_o = None
@@ -449,7 +584,7 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
                 f'光场载频不同（{om_o:.0f} vs {om:.0f} MHz）——共享光子块'
                 '要求同频；异频多光子块为后续扩展')
     if om_o is None:
-        raise ValueError('两体混合引擎需要光场（载频 > 1e5 MHz）')
+        raise ValueError('两体混合引擎需要光场（载频 > %.0e MHz）' % mm)
 
     # ---- V_dd（同扇区当场；预计算/传入）----
     from . import pair_core as _pc
@@ -472,26 +607,32 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
 
     # ---- AC 化逐波（每波独立剔除远强对；位移不注入——t70 定案，见
     # _ac_ize_pair docstring。t73b：shifts 全 0 → 时变 AC 对角路径移除）----
+    # t75：r_crit 可由上帝模式覆写
+    rc = float(r_crit) if r_crit is not None else R_CRIT
     optA_ac = [(A_new, env) for (A, om, env) in optA
-               if (A_new := _ac_ize_pair(E, A, om)) is not None]
+               if (A_new := _ac_ize_pair(E, A, om, rc)) is not None]
     optB_ac = [(A_new, env) for (A, om, env) in optB
-               if (A_new := _ac_ize_pair(E, A, om)) is not None]
+               if (A_new := _ac_ize_pair(E, A, om, rc)) is not None]
     if optA_ac or optB_ac:
         log(f'[mixed_pair] AC 化：剔除远强对'
             f'（{len(optA_ac)}+{len(optB_ac)} 光波逐波，位移不注入）')
 
     # ---- 光子块结构（K0 纯 E——t62f 语义；共享扇区 M=1）----
     stage_progress(progress_arr, 0, 0.2)     # AC 化完成 → 光子块几何
+    bw = float(bw_opt) if bw_opt is not None else BW_OPT
     K0, pairs_opt, P, dim = _build_pair_geometry(
-        E, optA_ac, optB_ac, om_o)
+        E, optA_ac, optB_ac, om_o, bw_opt=bw)
     # 耗散 gamma（N²）→ 扩展空间（N²·P，每扇区同衰减）
     if gamma is not None:
         gamma = np.tile(gamma, P)
     log(f'[mixed_pair] 光场 P={P} dim={N2}×{P}={dim}'
         f'（5 倍降维参考：全 Sambe N²·15）')
 
-    # ---- pairs 打包（7 元组 a,b,v,dD,is_mw,w,env）----
+    # ---- pairs 打包（7 元组 a,b,v,dD,is_mw,w,env）+ 分项标签（t75 诊断）----
+    mw_nres = (float(mw_nres_bw) if mw_nres_bw is not None
+               else MW_NRES_BW_MHZ)
     pairs = []
+    pair_tags = []
 
     def _one(tv):
         return np.ones_like(np.atleast_1d(tv))
@@ -511,10 +652,11 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
                 a = a0 + pn * N2
                 b = b0 + pn * N2
                 dD = K0[a] - K0[b]
-                if abs(dD) >= BW_OPT:
+                if abs(dD) >= bw:
                     continue
                 pairs.append((int(a), int(b), complex(vv), dD, 0, 0.0,
                               _one))
+                pair_tags.append('V_dd')
 
     # 微波当场逐波：A 侧 (i,k) 同 B 态 j；B 侧 (j,l) 同 A 态 i（修复残留 j bug）
     # t69：每波形独立 (A_mw, om_m, env_m)——不合并（交叉项不可能出现）
@@ -539,18 +681,20 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
                             dE = (E[jb] + E[ia]) - (E[jb] + E[ka])
                             a0 = jb * N + ia
                             b0 = jb * N + ka
-                        if abs(abs(dE) - om_m) > MW_NRES_BW_MHZ:
+                        if abs(abs(dE) - om_m) > mw_nres:
                             continue
                         for pn in range(P):
                             pairs.append((a0 + pn * N2, b0 + pn * N2,
                                           complex(A_mw[ia, ka]), dE, 1, om_m,
                                           env_m))
+                            pair_tags.append('微波')
 
     # 光场近对逐波并入（pairs_opt 为 5 元组 (a,b,v,dD,env)——各波独立 env）
     for (a, b, v, dD, env) in pairs_opt:
         if env is None:
             env = _one
         pairs.append((int(a), int(b), v, dD, 0, 0.0, env))
+        pair_tags.append('光场')
 
     # ---- 初态嵌入（中心扇区 n=0）+ 积分 ----
     psi0_A_vec = _as_vector(states, psi0_A)
@@ -563,7 +707,8 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
     from .coupling import pack_rhs
     pack = pack_rhs(pairs, T)
     Cv = _CONV
-    stat = np.zeros(4)
+    stat = np.zeros(6) if diag else np.zeros(4)
+    dt_hist = (np.zeros((100000, 2)) if diag else None)
     stage_progress(progress_arr, 0, 0.9)     # 打包/env 表完成（JIT 在驱动首调）
     ac_base = None          # t73b：位移不注入（t70 定案）→ AC 对角恒关；
     ac_env_tab = None       # 内核 AC 分支保留供单原子 mixed 使用
@@ -586,10 +731,10 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
         from .dop853 import _dop853_driver
         y_out = _dop853_driver(
             rhs_phi_pairs, X0, t, T, float(tol), 1e-11, max_step,
-            progress_arr, stat, pack['iis'], pack['jjs'], pack['vals'],
-            pack['dDs'], pack['is_mw'], pack['wcos'], pack['n_pairs_w'],
-            pack['env_tab'], pack['env_dt'], Cv, gamma, ac_base,
-            ac_env_tab, ac_env_dt)
+            progress_arr, stat, dt_hist, pack['iis'], pack['jjs'],
+            pack['vals'], pack['dDs'], pack['is_mw'], pack['wcos'],
+            pack['n_pairs_w'], pack['env_tab'], pack['env_dt'], Cv, gamma,
+            ac_base, ac_env_tab, ac_env_dt)
         stage_progress(progress_arr, 2, 0.0)  # 阶段 2：收尾（跨扇区投影）
         from .sambe import sector_sum_pops
         for i in range(1, len(t)):
@@ -640,6 +785,53 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
     pops_B = _tensor._reduce_B(pops, N)
     E_pair = np.array([E[i] + E[j]
                        for i in range(N) for j in range(N)])
+    # ---- t75 诊断快照（两体；diag=True 才采集）----
+    if diag:
+        diag_pairs = dict(
+            a=np.array([p[0] for p in pairs], int),
+            b=np.array([p[1] for p in pairs], int),
+            v=np.array([p[2] for p in pairs], complex),
+            dD=np.array([p[3] for p in pairs], float),
+            is_mw=np.array([p[4] for p in pairs], int),
+            w=np.array([p[5] for p in pairs], float))
+        acize_fields = []
+        for (A0, om0, _env0) in (optA + optB):
+            A1 = _ac_ize_pair(E, A0, om0, rc)
+            n0 = int((np.abs(np.asarray(A0, float)) > 1e-9).sum() // 2)
+            n1 = (int((np.abs(np.asarray(A1, float)) > 1e-9).sum() // 2)
+                  if A1 is not None else 0)
+            acize_fields.append(dict(
+                omega=float(om0), n_before=n0, n_kept=n1, n_acized=n0 - n1,
+                shift_min=0.0, shift_max=0.0))
+        idx = np.linspace(0, len(t) - 1, min(len(t), 240)).astype(int)
+        sector_amps = {p: np.abs(y_out[idx][:, p * N2:(p + 1) * N2])
+                       for p in range(P)}
+        ts_snap = sorted(set(float(x) for x in np.linspace(0.0, T, 5)))
+        snaps = {t0: _assemble_H_snapshot(K0, pairs, t0, Cv, gamma=gamma,
+                                          tags=pair_tags)
+                 for t0 in ts_snap}
+        diag_dt = (dt_hist[:int(stat[4])] if dt_hist is not None
+                   else np.zeros((0, 2)))
+        out_diag = dict(
+            meta=dict(method='mixed', backend='mixed-phi-dop853-pair', N=N,
+                      P=P, dim=dim, t_end=T, M=[1],
+                      r_crit=float(rc), n_pairs=len(pairs), tol=float(tol),
+                      max_step=float(max_step), bw=bw, mw_nres=mw_nres,
+                      mw_max=float(mm),
+                      labels=[f"({states[i]['label']})×({states[j]['label']})"
+                              for i in range(N) for j in range(N)],
+                      stride=N2),
+            photon=dict(Ms=[1], P=P, dim=dim, strides=[1],
+                        nvecs=np.arange(P), D_full=np.asarray(K0, float).copy()),
+            acize=dict(r_crit=float(rc), fields=acize_fields,
+                       shift=np.zeros(N2)),
+            pairs=diag_pairs,
+            solver=dict(t_steps=diag_dt[:, 0].copy(), dt=diag_dt[:, 1].copy(),
+                        nfev=int(stat[0]), n_acc=int(stat[1]),
+                        n_rej=int(stat[2]), norm_dev=norm_dev),
+            trajectory=dict(t=t[idx].copy(), sector_amps=sector_amps),
+            H_snapshots=snaps,
+        )
     report = dict(nfev=n_dop, max_norm_dev=norm_dev,
                   P=P, dim=dim, photon_blocks={f'{om_o:.6g}MHz': 3},
                   ac_shifts=None)
@@ -653,6 +845,7 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
         } for i in range(N) for j in range(N)],
         method='mixed', backend='mixed-phi-dop853-pair',
         error_report=report,
+        diag=out_diag if diag else None,
     )
     if record_amp:
         from .sambe import sector_sum_amp

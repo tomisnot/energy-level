@@ -109,11 +109,13 @@ def _dop853_dense_interp(y_old, y_new, f_old, f_new, K, t_old, h, x,
 
 @njit(cache=True, nogil=True)
 def _dop853_driver(rhs, y0, t_eval, T, rtol, atol, max_step, prog, stat,
-                   *rargs):
+                   dt_hist, *rargs):
     """scipy solve_ivp(DOP853) 主循环的 numba 移植（rhs 参数化，任意 N）。
 
     rhs(t, y, *rargs) -> dydt（njit 编译）。rargs 承载场矩阵/查表等附加参数。
     返回 y_out (n_eval, n) 复数；stat[0..3] = nfev/n_acc/n_rej/n_dense。
+    dt_hist：None 或预分配 (M,2) float64——每接受步写 (t_new, h)，行数记
+    stat[4]（t75 诊断；调用方传 dt_hist 时 stat 须 ≥6 行）。None=不记录。
     步进/误差/步长控制与 scipy rk.py 逐行一致（SAFETY=0.9 等）。
     """
     n = y0.size
@@ -227,6 +229,13 @@ def _dop853_driver(rhs, y0, t_eval, T, rtol, atol, max_step, prog, stat,
                 n_rej += 1
         h_step = h
         n_acc += 1
+        # t75：步长历史（诊断）——接受步写 (t_new, h)，行数记 stat[4]
+        if dt_hist is not None:
+            m = int(stat[4])
+            if m < dt_hist.shape[0]:
+                dt_hist[m, 0] = t_new
+                dt_hist[m, 1] = h_step
+                stat[4] = m + 1
         # t72：首个接受步后置阶段=1（积分）——驱动调用内的 numba 装载/
         # 编译期保持调用侧的阶段 0（"准备"标签 + 墙钟耗时），GUI 不失真
         if (not stage_set) and prog.shape[0] > 2:
