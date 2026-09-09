@@ -14,3 +14,8 @@ PyQt5==5.15.9
 arc_alkali_rydberg_calculator==3.9.0
 numba==0.65.1
 pyqtgraph==0.13.7
+# ── AI 协同（src/ai，可选）─────────────────────────────────────────
+# 缺失时软件照常运行，仅状态栏提示 AI 接口未启用。
+# 注意：分发给无 AI 需求的用户打包 exe 时不要装（PyInstaller 会收集
+# pydantic/uvicorn/starlette/httpx 增大体积）；开发者/AI 协同环境安装：
+#   pip install "mcp>=2,<3" uvicorn

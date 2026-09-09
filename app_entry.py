@@ -88,7 +88,69 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(str(msg), timeout)
 
     def closeEvent(self, ev):
+        try:
+            from src.ai import server as ai_server
+            ai_server.stop_server()
+        except Exception:
+            pass
         super().closeEvent(ev)
+
+    def _init_ai(self):
+        """启动进程内 MCP server（AI 协同端点）+ journal → 状态栏联动。
+
+        失败不影响软件本体使用（如无 mcp SDK / 端口占用），仅日志提示。
+        """
+        try:
+            from src.ai import server as ai_server
+            from src.ai.journal import get_journal
+            port = ai_server.start_server(self)
+            if port:
+                # P3：状态栏常驻 AI 在线指示（人随时知道 AI 通道开着）
+                from PyQt5.QtWidgets import QLabel
+                ind = QLabel(f'● AI 在线 :{port}')
+                ind.setToolTip(f'MCP 端点 http://127.0.0.1:{port}/mcp\n'
+                               'AI 的每次操作会显示在这里，并可一键撤销')
+                ind.setStyleSheet('color:#a855f7; padding:0 8px;')
+                self.statusBar().addPermanentWidget(ind)
+                # P3：人一键撤销最近一个 AI 操作（可逆与可归因的落地）
+                from PyQt5.QtWidgets import QPushButton
+                undo_btn = QPushButton('撤销AI')
+                undo_btn.setToolTip('撤销最近一个 AI 操作（回滚其变更前状态）')
+                undo_btn.setStyleSheet('color:#a855f7;')
+
+                def _ui_undo():
+                    r = ai_server.ui_undo_last_ai()
+                    self.log(r.get('msg', ''), 5000)
+                undo_btn.clicked.connect(_ui_undo)
+                self.statusBar().addPermanentWidget(undo_btn)
+                # P3 协同 UI：AI 来源的 op 滚动到状态栏（人自己的不刷屏）
+                j = get_journal(os.path.dirname(os.path.abspath(__file__)))
+
+                def _on_op(op):
+                    if op.actor.startswith('ai'):
+                        d = op.detail
+                        txt = f"[AI] {op.kind}: {d.get('path') or d.get('job') or ''}" \
+                              f"{'（' + op.reason + '）' if op.reason else ''}"
+                        self.log(txt, 6000)
+                j.subscribe(_on_op)
+
+                # 人侧流水：既有信号链上挂 user 记录钩子（AI 写入窗口内跳过，
+                # 防级联信号误归因）。无快照——undo 只撤 AI。
+                def _user_hook(where):
+                    def _f(*_):
+                        from src.ai.journal import is_ai_writing
+                        if not is_ai_writing():
+                            j.record('user', 'edit', {'where': where}, '', None)
+                    return _f
+                self.groups_store.changed.connect(
+                    _user_hook('能级组'))
+                self.field.data_changed.connect(_user_hook('场面板'))
+                self.dynamic.wave_panel.changed.connect(_user_hook('波形A'))
+                self.dynamic.wave_panel_B.changed.connect(_user_hook('波形B'))
+            return port
+        except Exception as e:
+            self.log(f'[AI] 端点启动失败（软件功能不受影响）: {e}')
+            return None
 
     def bind_store(self, groups_store, field_state):
         self.groups_store = groups_store
@@ -296,6 +358,7 @@ def main():
     app = QApplication(sys.argv)
     window = MainWindow()
     window.showMaximized()
+    window._init_ai()
     return app.exec_()
 
 
