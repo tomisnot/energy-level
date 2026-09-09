@@ -25,7 +25,8 @@ from .evolve_util import _as_vector  # t74 工具归位
 from . import tensor as _tensor
 from .params import (BW_OPT, MW_NRES_BW_MHZ, R_CRIT,  # t74c 参数单源
                      MW_MAX_MHZ)
-from .coupling import rhs_phi_pairs  # t74：φ-帧统一内核（单/两体共用）
+from .coupling import (rhs_phi_pairs,  # t74：φ-帧统一内核（单/两体共用）
+                       dop853_driver_mixed)  # 薄包装：让磁盘缓存命中
 from .field_build import _group_by_freq
 from .sambe import (_SambeSetup, _m_analytic, _embed)
 
@@ -321,16 +322,15 @@ def evolve_mixed(states, fields, psi0, t_grid, tol=1e-8, max_step=0.05,
     stage_progress(prog, 0, 0.9)             # 装配完成（JIT 装载在驱动首调）
 
     if driver == 'numba':
-        from .dop853 import _dop853_driver
         # 阶段 1（积分）由驱动在首个接受步置位——调用内的 numba 装载/
         # 编译期保持阶段 0（"准备"标签 + 耗时），GUI 显示不失真
-        y_out = _dop853_driver(rhs_phi_pairs, X0, t, T, float(tol), 1e-10,
-                               max_step, prog, stat, dt_hist,
-                               pack['iis'], pack['jjs'],
-                               pack['vals'], pack['dDs'], pack['is_mw'],
-                               pack['wcos'], pack['n_pairs_w'],
-                               pack['env_tab'], pack['env_dt'], float(C),
-                               gamma, ac_base, ac_env_tab, ac_env_dt)
+        y_out = dop853_driver_mixed(X0, t, T, float(tol), 1e-10,
+                                    max_step, prog, stat, dt_hist,
+                                    pack['iis'], pack['jjs'],
+                                    pack['vals'], pack['dDs'], pack['is_mw'],
+                                    pack['wcos'], pack['n_pairs_w'],
+                                    pack['env_tab'], pack['env_dt'], float(C),
+                                    gamma, ac_base, ac_env_tab, ac_env_dt)
     else:
         from scipy.integrate import solve_ivp
         from .coupling import rhs_phi_pairs
@@ -728,9 +728,8 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
     # 阶段 1（积分）由驱动在首个接受步置位——调用内的 numba 装载/编译期
     # 保持阶段 0（"准备"标签 + 墙钟耗时），GUI 显示不失真
     if driver == 'numba':
-        from .dop853 import _dop853_driver
-        y_out = _dop853_driver(
-            rhs_phi_pairs, X0, t, T, float(tol), 1e-11, max_step,
+        y_out = dop853_driver_mixed(
+            X0, t, T, float(tol), 1e-11, max_step,
             progress_arr, stat, dt_hist, pack['iis'], pack['jjs'],
             pack['vals'], pack['dDs'], pack['is_mw'], pack['wcos'],
             pack['n_pairs_w'], pack['env_tab'], pack['env_dt'], Cv, gamma,

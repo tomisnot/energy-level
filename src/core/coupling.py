@@ -130,3 +130,29 @@ def rhs_phi_pairs(t, phi, iis, jjs, vals, dDs, is_mw, wcos, n_pairs_w,
             if gamma[k] != 0.0:
                 res[k] -= 0.5 * Cv * gamma[k] * phi[k]
     return res
+
+
+# ============================================================
+# mixed 引擎的 DOP853 驱动（薄包装 —— 唯一目的：让磁盘缓存真正命中）
+# ============================================================
+# 背景：`_dop853_driver` 把 rhs 当参数，签名里因此带 numba 的 Dispatcher
+# 类型；那是 WeakType，缓存键取的是 weakref（等价于对象 id），**每个进程
+# 都不同** → 磁盘缓存永远查不中：每次启动重编 ~15s，还把新条目写进索引
+# （实测 375 个文件 / 100 MB），且保存索引时若旧条目的引用对象已被 GC，
+# 会抛 `ReferenceError: underlying object has vanished`，把整轮演化搞失败。
+#
+# 本包装把 rhs 静态绑定为模块级常量（不再出现在签名里）→ 键稳定。
+# 同时 dop853 三个内核都标了 `inline='always'`：内联后包装的编译产物里
+# 对 rhs 是**直接全局调用**而不是"把 jit 函数当实参传递"——后者会把
+# 包装标记为 has_dynamic_globals 而**完全拒绝缓存**（numba 实测警告）。
+# 三个内核因此不再产生自己的缓存条目，全部并入本包装的条目。
+# 数值上只是把同一批实参原样转发（附加参数走元组），逐位不变。
+from .dop853 import _dop853_driver          # noqa: E402  （系数已上收 dop853，无环）
+
+
+@_njit(cache=True, nogil=True)
+def dop853_driver_mixed(y0, t_eval, T, rtol, atol, max_step, prog, stat,
+                        dt_hist, *rargs):
+    """mixed 引擎（单/两体共用）：静态绑定 rhs_phi_pairs 的 DOP853 驱动。"""
+    return _dop853_driver(rhs_phi_pairs, y0, t_eval, T, rtol, atol,
+                          max_step, prog, stat, dt_hist, rargs)

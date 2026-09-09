@@ -31,8 +31,9 @@ from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                              QTabWidget, QCheckBox, QTableWidget,
                              QTableWidgetItem, QSlider, QWidget, QHeaderView,
                              QAbstractItemView, QPushButton, QLineEdit,
-                             QMessageBox, QFrame, QSpinBox)
+                             QMessageBox, QFrame, QSpinBox, QSizePolicy)
 from matplotlib.figure import Figure
+from matplotlib.ticker import MaxNLocator
 from matplotlib.backends.backend_qt5agg import (
     FigureCanvasQTAgg as FigureCanvas, NavigationToolbar2QT)
 
@@ -252,10 +253,23 @@ class SolverInspector(QDialog):
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(10, 10, 10, 10)
+        # 顶行：meta 摘要（左）+ 导出按钮（右）——导出原本是一条占满整宽、
+        # 顶在窗口最底的大按钮，既浪费一整行又和各页底部的说明挤在一起。
+        top = QHBoxLayout()
+        top.setSpacing(8)
         self.meta_label = QLabel('（未加载数据——运行演化后自动填充）')
         self.meta_label.setStyleSheet('color: %s; font-size:12px;'
                                       % ui_theme.COL_TEXT_DIM)
-        lay.addWidget(self.meta_label)
+        # 摘要可能很长：别撑宽窗口（超出部分省略号截断，全文进 tooltip）
+        self.meta_label.setSizePolicy(QSizePolicy.Ignored,
+                                      QSizePolicy.Preferred)
+        self.meta_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        top.addWidget(self.meta_label, 1)
+        self.export_btn = QPushButton('⬇ 导出诊断')
+        self.export_btn.setToolTip('当前诊断快照 → .npz（数值全量）+ .json（元数据）')
+        self.export_btn.clicked.connect(self.export_diag)
+        top.addWidget(self.export_btn, 0)
+        lay.addLayout(top)
 
         self.tabs = QTabWidget()
         lay.addWidget(self.tabs, 1)
@@ -271,12 +285,6 @@ class SolverInspector(QDialog):
         self.tabs.addTab(self._tab_s, '求解过程')
         self.tabs.addTab(self._tab_x, '扇区与重构')
         self.tabs.addTab(self._tab_e, '引擎参数')
-
-        # 诊断导出（meta 行右侧）
-        self.export_btn = QPushButton('⬇ 导出诊断')
-        self.export_btn.setToolTip('当前诊断快照 → .npz（数值全量）+ .json（元数据）')
-        self.export_btn.clicked.connect(self.export_diag)
-        lay.addWidget(self.export_btn)
 
     # ---------- 上帝旋钮（内嵌各页；主界面不再占用空间） ----------
     def _make_knob(self, attr, label, tip, width=90):
@@ -307,14 +315,10 @@ class SolverInspector(QDialog):
                 continue
             val = p.get(key)
             e.setText('' if val is None else str(val))
-        # 引擎参数页覆写列回填
-        tab = getattr(self, 'e_table', None)
-        if tab is not None:
-            for r, (kw, _const, _desc) in enumerate(self._E_PARAMS):
-                e = p.get(kw)
-                it = tab.item(r, 2)
-                if it is not None:
-                    it.setText('' if e is None else str(e))
+        # 引擎参数页覆写回填
+        for kw, e in (getattr(self, '_e_edits', None) or {}).items():
+            val = p.get(kw)
+            e.setText('' if val is None else str(val))
 
     def god_values(self, pair=False):
         """读取旋钮 → evolve_mixed(_pair) 覆写 kwargs（空=默认不传）。"""
@@ -340,19 +344,16 @@ class SolverInspector(QDialog):
                     QMessageBox.warning(self, '上帝参数',
                                         f'{key} 解析失败: {s}')
                     return {}
-        # 引擎参数页覆写列
-        tab = getattr(self, 'e_table', None)
-        if tab is not None:
-            for r, (kw, _const, _desc) in enumerate(self._E_PARAMS):
-                it = tab.item(r, 2)
-                s = it.text().strip() if it is not None else ''
-                if s:
-                    try:
-                        ek[kw] = float(s)
-                    except ValueError:
-                        QMessageBox.warning(self, '引擎参数',
-                                            f'{kw} 解析失败: {s}')
-                        return {}
+        # 引擎参数页覆写
+        for kw, e in (getattr(self, '_e_edits', None) or {}).items():
+            s = e.text().strip()
+            if s:
+                try:
+                    ek[kw] = float(s)
+                except ValueError:
+                    QMessageBox.warning(self, '引擎参数',
+                                        f'{kw} 解析失败: {s}')
+                    return {}
         ek['diag'] = True
         return ek
 
@@ -406,7 +407,7 @@ class SolverInspector(QDialog):
         w = QWidget()
         lay = QVBoxLayout(w)
         lay.setContentsMargins(10, 8, 10, 8)
-        lay.setSpacing(6)
+        lay.setSpacing(8)
         info = QLabel(
             '引擎数值收敛/过滤阈值（定义于 <b>params.py</b>，默认值实时读取）。'
             '覆写仅对本次运行生效，不写回 params.py；清空 = 恢复默认。'
@@ -415,32 +416,59 @@ class SolverInspector(QDialog):
         info.setWordWrap(True)
         lay.addWidget(info)
 
-        self.e_table = QTableWidget(len(self._E_PARAMS), 4)
-        self.e_table.setHorizontalHeaderLabels(
-            ['参数（kwarg）', '默认值 params.py', '本次覆写（空=默认）', '说明'])
-        self.e_table.horizontalHeader().setSectionResizeMode(
-            3, QHeaderView.Stretch)
-        self.e_table.setEditTriggers(QAbstractItemView.DoubleClicked |
-                                     QAbstractItemView.EditKeyPressed)
-        for r, (kw, const, desc) in enumerate(self._E_PARAMS):
-            it0 = QTableWidgetItem(kw)
-            it0.setFlags(it0.flags() & ~Qt.ItemIsEditable)
-            self.e_table.setItem(r, 0, it0)
-            it1 = QTableWidgetItem(str(float(getattr(_params, const))))
-            it1.setFlags(it1.flags() & ~Qt.ItemIsEditable)
-            self.e_table.setItem(r, 1, it1)
-            self.e_table.setItem(r, 2, QTableWidgetItem(''))
-            it3 = QTableWidgetItem(desc)
-            it3.setFlags(it3.flags() & ~Qt.ItemIsEditable)
-            self.e_table.setItem(r, 3, it3)
-        self.e_table.setRowHeight(0, 64)
-        self.e_table.setRowHeight(1, 48)
-        self.e_table.setRowHeight(2, 48)
-        lay.addWidget(self.e_table, 1)
-        row = QHBoxLayout()
-        row.addStretch(1)
-        row.addWidget(self._make_rerun_btn())
-        lay.addLayout(row)
+        # 每个可覆写参数一张卡（与处理链页同一套视觉语言），三张 stretch=1
+        # 平分主体。原先是一张 3 行表格被拉满整页，下面空一大片白。
+        self._e_edits = {}
+        for (kw, const, desc), accent in zip(
+                self._E_PARAMS, ('#378ADD', '#BA7517', '#1D9E75')):
+            card = QFrame()
+            card.setObjectName('ecard%s' % kw)
+            card.setStyleSheet(
+                'QFrame#ecard%s{background:#FFFFFF; border:1px solid %s; '
+                'border-radius:8px;}' % (kw, ui_theme.COL_BORDER))
+            cl = QHBoxLayout(card)
+            cl.setContentsMargins(10, 6, 12, 6)
+            cl.setSpacing(12)
+            bar = QFrame()
+            bar.setFixedWidth(6)
+            bar.setStyleSheet('background:%s; border:none; border-radius:3px;'
+                              % accent)
+            cl.addWidget(bar)
+            # 左栏：kwarg 名 + 默认值 + params.py 常量名
+            # 用布局直接挂在卡片里（不套 QWidget 包装）——套包装的话子控件
+            # 不继承卡片白底，会在卡里显示一块灰底，且竖向被拉散。
+            lbox = QVBoxLayout()
+            lbox.setSpacing(1)
+            lbox.addStretch(1)
+            name = QLabel('<b style="font-size:14px;">%s</b>' % kw)
+            name.setTextFormat(Qt.RichText)
+            name.setFixedWidth(150)
+            lbox.addWidget(name)
+            dflt = QLabel('默认 %g' % float(getattr(_params, const)))
+            dflt.setStyleSheet('color:%s; font-size:9pt;'
+                               % ui_theme.COL_TEXT_DIM)
+            dflt.setFixedWidth(150)
+            lbox.addWidget(dflt)
+            cst = QLabel('params.%s' % const)
+            cst.setStyleSheet('color:%s; font-size:8pt;'
+                              % ui_theme.COL_TEXT_DIM)
+            cst.setFixedWidth(150)
+            lbox.addWidget(cst)
+            lbox.addStretch(1)
+            cl.addLayout(lbox)
+            # 中栏：运行级覆写输入
+            e = QLineEdit('')
+            e.setFixedWidth(120)
+            e.setPlaceholderText('空 = 默认')
+            e.setToolTip('运行级覆写：仅本次运行生效，不写回 params.py')
+            self._e_edits[kw] = e
+            cl.addWidget(e, 0, Qt.AlignVCenter)
+            # 右栏：说明（占满剩余宽度）
+            d = QLabel(desc)
+            d.setWordWrap(True)
+            d.setStyleSheet('color:%s;' % ui_theme.COL_TEXT_DIM)
+            cl.addWidget(d, 1)
+            lay.addWidget(card, 1)
         return w
 
     # ---------- 诊断导出 ----------
@@ -742,6 +770,10 @@ class SolverInspector(QDialog):
         self.p_table = QTableWidget(0, 7)
         self.p_table.setHorizontalHeaderLabels(
             ['a', 'b', '|v| MHz', 'ΔD MHz', '类型', '载频 MHz', '物理含义'])
+        # 前六列按内容定宽，余下宽度全给「物理含义」——原先它被挤到只剩
+        # 几十像素，每个态名都以省略号截断（与哈密顿页同一类问题）。
+        for c, cw in enumerate((48, 48, 78, 88, 68, 92)):
+            self.p_table.setColumnWidth(c, cw)
         self.p_table.horizontalHeader().setSectionResizeMode(
             6, QHeaderView.Stretch)
         self.p_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -782,7 +814,15 @@ class SolverInspector(QDialog):
                 ax.hist(np.abs(dD[sel]), bins=bins, alpha=0.75,
                         label=lab, color=color)
         ax.set_xscale('log')
-        ax.set_yscale('log')
+        # 计数直方图：量级跨度不大就用线性 + 整数刻度——对数轴会把 6/10/20
+        # 这类整数计数画成 6×10⁰ / 10¹ / 2×10¹ 的怪刻度，反而难读。
+        cnts, _ = np.histogram(np.abs(dD), bins=bins)
+        nz = cnts[cnts > 0]
+        if nz.size and float(nz.max()) / max(float(nz.min()), 1.0) > 50.0:
+            ax.set_yscale('log')
+        else:
+            ax.set_yscale('linear')
+            ax.yaxis.set_major_locator(MaxNLocator(integer=True))
         ax.axvline(2e4, color='#A32D2D', ls='--', lw=1, label='BW_OPT=20GHz')
         ax.set_xlabel('|ΔD| MHz（对数）')
         ax.set_ylabel('耦合对数')
@@ -933,7 +973,9 @@ class SolverInspector(QDialog):
         ax.set_xlabel('t (ns)')
         ax.set_ylabel('|X| 扇区幅值')
         ax.set_title('扩展空间逐扇区幅值（相干扇和 = 物理布居）')
-        ax.legend(fontsize=8)
+        # 图例放左下：右上角被 n=−1（t=0 处 ≈1.0）和 n=0 的抬升占住，
+        # 原来贴在右上会压在曲线身上；左下 t<30 区间各扇区都接近 0，最空。
+        ax.legend(fontsize=8, loc='lower left', framealpha=0.9)
         ax.grid(alpha=0.3)
         self.x_canvas.draw_idle()
         m = (d or {}).get('meta', {})
