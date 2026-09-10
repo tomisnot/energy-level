@@ -24,7 +24,8 @@ from PyQt5.QtCore import Qt, pyqtSignal, QEvent, QMimeData
 from PyQt5.QtGui import QDrag
 from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout,
                              QGridLayout, QFormLayout, QLabel, QDoubleSpinBox,
-                             QComboBox, QPushButton, QToolButton, QScrollArea)
+                             QComboBox, QPushButton, QToolButton, QScrollArea,
+                             QMenu, QAction)
 
 from ..core import core
 from ..core import waveforms
@@ -127,10 +128,24 @@ class WavePanel(QWidget):
         b_s.setToolTip('添加方波包络波形')
         b_s.clicked.connect(lambda: self._add('square'))
         row.addWidget(b_s)
-        b_a = QPushButton('＋任意')
-        b_a.setToolTip('添加任意波形（无单载频，第一性原理求解）：\n'
-                       '载入时域信号样品文件（两列：时间ns 幅值；或单列幅值+等间距）')
-        b_a.clicked.connect(lambda: self._add('arb'))
+        b_a = QToolButton()
+        b_a.setText('＋任意 ▾')
+        b_a.setPopupMode(QToolButton.InstantPopup)
+        b_a.setToolTip('从文件导入任意时间形状（txt/csv/dat/npy）。两种语义：\n'
+                       '· 光强包络：文件=光强形状，载频由波形自带 → 三引擎全支持\n'
+                       '· 完整驱动：文件=驱动信号本身（含振荡），无载频 → 仅 hard')
+        act_env = QAction('作为光强包络（配载频）', b_a)
+        act_env.setToolTip('文件给出 0..1 的光强形状，载频另填（默认取基组内\n'
+                           '最小偶极跃迁）。sambe / mixed / hard 全支持，推荐。')
+        act_env.triggered.connect(lambda: self._add('envfile'))
+        act_drv = QAction('作为完整驱动（无载频，仅 hard）', b_a)
+        act_drv.setToolTip('文件本身就是时域驱动信号（必须含目标跃迁的振荡，\n'
+                           '否则静默零效果）。仅 hard 支持；采样率须过 Nyquist。')
+        act_drv.triggered.connect(lambda: self._add('drive'))
+        _menu = QMenu(b_a)
+        _menu.addAction(act_env)
+        _menu.addAction(act_drv)
+        b_a.setMenu(_menu)
         row.addWidget(b_a)
         root.addLayout(row)
 
@@ -171,16 +186,11 @@ class WavePanel(QWidget):
             env = waveforms.GaussianEnv(200.0, 40.0)
         elif kind == 'square':
             env = waveforms.SquareEnv(50.0, 20.0)
-        else:
-            data = self._load_arb_samples()
-            if data is None:
-                return
-            t, a = data
-            self.waves.append(waveforms.ArbitraryWave(
-                f'任意波形{len(self.waves) + 1}', t, a,
-                intensity_mwcm2=100.0))
-            self._rebuild()
-            self.changed.emit()
+        elif kind == 'envfile':
+            self._add_env_file()
+            return
+        else:                                   # 'drive'：完整时域驱动
+            self._add_drive_file()
             return
         self.waves.append(waveforms.Wave(
             f'波形{len(self.waves) + 1}', 6.8e6, env,
@@ -188,12 +198,87 @@ class WavePanel(QWidget):
         self._rebuild()
         self.changed.emit()
 
-    def _load_arb_samples(self):
+    def _add_env_file(self):
+        """＋任意 → 作为**光强包络**：文件给形状，载频另填（保留载频语义）。
+
+        与「完整驱动」的关键区别：本路径产出普通 `Wave`（载频 + 包络 callable），
+        因此 sambe / mixed / hard 三引擎都支持，也不会踩"无载频"那串坑。
+        """
+        from PyQt5.QtWidgets import QInputDialog, QMessageBox
+        data = self._load_samples('载入光强包络文件')
+        if data is None:
+            return
+        t, a = data
+        try:
+            env = waveforms.FileEnv(t, a)
+        except Exception as e:                                  # noqa: BLE001
+            QMessageBox.warning(self, '载入失败', str(e))
+            return
+        f0 = self._suggest_freq('π')
+        f, ok = QInputDialog.getDouble(
+            self, '载频', '该包络作用的载频 (MHz)：\n'
+            '（默认取基组内**耦合最强**的跨流形偶极跃迁；'
+            '请按你的驱动意图核对）',
+            f0, 1e-3, 1e12, 6)
+        if not ok:
+            return
+        self.waves.append(waveforms.Wave(
+            f'包络{len(self.waves) + 1}', float(f), env, pol='π',
+            offset_ns=0.0, intensity_mwcm2=100.0))
+        self._rebuild()
+        self.changed.emit()
+
+    def _add_drive_file(self):
+        """＋任意 → 作为**完整驱动**：文件即驱动信号（无载频），仅 hard 支持。"""
+        data = self._load_samples('载入完整驱动文件')
+        if data is None:
+            return
+        t, a = data
+        self.waves.append(waveforms.ArbitraryWave(
+            f'驱动{len(self.waves) + 1}', t, a, intensity_mwcm2=100.0))
+        self._rebuild()
+        self.changed.emit()
+
+    def _suggest_freq(self, pol='π'):
+        """按当前基组建议载频（MHz）= 该偏振下**偶极最强**的**跨流形**跃迁。
+
+        为什么要排除同流形 (n,l,j) 相同的对：那是 Zeeman/超精细劈裂（几十 MHz
+        量级），取"最小跃迁"会选中它——看着像算出来的、其实几乎不是用户想驱动
+        的对象，属静默坑。跨流形取最强耦合更接近"你打算驱动的跃迁"。
+        退路：无跨流形对→用全部对；再无→6.8e6（与高斯/方波默认一致）。
+        """
+        try:
+            q = {'π': 0, 'σ+': 1, 'σ-': -1}.get(pol, 0)
+            st, ck = getattr(self, 'states', None), getattr(self, 'cache', None)
+            if not st or ck is None:
+                return 6.8e6
+            from ..core.field_build import _sublevel_row
+            cross, any_ = [], []
+            for i in range(len(st)):
+                for j in range(i + 1, len(st)):
+                    d = core.dipole_amplitude(ck, _sublevel_row(st[i]),
+                                              _sublevel_row(st[j]), q)
+                    if abs(d) <= 1e-12:
+                        continue
+                    nu = abs(float(st[j]['E_mhz']) - float(st[i]['E_mhz']))
+                    any_.append((abs(d), nu))
+                    same = ((st[i]['n'], st[i]['l'], st[i]['j'])
+                            == (st[j]['n'], st[j]['l'], st[j]['j']))
+                    if not same:
+                        cross.append((abs(d), nu))
+            pool = cross or any_
+            if not pool:
+                return 6.8e6
+            return float(max(pool, key=lambda x: x[0])[1])
+        except Exception:                                       # noqa: BLE001
+            return 6.8e6
+
+    def _load_samples(self, title='载入波形文件'):
         """文件 → (t_ns, amp)。两列(时间ns,幅值)；单列(幅值)+QInputDialog 等间距。
-        返回 None = 用户取消/失败。"""
+        返回 None = 用户取消/失败。载入形状与语义无关，包络/完整驱动共用。"""
         from PyQt5.QtWidgets import (QFileDialog, QInputDialog, QMessageBox)
         path, _ = QFileDialog.getOpenFileName(
-            self, '载入任意波形', '',
+            self, title, '',
             '波形文件 (*.txt *.csv *.dat *.npy);;所有文件 (*)')
         if not path:
             return None
@@ -267,7 +352,12 @@ class WavePanel(QWidget):
             return (f'波形{idx + 1} 任意 · {len(w.t_ns)}点 · '
                     f'dt={w.dt_min_ns():.3g}ns · {w.pol}')
         e = w.envelope
-        kind = '高斯' if isinstance(e, waveforms.GaussianEnv) else '方波'
+        if isinstance(e, waveforms.FileEnv):
+            kind = '包络文件'
+        elif isinstance(e, waveforms.GaussianEnv):
+            kind = '高斯'
+        else:
+            kind = '方波'
         return f'波形{idx + 1} {kind} · {w.freq_mhz:.3g}MHz · {w.pol}'
 
     # ---------------- 拖拽复制（拖到另一原子的页签 = 复制到该原子） ----------------
@@ -372,11 +462,29 @@ class WavePanel(QWidget):
         return box
 
     # ---------------- 波形参数内容 ----------------
+    def set_t_end(self, t_end_ns):
+        """告知演化窗口 → 带宽显示随引擎查表上限收紧（t78）。
+
+        `f_max` 有两个上限：文件 Nyquist 与引擎查表 Nyquist（≈0.5·N_TAB/T，
+        T=620 ns 时仅 ~106 GHz）。只报前者会过度承诺，故窗口已知时取较小值。
+        """
+        if getattr(self, '_t_end_ns', None) == t_end_ns:
+            return
+        self._t_end_ns = float(t_end_ns) if t_end_ns else None
+        self._rebuild()
+
+    def _envfile_info(self, e):
+        """文件包络摘要（点数/采样/时长/带宽）。"""
+        f = e.f_max_mhz(getattr(self, '_t_end_ns', None))
+        return (f'{len(e.t_ns)} 点 · dt_min={e.dt_min_ns():.3g} ns · '
+                f'时长={e.span_ns():.4g} ns · 带宽≥{f:.4g} MHz')
+
     def _arb_info(self, w):
-        """任意波形摘要行（样品统计 + 求解提示）。"""
+        """完整驱动摘要（样品统计 + 求解提示）。"""
+        f = w.f_max_mhz(getattr(self, '_t_end_ns', None))
         return (f'{len(w.t_ns)} 点 · dt_min={w.dt_min_ns():.3g} ns · '
-                f'f_max≈{w.f_max_mhz():.3g} MHz · 幅值峰值归一 '
-                '（运行走 arbitrary 第一性原理，无 RWA，较慢）')
+                f'带宽≥{f:.4g} MHz · 幅值峰值归一 · 文件即驱动（须含目标'
+                '跃迁的振荡，否则零效果；仅 hard 支持）')
 
     def _arb_content(self, w, idx, head):
         """任意波形参数区：光强 | 偏振 | 偏移 + 样品信息/重新载入。
@@ -457,7 +565,7 @@ class WavePanel(QWidget):
             inten.blockSignals(False)
 
         def _reload(*_):
-            data = self._load_arb_samples()
+            data = self._load_samples('重新载入完整驱动文件')
             if data is None:
                 return
             t, a = data
@@ -571,6 +679,8 @@ class WavePanel(QWidget):
             spins = [('中心', _spin(0, 1e7, 1, e.center_ns, 10, ' ns', 90)),
                      ('σ', _spin(1e-3, 1e6, 1, e.sigma_ns, 1, ' ns', 90)),
                      ('峰值', _spin(0, 1, 3, e.peak, 0.1, min_w=90))]
+        elif isinstance(e, waveforms.FileEnv):
+            spins = []                       # 包络形状来自文件 → 无参数旋钮
         else:
             spins = [('起点', _spin(0, 1e7, 1, e.start_ns, 10, ' ns', 68)),
                      ('沿', _spin(0, 1e6, 1, e.edge_ns, 1, ' ns', 68)),
@@ -588,6 +698,31 @@ class WavePanel(QWidget):
             cl.addWidget(_label(lab))
             cl.addWidget(sb, 1)
             env_row.addWidget(cell, 1)
+        if isinstance(e, waveforms.FileEnv):
+            # 包络来自文件：显示样品信息 + 重新载入（形状由文件定，无旋钮）
+            _fi = QLabel(self._envfile_info(e))
+            _fi.setStyleSheet('font-family:Consolas; font-size:9pt;'
+                              'color:#0b5394;')
+            _rb = QPushButton('重新载入包络文件…')
+            _rb.setToolTip('替换包络样品（保留载频/光强/偏振/偏移）')
+            env_row.addWidget(_fi, 2)
+            env_row.addWidget(_rb, 1)
+
+            def _reload_env(_e=e, _lb=_fi):
+                from PyQt5.QtWidgets import QMessageBox
+                data = self._load_samples('重新载入光强包络文件')
+                if data is None:
+                    return
+                try:
+                    e2 = waveforms.FileEnv(*data)
+                except Exception as ex:                          # noqa: BLE001
+                    QMessageBox.warning(widget, '载入失败', str(ex))
+                    return
+                _e.t_ns, _e.amp = e2.t_ns, e2.amp
+                _lb.setText(self._envfile_info(_e))
+                self.changed.emit()
+
+            _rb.clicked.connect(_reload_env)
         off = _spin(-1e9, 1e9, 1, w.offset_ns, 10, ' ns', min_w=100)
         off.setToolTip('波形绝对起点相对演化 t=0 的偏移')
         off_cell = QWidget()
@@ -795,7 +930,7 @@ class WavePanel(QWidget):
                 e.center_ns = spins[0][1].value()
                 e.sigma_ns = spins[1][1].value()
                 e.peak = spins[2][1].value()
-            else:
+            elif not isinstance(e, waveforms.FileEnv):
                 e.start_ns = spins[0][1].value()
                 e.edge_ns = spins[1][1].value()
                 e.height = spins[2][1].value()

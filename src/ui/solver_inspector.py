@@ -247,7 +247,11 @@ class SolverInspector(QDialog):
         self.setWindowTitle('求解检视器（上帝模式）')
         self.setModal(False)
         self.setWindowFlags(self.windowFlags() | Qt.WindowMinMaxButtonsHint)
-        self.resize(1500, 960)          # v1.1：扩容约一倍
+        # v1.2：高度 960 → 1080。哈密顿量页的方阵受画布"短边"限制：画布宽
+        # 678、高 558 时方阵只能取 558，右边空 120px。加高 120 后画布变
+        # 678×678 正方 → 方阵填满（558 → 678，+21%），右/下空白同时归零，
+        # 逐维标注的行距也跟着变宽。其余 5 页同高，图表与表格一并变高。
+        self.resize(1500, 1080)
         self.setStyleSheet(ui_theme.QSS)
         self._diag = None
 
@@ -468,6 +472,8 @@ class SolverInspector(QDialog):
             d.setWordWrap(True)
             d.setStyleSheet('color:%s;' % ui_theme.COL_TEXT_DIM)
             cl.addWidget(d, 1)
+            # 三张卡平分整页（试过"紧凑卡+页尾留白"和"卡片间大间距"，在
+            # 1080 高下都比平分更空、更散——保持平分）。
             lay.addWidget(card, 1)
         return w
 

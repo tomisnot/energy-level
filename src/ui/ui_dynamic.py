@@ -28,6 +28,7 @@ from matplotlib import colormaps
 from matplotlib.ticker import MaxNLocator
 
 from ..core import core, pair_core
+from .. import pm_setup as pm
 from ..core.atomic_levels import make_levels
 from ..core.evolve_util import decay, auto_decays  # t74 工具归位
 from . import ui_waves
@@ -109,27 +110,25 @@ class DynamicPanel(QWidget):
         vdd_lay.setContentsMargins(0, 0, 0, 0)
         vdd_lay.setSpacing(2)
         vdd_lay.addWidget(QLabel('R:'))
-        self.vdd_R_sb = QDoubleSpinBox()
-        self.vdd_R_sb.setRange(0.1, 1000.0)
-        self.vdd_R_sb.setValue(5.0)
-        self.vdd_R_sb.setDecimals(1)
-        self.vdd_R_sb.setFixedWidth(128)
+        _reg = self.main.param_reg
+        self.vdd_R_sb = pm.spinbox(_reg, 'dynamic.pair.R_um', 5.0, 0.1, 1000.0,
+                                   decimals=1, width=128,
+                                   spec=pm.ParamSpec('float', unit='μm',
+                                                     desc='原子间距'))
         self.vdd_R_sb.setToolTip('原子间距 R（μm）')
         vdd_lay.addWidget(self.vdd_R_sb)
         vdd_lay.addWidget(QLabel('θ:'))
-        self.vdd_theta_sb = QDoubleSpinBox()
-        self.vdd_theta_sb.setRange(0.0, 180.0)
-        self.vdd_theta_sb.setValue(0.0)
-        self.vdd_theta_sb.setDecimals(1)
-        self.vdd_theta_sb.setFixedWidth(128)
+        self.vdd_theta_sb = pm.spinbox(_reg, 'dynamic.pair.theta_deg', 0.0,
+                                       0.0, 180.0, decimals=1, width=128,
+                                       spec=pm.ParamSpec('float', unit='°',
+                                                         desc='V_dd 极角'))
         self.vdd_theta_sb.setToolTip('极角 θ（°）')
         vdd_lay.addWidget(self.vdd_theta_sb)
         vdd_lay.addWidget(QLabel('φ:'))
-        self.vdd_phi_sb = QDoubleSpinBox()
-        self.vdd_phi_sb.setRange(0.0, 360.0)
-        self.vdd_phi_sb.setValue(0.0)
-        self.vdd_phi_sb.setDecimals(1)
-        self.vdd_phi_sb.setFixedWidth(128)
+        self.vdd_phi_sb = pm.spinbox(_reg, 'dynamic.pair.phi_deg', 0.0,
+                                     0.0, 360.0, decimals=1, width=128,
+                                     spec=pm.ParamSpec('float', unit='°',
+                                                       desc='V_dd 方位角'))
         self.vdd_phi_sb.setToolTip('方位角 φ（°）')
         vdd_lay.addWidget(self.vdd_phi_sb)
         self._vdd_box.setVisible(False)
@@ -155,18 +154,19 @@ class DynamicPanel(QWidget):
         sa_lay.setContentsMargins(0, 0, 0, 0)
         sa_lay.setSpacing(4)
         sa_lay.addWidget(QLabel('frozen_h(ns)'))
-        self.frozen_h_sb = QDoubleSpinBox()
-        self.frozen_h_sb.setRange(0.0, 100.0)
-        self.frozen_h_sb.setValue(0.0)
-        self.frozen_h_sb.setDecimals(2)
-        self.frozen_h_sb.setFixedWidth(72)
+        self.frozen_h_sb = pm.spinbox(_reg, 'dynamic.frozen_h_ns', 0.0, 0.0,
+                                      100.0, decimals=2, width=72,
+                                      spec=pm.ParamSpec(
+                                          'float', unit='ns',
+                                          desc='Sambe 冻结段长（0=默认）'))
         self.frozen_h_sb.setToolTip(
             '全频段 Sambe 纯冻结段长（ns，包络变化尺度内）；0 = 默认路径')
         sa_lay.addWidget(self.frozen_h_sb)
         sa_lay.addWidget(QLabel('per_freq_M'))
-        self.perfreq_m_edit = QLineEdit('')
+        self.perfreq_m_edit = pm.lineedit(
+            _reg, 'dynamic.per_freq_M', '', width=120,
+            spec=pm.ParamSpec('str', desc='逐载频光子块阶数（空=自动）'))
         self.perfreq_m_edit.setPlaceholderText('[1,1] 或空=自动')
-        self.perfreq_m_edit.setFixedWidth(120)
         self.perfreq_m_edit.setToolTip(
             '逐载频光子块阶数（列表 [M1,M2,…] 或 int 全体）；空 = 自动探针')
         sa_lay.addWidget(self.perfreq_m_edit)
@@ -177,13 +177,14 @@ class DynamicPanel(QWidget):
         # 旧写法导致该行从未进入面板（双原子+sambe 下不可见）。
         p.addWidget(self._sambe_adv_box)
 
-        # ---- 波形管理：单原子与双原子「原子A」共用同一面板 ----
-        # 先在单原子模式校准波形 → 切到双原子时原子 A 原样迁移，无需重配。
-        # 实现：wave_panel_A 就是 wave_panel（同一实例），模式切换时把该实例
-        # 在「单原子槽位」与「tab-A 槽位」之间整体迁移（Qt widget 可换 parent）。
-        self.wave_panel = ui_waves.WavePanel()       # 共享面板（单原子 = 原子A）
+        # ---- 波形管理：单原子与双原子各一套独立面板（数据完全独立）----
+        # 接力需求（单原子校准→双原子 A 沿用）由拖放实现：把波形组拖到
+        # "单原子/双原子"选择区 = 单原子全部波形复制进原子 A 并切到双原子
+        # （与 A→B 页签拖放同一 MIME 机制，见 eventFilter）。
+        self.wave_panel = ui_waves.WavePanel()       # 单原子面板
         self.wave_panel.changed.connect(self._on_waves_changed)
-        self.wave_panel_A = self.wave_panel          # 同一实例
+        self.wave_panel_A = ui_waves.WavePanel()    # 双原子 A（独立实例）
+        self.wave_panel_A.changed.connect(self._on_waves_changed)
         self.wave_panel_B = ui_waves.WavePanel()
         self.wave_panel_B.changed.connect(self._on_waves_changed)
 
@@ -195,6 +196,7 @@ class DynamicPanel(QWidget):
         self._wave_tab_A_host = QWidget()            # 双原子 tab-A 的槽位
         _wah = QVBoxLayout(self._wave_tab_A_host)
         _wah.setContentsMargins(0, 0, 0, 0)
+        _wah.addWidget(self.wave_panel_A)
 
         self._wave_tab = QTabWidget()
         self._wave_tab.addTab(self._wave_tab_A_host, '原子 A')
@@ -246,16 +248,17 @@ class DynamicPanel(QWidget):
         # ---- 时间 / 方法 / 截断 一行 ----
         rowt = QHBoxLayout()
         rowt.addWidget(QLabel('t_max(ns)'))
-        self.tmax_sb = QDoubleSpinBox()
-        self.tmax_sb.setRange(10, 1e6); self.tmax_sb.setValue(1500.0)
-        self.tmax_sb.setDecimals(0)
+        self.tmax_sb = pm.spinbox(_reg, 'dynamic.t_max', 1500.0, 10, 1e6,
+                                  decimals=0,
+                                  spec=pm.ParamSpec(
+                                      'float', unit='ns', desc='演化总时长',
+                                      aliases=['tmax', '时长']))
         rowt.addWidget(self.tmax_sb)
         rowt.addWidget(QLabel('点数'))
-        self.npts_sb = QSpinBox()
-        self.npts_sb.setRange(10, 50000); self.npts_sb.setValue(1501)
+        self.npts_sb = pm.spinbox(_reg, 'dynamic.npts', 1501, 10, 50000,
+                                  spec=pm.ParamSpec('int', desc='时间网格点数'))
         rowt.addWidget(self.npts_sb)
         rowt.addWidget(QLabel('方法'))
-        self.method_cb = QComboBox()
         # t25→t71：方法选项收敛——sambe：第一性原理 Sambe 光子块（实验室系无
         # RWA/无旋转系/无近远分流，引擎 sambe.evolve_sambe）；
         # hard：微波硬积分 DOP853 零近似 + 光场旋转系 + 耗散（numba 加速）；
@@ -263,9 +266,12 @@ class DynamicPanel(QWidget):
         # （φ-帧，t62 起验证 ≡frozen 1e-5~1e-8 级；两体 5 倍降维 dim 1452）。
         # t71：删除 ip4（RWA RK4 快速粗算档）与 auto（route_auto 智能路由）——
         # 引擎层仍可用（evolve_rwa ip4 / route_auto 脚本调用），GUI 不再暴露；
-        # 默认 mixed；纯微波场景（mixed 需光场）UI 自动降级 hard。
-        self.method_cb.addItems(['sambe', 'hard', 'mixed'])
-        self.method_cb.setCurrentText('mixed')   # t71：默认 mixed
+        # 默认 mixed（t77 起亦支持纯微波：光子维退化 P=1）；
+        # 仅任意波形（无单载频）不支持，UI 自动降级 hard。
+        self.method_cb = pm.combobox(
+            _reg, 'dynamic.method', ['sambe', 'hard', 'mixed'], current=2,
+            spec=pm.ParamSpec('str', options=['sambe', 'hard', 'mixed'],
+                              desc='演化引擎'))
         self.method_cb.currentTextChanged.connect(self._on_method_changed)
         rowt.addWidget(self.method_cb)
         # t75：上帝模式开关——开启即弹求解检视器（精度旋钮内嵌检视器各页，
@@ -361,16 +367,13 @@ class DynamicPanel(QWidget):
 
     # ---------- 单原子/双原子切换 ----------
     def _on_mode_changed(self, mode_id):
-        """0=单原子, 1=双原子。切换面板可见性 + 共享波形面板迁移。"""
+        """0=单原子, 1=双原子。纯显隐切换（两套波形面板独立存在，不搬家）。"""
         self._is_two_body = (mode_id == 1)
         # V_dd 参数
         self._vdd_box.setVisible(self._is_two_body)
         # Sambe 高级行（双原子 + sambe/auto）
         self._update_sambe_adv_visibility()
-        # 波形面板：共享面板（单原子 = 原子A）在槽位间迁移 + 容器显隐。
-        # 注意：不再 setVisible 共享面板本身——它迁到哪个容器就由哪个容器
-        # 展示（hidden 会让 tab-A"看起来没有波形"，且被布局压成最小高度）。
-        self._place_shared_waves(self._is_two_body)
+        # 波形面板：单/双各一套，独立数据，只切容器显隐
         self._wave_single_host.setVisible(not self._is_two_body)
         self._wave_tab.setVisible(self._is_two_body)
         # 初态面板
@@ -381,18 +384,40 @@ class DynamicPanel(QWidget):
         # 刷新初态下拉
         self._on_m_changed()
 
-    def _place_shared_waves(self, in_tab):
-        """共享波形面板（wave_panel ≡ wave_panel_A）在单原子槽位 / tab-A 槽位间迁移。"""
-        pan = self.wave_panel
-        target = self._wave_tab_A_host if in_tab else self._wave_single_host
-        if pan.parent() is target:
-            return
-        if pan.parent() is not None:
-            pan.parent().layout().removeWidget(pan)
-        target.layout().addWidget(pan)
-
     def eventFilter(self, obj, ev):
-        """双原子页签栏的拖放：把波形拖到另一原子的标签（不切页）即复制到该原子。"""
+        """波形拖放接力（与 ui_waves 拖拽源同一 MIME）：
+        - 拖到 A/B 页签 → 复制该波形到对应原子（跨原子复制，原有）；
+        - 拖到「双原子」单选钮 → 单原子面板全部波形深拷贝进原子 A
+          并切到双原子（校准接力）。"""
+        # ---- 「双原子」单选钮：整列表接力（仅接受从单原子面板拖来的）----
+        if obj is getattr(self, '_radio_pair', None):
+            t = ev.type()
+            if t in (QEvent.DragEnter, QEvent.DragMove):
+                if ev.mimeData().hasFormat(ui_waves._WAVE_MIME):
+                    ev.setDropAction(Qt.CopyAction)
+                    ev.accept()
+                    return True
+                return False
+            if t == QEvent.Drop:
+                try:
+                    payload = json.loads(bytes(
+                        ev.mimeData().data(ui_waves._WAVE_MIME)
+                    ).decode('utf-8'))
+                except Exception:
+                    return False
+                if payload.get('_src') != id(self.wave_panel):
+                    return False
+                import copy as _copy
+                self.wave_panel_A.waves = _copy.deepcopy(
+                    self.wave_panel.waves)
+                self.wave_panel_A._rebuild()
+                self.wave_panel_A.changed.emit()
+                self._radio_pair.setChecked(True)
+                self._on_mode_changed(1)
+                self.main.log('[动态] 单原子波形已复制到原子 A，切到双原子')
+                ev.acceptProposedAction()
+                return True
+        # ---- A/B 页签：单波形跨原子复制 ----
         if obj is getattr(self, '_tabbar', None):
             t = ev.type()
             if t in (QEvent.DragEnter, QEvent.DragMove):
@@ -427,10 +452,13 @@ class DynamicPanel(QWidget):
     def _on_m_changed(self, *_):
         """基组变化 → 刷新初态下拉（保留当前选择）+ 波形辅助 g/e 下拉。"""
         states = self._current_states()
-        self._states = list(states)      # 供 serialize_state 把初态索引映射为身份键
+        self._states = list(states)      # 供 _psi_key_for 把初态索引映射为身份键
         pending = getattr(self, '_pending_psi_keys', None)
 
         def _fill(combo, pending_key, fallback_text):
+            # 重填期屏蔽信号：psi 参数接了 currentIndexChanged→note_change
+            # （人侧流水），clear/addItem 的中间态会发假变更
+            combo.blockSignals(True)
             combo.clear()
             for s in states:
                 combo.addItem(s['label'])
@@ -438,13 +466,15 @@ class DynamicPanel(QWidget):
                 i = find_state_index(states, pending_key)
                 if i >= 0:
                     combo.setCurrentIndex(i)
-                    return
+                combo.blockSignals(False)
+                return
             if fallback_text:
                 idx = combo.findText(fallback_text)
                 if idx >= 0:
                     combo.setCurrentIndex(idx)
             elif combo.count():
                 combo.setCurrentIndex(0)
+            combo.blockSignals(False)
 
         # 单原子初态
         cur = self.psi_combo.currentText()
@@ -464,32 +494,20 @@ class DynamicPanel(QWidget):
         for i, s in enumerate(states):
             self.readout_cb.addItem(s['label'], i)
         self.readout_cb.addItem('复杂配置…', _COMPLEX_READOUT)
-        # t30：基组重建 → 读出率权重重置全 0；恢复档有 pending 则用之
+        # t30：基组重建 → 读出率权重重置全 0（读出态=显示参数，不入册不存档）
         self._readout_weights = np.zeros(len(states), dtype=np.float64)
-        pw = getattr(self, '_pending_readout_weights', None)
-        if pw is not None and len(pw) == len(states):
-            self._readout_weights = np.asarray(pw, float)
-        self._pending_readout_weights = None
-        # t30 微调：复杂配置只能用户主动选中——cur_r/_pending_readout 为哨兵
-        # 项时忽略，回退第一个真实能级（初始/恢复档都不得默认落在复杂配置上）
-        want = cur_r
-        if not want or want == _COMPLEX_LABEL:
-            want = getattr(self, '_pending_readout', '')
-        if not want or want == _COMPLEX_LABEL:
-            want = ''
+        # t30 微调：复杂配置只能用户主动选中——cur_r 为哨兵项时忽略，
+        # 回退第一个真实能级（初始/重建都不得默认落在复杂配置上）
+        want = cur_r if cur_r != _COMPLEX_LABEL else ''
         if want:
             idx = self.readout_cb.findText(want)
-            if idx >= 0:
-                self.readout_cb.setCurrentIndex(idx)
-            else:
-                self.readout_cb.setCurrentIndex(0)
+            self.readout_cb.setCurrentIndex(idx if idx >= 0 else 0)
         elif self.readout_cb.count():
             self.readout_cb.setCurrentIndex(0)
-        self._pending_readout = ''
         self._pending_psi_keys = None
         self._refresh_decay_combos(states)
-        # 基组变化 → 波形面板辅助 g/e 下拉数据源同步（A ≡ 共享面板，去重）
-        for wp in (self.wave_panel, self.wave_panel_B):
+        # 基组变化 → 波形面板辅助 g/e 下拉数据源同步（三面板独立实例）
+        for wp in (self.wave_panel, self.wave_panel_A, self.wave_panel_B):
             if wp is not None:
                 wp.set_states(states, self.cache)
 
@@ -667,54 +685,9 @@ class DynamicPanel(QWidget):
             self.wave_data = waveforms.waveforms_to_env(wp.waves, t)
         self._draw_top(self.wave_data)
 
-    # ---------- 状态管理（序列化/恢复；文件 IO 与菜单入口在主程序） ----------
-    def serialize_state(self):
-        """只导出科学数据与参数，不导出显示参数。
-
-        - 科学数据/参数：模式（单/双原子）、初态、t_max/点数、方法、
-          共振截断、衰变档位与通道、V_dd 几何（R/θ/φ）、各原子波形
-        - 不保存显示参数：显示态数 topn、波形预览 wave_data
-          （预览曲线由波形重算，属于派生显示数据）
-        """
-        return {
-            'dynamic': {
-                'mode': 1 if self._is_two_body else 0,
-                'psi': self.psi_combo.currentIndex(),
-                'psi_A': self.psi_combo_A.currentIndex(),
-                'psi_B': self.psi_combo_B.currentIndex(),
-                # 身份键（跨 B 稳定，恢复按最近能量匹配；旧档无此字段时回退索引）
-                'psi_key': self._psi_key_for(self.psi_combo),
-                'psi_key_A': self._psi_key_for(self.psi_combo_A),
-                'psi_key_B': self._psi_key_for(self.psi_combo_B),
-                't_max': self.tmax_sb.value(),
-                'npts': self.npts_sb.value(),
-                'method': self.method_cb.currentText(),
-                # t62：sambe 两体高级参数（frozen_h_ns / per_freq_M）
-                'frozen_h_ns': self.frozen_h_sb.value(),
-                'per_freq_M': self.perfreq_m_edit.text(),
-                'decay_mode': self.decay_mode_cb.currentIndex(),
-                # t25：显示选项（0 态布居 / 1 荧光读出）+ 读出态（身份文本）
-                'display_mode': self.display_mode_cb.currentIndex(),
-                'readout': self.readout_cb.currentText(),
-                # t30：复杂配置读出率权重（索引随基组；无配置时全 0）
-                'readout_weights': list(getattr(
-                    self, '_readout_weights',
-                    np.zeros(len(getattr(self, '_states', []))))),
-            },
-            'pair': {
-                'R_um': self.vdd_R_sb.value(),
-                'theta_deg': self.vdd_theta_sb.value(),
-                'phi_deg': self.vdd_phi_sb.value(),
-            },
-            'waves': waveforms.serialize_waves(self.wave_panel.waves),
-            # A ≡ 共享面板：只存一份（waves），避免任意波形采样数组双倍体积
-            'waves_A': ([] if self.wave_panel_A is self.wave_panel
-                        else waveforms.serialize_waves(
-                            self.wave_panel_A.waves)),
-            'waves_B': waveforms.serialize_waves(self.wave_panel_B.waves),
-            'decays': [dict(c) for c in self.decay_cfgs],
-        }
-
+    # ---------- 状态管理：登记即存档（v3，见 src/pm_setup.py + src/archive.py）
+    # 本面板不再持有 serialize_state/restore_state 平行清单；
+    # 存档 = archive.snapshot(win.param_reg)，恢复 = archive.restore(...)。
     def _psi_key_for(self, combo):
         """组合框当前选中态的身份键（JSON 友好 list）；无可用时返回 None。"""
         i = combo.currentIndex()
@@ -722,87 +695,6 @@ class DynamicPanel(QWidget):
         if st and 0 <= i < len(st):
             return list(state_key(st[i]))
         return None
-
-    def _serialize_dynamic(self):
-        """兼容旧接口：由本模块导出自己的状态快照。"""
-        return self.serialize_state()
-
-    def restore_state(self, state):
-        """按本模块状态快照恢复（旧档缺新字段时用默认值，向后兼容）。
-
-        注意：旧档里的 wave_data（波形预览，派生显示数据）不再读取，
-        预览曲线在恢复后由波形重算（_on_waves_changed）。
-        """
-        if not isinstance(state, dict):
-            return
-        dyn = state.get('dynamic', {})
-        # 模式（科学/工作流参数）：先恢复，决定波形/初态面板可见性
-        mode = int(dyn.get('mode', 0))
-        self._is_two_body = (mode == 1)
-        self._radio_single.setChecked(not self._is_two_body)
-        self._radio_pair.setChecked(self._is_two_body)
-        self._on_mode_changed(mode)
-        # 科学参数
-        self.tmax_sb.setValue(float(dyn.get('t_max', 1500.0)))
-        self.npts_sb.setValue(int(dyn.get('npts', 1501)))
-        # t25：旧档方法名映射（exact→sambe）
-        # t71：GUI 选项收敛为 sambe/hard/mixed——旧档 ip4/auto 归一：
-        #   ip4（RWA 快速粗算）→ hard（最接近的通用精确档）；
-        #   auto（智能路由）→ mixed（t71 起混合为推荐默认，与 route_auto 对
-        #   光+微波/两体场景的路由结论一致——route_auto 仍可脚本调用）；
-        # 未知/缺省 → mixed（默认）。
-        _m = {'exact': 'sambe', 'ip4': 'hard', 'auto': 'mixed'}.get(
-            dyn.get('method', 'mixed'), dyn.get('method', 'mixed'))
-        if _m not in ('sambe', 'hard', 'mixed'):
-            _m = 'mixed'
-        self.method_cb.setCurrentText(_m)
-        # t62：sambe 两体高级参数恢复（缺省 = 默认 0/空）
-        self.frozen_h_sb.setValue(float(dyn.get('frozen_h_ns', 0.0)))
-        self.perfreq_m_edit.setText(str(dyn.get('per_freq_M', '')))
-        # 显示选项 + 读出态（读出态文本在 _on_m_changed 填充时按 label 恢复）
-        self.display_mode_cb.setCurrentIndex(
-            int(dyn.get('display_mode', 0)))
-        self._on_display_mode()
-        self._pending_readout = str(dyn.get('readout', ''))
-        # t30：复杂配置读出率权重（长度不符/缺失 → 全 0，_on_m_changed 应用）
-        _rw = dyn.get('readout_weights')
-        self._pending_readout_weights = (
-            list(_rw) if isinstance(_rw, (list, tuple)) else None)
-        # 自发辐射档位（双原子模式现支持寿命/丢失通道，同样恢复）
-        self.decay_mode_cb.setCurrentIndex(int(dyn.get('decay_mode', 0)))
-        pair = state.get('pair', {})
-        self.vdd_R_sb.setValue(float(pair.get('R_um', 5.0)))
-        self.vdd_theta_sb.setValue(float(pair.get('theta_deg', 0.0)))
-        self.vdd_phi_sb.setValue(float(pair.get('phi_deg', 0.0)))
-        # 波形（单原子 + 双原子 A/B；A ≡ 共享面板 → 只恢复一次）
-        wv = state.get('waves')
-        if wv:
-            self.wave_panel.set_waves(waveforms.restore_waves(wv))
-        wvA = state.get('waves_A')
-        if wvA and self.wave_panel_A is not self.wave_panel:
-            self.wave_panel_A.set_waves(waveforms.restore_waves(wvA))
-        wvB = state.get('waves_B')
-        if wvB:
-            self.wave_panel_B.set_waves(waveforms.restore_waves(wvB))
-        self.decay_cfgs = [dict(c) for c in state.get('decays', [])]
-        self._update_decay_list()
-        # 初态（基组下拉由 groups_changed 刷新填充；优先身份键，旧档回退索引）
-        pkeys = {'single': dyn.get('psi_key'),
-                 'A': dyn.get('psi_key_A'),
-                 'B': dyn.get('psi_key_B')}
-        self._pending_psi_keys = pkeys if any(
-            k for k in pkeys.values() if k) else None
-        if self._pending_psi_keys is None:
-            self.psi_combo.setCurrentIndex(int(dyn.get('psi', 0)))
-            self.psi_combo_A.setCurrentIndex(int(dyn.get('psi_A', 0)))
-            self.psi_combo_B.setCurrentIndex(int(dyn.get('psi_B', 0)))
-        self.main.groups_changed.emit()
-        # 显示预览由波形重算（wave_data 不再存档）
-        self._on_waves_changed()
-
-    def _restore_dynamic(self, state):
-        """兼容旧接口：按本模块快照恢复。"""
-        self.restore_state(state)
 
     # ---------- 运行演化（后台线程 + 进度条 + 可取消） ----------
     def _run(self):
@@ -1056,20 +948,56 @@ class DynamicPanel(QWidget):
         elif 'pops' in res and states is not None:
             self._draw_bot(states, res)
 
+    def _sync_t_end(self, t):
+        """把演化窗口告知波形面板 → 带宽显示随引擎查表上限收紧（t78）。"""
+        if t is None or not len(t):
+            return
+        te = float(t[-1])
+        for name in ('wave_panel', 'wave_panel_A', 'wave_panel_B'):
+            p = getattr(self, name, None)
+            if p is not None and hasattr(p, 'set_t_end'):
+                try:
+                    p.set_t_end(te)
+                except Exception:                               # noqa: BLE001
+                    pass
+
+    def _check_arb_applicability(self, waves, states, t):
+        """完整驱动（ArbitraryWave）的适用性体检 → 状态栏提示（t78）。
+
+        任意波形走「文件即驱动」路径（无载频：H ⊃ amp(t)·A），三个已知陷阱：
+          · 文件带宽不覆盖目标跃迁 → **静默零效果**（不是轻微失真）；
+          · 基组含光学流形 → 该路径不参与光场旋转 → DOP853 步长被 THz 相位
+            钉死（实测 2 ns 演化 >60 s 未完成）；
+          · 超出引擎查表带宽的部分被折叠（f_max 已含该上限）。
+        """
+        from ..core.field_build import arb_applicability
+        arbs = [w for w in (waves or [])
+                if isinstance(w, waveforms.ArbitraryWave)]
+        if not arbs or t is None or not len(t):
+            return
+        for w in arbs:
+            try:
+                warns = arb_applicability(self.cache, states, w, float(t[-1]))
+            except Exception as e:                              # noqa: BLE001
+                warns = [f'适用性检查失败（{type(e).__name__}: {e}）']
+            for msg in warns:
+                self.main.log(f'⚠ 任意波形「{w.name}」：{msg}')
+
     def _run_single_body(self, states, t, decays):
         """单原子演化路径（定时器/对话框已在 _run 启动）。"""
         waves = list(self.wave_panel.waves)
         method = self.method_cb.currentText()
-        # t71：mixed 需光场且不支持任意波形——无光场/含任意波自动降级 hard
-        # （原 auto 的纯微波→hard / 任意波→hard 判据内联；状态栏提示）
-        if method == 'mixed':
-            has_opt = any(getattr(w, 'freq_mhz', 0.0) > 1e5 for w in waves)
-            has_arb = any(isinstance(w, waveforms.ArbitraryWave)
-                          for w in waves)
-            if not has_opt or has_arb:
-                self.main.log('mixed 需光场且不支持任意波形'
-                              '（纯微波/任意波 → 自动改用 hard）')
-                method = 'hard'
+        # t77/t78：mixed 自持无光场（P=1 退化）；sambe / mixed 都不支持
+        # **完整驱动**（ArbitraryWave 无载频，而光子块扩展空间需要单一载频）
+        # → 一律改道 hard。光强包络（FileEnv）不受影响：它是普通 Wave。
+        if method in ('sambe', 'mixed') and any(
+                isinstance(w, waveforms.ArbitraryWave) for w in waves):
+            self.main.log(f'{method} 不支持任意波形（完整驱动无载频）→ '
+                          '自动改用 hard；若文件只是光强形状，请按'
+                          '「＋任意 → 作为光强包络」导入')
+            method = 'hard'
+        self._sync_t_end(t)
+        self._check_arb_applicability(waves, states, t)
         self._prep('构造驱动场', 0.85)
         if method == 'sambe':
             # 第一性原理场（Sambe 光子块）：全部偶极对耦合，无近/远分流与
@@ -1118,17 +1046,17 @@ class DynamicPanel(QWidget):
         waves_A = list(self.wave_panel_A.waves)
         waves_B = list(self.wave_panel_B.waves)
         method = self.method_cb.currentText()
-        # t71：mixed 需光场且不支持任意波形——A/B 均无光场/含任意波 → hard
-        if method == 'mixed':
-            all_w = waves_A + waves_B
-            has_opt = any(getattr(w, 'freq_mhz', 0.0) > 1e5
-                          for w in all_w)
-            has_arb = any(isinstance(w, waveforms.ArbitraryWave)
-                          for w in all_w)
-            if not has_opt or has_arb:
-                self.main.log('mixed 需光场且不支持任意波形'
-                              '（纯微波/任意波 → 自动改用 hard）')
-                method = 'hard'
+        # t77/t78：sambe / mixed 都不支持完整驱动（无载频）→ hard；
+        # 光强包络（FileEnv）是普通 Wave，不受影响。
+        if method in ('sambe', 'mixed') and any(
+                isinstance(w, waveforms.ArbitraryWave)
+                for w in waves_A + waves_B):
+            self.main.log(f'{method} 不支持任意波形（完整驱动无载频）→ '
+                          '自动改用 hard；若文件只是光强形状，请按'
+                          '「＋任意 → 作为光强包络」导入')
+            method = 'hard'
+        self._sync_t_end(t)
+        self._check_arb_applicability(waves_A + waves_B, states, t)
         if method == 'mixed':
             # t62 两体混合引擎（正式版 evolve_mixed_pair——光场光子块 +
             # 微波/V_dd 当场，φ-帧；dim 1452 = 5 倍降维 vs 全 Sambe）

@@ -7,7 +7,8 @@ from . import static_atom as core
 from .atomic_levels import square
 
 from .evolve_util import _CONV              # t74：常量单源
-from .params import _ENV_SAMPLES, AC_NEAR_CUTOFF_MHZ  # t74c
+from .params import (_ENV_SAMPLES, AC_NEAR_CUTOFF_MHZ,  # t74c
+                     MW_MAX_MHZ)
 from .evolve_util import _POL_Q            # t74：工具归位
 # 上态总衰变率缓存（(n,l,j) → Γ MHz；远失谐散射损失用）
 _lifetime_cache = {}
@@ -157,9 +158,9 @@ def build_fields_exact(cache, states, waves):
     for w in waves:
         if getattr(w, 'kind', None) == 'arb':
             raise ValueError(
-                '第一性引擎（method=exact）暂不支持任意波形'
-                '（ArbitraryWave，无单载频概念）；请用 method=auto'
-                '（自动转 arbitrary 路径）。')
+                '第一性引擎（sambe/mixed）不支持任意波形——其扩展空间需要'
+                '**单一载频**，而任意波形无载频概念。请把该文件按「光强包络」'
+                '导入（Wave + 载频，三引擎全支持），或改用「完整驱动」+ hard。')
         q = _POL_Q.get(w.pol, 0)
         E0_sq = core.field_e0_sq(float(w.intensity_mwcm2))
         A = np.zeros((N, N))
@@ -180,6 +181,53 @@ def build_fields_exact(cache, states, waves):
                     'intensity_mwcm2': float(w.intensity_mwcm2),
                     'pol': w.pol})
     return out
+
+
+def arb_applicability(cache, states, wave, t_end_ns=None):
+    """任意波形（ArbitraryWave）对当前基组的适用性体检 → 警告文本列表。
+
+    任意波形走「文件即驱动」路径（无载频，H ⊃ amp(t)·A），三个已知陷阱：
+      ① 文件带宽 f_max 必须覆盖目标跃迁频率——否则**静默零效果**（实测：基带
+         包络驱动 17 GHz 跃迁，转移布居恒为 0；采样不足同样归零，不是轻微失真）；
+      ② 基组若含光学流形（跃迁 ≫ 微波分界），该路径**不参与光场旋转** → RHS 带
+         THz 相位 → DOP853 步长被钉死（实测 2 ns 演化 >60 s 未完成）；
+      ③ 超出引擎查表带宽的部分会被折叠（`f_max_mhz(t_end)` 已含该上限）。
+    返回 [] = 无警告。供 GUI 运行前提示 / 脚本自检复用。
+    """
+    warns = []
+    if getattr(wave, 'kind', None) != 'arb':
+        return warns
+    q = _POL_Q.get(wave.pol, 0)
+    nus = []
+    n = len(states)
+    for i in range(n):
+        for j in range(i + 1, n):
+            d = core.dipole_amplitude(cache, _sublevel_row(states[i]),
+                                      _sublevel_row(states[j]), q)
+            if abs(d) > 1e-12:
+                nus.append(abs(float(states[j]['E_mhz'])
+                               - float(states[i]['E_mhz'])))
+    if not nus:
+        warns.append('该偏振下基组内无任何偶极允许跃迁——'
+                     '任意波形不会驱动任何态')
+        return warns
+    fmax = float(wave.f_max_mhz(t_end_ns))
+    nu_min, nu_max = min(nus), max(nus)
+    if fmax > 0.0 and fmax < nu_min:
+        warns.append(
+            f'文件带宽 f_max≈{fmax:.3g} MHz 低于基组最小偶极跃迁 '
+            f'{nu_min:.3g} MHz → 驱动不到任何跃迁（效果为零）。'
+            '若这份文件其实是"光强形状"，请按「光强包络」导入'
+            '（保留载频，sambe/mixed/hard 全支持）。')
+    if nu_max > MW_MAX_MHZ:
+        warns.append(
+            f'基组含光学流形（最高偶极跃迁 {nu_max / 1e6:.1f} THz）：'
+            '任意波形不参与光场旋转 → 积分器会被 THz 相位钉死'
+            '（实测 2 ns 演化 >60 s 未完成）。光学驱动请改用光场波形。')
+    elif fmax > 0.0 and fmax < nu_max:
+        warns.append(f'文件带宽 f_max≈{fmax:.3g} MHz 不足以驱动 '
+                     f'{nu_max:.3g} MHz 的跃迁（该跃迁将不被驱动）。')
+    return warns
 
 
 def _validate_fields(fields):

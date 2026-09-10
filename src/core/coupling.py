@@ -6,8 +6,13 @@
   (is_mw, w, id(env))——t62 用例 1 教训：光场/微波即使同一 env 对象也必须分属
   不同组——is_mw 决定 cos 载波；env 表预采样 + 线性插值）
 - 返回 dict: iis, jjs, vals, dDs, is_mw, wcos, n_pairs_w, env_tab, env_dt
+- static_phase_keep(vals, dE, T)：静态耦合（V_dd）的累积相位判据（t78）——
+  hard / mixed 共用的唯一 V_dd 丢弃判据，替代原幅度阈值与能量间隙阈值。
 """
 import numpy as np
+
+from .params import POP_PHASE_TOL
+from .evolve_util import _CONV
 
 
 def stage_progress(arr, st, frac):
@@ -62,6 +67,43 @@ def pack_rhs(pairs, t_end, n_tab=20001):
                 wcos=np.asarray(wcos_a, np.float64),
                 n_pairs_w=np.asarray(n_ppw, np.int64),
                 env_tab=env_tab, env_dt=env_dt)
+
+
+# ============================================================
+# 静态耦合（V_dd）丢弃判据（t78）：累积相位 Θ —— hard / mixed 共用
+# ============================================================
+def static_phase_keep(vals, dE, T, theta_tol=POP_PHASE_TOL, Cv=_CONV):
+    """V_dd 累积相位判据：Θ = C·T·|V|²/max(|ΔE|, |V|) ≥ theta_tol → 保留。
+
+    参数
+      vals     : 逐元素耦合矩阵元（MHz，复数取模；任意形状）
+      dE       : 逐元素两端能量差（MHz，与 vals 同长）
+      T        : 演化窗口（ns）——效应是累积量，窗口越长判据越严
+      theta_tol: 无量纲容差（rad），默认 params.POP_PHASE_TOL
+    返回
+      (keep 布尔掩码, info dict)——info 供日志/自检：
+        n_keep/n_drop、max_v_drop（被剔项最大 |V|）、max_theta_drop、
+        max_rate_keep（保留项最大 C·|ΔE|，rad/ns——越大说明留下的相位越快）
+
+    两个极限自动切换：共振（|ΔE|≲|V|）→ Θ=C·T·|V|；远失谐 → Θ=C·T·|V|²/Δ。
+    判据只用 (|V|,|ΔE|,T)，**与基组标度、引擎、参考系无关**——故可跨算法共用。
+    |V|=|ΔE|=0 的元素 Θ 记 0（丢弃）。
+    """
+    v = np.abs(np.asarray(vals, complex)).ravel()
+    d = np.abs(np.asarray(dE, float)).ravel()
+    if v.shape != d.shape:
+        raise ValueError(f'vals 与 dE 长度不一致（{v.shape} vs {d.shape}）')
+    den = np.maximum(d, v)
+    th = np.zeros(v.shape[0], float)
+    np.divide((Cv * float(T)) * v * v, den, out=th, where=(den > 0.0))
+    keep = th >= float(theta_tol)
+    dr = ~keep
+    info = dict(n_keep=int(keep.sum()), n_drop=int(dr.sum()),
+                max_v_drop=float(v[dr].max()) if dr.any() else 0.0,
+                max_theta_drop=float(th[dr].max()) if dr.any() else 0.0,
+                max_rate_keep=float((Cv * d[keep]).max()) if keep.any() else 0.0)
+    return keep, info
+
 
 # ============================================================
 # φ-帧统一 RHS 内核（t73：mixed 单原子/两体同一实现——t66 语义收敛）

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""精简回归入口：核心自检（约 2 分钟）。
+"""精简回归入口：核心自检（约 4 分钟）。
 
     core_selfcheck.py              单原子静态（能级/偶极/AC 位移，22 项）
     evolve_dissipative_selfcheck.py  Lindblad 耗散引擎（解析衰变/时变/退相/
@@ -7,20 +7,31 @@
     evolve_exact_selfcheck.py      第一性原理含时引擎（Sambe 光子块 + 包络
                                    自适应，解析/参考/封存权威交叉，11 项）
     evolve_exact_pair_selfcheck.py 两体第一性引擎（完整 V_dd 无 secular，
-                                   交换/直积极限/vdW/耗散/收敛，10 项）
+                                   交换/直积极限/vdW/耗散/收敛，11 项）
+    two_field_pair_selfcheck.py    两场两体引擎（11 项）
     ui_selftest.py                 UI 回归（主窗口/编辑器/TTL/动态页/存档恢复）
-    pair_evolve_selfcheck.py       两体动态（pairinteraction 权威参考 5 项；
+    pair_evolve_selfcheck.py       两体动态（pairinteraction 权威参考；
                                     未装 pairinteraction 时自动 SKIP）
+
+不在聚合里、按需单跑的独立自检：
+    mixed_nolight_selfcheck.py     mixed 无光场退化契约（10 项）
+    hard_vdd_pack_selfcheck.py     hard 的 V_dd 打包 + Θ 判据语义（9 项）
+    route_auto_selfcheck.py        route_auto 判据（6 项）
+    ai_selftest / ai_compute_test / ai_codeact_test   AI 协同三件套
+                                   （需 mcp/uvicorn；当前被 mcp 2.2 的
+                                   stateless-HTTP 行为阻塞）
 
 其余自检（两体 pair/unified、STIRAP/拉曼、pulse 模块、Floquet 交叉验证、
 单原子 evolve）已归档到 checks/_archive/，需要时单独运行，不进日常回归。
-（2025-08：floquet/pwc 算法已从 evolve.py 封存至
-src/_archive/evolve_floquet_pwc.py——动态分析只用 ip4；相关基准
-evolve_matrix.py / mw_bench_firstprinciples.py / evolve_rwa_bench.py /
-acceptance_state.py 均已改引封存模块。）
+（2026-09-10 清理：`hard_numba_selfcheck` / `two_field_selfcheck` /
+`evolve_matrix` / `evolve_rwa_bench` / `acceptance_state` 因导入或 API 断裂
+（引用 `src.core.evolve`、`src.pulse` 等已删路径）或所基准的 floquet/pwc
+算法已封存，一并迁入 `_archive/`；判断依据 = 实际执行退出码。
+⚠ `mw_bench_firstprinciples.py` **保留在 checks/**——它不是独立自检，而是
+`ui_selftest` 的场景构造依赖（`mb.build_s1`）。）
 
 用法：
-  python checks\\selftest_all.py       # 全量（约 1.5 分钟）
+  python checks\\selftest_all.py       # 全量（约 4 分钟）
 """
 import os
 import sys
@@ -30,7 +41,8 @@ import subprocess
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_SCRIPTS = ['core_selfcheck.py', 'evolve_dissipative_selfcheck.py',
+_SCRIPTS = ['checks_sentinel.py',        # 存活哨兵（秒级，最先跑：防脚本腐烂）
+            'core_selfcheck.py', 'evolve_dissipative_selfcheck.py',
             'evolve_exact_selfcheck.py', 'evolve_exact_pair_selfcheck.py',
             'two_field_pair_selfcheck.py',
             'ui_selftest.py',

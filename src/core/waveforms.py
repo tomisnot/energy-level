@@ -17,6 +17,8 @@
 """
 import numpy as np
 
+from .params import _TAB_N          # 相位/包络查表 Nyquist（见 f_max_mhz）
+
 from .field_build import (build_fields_exact, real_field,  # noqa: F401
                           arbitrary_field)
 
@@ -28,6 +30,20 @@ def _smooth(x):
     """x∈[0,1] → 0..1 余弦缓变（raised cosine，两端导数连续=0）。"""
     x = np.clip(x, 0.0, 1.0)
     return 0.5 * (1.0 - np.cos(np.pi * x))
+
+
+def _f_max_mhz(dt_min_ns, t_end_ns=None):
+    """可表达带宽上限（MHz）= min(样品 Nyquist, 引擎查表 Nyquist, 波长约束)。
+
+    样品 Nyquist = 0.5/dt_min（GHz→MHz 用 0.5e3/dt_ns）。
+    引擎侧：驱动包络/相位被预采样成 `_TAB_N` 点查表，其 Nyquist
+    = 0.5·(_TAB_N−1)/T。**只报前者会过度承诺**（T=620 ns 时表上限仅 ~106 GHz，
+    恰好压在微波/光场分界上），故 t_end_ns 给定时取两者较小值。
+    """
+    fn = 0.0 if dt_min_ns <= 0 else 0.5e3 / float(dt_min_ns)
+    if t_end_ns and float(t_end_ns) > 0 and fn > 0.0:
+        fn = min(fn, 0.5e3 * (_TAB_N - 1) / float(t_end_ns))
+    return fn
 
 
 class GaussianEnv:
@@ -80,6 +96,56 @@ class SquareEnv:
                         np.where(t > self.fall_start_ns + self.edge_ns,
                                  0.0, env))
 
+
+class FileEnv:
+    """**文件导入的光强包络**（保留载频）：env(τ) = interp(τ, t_ns, |amp|)。
+
+    与 `ArbitraryWave` 的分工（两者都从文件来，但语义完全不同）：
+      · `FileEnv`  —— 只提供 0..1 的**光强包络**；载频由所附 `Wave` 决定。
+        因为载频明确，**sambe / mixed / hard 三引擎全支持**（sambe 正是靠
+        "包络自适应分段"处理任意形状包络：不连续、任意分段、快速调制都行）。
+        文件里的振荡会被**忽略**（取 |amp| 峰值归一）——它表示的是光强形状。
+      · `ArbitraryWave` —— 文件是**完整时域驱动信号**，无载频概念，只有 hard 认。
+
+    ⚠ 本类**故意不定义 `start_ns`**：hard/twofield 用 `hasattr(env,'start_ns')`
+    识别方波的不连续沿，若本类带上该属性会被误当成方波边界。
+    """
+    kind = 'file'
+
+    def __init__(self, t_ns, amp):
+        t = np.asarray(t_ns, float)
+        a = np.asarray(amp, float)
+        if t.ndim != 1 or a.ndim != 1 or t.size != a.size or t.size < 2:
+            raise ValueError('包络文件样品须为等长一维数组（至少 2 点）')
+        if np.any(np.diff(t) <= 0):
+            raise ValueError('包络文件时间样品必须严格递增')
+        mx = float(np.max(np.abs(a)))
+        if mx <= 0:
+            raise ValueError('包络文件幅值全零')
+        self.t_ns = t
+        self.amp = np.abs(a) / mx          # 光强包络：非负、峰值归一
+
+    def __call__(self, tau):
+        return np.interp(np.asarray(tau, float), self.t_ns, self.amp,
+                         left=0.0, right=0.0)
+
+    def span_ns(self):
+        """包络的绝对时长（ns）。"""
+        return float(self.t_ns[-1] - self.t_ns[0])
+
+    def dt_min_ns(self):
+        d = np.diff(self.t_ns)
+        d = d[d > 0]
+        return float(d.min()) if d.size else 0.0
+
+    def f_max_mhz(self, t_end_ns=None):
+        """包络可表达带宽（MHz）：min(文件 Nyquist, 引擎查表 Nyquist)。"""
+        return _f_max_mhz(self.dt_min_ns(), t_end_ns)
+
+    def __repr__(self):
+        return (f'FileEnv(N={len(self.t_ns)}点, dt_min={self.dt_min_ns():.3g}ns,'
+                f' span={self.span_ns():.3g}ns)')
+
     def __repr__(self):
         return (f'SquareEnv(start={self.start_ns}ns, '
                 f'edge={self.edge_ns}ns, height={self.height}, '
@@ -111,6 +177,8 @@ class Wave:
         e = self.envelope
         if isinstance(e, GaussianEnv):
             return self.start() + e.center_ns + 5 * e.sigma_ns
+        if isinstance(e, FileEnv):
+            return self.start() + e.t_ns[-1]
         return self.start() + e.fall_start_ns + e.edge_ns
 
     def waveform(self, t):
@@ -192,30 +260,18 @@ class ArbitraryWave:
         d = d[d > 0]
         return float(d.min()) if d.size else 0.0
 
-    def f_max_mhz(self):
-        """信号 Nyquist 上限（MHz）：0.5/最小采样间隔。"""
-        d = self.dt_min_ns()
-        return 0.0 if d <= 0 else 0.5e3 / d
+    def f_max_mhz(self, t_end_ns=None):
+        """可表达带宽上限（MHz）：min(文件 Nyquist, 引擎查表 Nyquist)。
+
+        t_end_ns 给定时把引擎相位查表上限一并算进来（否则只报文件 Nyquist，
+        会过度承诺——见 `_f_max_mhz`）。
+        """
+        return _f_max_mhz(self.dt_min_ns(), t_end_ns)
 
     def __repr__(self):
         return (f'ArbitraryWave({self.name!r}, N={len(self.t_ns)}点, '
                 f'dt_min={self.dt_min_ns():.3g}ns, f_max={self.f_max_mhz():.3g}'
                 f'MHz, pol={self.pol}, @{self.offset_ns:.1f}ns)')
-
-
-# ================= 数据源（动态页演化输入） =================
-def waveforms_to_env(waves, t_grid):
-    """各波形的光强曲线数据（画光强，不画载波）。
-
-    返回 [(label, t, env, freq_mhz, intensity_mwcm2), ...]——每波形一条。
-    env 为 0~1 包络，光强曲线 = intensity × env。采样直接用输出网格 t_grid。
-    """
-    t = np.asarray(t_grid, float)
-    out = []
-    for w in waves:
-        out.append((w.name, t, np.asarray(w.waveform(t), float),
-                    float(w.freq_mhz), float(w.intensity_mwcm2)))
-    return out
 
 
 # ================= 数据源（动态页演化输入） =================
@@ -282,6 +338,8 @@ def serialize_waves(waves):
         env = w.envelope
         if isinstance(env, GaussianEnv):
             e = ('gauss', env.center_ns, env.sigma_ns, env.peak)
+        elif isinstance(env, FileEnv):
+            e = ('file', list(env.t_ns), list(env.amp))
         else:
             e = ('square', env.start_ns, env.edge_ns, env.height,
                  env.fall_start_ns)
@@ -306,6 +364,8 @@ def restore_waves(data):
         env = d['env']
         if env[0] == 'gauss':
             env_obj = GaussianEnv(env[1], env[2], env[3])
+        elif env[0] == 'file':
+            env_obj = FileEnv(env[1], env[2])
         else:
             env_obj = SquareEnv(env[1], env[2], env[3], env[4])
         dr = d.get('drive')

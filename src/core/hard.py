@@ -37,10 +37,10 @@ from .dop853 import _dop853_driver   # 驱动（系数已随驱动上收 dop853�
 
 from . import tensor as _tensor
 from . import static_atom as core  # t74：build_two_field 系列归位所需
-from .params import (_TAB_N, _VDD_MIN_FRAC, MW_MAX_MHZ,  # t74c 参数单源
-                     OPT_NRES_BW_MHZ, MW_NRES_BW_MHZ)
+from .params import _TAB_N  # t74c 参数单源（其余阈值随函数收敛到 evolve_twofield）
 from .evolve_util import (_single_loss_rates, _loss_and_norm,
                           _as_vector, env_at, _CONV)  # t74 工具归位
+from .coupling import static_phase_keep  # t78：V_dd 统一判据（与 mixed 共用）
 
 # 包络查表点数（620ns → h≈0.0047ns；插值误差 ~3e-10）
 
@@ -318,15 +318,26 @@ def _pack_pair_hard(fields_meta_A, fields_meta_B, T, vdd_sp, n_tab,
         grp_start = np.zeros(1, np.int64)
         grp_dE = np.zeros(0, float)
     else:
-        V = vdd_sp.tocsr().astype(complex)
-        rows, cols = V.nonzero()
-        vals = np.asarray(V.data, complex)
-        vmax = np.max(np.abs(vals)) if vals.size else 0.0
-        if vmax > 0.0:
-            keep = np.abs(vals) >= _VDD_MIN_FRAC * vmax
-            rows = rows[keep]
-            cols = cols[keep]
-            vals = vals[keep]
+        if E_lab is None:
+            raise ValueError('vdd_sp 非 None 时必须给 E_lab（V_dd 相位与判据需要）')
+        V = vdd_sp.tocsr().astype(complex, copy=True)
+        # t77：单一来源取三元组。原先 rows/cols 走 V.nonzero()（会**滤掉**显式
+        # 存储的零）而 vals 走 V.data（含显式零）——含显式零的矩阵会长度失配
+        # 触发 IndexError（掩码后未 eliminate_zeros / load_npz 读回 / 上帝模式
+        # 手动 keep 都会产出显式零）。改为一律从同一个 coo 取，天然对齐。
+        V.eliminate_zeros()
+        _coo = V.tocoo()
+        rows, cols = _coo.row, _coo.col
+        vals = np.asarray(_coo.data, complex)
+        dE = E_lab_pair[rows] - E_lab_pair[cols]
+        if vals.size:
+            # t78：V_dd 丢弃判据统一为「累积相位」Θ=C·T·|V|²/max(|ΔE|,|V|)
+            # ≥ POP_PHASE_TOL——取代原幅度阈值 _VDD_MIN_FRAC（随基组标度漂移、
+            # 且管不住"|V| 大但远失谐"的元素）。与 mixed 共用同一判据 → 两引擎
+            # 的 V_dd 存活集自动一致（不再有 ~1e-5 的固有差异）。
+            _keep, _ = static_phase_keep(vals, dE, T)
+            rows, cols, vals, dE = (rows[_keep], cols[_keep],
+                                    vals[_keep], dE[_keep])
         if rows.size == 0:
             vdd_rows = np.zeros(0, np.int64)
             vdd_cols = np.zeros(0, np.int64)
@@ -334,7 +345,6 @@ def _pack_pair_hard(fields_meta_A, fields_meta_B, T, vdd_sp, n_tab,
             grp_start = np.zeros(1, np.int64)
             grp_dE = np.zeros(0, float)
         else:
-            dE = E_lab_pair[rows] - E_lab_pair[cols]
             key = np.round(dE * 1e6)          # δ=1e-6 MHz
             order = np.lexsort((rows, key))   # 按 (组, row) 排序
             rows = rows[order]
@@ -580,237 +590,18 @@ def evolve_hard_pair(states, fields_meta_A, fields_meta_B, psi0_A, psi0_B,
 
 
 # ============================================================
-# 输入格式构造（t74 自 evolve_twofield 归位——hard 的输入格式属于 hard）
-# build_two_field / arbitrary_mw_group / split_by_freq / evolve_hard(scipy 参考)
+# 输入格式构造（t78：收敛到单一定义点）
+# `build_two_field` / `arbitrary_mw_group` / `split_by_freq` / `_build_A` /
+# `adaptive_split_threshold` 原先在 hard.py 与 evolve_twofield.py **逐字各存
+# 一份**（合计 ~209 行 ×2）——"双实现语义漂移"的温床（t70 的 Rabi 翻倍即同类
+# 问题）。现统一以 `evolve_twofield` 为唯一定义点（GUI 也从那里导入），此处仅
+# 再导出，保留 `hard.build_two_field` 等旧名字可用。
+# ⚠ 方向不可反转：反向会让 evolve_twofield 在模块级 import hard，与本文件的
+#   模块级导入成环（evolve_hard 对 hard 的依赖保持函数内惰性导入）。
 # ============================================================
-MW_MAX_MHZ = 1e5            # 载频 ≤ 100 GHz 视为微波，> 视为光场
-OPT_NRES_BW_MHZ = 2e3       # 旋转后近共振对筛选带宽（2 GHz）
-MW_NRES_BW_MHZ = 5e3        # 微波近共振对筛选带宽（5 GHz）
-
-
-def arbitrary_mw_group(cache, states, wave):
-    """ArbitraryWave → hard 兼容 mw_group（t18：旧任意波形重构适配 hard）。
-
-    解析信号分解（Hilbert）：amp(t) = env(t)·cos(φ(t)) 精确（env=|z|,
-    φ=unwrap arg z，重构误差 ~1e-11）；env/φ 以绝对时间插值函数给出，
-    经 hard 打包为查表（cos(φ_f(t)) 任意相位路径，内核插值求值）。
-    A 为全偶极实振幅（|d|·rabi）——复杂偶极相位（多通道干涉）暂以 |d|
-    吸收，单通道驱动精确（多通道场景为后续扩展）。
-    用法：meta = dict(E_rot=…, N=N, opt_terms=[], disc_times=[],
-                      mw_groups=[arbitrary_mw_group(cache, states, wave)])。
-    """
-    from scipy.signal import hilbert
-    q = {'σ+': +1, 'π': 0, 'σ-': -1}.get(wave.pol, 0)
-    E0_sq = core.field_e0_sq(float(wave.intensity_mwcm2))
-    N = len(states)
-    A = np.zeros((N, N))
-    for i in range(N):
-        for j in range(i + 1, N):
-            d = core.dipole_amplitude(cache, _crow(states[i]),
-                                      _crow(states[j]), q)
-            if abs(d) < 1e-12:
-                continue
-            A[i, j] = A[j, i] = core.rabi_mhz(abs(d), E0_sq)
-    if not np.any(A):
-        raise ValueError('arbitrary_mw_group：偏振下无任何偶极耦合')
-    ts = wave.t_ns + wave.offset_ns          # 绝对时间样品
-    z = hilbert(wave.amp)
-    env_h, phi_h = np.abs(z), np.unwrap(np.angle(z))
-    return dict(omega_mhz=0.0, As=[A],
-                envs=[lambda tv: np.interp(np.asarray(tv, float), ts, env_h,
-                                           left=0.0, right=0.0)],
-                phase_fn=lambda tv: np.interp(
-                    np.asarray(tv, float), ts, phi_h,
-                    left=phi_h[0], right=phi_h[-1]),
-                labels=[wave.name])
-
-
-def _crow(s):  # t74：与 field_build._sublevel_row 同构（保留旧名以免连带改动）
-    """states 元素 → core.dipole_amplitude 子能级行。"""
-    return dict(n=s['n'], l=s['l'], j=s['j'], kind=s['kind'],
-                mj=s.get('mj'), mF=s.get('mF'), amps=s.get('amps'))
-
-
-def _build_A(cache, states, freq_mhz, intensity_mwcm2, pol, det_selector):
-    """按失谐条件构造 Rabi 矩阵 A[i,j]（峰值，MHz）。
-
-    det_selector(i, j, E) → bool：是否把该对收入（近共振筛选）。
-    E 为 states 能量数组（旋转前）。"""
-    q = {'σ+': +1, 'π': 0, 'σ-': -1}.get(pol, 0)
-    E0_sq = core.field_e0_sq(float(intensity_mwcm2))
-    N = len(states)
-    E = np.array([s['E_mhz'] for s in states], float)
-    A = np.zeros((N, N))
-    for i in range(N):
-        for j in range(i + 1, N):
-            if not det_selector(i, j, E):
-                continue
-            d = core.dipole_amplitude(cache, _crow(states[i]),
-                                      _crow(states[j]), q)
-            if abs(d) < 1e-12:
-                continue
-            A[i, j] = A[j, i] = core.rabi_mhz(abs(d), E0_sq)
-    return A
-
-
-def adaptive_split_threshold(states, default_mhz=MW_MAX_MHZ):
-    """能级间隔分布 → 微波/光场自适应分界阈值（MHz）。
-
-    物理：旋转系 RWA 只在载频 ≫ 里德堡尺度跃迁时有效；微波硬积分受
-    DOP853 载波可行性约束。能级间隙在 log 尺度成簇（里德堡带 vs 光学
-    带），取最大对数间隔比的几何中点作阈值；clamp 到 [1e4, 1e6]
-    （DOP853 载波可行性安全带）。鲁棒性：无清晰两簇（单簇/退化）或
-    孤立离群点（某侧间隙占比 < 5%）时回退 default_mhz。
-    """
-    E = np.array([s['E_mhz'] for s in states], float)
-    if E.size < 2:
-        return default_mhz
-    d = np.abs(E[:, None] - E[None, :])
-    gaps = np.unique(d[np.triu_indices(E.size, 1)])
-    gaps = gaps[gaps > 0]
-    if gaps.size < 2:
-        return default_mhz
-    ratios = gaps[1:] / gaps[:-1]
-    k = int(np.argmax(ratios))
-    r = ratios[k]
-    thr = np.sqrt(gaps[k] * gaps[k + 1])
-    # 双侧最小占比（孤立离群点不干扰聚类）：各侧 ≥ 5%（且 ≥ 3 个间隙）
-    n = gaps.size
-    lo = int(np.searchsorted(gaps, thr, side='right'))
-    if (r >= 1e3 and lo >= max(3, 0.05 * n)
-            and (n - lo) >= max(3, 0.05 * n)):
-        return float(np.clip(thr, 1e4, 1e6))
-    return default_mhz
-
-
-def split_by_freq(waves, states=None):
-    """波形列表 → (opt_waves, mw_waves)。
-
-    states 提供时按能级间隔分布自适应分界（adaptive_split_threshold）；
-    否则回退固定 MW_MAX_MHZ（向后兼容）。
-    """
-    thr = (adaptive_split_threshold(states)
-           if states is not None else MW_MAX_MHZ)
-    opt, mw = [], []
-    for w in waves:
-        if w.freq_mhz > thr:
-            opt.append(w)
-        else:
-            mw.append(w)
-    return opt, mw
-
-
-def build_two_field(cache, states, waves, mw_M=2):
-    """构造两场引擎所需结构。
-
-    返回 dict:
-      E_rot      : 旋转后对角能（MHz）——6P 等被光场耦合的低能流形 +ω_opt
-      opt_terms  : [(A_opt(N×N), waveform, omega_opt)] 光场（不占光子块）
-      mw_groups  : _group_by_freq 格式的微波组（每载频一个，As 为其驱动矩阵）
-      N          : 物理态数
-    """
-    opt_w, mw_w = split_by_freq(waves, states)   # t20：自适应阈值（states 驱动）
-    N = len(states)
-    E = np.array([s['E_mhz'] for s in states], float)
-
-    # ---- 光场：确定低能流形与旋转参考 ----
-    # 对每个光场，先按"旋转前载频近共振"找耦合对（|ΔE−ω|<2GHz），
-    # 再取其中能量较低的一侧流形作为旋转对象（该流形整体 +ω）。
-    rot_pick = {}            # 流形 (n,l,j) → 是否已定参考
-    ref_add = np.zeros(N)
-    opt_terms = []
-    for w in opt_w:
-        # 近共振对（旋转前，以跃迁频率 ≈ ω 判）
-        def _sel(i, j, E, w=w):
-            return abs(abs(E[i] - E[j]) - w.freq_mhz) < OPT_NRES_BW_MHZ
-        A = _build_A(cache, states, w.freq_mhz, w.intensity_mwcm2, w.pol,
-                     _sel)
-        if not np.any(A):
-            continue
-        # 该场耦合的所有流形对中的低能流形
-        ii, jj = np.nonzero(A)
-        keys = [(states[i]['n'], states[i]['l'], states[i]['j'])
-                for i in set(ii.tolist() + jj.tolist())]
-        # 按平均能量排序，取最低流形作为旋转对象（6P 场景）
-        eavg = {}
-        for k in keys:
-            idxs = [i for i, s in enumerate(states)
-                    if (s['n'], s['l'], s['j']) == k]
-            eavg[k] = float(np.mean([E[i] for i in idxs]))
-        low_k = min(keys, key=lambda k: eavg[k])
-        if low_k not in rot_pick:
-            rot_pick[low_k] = w.freq_mhz
-        omega_ref = rot_pick[low_k]
-        # 旋转参考 = 第一个耦合该流形的光场载频（多光场共享流形取首个）
-        for i, s in enumerate(states):
-            if (s['n'], s['l'], s['j']) == low_k:
-                ref_add[i] = omega_ref
-        # 拍频信息（任务书 §2.3 / §8 多光场；t10 验证：exp 非 cos）：
-        # 第 2+ 个光场相对共享参考 ω_ref 失谐 δ=ω_f−ω_ref，其耦合项在旋转
-        # 系内带 exp(i·C·δ·t) 相位（本场自身 δ=0 → 逐位退化为旧行为）。
-        # 元组扩展为 (A, wf, omega, name, omega_ref, mask)；mask 标记被本
-        # 参考旋转的流形（用于相位符号 m[i]−m[k]）。路径 A（Sambe）复用
-        # omega_ref，路径 B（hard）用 δ。
-        mask = np.array([(s['n'], s['l'], s['j']) == low_k
-                         for s in states], int)
-        # RWA 振幅 ×0.5（t17 船长裁决：两场引擎光场项此前用全 Rabi（rabi_mhz），
-        # 物理错误 2×——cos(ωt)=½(e^{iωt}+e^{−iωt}) 旋转系只留共振项 → 耦合
-        # = ½·rabi_mhz。与 exact 引擎 SambeSetup 的 0.5·A 对齐（evolve_exact.py:
-        # 226）。此前 AC-Stark 位移偏 4×（Ω²/Δ）——"AC 位移调交换共振"是本场景
-        # 核心物理。微波项保持 1.0（实验室系全 cos，硬积分无 RWA，正确）。
-        # 单点修复：所有消费方（Sambe opt_ext / defect / hard coupling_at / numba /
-        # pair 打包）自动获得 ½。om_mhz 报告随之变为 RWA 耦合振幅。
-        A = 0.5 * A
-        opt_terms.append((A, w.waveform, w.freq_mhz, w.name,
-                          float(omega_ref), mask))
-    E_rot = E + ref_add
-
-    # ---- 收集光学包络不连续点（SquareEnv 上升沿/下降沿边界） ----
-    # C¹ 连续的缓变方波在二阶导数处有 kink，Gauss-Legendre 求积收敛慢；
-    # 必须将不连续点作为段边界，避免段内包络突变导致缺陷修正非幺正。
-    disc_times = []
-    for w in opt_w:
-        env = w.envelope
-        if hasattr(env, 'start_ns'):       # SquareEnv（有 start_ns；GaussianEnv 没有）
-            abs_off = float(w.offset_ns)
-            s0 = abs_off + float(env.start_ns)
-            s1 = abs_off + float(env.start_ns) + float(env.edge_ns)
-            s2 = abs_off + float(env.fall_start_ns)
-            s3 = abs_off + float(env.fall_start_ns) + float(env.edge_ns)
-            for v in (s0, s1, s2, s3):
-                if v not in disc_times:      # dedup via list (small N)
-                    disc_times.append(v)
-    # 去重（相邻 < 1μs 视为同一点）并排序
-    if len(disc_times) > 1:
-        disc_times.sort()
-        filtered = [disc_times[0]]
-        for dt in disc_times[1:]:
-            if dt - filtered[-1] > 1e-6:
-                filtered.append(dt)
-        disc_times = filtered
-
-    # ---- 微波场：近共振对筛选（60S↔60P 等，|ΔE−ω|<5GHz）----
-    mw_groups = []
-    for w in mw_w:
-        def _selm(i, j, E, w=w):
-            return abs(abs(E[i] - E[j]) - w.freq_mhz) < MW_NRES_BW_MHZ
-        A = _build_A(cache, states, w.freq_mhz, w.intensity_mwcm2, w.pol,
-                     _selm)
-        if not np.any(A):
-            continue
-        hit = None
-        for g in mw_groups:
-            if abs(g['omega_mhz'] - w.freq_mhz) <= 1e-9 * max(abs(w.freq_mhz), 1.0):
-                hit = g
-                break
-        if hit is None:
-            hit = dict(omega_mhz=w.freq_mhz, As=[], envs=[], labels=[])
-            mw_groups.append(hit)
-        hit['As'].append(A)
-        hit['envs'].append(w.waveform)
-        hit['labels'].append(w.name)
-    return dict(E_rot=E_rot, opt_terms=opt_terms, mw_groups=mw_groups,
-                N=N, disc_times=disc_times)
+from .evolve_twofield import (build_two_field, arbitrary_mw_group,  # noqa: E402,F401
+                              split_by_freq, _build_A,
+                              adaptive_split_threshold)
 
 
 def evolve_hard(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,

@@ -9,7 +9,7 @@ from PyQt5.QtWidgets import (
     QHeaderView, QAbstractItemView, QMessageBox,
 )
 
-from src import core
+from src.core import core
 
 
 class EnergyGroupPanel(QWidget):
@@ -106,14 +106,9 @@ class EnergyGroupPanel(QWidget):
                 self.group_list.takeItem(row)
                 self.owner.groups_store.remove_at(row)
 
-    def serialize_state(self):
-        """本模块负责导出它自己的状态快照。"""
-        return {'groups': [dict(g) for g in self.owner.groups_store.groups]}
-
-    def restore_state(self, state):
-        """按本模块状态快照恢复。"""
-        groups = state.get('groups', []) if isinstance(state, dict) else []
-        self.owner.groups_store.groups = [dict(g) for g in groups]
+    def set_groups(self, groups):
+        """整表设置能级组（参数管理 write 通道；存档恢复/AI 载入同路）。"""
+        self.owner.groups_store.groups = [dict(g) for g in (groups or [])]
         self.owner.groups = self.owner.groups_store.groups
         self.group_list.clear()
         for g in self.owner.groups_store.groups:

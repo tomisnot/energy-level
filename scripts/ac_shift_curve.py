@@ -19,7 +19,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from arc import Rubidium87
-from src import core
+from src.core import core
 _DIR = os.path.dirname(os.path.abspath(__file__))  # 输出到脚本所在目录
 
 FREQ_HZ = 295724.048e9      # 寻址光频率 (Hz)

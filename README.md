@@ -2,11 +2,12 @@
 
 > 面向三种读者的完整技术文档：
 >
-> - **第 1 部分 · 使用指南**：实验人员/一般用户——软件能做什么、界面如何操作。
+> - **第 1 部分 · 使用指南**：实验人员/一般用户——软件能做什么、界面如何操作
+>   （含上帝模式检视器 §1.6 与 AI 协同 MCP 接口 §1.9）。
 > - **第 2 部分 · 引擎原理**：物理/算法研究者——hard / sambe / mixed 三引擎的严格推导、
 >   公式与背后的物理图景（波 vs 粒子、低频 vs 高频的互补）。
 > - **第 3 部分 · 开发指南**：开发者——代码架构、模块地图、如何调用核心算法组装
->   自己的仿真程序。
+>   自己的仿真程序（含 AI 协同架构 §3.10）。
 >
 > 配套理论文档（docs/ 下）：`混合引擎理论推导-光Sambe微波当场.md`、`t58光子块截断判据.md`、
 > `引擎能力边界-终稿.md`、`认知固化II-AC化与混合引擎回归.md`、`auto路由方案-动态引擎选择.md`
@@ -63,7 +64,8 @@
 - 左侧**右侧滚动面板**：能级组面板 → 场面板 → 页面堆栈（随中央 Tab 切换显示静态/动态参数）。
 - 中央 **「静态」/「动态」** 两个 Tab：静态页做能级/光谱/耦合强度分析；动态页做含时演化。
 - 菜单 **文件 → 保存状态 / 恢复状态**：把当前所有参数（能级组/场/波形/初态/方法）存成
-  JSON 存档或从存档恢复。
+  JSON 存档或从存档恢复。存档格式 v3「登记册即存档」——v1/v2 旧档恢复时自动迁移
+  （未识别键不丢，按条数提示），详见 **§3.11**。
 
 ### 通用状态栏
 
@@ -144,11 +146,26 @@
 | **偏移 (ns)** | 波形绝对起点相对演化 t=0 的偏移 |
 | **辅助**（可折叠） | 选 g/e 态对后：**定光强**（反推使该对 Rabi=目标 Ω 的光强写回）、**定频率**（频率=裸差+目标失谐 Δ）——只辅助定参，不参与结算 |
 
-**任意波形**（ArbitraryWave）：无单一载频概念，载入用户自己的时域信号文件
-（txt/csv/dat/npy，两列"时间 ns 幅值"，或单列+等间距 dt；载入时峰值自动归一，负幅值
-= 电场反向）；参数只剩光强/偏振/偏移，可随时「重新载入波形文件…」替换样品数据；
-软件按第一性原理（实验室系，无旋转波近似）求解，适合啁啾、多频叠加等任意波形。
-> 注意：任意波形演化较慢，软件会提示 Nyquist 上限（f_max）与建议最小步长。
+**从文件导入时间形状**（`＋任意 ▾`，t78 起分两种语义，别混）：
+
+| 导入方式 | 产出 | 文件内容 | 可用引擎 |
+|---|---|---|---|
+| **作为光强包络**（推荐） | `Wave` + `FileEnv` | 光的**强度形状** env(t)∈[0,1]（文件里的振荡被忽略），载频另填（默认取基组内**耦合最强**的跨流形偶极跃迁） | **sambe / mixed / hard 全支持** |
+| **作为完整驱动** | `ArbitraryWave` | **驱动信号本身**，必须含目标跃迁的振荡 | 仅 hard（sambe/mixed 会自动改道） |
+
+文件格式（两种共用）：txt/csv/dat/npy，两列"时间 ns 幅值"，或单列 + 等间距 dt；
+载入时峰值自动归一。包络与完整驱动都可随时「重新载入…」替换样品。
+
+> **为什么会有两种？** 光强包络保留载频 → 光子块引擎（sambe/mixed）认；完整驱动
+> 无载频概念 → 只有 hard 的 `cos(φ(t))` 任意相位路径能接。把"光强形状"误当
+> "完整驱动"导入是最常见的坑：**基带包络不含振荡，驱动不了任何跃迁（效果恒为零）**，
+> 而软件不会报错。运行时会给适用性提示（带宽是否覆盖目标跃迁 / 基组是否含光学
+> 流形），请留意状态栏。
+> **任意波形不能用于光学寻址**：要驱动 295.7 THz 跃迁，文件须振荡在 295.7 THz
+> 上 → dt ≤ 1.7e-3 ns、620 ns 窗需 ≥3.7×10⁵ 点，且远超引擎查表带宽上限；光学
+> 驱动请用普通光场波形（或把文件按"光强包络"导入）。
+> **带宽有两个上限**：文件 Nyquist 与引擎查表 Nyquist（≈0.5·N_TAB/T，T=620 ns 时
+> 仅 ~106 GHz，恰好压在微波/光场分界上）。界面显示的 `带宽≥` 已取两者较小值。
 
 **光强量级参考**（同偏振/频率下 Rabi ∝ √I）：60S↔60P 微波（17 GHz）偶极巨大，~10⁻⁴
 mW/cm² 即 MHz 级 Rabi；60S↔6P 光场（295.7 THz）需 ~10⁷–10⁸ mW/cm² 才到几十 MHz
@@ -160,16 +177,26 @@ Rabi。设置时优先用波形辅助区"定光强/定频率"按目标 Ω/Δ 反
 |---|---|---|
 | **sambe** | 第一性原理 Sambe 光子块（实验室系、无 RWA、无旋转系） | 强光近共振需最高精度；STIRAP/拉曼 |
 | **hard** | 光场旋转系 RWA + 微波 cos 硬积分 DOP853（numba 加速） | 纯微波/变频/任意波形 |
-| **mixed**（默认） | 混合引擎：光场 Sambe 光子块 + 微波/V_dd 当场（φ-帧） | 光+微波混合/双原子交换（5 倍降维）；**软件默认**；无光场时自动降级 hard |
+| **mixed**（默认） | 混合引擎：光场 Sambe 光子块 + 微波/V_dd 当场（φ-帧） | 光+微波混合/双原子交换（5 倍降维）；**软件默认**；纯微波亦可（光子维退化 P=1） |
 
 > 旧版 ip4（RWA 快速粗算）与 auto（智能路由）档已从选项移除：引擎层仍可通过脚本
 > 调用（`evolve_rwa.evolve(..., method='ip4')` / `route_auto`），GUI 统一为上述三档。
-> **mixed 需要光场**：若波形只有微波（或含任意波形），运行时会自动降级 hard 并在
-> 状态栏提示——纯微波场景无需手动切换。
+> **mixed 支持纯微波**（t77 起）：没有光场时光子维自动退化（P=1），φ-帧回到实验室系，
+> 等价于微波/V_dd 当场精确积分——与 hard 同物理（实测 max|Δpops| ≤ 6e-8），无需手工
+> 切换。
+> **会被强制改道的是「完整驱动」（ArbitraryWave）**：它无单载频概念，而 sambe/mixed
+> 的光子块扩展空间需要单一载频 → 选 sambe 或 mixed 时都会自动改用 hard 并提示
+> （t78 起 sambe 也纳入降级；此前 sambe 直接抛 ValueError 弹"演化失败"）。
+> **"光强包络文件"（FileEnv）不会被改道**——它是普通 `Wave`，三引擎全支持；
+> 想把任意波形用于 sambe，请按「＋任意 → 作为光强包络」导入（§1.5.2）。
 
 - **sambe 高级参数**（仅 双原子 + sambe 时显示）：
   - **frozen_h (ns)**：全频段 Sambe 纯冻结段长（0=默认缺陷修正路径；推荐 8）；
   - **per_freq_M**：逐载频光子块阶数（如 `[1,1]`，空=自动探针）。
+
+- **上帝模式**（仅 mixed 时有意义）：勾选后运行会弹出**求解检视器**——
+  求解过程可视化 + 四个精度旋钮内嵌（改完「应用并重跑」就地生效），
+  详见 §1.6。
 
 ### 1.5.4 初态与自发辐射
 
@@ -207,7 +234,42 @@ Rabi。设置时优先用波形辅助区"定光强/定频率"按目标 Ω/Δ 反
 4. 完成自动关闭；失败会弹「演化失败」并建议降低光强/调整失谐/减小 t_max；
 5. 结果即时画在顶部（波形包络）与底部（布居/荧光曲线；有耗散时叠加 loss 虚线）。
 
-## 1.6 典型操作流程示例
+## 1.6 上帝模式检视器（mixed 求解过程可视化）
+
+动态页方法栏有 **「上帝模式」** 勾选框与 **「检视器…」** 按钮：勾选后运行 mixed
+演化，引擎随结果产出完整**诊断快照**（diag）并自动弹出**求解检视器**（非模态
+窗口，1500×1080；之后可随时点「检视器…」查看最近一次结果）。简单模式（默认关）
+行为完全不变——检视器把 mixed 引擎的内部处理链摊开给人看，共 6 页：
+
+| 页 | 内容 |
+|---|---|
+| **处理链** | 分步着色徽标卡片：基组 → 光子块（Ms/P/dim）→ AC 化（r 判据分类、剔除了多少远强对）→ 耦合对打包 → 求解器，关键数字加粗 |
+| **哈密顿量** | 扩展空间 H(t) 的**自适应热图**（见下）+ 解析公式分项着色 + 矩阵元"物理含义"表 |
+| **耦合对** | 全部打包耦合对列表（a, b, v, ΔD, 是否微波）——引擎实际看到什么 |
+| **求解过程** | 步长/nfev/接受-拒绝统计、norm 偏差；**tol / max_step 旋钮** |
+| **扇区与重构** | 各光子扇区布居随时间的轨迹、跨扇区重构 |
+| **引擎参数** | meta 总览（method/backend/N/P/dim/时间轴等） |
+
+四个精度旋钮内嵌检视器对应位置（per_freq_M / r_crit 在处理链页，tol /
+max_step 在求解过程页），改完点 **「应用并重跑」** 就地用新参数重跑演化——
+调精度不用回主界面。
+
+### 哈密顿页热图（分级标注）
+
+- **三级分层标注**随缩放自动切换：最粗级标光子扇区（n=±k，色块底 + 贯穿
+  分隔线），中级标流形组（如 60S₁/₂、6P₃/₂，带下角标；放不下先缩字、再降级
+  短名、最后隐藏），最细级才逐维标量子态——图上只做"这是哪一段、哪一维"的
+  粗略定位，不堆文字；
+- **hover 联动**：鼠标所在行/列画红色十字（只描边不填充，不遮挡像素），底栏
+  两行显示矩阵元两端的态全名 + |H|/相位/物理含义，命中的各级标注一并高亮；
+- **零值 = 白底**：稀疏矩阵的零元素直接"消失"，只剩真实耦合结构；
+- 滚轮缩放 + 左键平移。
+
+> diag 快照的数据契约见 `src/ui/solver_inspector.py` 头注释；哈密顿热图的
+> 多档缩放截图与几何断言工作流在 `ui_design/`（shot_hamiltonian.py /
+> debug_geom.py）。
+
+## 1.7 典型操作流程示例
 
 ### 示例 A：单原子 π 脉冲（微波 Rabi 振荡）
 
@@ -218,7 +280,7 @@ Rabi。设置时优先用波形辅助区"定光强/定频率"按目标 Ω/Δ 反
    （60S↔60P 偶极极大，μW 级光强已有 MHz 级 Rabi；也可用辅助区"定光强"：
    选 g=60S mJ、e=60P mJ，给定目标 Ω 自动反推光强），中心 70 ns、σ 20 ns、偏移 0；
 5. 初态选 60S₁/₂ 某 mJ；t_max=300 ns、点数 301；方法保持默认 mixed 即可
-   （纯微波会自动降级 hard——也可直接选 hard）；显示"态布居"；
+   （纯微波下 mixed 光子维退化 P=1，与 hard 等价；也可直接选 hard）；显示"态布居"；
 6. 「运行演化」→ 底部应看到 60S 与 60P 之间的 Rabi 振荡；若振荡周期 ≠ 2/Ω 或转移
    不完全，用辅助区把目标 Ω 设准再跑。
 
@@ -239,7 +301,12 @@ Rabi。设置时优先用波形辅助区"定光强/定频率"按目标 Ω/Δ 反
 「文件 → 保存状态」存 JSON → 换机器/重开软件 → 「文件 → 恢复状态」→ 所有参数复原，
 再点「运行演化」即可复现。
 
-## 1.7 使用注意事项（物理提醒）
+> 存档分版本：新存的是 **v3**（`meta.version=3`，内容 = 参数登记册快照）；
+> 仓库 `save_state/` 里多数样本是 v2、`save_state/_legacy/` 两个是 v1——**都能直接恢复**
+> （自动迁移）。恢复后若状态栏提示"存档含 N 个未识别键（已忽略）"，说明该档里有当前
+> 版本已不存在的参数，其余部分照常复原。
+
+## 1.8 使用注意事项（物理提醒）
 
 - **基组要完整**：光场耦合的中间态（如 6P）必须加入能级组，否则 AC 频移/失谐算错——
   例如 60S 的光频移主源是 60S↔6P 近对，漏 6P 会把 60S 频移从 −53 MHz 算成 +8 MHz。
@@ -251,6 +318,73 @@ Rabi。设置时优先用波形辅助区"定光强/定频率"按目标 Ω/Δ 反
   点数太少导致不精确（只要别少到看不见振荡）。
 - **双原子 V_dd 预计算**：运行前软件会在主线程预计算 V_dd 稀疏矩阵并打印非零元数——
   大基组下这一步要等一会儿属正常（t72 起该阶段在进度对话框内逐行显示进度，且可取消）。
+
+## 1.9 AI 协同 — 把软件交给 AI 驱动（MCP）
+
+软件启动时自动内建一个 **MCP server**（streamable HTTP，默认端口 8765，
+实际端口写入项目根 `.mcp-port` 文件，状态栏常驻 **「● AI 在线 :端口」** 指示）。
+任何支持 MCP 的 AI harness（Trae / Claude Code / Cline…）配置这个 URL 即可
+像人一样操作软件：AI 改参数、点计算，GUI 实时反映；AI 不动时人照常用，
+体验无退化；人可随时点状态栏 **「撤销AI」** 回滚 AI 的最近一步。
+
+### 启用（可选依赖）
+
+```bash
+pip install "mcp>=2,<3" uvicorn    # 缺失时软件照常运行，仅状态栏提示 AI 接口未启用
+```
+
+> ⚠ **当前实测：`mcp 2.2.0` 下 AI 通道不可用**（2026-09 发现）。
+> 症状：`initialize` 与 `tools/list` 正常返回 200、工具齐全，但
+> `tools/call` 一律 **404 Not Found**（transcript 里能看到每次响应后紧跟
+> `Terminating session: None`）→ 任何 harness 都调不动工具，`checks/ai_*`
+> 三件套也因此失败。这是 **SDK 的 stateless-HTTP 语义在 2.2 变化**所致，
+> 不是脚本或本仓库代码的问题。两条出路：① 回钉 `pip install "mcp<2.2"`
+> 立刻恢复；② 按官方迁移指南适配 `server.start_server` 的会话处理。
+> `requirements.txt` 目前的 `mcp>=2,<3` 偏宽，把 2.2 放进来了。
+
+- 端口：默认 8765；环境变量 `EL_MCP_PORT` 可改；被占自动回退随机端口；
+- **Trae IDE**：项目根 `.trae/mcp.json` 已配好（`http://127.0.0.1:8765/mcp`），
+  开启"启用项目级 MCP"后**新开会话**生效；
+- **Claude Code**：`claude mcp add --transport http energy-level http://127.0.0.1:8765/mcp`。
+
+### 人机协同表现
+
+- AI 每次写入：对应控件**闪紫色描边**（1.5 s）+ 状态栏滚动操作流水（含动机
+  reason）；人自己的操作不闪不刷屏；
+- AI 发起的计算：画布/状态栏照常显示，弹窗类消息自动降级为状态栏日志
+  （防模态框卡死 AI 通道）；
+- 人与 AI 的每次变更都进统一操作流水 journal（落盘
+  `save_state/_journal/<日期>.jsonl`），`get_activity` 工具随时可查；
+- 安全模型 = **先斩后奏**：AI 写操作直接生效，每步带变更前快照可 undo；
+  AI 恢复存档前自动快照到 `save_state/_autosnap/`（保留最近 20 份）兜底。
+
+### MCP 工具清单（17 个）
+
+| 工具 | 作用 |
+|---|---|
+| `summary` / `get_state(scope)` | 读当前状态（轻量摘要 / 全量或分模块导出） |
+| `list_params` / `set_param(path, value, reason)` | 查 / 改白名单参数（B、E、t_max、方法、V_dd 几何…） |
+| `add_level_group(n,l,j)` / `remove_level_group(i)` | 能级组增删（自动校验 + 配色） |
+| `set_waves(waves, atom)` | 整表替换 A/B 原子的波形序列 |
+| `run_compute` → `job_status` → `job_result(save_npz)` | 启动演化（与人点"运行"同一条路径）→ 轮询进度 → 取结果摘要（大数组落 npz 给路径） |
+| `cancel_job(job_id)` | 取消计算 |
+| `get_activity(since_seq)` / `undo(reason)` | 操作流水（人+AI）/ 撤销 AI 最近一步 |
+| `save_archive(path)` / `load_archive(path)` | JSON 存档读写（与菜单"保存/恢复状态"同源） |
+| `screenshot()` | 主窗口截图 PNG（让 AI 看一眼人眼所见） |
+| `run_python(code)` | **CodeAct**：一次调用跑一段 Python 完成循环/扫描/后处理（见下） |
+
+### 两种驱动形态
+
+- **细粒度工具**：单步探索、逐步监督——每个动作在对话与 GUI 双通道可见；
+- **run_python（CodeAct）**：参数扫描、批量对比等多步编排一次调用跑完
+  （省回合），大数组在进程内被 numpy 消化、只有统计量回传。命名空间只注入
+  语义入口函数（与 MCP 工具同名同返回形状），所有状态变更仍走 SimState →
+  journal——换传输形态不丢"人机等效"与"可追溯"。整段脚本算一个 undo 单元。
+
+> AI 侧完整操作手册（工具语义、单位约定、波形 JSON 格式、已知坑）在
+> `skills/energy-level/SKILL.md`——给 AI 看的说明书，AI 使用中发现不符可
+> 回头修正（自我迭代）。注意：上帝模式的 diag 精度旋钮**不开放给 AI**
+> （检视器属人侧调试通道）；单/双原子模式切换也需人在 GUI 上操作。
 
 ---
 
@@ -448,12 +582,21 @@ $A\otimes I$ / $I\otimes A$ 三元组。
 
 $V_{dd}$ 项的处理是 t34 核查的重点结论：**用实验室系能量差**做相位扭曲
 $e^{iC(E^{\text{lab}}_k+E^{\text{lab}}_l-E^{\text{lab}}_i-E^{\text{lab}}_j)t}$ 而不是旋转系差。
-为什么对？因为 hard 的旋转只落在 6P 等低流形上，而 $V_{dd}$ 的**存活元素**（经
-$|V|\ge10^{-4}\max|V|$ 过滤后）全部连接里德堡态（60S/60P，ref=0）——在这些元素上
-$E^{\text{lab}}=E^{\text{rot}}$，两种写法严格等价；会连接 6P 的 THz-dE 元素全被过滤
-（其净效应 $V^2/\Delta\le10^{-8}$ MHz 可忽略）。数学上：场项相位
-$e^{iC\,E^{\text{rot}}t}$ 与 $V_{dd}$ 项相位 $e^{iC\,E^{\text{lab}}t}$ 的差为
+为什么对？因为 hard 的旋转只落在 6P 等低流形上，而 $V_{dd}$ 的**存活元素**全部连接
+里德堡态（60S/60P，ref=0）——在这些元素上 $E^{\text{lab}}=E^{\text{rot}}$，两种写法
+严格等价；会让两者分歧的元素是**连接 6P 的 THz 级跨尺度对**，它们同时是极远失谐
+（净效应 $V^2/\Delta$ 可忽略），在 t78 的统一判据下 $\Theta\to0$ 被剔除。数学上：
+场项相位 $e^{iC\,E^{\text{rot}}t}$ 与 $V_{dd}$ 项相位 $e^{iC\,E^{\text{lab}}t}$ 的差为
 $e^{iC(\text{ref}_k-\text{ref}_l)t}$，存活元素 ref 差 = 0 → 等价。
+
+> **存活元素由谁决定（t78 统一判据）**：丢弃判据是**累积相位**
+> $\Theta=CT|V|^2/\max(|V|,|\Delta E|)\ge\texttt{POP\_PHASE\_TOL}=10^{-4}$ rad
+> （`coupling.static_phase_keep`，hard 与 mixed 共用）。这正是本文档早先
+> （t34/§2.4）所述的"$V^2/\Delta$ 可忽略"从**定性说法**升级成的**定量判据**：
+> 注意它按**效应大小**筛（与 |V| 和 ΔE 都相关），而不是按 |V| 的绝对幅度筛——
+> 后者会随基组标度漂移，且会误删"|V| 不小但远失谐"的元素（如 60S60S↔60P60P
+> 双翻转 Förster 通道，Δ≈34.6 GHz、|V|~2 MHz，$\Theta\approx5\times10^{-4}$ 应当保留）。
+> 改动前后 hard↔mixed 的 V_dd 结果差从 $1.1\times10^{-5}$ 降到 $4.3\times10^{-8}$。
 
 ### 2.2.4 hard 的物理图景与适用域
 
@@ -670,8 +813,26 @@ AC 位移 2.36e-2）；t43/44 AC 化但伪值（单向 Ω²/4Δ、ac_diag 扩展
 STIRAP 链（φ-帧无参考，hard rot_pick 盲区的解法，用例 4 ≡ frozen 1.56e-5）；近光+
 微波共存（≡ frozen 4.35e-8）；两体 V_dd 交换（dim 1452 5 倍降维，620 ns norm ~5.7e-7）。
 
-**局限**：光场须同载频（异频多光子块未实现，NotImplementedError）；光子块需固定载频
-（变频/任意波形请用 hard）；远失谐微波对须 AC 化/当场（不当场会 THz 钉死）。
+**V_dd 的取舍判据（t78，与 hard 共用）**：静态耦合成千上万，必须筛掉无意义的。
+判据只用耦合自身的观测量——**累积相位**
+
+$$
+\Theta = C\,T\,\frac{|V|^2}{\max(|V|,\,|\Delta E|)}\;\ge\;\theta_{\text{tol}}
+\quad(\theta_{\text{tol}}=\texttt{POP\_PHASE\_TOL}=10^{-4}\,\text{rad})
+$$
+
+两个极限自动切换：共振（$|\Delta E|\lesssim|V|$）→ $\Theta=C T|V|$（Rabi 相位）；
+远失谐（$|\Delta E|\gg|V|$）→ $\Theta=C T|V|^2/\Delta$（色散/vdW 相位）。
+它与基组标度、引擎、参考系都无关，故 hard / mixed 共用同一实现
+（`coupling.static_phase_keep`）——这也是两引擎 V_dd 结果自动一致（差 ≤5e-8）的
+来源。它同时取代了两个旧阈值：幅度阈值 $\|V\|\ge10^{-4}\max$（随基组标度漂移，
+且管不住"$|V|$ 大但远失谐"的元素）与 mixed 借用的 20 GHz 能量间隙阈值
+（与 $|V|$ 无关，会误删 34.6 GHz 的双翻转 Förster 通道）。
+
+**局限**：两体光场须同载频（异频多光子块未实现，NotImplementedError）；光子块需固定
+载频（变频/任意波形请用 hard）；远失谐微波对须 AC 化/当场（不当场会 THz 钉死）。
+**无光场不是局限**（t77）：光子维退化 P=1，φ-帧回到实验室系，微波/V_dd 当场精确积分
+（与 hard 同物理，实测单体差 ≤6e-8、两体差 ≤5e-8）。
 
 ## 2.5 三引擎对比与自动路由
 
@@ -685,15 +846,17 @@ STIRAP 链（φ-帧无参考，hard rot_pick 盲区的解法，用例 4 ≡ froz
 | 参考选择 | rot_pick（低流形 +ω）——STIRAP 链盲区 | 无（实验室系） | 无（φ-帧） |
 | 两体 dim（22 态场景） | ~2420 级 | 7260（AC 化后 4356）/GPU | **1452（5 倍降维）** |
 | 速度（22 态 620 ns） | ~2 s | 分钟级 | ~120 s（620 ns 两体） |
-| 变频/任意波形 | **唯一支持** | 不支持 | 不支持 |
+| 变频/任意波形（ArbitraryWave） | **唯一支持** | 不支持（GUI 自动改道 hard） | 不支持（GUI 自动改道 hard） |
+| **光强包络文件（FileEnv）** | 支持 | **支持**（包络自适应分段） | **支持** |
 | 权威锚 | ≡ reference 1.93e-9 | 收敛 3.5e-7（t39） | ≡ frozen 1e-5~1e-8 |
 
 ### 2.5.2 auto 路由判据（引擎层 `route_auto`，脚本可用；GUI 不再暴露 auto 档）
 
 > t71：GUI 方法选项收敛为 sambe/hard/mixed 三档后，auto 档不再出现在界面。
 > 引擎层的 `route_auto` 保留供脚本调用（开发者想"按场配置自动选引擎"时），
-> 其判据如下——GUI 默认 mixed 对"纯微波/任意波形"的自动降级（§1.5.3）即内联了
-> 其中第 1、2 条：
+> 其判据如下——GUI 默认 mixed 现在只对"任意波形"自动降级（§1.5.3，内联了第 1 条）；
+> 第 2 条"纯微波 → hard"自 t77 起不再是**必要**改道（mixed 亦支持），
+> 仅作为性能建议保留在 `route_auto` 里：
 
 `route_auto` 按场配置返回 (method, reason)：
 
@@ -719,7 +882,8 @@ src/
 │   ├── static_pair.py    # 两原子静态：V_dd/交换耦合/vdW/耦合强度地图
 │   ├── atomic_levels.py  # 能级构造 make_levels（states 列表）
 │   ├── field_build.py    # 场构造（field/group_field/real_field/arbitrary_field）
-│   ├── waveforms.py      # 波形数据层（Wave/GaussianEnv/SquareEnv/ArbitraryWave）
+│   ├── waveforms.py      # 波形数据层（Wave/GaussianEnv/SquareEnv/FileEnv/
+│   │                     #   ArbitraryWave；FileEnv=文件导入的光强包络，保留载频）
 │   ├── sambe.py          # Sambe 引擎总模块（t74：核心层+单体引擎+两体引擎
 │   │                     #   合一；evolve_sambe/evolve_sambe_pair 同收此处，
 │   │                     #   t74b 已删旧文件名 shim）
@@ -731,9 +895,12 @@ src/
 │   ├── evolve_rwa.py     # ip4/Lindblad 遗留引擎（数值权威参照；工具已迁出）
 │   ├── evolve_sambe_pair_gpu.py # GPU 传播（研究原型）
 │   ├── evolve_twofield.py # 两场引擎家族（单/两体团聚：光旋转系+微波光子块）
-│   ├── hard.py           # hard 引擎单/两体同一内核（单原子=N_B=1 旁观维）
-│   │                     #   + 输入格式构造 build_two_field（t74 归位）；
-│   │                     #   任意波形走 cos(φ_f(t)) 任意相位路径
+│   ├── hard.py           # hard 引擎单/两体同一内核（单原子=N_B=1 旁观维）；
+│   │                     #   任意波形走 cos(φ_f(t)) 任意相位路径。
+│   │                     #   ⚠ t78：build_two_field/split_by_freq/
+│   │                     #   arbitrary_mw_group/_build_A/adaptive_split_threshold
+│   │                     #   的唯一定义点已收敛到 evolve_twofield.py，本模块只
+│   │                     #   再导出（原两份逐字副本 ~209 行 ×2 已删）
 │   ├── evolve_mixed.py   # 混合引擎总模块（t74 单/两体合一；t74b acize 并入）
 │   │                     #   evolve_mixed / evolve_mixed_pair /
 │   │                     #   acize_physical 同收此处（φ-帧；依赖 sambe+coupling）
@@ -744,6 +911,8 @@ src/
 │   ├── coupling.py       # RHS 公共层（t73）：pack_rhs + φ-帧统一内核
 │   │                     #   rhs_phi_pairs（mixed 单/两体同一 RHS）
 │   │                     #   + 三槽进度协议 stage_progress
+│   │                     #   + static_phase_keep（t78：V_dd 累积相位判据，
+│   │                     #     与 hard 共用，取代幅度/能量间隙两个旧阈值）
 │   ├── project.py        # 跨扇区投影公共层 project_pops
 │   ├── tensor_fields.py  # 两体场提升（lift_single_A/lift_side_A/lift_fields）
 │   ├── tensor.py         # 两体张量化（tensor_states/_reduce_*/_pair_loss_vectors）
@@ -756,13 +925,46 @@ src/
 │   ├── ui_radar.py       # 耦合强度雷达图
 │   ├── ui_waves.py       # 波形面板
 │   ├── ui_dynamic.py     # 动态演化页（核心）
+│   ├── solver_inspector.py   # 求解检视器（t75 上帝模式：处理链/耦合对/
+│   │                     #   求解过程/扇区重构 + 内嵌精度旋钮「应用并重跑」）
+│   ├── hamiltonian_viewer.py # 哈密顿热图（三级分层标注 + hover 十字联动）
 │   ├── evolve_worker.py  # 演化后台线程（EvolveWorker/Pair）
 │   ├── app_state.py      # 能级组/场状态 store
-│   ├── serialization.py  # 存档助手
-│   └── ui_theme.py       # QSS 主题
+│   ├── ui_theme.py       # QSS 主题
+│   └── __init__.py       # 子包 docstring（存档序列化已迁出 → src/archive.py）
+├── ai/                   # AI 协同（MCP 接口；可选依赖，缺失不影响软件本体）
+│   ├── server.py         # 进程内 MCP server（streamable HTTP :8765，17 工具；
+│   │                     #   端口写项目根 .mcp-port 供 harness 发现）
+│   ├── sim_state.py      # SimState 状态门面（人机等效的唯一语义入口 +
+│   │                     #   set_param 白名单 + AI 控件高亮）
+│   ├── journal.py        # OpJournal 操作流水（actor/快照/undo；落盘 jsonl）
+│   ├── dispatch.py       # 主线程派发器（MCP 线程 → Qt 主线程 marshal）
+│   ├── codeact.py        # CodeAct：run_python 受限执行（一次调用多步编排）
+│   └── __init__.py       # 子包占位
+├── archive.py            # 状态存档 v3「登记册即存档」：snapshot/restore/
+│                         #   load_file/migrate(v1·v2→v3)——菜单存档与
+│                         #   AI save_archive/load_archive 同源（§3.11）
+├── pm_setup.py           # 参数登记册装配：new_registry / build_registry /
+│                         #   register_panel_params（定义即注册）
+├── julia/                # Julia 桥工作目录（历史原型，未进主路径）
 ├── _archive/             # 退役模块（floquet/pwc/ttl 等）
 └── __init__.py           # ARC 数据目录重定向 + 顶层兼容导出
 ```
+
+> **顶层兼容导出的例外（t78）**：`src/__init__.py` 会把 `waveforms` /
+> `pair_core` / `evolve_exact` / `ui_*` 等旧名 re-export 到 `src` 层，方便老脚本
+> `from src import waveforms` 不改就能跑。**但 `core` 是唯一例外——不从 src 层导出**：
+> 那会与同名子包 `src.core` 冲突（`from .core import core` 是**属性赋值**，会把
+> `src.core` 这个属性覆盖成 `static_atom`），进而让 `import src.core.<x> as <别名>`
+> 报 `cannot import name '<x>' from src.core.static_atom`（CPython 对带 `as` 的
+> 点号导入走**父模块属性遍历**）。取单原子静态请用：
+>
+> ```python
+> from src.core import core          # 或 from src.core import static_atom as core
+> ```
+>
+> 想注册旧模块路径请用 `sys.modules['pkg.old'] = new_mod`（不碰属性），
+> 别在父包上做同名属性赋值——`src/core/__init__.py` 就是这么做的。
 
 > t74b 拆除兼容层后的归属变化：`acize.py` 并入 evolve_mixed.py（唯一消费者
 > 家族是 mixed）；`evolve_mixed_pair.py` 并入 evolve_mixed.py；`pair_evolve.py`
@@ -775,6 +977,25 @@ src/
 3. **统一入口**（evolve_engine + route_auto）：按 method/n_body 分派；
    中间穿插 **t63 公共层**（sambe/dop853 与 N 无关核心 + coupling/acize/project/
    tensor_fields 单两体共用），避免每个引擎各写一遍语义漂移。
+
+**仓库根目录**（README 之外）：
+
+```
+├── 能级.py / app_entry.py / main.py   # 三个等价入口（前者日常、中者直跑、后者打包）
+├── src/                                # 见上（core 22 文件 / ui 13 / ai 6）
+├── checks/                             # 自检与回归（聚合入口 selftest_all.py；
+│                                       #   checks_sentinel.py 做存活哨兵；_archive/ 为退役自检）
+├── scripts/                            # 独立脚本（部分依赖已归档模块，见文件头说明）
+├── ui_design/                          # 离屏截图脚本（ui_shot*.py，开发用）
+├── tempsimu/                           # 实验/基准/一次性探针（非产品路径，可随时清）
+├── save_state/                         # 存档（含 _legacy/ 旧版本样本、_autosnap/、_journal/）
+├── docs/                               # 设计/交付文档（_archive/ 为历史文档）
+├── skills/energy-level/SKILL.md        # 给 AI harness 的说明书（§3.10）
+└── requirements.txt
+```
+
+> 规模参考（2026-09）：`src/core` 22 文件 / 9684 行，`src/ui` 13 文件 / 7550 行
+> （含检视器 hamiltonian_viewer 1540 + solver_inspector 991），`src/ai` 6 文件 / 1048 行。
 
 ## 3.2 数据模型（写仿真脚本前必读）
 
@@ -807,7 +1028,10 @@ src/
 
 `Wave(name, freq_mhz, envelope, pol, offset_ns, intensity_mwcm2, drive)`；
 包络 `GaussianEnv(center, sigma, peak)` / `SquareEnv(start, edge, height, fall_start)` /
-`ArbitraryWave(t_ns, amp, ...)`。序列化：`serialize_waves / restore_waves`。
+**`FileEnv(t_ns, amp)`**（t78：从文件导入的**光强包络**，|amp| 峰值归一、保留载频，
+故 sambe/mixed/hard 三引擎全支持）/ `ArbitraryWave(t_ns, amp, ...)`（文件即**驱动信号**，
+无载频，仅 hard——两者分工见 §1.5.2）。序列化：`serialize_waves / restore_waves`
+（`FileEnv` 以 `('file', t, amp)` 入档，往返保真已验）。
 
 ### 3.2.4 psi0 三形态
 
@@ -888,7 +1112,7 @@ res = evolve_engine('hard', states, fields=fields, psi0=0,
 pops = res['pops']          # (301, N)
 ```
 
-两体脚本在示例 B（§1.6）基础上加 `pair_core.vdd_sparse` 预计算：
+两体脚本在示例 B（§1.7）基础上加 `pair_core.vdd_sparse` 预计算：
 
 ```python
 from src.core.static_pair import vdd_sparse
@@ -920,6 +1144,15 @@ res = evolve_engine('mixed', states,
 > `evolve_sambe_pair_gpu.gpu_propagate_pair(...)`（CUDA，研究原型）已实现但未进
 > GUI 主路径；一般开发用上表的六组入口即可。
 
+> **输入格式构造的唯一家在 `evolve_twofield.py`**（t78 收敛）：`build_two_field` /
+> `split_by_freq` / `arbitrary_mw_group` / `_build_A` / `adaptive_split_threshold`
+> 原先在 `hard.py` 与 `evolve_twofield.py` **各存一份逐字相同副本**（约 209 行 ×2），
+> 是"双实现语义漂移"的温床（t70 的 Rabi 翻倍即同类问题）。现以 `evolve_twofield`
+> 为唯一定义点，`hard.X` 仅再导出保旧名。**方向不可反转**——反向会让
+> `evolve_twofield` 在模块级 import `hard`，与 `hard` 的模块级导入成环。
+> （GUI 用的 `evolve_twofield.evolve_hard` 在 `numba=True` 时委托
+> `hard.evolve_hard_fast`，两者是同一条代码路径。）
+
 ## 3.5 公共层（t63，单/两体共用——新引擎优先复用）
 
 - **`sambe.photon_geometry(E, groups, Ms)`**：光子块几何（P/dim/strides/nvecs/diag/
@@ -944,6 +1177,12 @@ res = evolve_engine('mixed', states,
 - **`dop853._dop853_driver`**：DOP853 全编译驱动（njit first-class RHS）。
 - **`coupling.pack_rhs(pairs, t_end)`**：把 (a,b,v,dD,is_mw,w,env) 对打包成 RHS 数组；
   分组键 (is_mw, ω, id(env))。
+- **`coupling.static_phase_keep(vals, dE, T, theta_tol)`**（t78）：**V_dd 静态耦合的
+  唯一丢弃判据**——累积相位 $\Theta=C T|V|^2/\max(|V|,|\Delta E|)\ge\theta_{tol}$
+  （默认 `params.POP_PHASE_TOL=1e-4` rad），返回 (keep 掩码, info)。hard 与 mixed
+  共用同一实现 → 两引擎 V_dd 存活集自动一致（实测差 4.3e-8，改前 1.1e-5）。
+  取代原 `_VDD_MIN_FRAC`（幅度阈值，随基组标度漂移）与 mixed 借用 `BW_OPT` 的
+  能量间隙阈值（与 |V| 无关，会误删 34.6 GHz 双翻转 Förster 通道）。
 - **`evolve_mixed.acize_physical(E, fields_opt, r_crit)`**（t74b 自 acize.py
   并入）：AC 化唯一实现——r 判据分类 +
   远强对剔除 + per-field far_sos 位移。
@@ -979,25 +1218,175 @@ V = vdd_sparse(cache, singles, R_um, theta_deg, phi_deg)
 
 ## 3.8 checks 回归
 
-`python checks/selftest_all.py`（约 2 分钟）跑：core（静态 22 项）、dissipative
-（Lindblad 18 项）、exact（单原子 Sambe 11 项）、exact_pair（两体第一性 10 项）、
-two_field_pair、ui_selftest、pair_evolve。独立基准在 checks/ 其余脚本。
+`python checks/selftest_all.py` 依次跑（热缓存约 4 分钟；**清过 `__pycache__`
+后的首次约 10 分钟**——numba 的磁盘 JIT 缓存就在那里）：
+
+| 顺序 | 脚本 | 项数 | 说明 |
+|---|---|---|---|
+| 0 | `checks_sentinel.py` | — | **存活哨兵**（秒级）：语法 + `src.*` 导入可解析 + 兼容导出未遮蔽子包 + 同目录隐式依赖登记 |
+| 1 | `core_selfcheck.py` | 22 | 单原子静态（能级/偶极/AC 位移） |
+| 2 | `evolve_dissipative_selfcheck.py` | 18 | Lindblad 耗散引擎 |
+| 3 | `evolve_exact_selfcheck.py` | 11 | 单原子 Sambe（光子块 + 包络自适应） |
+| 4 | `evolve_exact_pair_selfcheck.py` | 11 | 两体第一性（完整 V_dd） |
+| 5 | `two_field_pair_selfcheck.py` | 11 | 两场两体 |
+| 6 | `ui_selftest.py` | **60** | 主窗口/编辑器/TTL/动态页/存档往返/STIRAP 恢复 |
+| 7 | `pair_evolve_selfcheck.py` | 12 | 两体动态（未装 pairinteraction 时 SKIP） |
+
+独立自检（不在聚合里，按需单跑）：
+
+```bash
+python checks/mixed_nolight_selfcheck.py   # mixed 无光场退化契约 10 项
+python checks/hard_vdd_pack_selfcheck.py   # V_dd 打包（显式零矩阵）+ Θ 判据语义 9 项
+python checks/route_auto_selfcheck.py      # route_auto 判据 6 项
+python checks/checks_sentinel.py           # 哨兵（也可单独跑）
+```
+
+AI 协同三件套（需装 `mcp`/`uvicorn`；**当前被 mcp 2.2.0 的 stateless-HTTP 行为
+阻塞**——`tools/list` 正常但 `tools/call` 返回 404，需回钉 `mcp<2.2` 或适配新
+SDK，见 §1.9）：
+
+```bash
+python checks/ai_selftest.py      # MCP 工具语义 11 项（状态读写/journal/undo）
+python checks/ai_compute_test.py  # 计算通道 17 项（run_compute→job_status/result）
+python checks/ai_codeact_test.py  # CodeAct 13 项（含两轮 B 场扫描一次调用完成）
+```
+
+> 2026-09-10 清理：`hard_numba_selfcheck.py`、`two_field_selfcheck.py`、
+> `evolve_matrix.py`、`evolve_rwa_bench.py`、`acceptance_state.py` 五项因
+> **导入/API 断裂或主题退役**（引用 `src.core.evolve`、`src.pulse` 等已删路径，
+> 或基准的是已封存的 floquet/pwc 算法）迁入 `checks/_archive/`。判断依据 =
+> 实际执行退出码，不靠阅读猜测。
+> ⚠ `mw_bench_firstprinciples.py` **留在 checks/**——它不是独立自检，而是
+> `ui_selftest` 的场景构造依赖（`mb.build_s1`）；首轮误归档被回归当场抓出。
+> 这类"同目录隐式依赖"现已由哨兵逐条登记。
 
 ## 3.9 docs 文档索引
 
+`docs/` 共 28 篇（另有 `docs/_archive/` 存历史文档）。按用途分组：
+
+**规格与总表（先看这几篇）**
+
 | 文档 | 内容 |
 |---|---|
-| `引擎能力边界-终稿.md` | 三引擎适用/局限总表（目标 3）|
+| `引擎能力边界-终稿.md` | 三引擎适用/局限总表 |
+| `引擎参数总表.md` | **全库硬编码参数唯一定义点的清单**（值/位置/依据；含哪些已退役） |
 | `混合引擎理论推导-光Sambe微波当场.md` | φ-帧 + AC 化完整推导 |
-| `混合引擎两体理论方案-用例8设计.md` | 两体 V_dd φ-帧相位 + 当场同扇区 |
-| `t58光子块截断判据.md` | r=Ω/ω → M 判据 |
-| `t34核查结论.md` | 多频 RWA 参考污染核查（E_lab≡E_rot 等价性）|
-| `认知固化II-AC化与混合引擎回归.md` | t55-t62 认知链（norm 漂移根因/仲裁）|
-| `t62f认知固化.md`、`t66认知固化-单两体RHS语义不对称.md` | RHS 语义收敛教训 |
+| `混合引擎锚验证矩阵设计.md` | 锚验证矩阵（各场景用谁做权威参照） |
 | `M选择指南-全频段两体Sambe.md` | per_freq_M 选择与性能档 |
 | `auto路由方案-动态引擎选择.md` | route_auto 判据设计 |
+
+**专项推导与核查**
+
+| 文档 | 内容 |
+|---|---|
+| `混合引擎两体理论方案-用例8设计.md` | 两体 V_dd φ-帧相位 + 当场同扇区 |
+| `t58光子块截断判据.md` | r=Ω/ω → M 判据 |
+| `t34核查结论.md` | 多频 RWA 参考污染核查（E_lab≡E_rot 等价性） |
 | `AC化正式化设计-目标6.md` | ac_ize 正式路径 |
-| `AI队友任务书-两场引擎.md` | hard/sambe/mixed 攻关史 |
+| `t39STIRAP仲裁.md` / `问题json现象核查.md` | STIRAP 精度仲裁 / 现象核查 |
+| `认知固化II-AC化与混合引擎回归.md` / `t62f认知固化.md` / `t66认知固化-单两体RHS语义不对称.md` | 认知链与 RHS 语义收敛教训 |
+
+**重构与流程记录**
+
+| 文档 | 内容 |
+|---|---|
+| `参数管理改造-议题清单.md` | **参数登记册 + 存档 v3** 的议题与落地状态（§3.11） |
+| `t73单两体合并.md` / `t74核心引擎归属重构.md` / `t74b兼容层拆除.md` | 引擎归位三部曲 |
+| `t72进度协议与GIL释放.md` | 进度三槽协议 + GIL 释放 |
+| `t75上帝模式一期-mixed求解可视化方案.md` | 检视器（§1.6）设计 |
+| `GUI接入-mixed与auto实施清单.md` / `AI队友任务书-两场引擎.md` | 接入清单 / 攻关史 |
+| `t46全频段两体稀疏可行性.md` / `t54全频段两体交付状态.md` / `t62混合引擎交付报告.md` | 阶段性交付 |
+| `AI协同-项目目标与原则.md` | AI 接入的愿景/目标/原则（G1–G4、P1–P6、适配分档） |
+| `AI协同-实现方案草案.md` | MCP server/SimState/journal/CodeAct 实现方案（P0–P5） |
+
+## 3.10 AI 协同架构（src/ai）
+
+顶层依据见《AI协同-项目目标与原则.md》：GUI 是状态的一个投影而不是真值源，
+AI 的通道是对**语义操作的直接调用**（不是点像素）；人与 AI 操作**同一个状态
+对象、同一套语义入口**；每次变更带来源（user / ai）进 journal，可撤销、可
+追溯；适配层一律标准 MCP，不绑定特定 harness。
+
+| 模块 | 职责 |
+|---|---|
+| `server.py` | 进程内 MCP server：uvicorn 专用线程跑 streamable HTTP（127.0.0.1，默认 8765，写 `.mcp-port`）；注册 17 个工具；`start_server(win)` 由 `app_entry._init_ai` 在 MainWindow 构造后调用，失败仅日志不影响软件本体 |
+| `sim_state.py` | **SimState 状态门面**：读写一律经**参数登记册**（`src/pm_setup.py` 的 `reg`）的绑定路径（如 `dynamic.waves_A`、`field.B_gauss`）——AI 写入、人的操作、存档恢复走同一组语义入口，自动经既有信号链刷新 GUI；含 `set_param` 白名单与 AI 控件紫色描边 |
+| `journal.py` | OpJournal：每次变更记 `{seq, ts, actor, kind, detail, reason, snapshot}`；落盘 `_journal/<日期>.jsonl`；undo = 整 op 快照回滚（粒度粗但绝对正确） |
+| `dispatch.py` | 主线程派发器：MCP 线程经 queued-signal 把闭包投递 Qt 主线程执行（`run_on_main`），Event 回传结果——Qt 状态只允许主线程读写，长计算阻塞时超时报错不死锁 |
+| `codeact.py` | CodeAct：受限命名空间 exec（只注入语义入口 + numpy/json/time，不给 os/sys），主线程执行、泵事件循环等待计算；整段一个 undo 单元 + 一条 journal |
+
+关键设计决策：
+
+- **门面而非"值入核"**：控件仍是当前真值源，但人/存档/AI 三方消费者全走
+  同一组语义入口——人机等效成立且零重构风险；后续若做彻底"值入核"
+  （视图与语义分离），只替换 SimState 内部实现，调用方不感知；
+- **统一落账（重构后）**：人机写操作都经**参数登记册**的事件通路落账——
+  `server.start_server` 里 `reg.on_op(_journal_bridge)`（server.py:500），
+  归因靠 op 自带的 `actor`，**不再靠信号抑制**。旧版的"AI 写入窗口
+  `set_ai_writing` + 各面板信号钩子"那套已随参数管理改造删除（`journal.py`
+  里已无 `set_ai_writing`/`is_ai_writing`）。
+- **演化复用**：`run_compute` 走与人点运行完全同一条 `dyn._run()` 路径
+  （临时接管 done 回调登记 job + 静默进度框），不另造执行器——AI 跑的
+  计算与 GUI 显示天然一致；
+- **skill 化**（G4 自我迭代）：`skills/energy-level/SKILL.md` 是 AI harness
+  的说明书（连接方式/工具清单/工作流/单位约定/已知坑），项目根
+  `.trae/mcp.json` 为 Trae 接入样板。
+
+测试与验收：`checks/ai_selftest.py`（11）+ `checks/ai_compute_test.py`（17）+
+`checks/ai_codeact_test.py`（13）；`ui_selftest` 60 项无回归（含 §3.11 的
+存档往返用例）。
+> ⚠ 三件套目前**因 `mcp 2.2.0` 的 `tools/call` 404 而失败**，见 §1.9 的警告——
+> 这是环境问题，不是测试或代码问题。
+
+---
+
+## 3.11 状态存档（v3「登记册即存档」）
+
+存档子系统是 2026-09 参数管理改造的产物，由两个模块构成：
+
+| 模块 | 角色 |
+|---|---|
+| `src/pm_setup.py` | **参数登记册装配**：`new_registry(win)` 造册、各面板构造时就地登记（"定义即注册"）、`register_panel_params(reg, win, panel)` 补登外部/非标参数（光场表/能级组/波形/psi/衰变/模式）、`seed_baseline()` 播种 |
+| `src/archive.py` | **快照与迁移**：`snapshot(reg)` / `restore(reg, state)` / `load_file(path)` / `migrate(state)` |
+
+核心设计（用户定案）：
+
+- **存档 = `{'meta': {'version': 3}, 'params': reg.collect()}`**——参数在不在档里，
+  由"它在不在册上"唯一决定；各组件原来的 `serialize_state/restore_state`
+  平行清单**全部删除**（它们是"两份清单各自漂移"的经典来源）。
+- **恢复 = `reg.load(params, apply_external=True)`**：external 参数走 `write_fn`
+  **人用路径**真正应用；标量走 display 通道 + 基准回填。
+- **显示类字段不入档**：`display_mode / readout / readout_weights / focus /
+  fields.psi / topn` 与科学计算无关，不入册即不入档。
+- **旧档兼容**：v2（嵌套 `groups/field/dynamic`）与 v1（顶层平铺）经 `migrate()`
+  转 v3；**未识别键不丢**，以清单返回并由 GUI 提示条数。仓库里
+  `save_state/_legacy/*_v1.json` 就是 v1 兼容回归样本。
+- **三条路同一张册**：菜单「保存/恢复状态」（`app_entry._save_state/_load_state`）、
+  AI 的 `save_archive/load_archive` 工具、AI 恢复前的自动快照
+  （`save_state/_autosnap/`，保留最近 20 份）——全都吃同一张登记册，所以
+  "人存的档 AI 能读、AI 存的档人能读"。
+
+> ⚠ **踩坑记录（2026-09，已被回归覆盖）**：参数改造把 `app_entry` 的存档实现换成
+> `archive.snapshot/restore(...)` 时**漏了 `from src import archive`**，于是「保存
+> 状态」与「恢复状态」两个按钮都 `NameError: name 'archive' is not defined`。
+> 更隐蔽的是当时 `ui_selftest` 仍 57/57 全绿——因为其中的
+> `test_stir_states` 是**自己 `json.load` 旧档再手工搭场**，从不调用 GUI 的
+> `_load_state`，**覆盖不到这条路径**。现已补 `test_archive_roundtrip`
+> （驱动真实 `_save_state`/`_load_state`，含 v1 迁移），`ui_selftest` 57 → 60 项。
+> 教训：判断测试覆盖要看它**调用了哪个入口**，不是看函数名。
+
+---
+
+## 3.12 已知问题与环境限制
+
+| 问题 | 现状 | 处置 |
+|---|---|---|
+| **AI 通道在 `mcp 2.2.0` 下不可用** | `tools/list` 200 正常但 `tools/call` 一律 404（stateless-HTTP 语义变化），任何 harness 都调不动工具 | 回钉 `pip install "mcp<2.2"`，或按官方迁移指南适配 `server.start_server`（§1.9） |
+| **任意波形 + 含光学流形的基组 → 极慢/疑似挂死** | 任意波形走 `mw_group` 路径、**不参与光场旋转** → RHS 带 295 THz 相位 → DOP853 步长被钉死。实测同一 2 ns 演化：基组无 6P 时 15.9 s 完成，含 6P 时 **60 s 未完成** | t78 起运行前会打印适用性警告（`field_build.arb_applicability`）；光学驱动请改用光场波形或按"光强包络"导入 |
+| **长演化偶发 Qt/ARC 堆损坏** | 全流程长演化（本机）偶发崩；**隔离单跑正常** → 判为环境/ARC 交互问题，与本仓库算法无关 | 自检里把长演化放在独立进程/隔离跑（见 `ui_selftest` 的 STIRAP 段注释） |
+| `scripts/` 三个脚本跑不起来 | `demo_pair_drive.py` / `demo_unified.py`（依赖已归档的 `driver`）、`make_stir_rap_states.py`（依赖 t74b 已拆的 `evolve`）——**改动前就已腐坏** | 需要时改指 `src._archive.*` 或一并归档；其余 `scripts/` 是可用的 |
+| 自检脚本在受限沙箱里删文件会失败 | 沙箱的安全删除策略 **fail-closed**：`os.remove` 被拒后抛异常，会让整套回归变"有失败" | 临时文件写系统临时目录 + 删除一律套 `try/except OSError`（`src/ai/server.py` 清 `.mcp-port` 就是范例） |
+
+> 本节替代了旧文档里对"README §4.6"的引用（该章节号从未存在）。
 
 ---
 
@@ -1021,4 +1410,11 @@ AC 位移 ∝Rabi² 失真 4× → 交换对永不共振。V_dd/微波打包均�
 
 ---
 
-*文档版本：2026-09（对应代码 commit 8d6bd2c 之后）。*
+*文档版本：2026-09（t78）。本轮相对上一版的实质更新：mixed 支持无光场（t77，
+光子维退化 P=1）；**V_dd 丢弃判据统一为累积相位 Θ**（t78，hard/mixed 共用
+`coupling.static_phase_keep`，两引擎 V_dd 差 1.1e-5 → 4.3e-8）；新增
+`waveforms.FileEnv` 与「＋任意 → 光强包络 / 完整驱动」两条文件导入路径（§1.5.2）；
+sambe 纳入任意波形降级；`f_max` 增补引擎查表上限；`hard` 与 `evolve_twofield`
+的 5 个逐字重复函数收敛到单一定义点；新增 `checks/checks_sentinel.py` 存活哨兵；
+参数登记册 + 存档 v3 独立成节（§3.11）与已知问题节（§3.12）。
+`src/core` 22 文件 / 9684 行，`src/ui` 13 / 7550，`src/ai` 6 / 1048。*

@@ -10,6 +10,7 @@
 - ui_dynamic.py     动态页面板
 - evolve_worker.py  演化后台线程
 - app_state.py      共享状态层（LevelGroupStore / FieldState）
-- serialization.py  存档序列化（纯数据）
 - pages/            组件页面目录（保留通用布局结构）
+
+存档序列化已迁至 src/pm_setup.py（登记）+ src/archive.py（v3 快照/迁移）。
 """

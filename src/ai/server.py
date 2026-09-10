@@ -10,7 +10,10 @@
 卡住事件循环）。
 
 v1 策略：AI 写操作先斩后奏（草案 §开放问题，用户拍板）——直接生效，
-journal 记 actor='ai' + 变更前快照，undo / get_activity 兜底可追溯。
+归因与记账由参数注册表的 op 事件统一驱动（src/ai/params.py +
+param_framework）：人经 touch→commit 自动 op(source='user')，AI 经
+reg.set/mutate(source='ai', reason, 变更前快照)——本模块只把 op 桥接到
+journal，undo / get_activity 基于 journal 兜底可追溯。
 """
 import asyncio
 import json
@@ -21,19 +24,8 @@ import time
 from typing import Any
 
 from .dispatch import run_on_main
-from .journal import get_journal, set_ai_writing
+from .journal import get_journal
 from .sim_state import SimState, json_safe
-
-
-def _ai_window(fn):
-    """AI 写入窗口包裹：期间 user 钩子不记流水（防级联信号误归因）。"""
-    def _f(*a, **k):
-        set_ai_writing(True)
-        try:
-            return fn(*a, **k)
-        finally:
-            set_ai_writing(False)
-    return _f
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _PORT_FILE = os.path.join(_ROOT, '.mcp-port')
@@ -45,6 +37,29 @@ _mcp = None               # MCPServer 实例
 _state = None             # SimState 门面
 _jobs = {}                # job_id -> {'started': ts, 'seq': int}
 _job_seq = [0]
+
+
+# ============================================================
+# 注册表 op → journal 桥（人机统一落账）
+# ============================================================
+def _brief(v):
+    """op 值 → journal 友好（大列表只记长度/摘要，防流水爆量）。"""
+    if isinstance(v, list):
+        return {'n': len(v), 'head': v[:2]}
+    if isinstance(v, dict):
+        return {k: _brief(x) for k, x in list(v.items())[:8]}
+    return v
+
+
+def _journal_bridge(op):
+    """param_framework op 事件 → journal（source 即 actor）。"""
+    j = get_journal(_ROOT)
+    detail = {'path': op['full_name'], 'old': _brief(op['old']),
+              'new': _brief(op['new'])}
+    if not op['ok']:
+        detail['error'] = op['error']
+    j.record(op['source'], 'set_param', detail, op['reason'],
+             op.get('snapshot'))
 
 
 # ============================================================
@@ -66,59 +81,21 @@ def _t_summary():
     return _state.summary()
 
 
-def _flash(w, widget):
-    """P3：AI 改动处短暂高亮（主线程调用；异常静默）。"""
-    try:
-        from .sim_state import flash_widget
-        flash_widget(widget)
-    except Exception:               # noqa: BLE001
-        pass
-
-
 def _t_set_param(path, value, reason):
-    snap = _state.to_dict()
-    ok, msg, delta = _state.set_param(path, value)
-    if ok:
-        get_journal(_ROOT).record('ai', 'set_param',
-                                  {'path': path, **delta}, reason, snap)
-        from .sim_state import _PARAM_WIDGET
-        try:
-            _flash(None, _PARAM_WIDGET[path](_win()))
-        except Exception:           # noqa: BLE001
-            pass
-    return {'ok': ok, 'msg': msg, **delta}
+    # journal 由 reg.set 的 op 事件自动落账（含快照/归因/高亮）
+    return _state.set_param(path, value, reason=reason)
 
 
 def _t_add_group(n, l, j, reason):
-    snap = _state.to_dict()
-    ok, msg, delta = _state.add_level_group(n, l, j)
-    if ok:
-        get_journal(_ROOT).record('ai', 'add_level_group',
-                                  {'n': n, 'l': l, 'j': j, **delta}, reason, snap)
-        _flash(None, _win().group_panel.group_list)
-    return {'ok': ok, 'msg': msg, **delta}
+    return _state.add_level_group(n, l, j, reason=reason)
 
 
 def _t_remove_group(idx, reason):
-    snap = _state.to_dict()
-    ok, msg, delta = _state.remove_level_group(idx)
-    if ok:
-        get_journal(_ROOT).record('ai', 'remove_level_group',
-                                  {'index': idx, **delta}, reason, snap)
-        _flash(None, _win().group_panel.group_list)
-    return {'ok': ok, 'msg': msg, **delta}
+    return _state.remove_level_group(idx, reason=reason)
 
 
 def _t_set_waves(atom, waves, reason):
-    snap = _state.to_dict()
-    ok, msg, delta = _state.set_waves(waves, atom)
-    if ok:
-        get_journal(_ROOT).record('ai', 'set_waves',
-                                  {'atom': atom, 'n': len(waves), **delta},
-                                  reason, snap)
-        dyn = _win().dynamic
-        _flash(None, dyn.wave_panel_A if atom == 'A' else dyn.wave_panel_B)
-    return {'ok': ok, 'msg': msg, **delta}
+    return _state.set_waves(waves, atom, reason=reason)
 
 
 def _t_activity(since_seq):
@@ -131,9 +108,11 @@ def _t_undo(reason):
     if snap is None:
         return {'ok': False, 'msg': '没有可撤销的 AI 操作'}
     _state.restore_snapshot(snap)
-    j.record('ai', 'undo', {'undid': pub['seq'], 'kind': pub['kind']},
+    j.record('ai', 'undo', {'undid': pub['seq'], 'kind': pub['kind'],
+                            'path': pub['detail'].get('path')},
              reason, None)
-    return {'ok': True, 'msg': f"已撤销 op#{pub['seq']} {pub['kind']}",
+    return {'ok': True, 'msg': f"已撤销 op#{pub['seq']} "
+                               f"{pub['detail'].get('path', pub['kind'])}",
             'undone': pub}
 
 
@@ -385,48 +364,34 @@ def _register_tools(mcp):
     async def summary() -> dict:
         return await asyncio.to_thread(d, _t_summary)
 
-    @mcp.tool(description='改一个白名单参数。path 见 list_params；value 按类型；reason 简述动机')
+    @mcp.tool(description='改一个参数。path 见 list_params；value 按类型；reason 简述动机')
     async def set_param(path: str, value: Any = None, reason: str = '') -> dict:
-        return await asyncio.to_thread(
-            d, _ai_window(lambda: _t_set_param(path, value, reason)))
+        return await asyncio.to_thread(d, lambda: _t_set_param(path, value, reason))
 
-    @mcp.tool(description='列出所有可改参数 path 及当前值')
-    async def list_params() -> dict:
-        def _g():
-            from .sim_state import _PARAM_MAP
-            w = _win()
-            out = {}
-            for p, getter in _PARAM_MAP.items():
-                try:
-                    out[p] = getter(w)[0]
-                except Exception:      # noqa: BLE001
-                    out[p] = None
-            return {'params': json_safe(out)}
-        return await asyncio.to_thread(d, _g)
+    @mcp.tool(description='列出所有可改参数的 schema（type/unit/desc/range/options/value）')
+    async def list_params(prefix: str = '') -> dict:
+        return await asyncio.to_thread(d, lambda: {'params': _state.schema(prefix)})
 
     @mcp.tool(description='添加能级组（n 主量子数, l 轨道角动量, j 总角动量），自动校验+配色')
     async def add_level_group(n: int, l: int, j: float, reason: str = '') -> dict:
-        return await asyncio.to_thread(
-            d, _ai_window(lambda: _t_add_group(n, l, j, reason)))
+        return await asyncio.to_thread(d, lambda: _t_add_group(n, l, j, reason))
 
     @mcp.tool(description='按索引删除能级组（索引见 get_state groups）')
     async def remove_level_group(index: int, reason: str = '') -> dict:
-        return await asyncio.to_thread(
-            d, _ai_window(lambda: _t_remove_group(index, reason)))
+        return await asyncio.to_thread(d, lambda: _t_remove_group(index, reason))
 
-    @mcp.tool(description='整表替换波形序列（A/B 原子）。waves 为 serialize_waves 同构 list：'
+    @mcp.tool(description='整表替换波形序列。atom: single 单原子 / A·B 双原子'
+                         '（三套数据独立）。waves 为 serialize_waves 同构 list：'
                          '普通波 {name,freq_mhz,intensity,pol,offset_ns,env:[gauss,c,s,peak]|[square,start,edge,height]}')
     async def set_waves(waves: list, atom: str = 'A', reason: str = '') -> dict:
-        return await asyncio.to_thread(
-            d, _ai_window(lambda: _t_set_waves(atom, waves, reason)))
+        return await asyncio.to_thread(d, lambda: _t_set_waves(atom, waves, reason))
 
     @mcp.tool(description='启动演化计算（与 GUI 点"运行"同一路径）。立即返回 job_id，'
                          'GUI 进度照常显示；用 job_status/job_result 跟进')
     async def run_compute() -> dict:
         _job_seq[0] += 1
         jid = f'job{_job_seq[0]}'
-        return await asyncio.to_thread(
-            d, _ai_window(lambda: _t_run_compute(jid)), 300.0)
+        return await asyncio.to_thread(d, lambda: _t_run_compute(jid), 300.0)
 
     @mcp.tool(description='查询计算进度')
     async def job_status(job_id: str) -> dict:
@@ -454,8 +419,7 @@ def _register_tools(mcp):
 
     @mcp.tool(description='从 JSON 存档恢复（与菜单"恢复状态"同源，可 undo）')
     async def load_archive(path: str) -> dict:
-        return await asyncio.to_thread(
-            d, _ai_window(lambda: _t_load_archive(path)))
+        return await asyncio.to_thread(d, lambda: _t_load_archive(path))
 
     @mcp.tool(description='主窗口截图 PNG → 返回文件路径（了解人眼所见）')
     async def screenshot() -> dict:
@@ -463,17 +427,18 @@ def _register_tools(mcp):
 
     @mcp.tool(description='CodeAct：一次调用跑一段 Python，完成循环/扫描/后处理等'
                          '多步编排（省回合）。可用名字：summary/get_state/set_param/'
-                         'add_level_group/remove_level_group/set_waves/run_compute_and_wait'
-                         '(启动并等完成，返回摘要)/activity/np/json/time/ROOT。'
-                         '把结论赋给变量 result。大数组用 print 出统计量、别整体回传。')
+                         'add_level_group/remove_level_group/set_waves/load_archive/'
+                         'save_archive/run_compute_and_wait(启动并等完成,返回摘要)/'
+                         'activity/np/json/time/ROOT。把结论赋给变量 result。'
+                         '大数组用 print 出统计量、别整体回传。整段算一个 undo 单元。')
     async def run_python(code: str, timeout: float = 1800.0) -> dict:
         from .codeact import run_code
         return await asyncio.to_thread(
-            d, _ai_window(lambda: run_code(
+            d, lambda: run_code(
                 code, _state, _ROOT, {'seq': _job_seq},
                 _t_run_compute, _t_job_status, _t_job_result,
                 timeout=timeout, t_load=_t_load_archive,
-                t_save=_t_save_archive)), timeout + 60)
+                t_save=_t_save_archive), timeout + 60)
 
 
 # ============================================================
@@ -532,6 +497,7 @@ def start_server(win, port=None):
     init()
     _state = SimState(win)
     get_journal(_ROOT)
+    _state.reg.on_op(_journal_bridge)      # 人机写操作统一落账（op→journal）
     try:
         from mcp.server.mcpserver import MCPServer
     except ImportError:

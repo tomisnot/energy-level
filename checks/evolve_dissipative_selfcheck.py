@@ -27,7 +27,7 @@ import numpy as np
 from scipy.integrate import solve_ivp
 from arc import Rubidium87
 
-from src import core, waveforms
+from src.core import core, waveforms
 # t74：evolve shim 已删——按新家直连
 from src.core.atomic_levels import gaussian, square, make_levels
 from src.core.field_build import (field, real_field, group_field,

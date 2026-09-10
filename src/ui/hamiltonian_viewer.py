@@ -501,8 +501,9 @@ class HamiltonianViewer(QWidget):
     def _viewport_scene_geom(self):
         """当前视口内"可见的热图部分"的场景矩形 → (ox, oy, pw, ph)。
 
-        顶条/左条/轴刻度的"贴边"位置以此为准（缩放时装饰跟着可见区走，
-        不会被甩到屏幕外）。
+        供**数据类**装饰使用：扇区/分组分隔线、hover 行列高亮、命中测试
+        （这些只该覆盖真正有数据的区域）。表头带/外框/轴刻度改用
+        `_frame_scene_geom()`（钉在视口上，不随拖拽移动）。
         """
         if self._dim == 0 or self.img.image is None:
             return 0.0, 0.0, 1.0, 1.0
@@ -515,6 +516,20 @@ class HamiltonianViewer(QWidget):
         if x1 <= x0 or y1 <= y0:
             return fx, fy, fw, fh
         return x0, y0, x1 - x0, y1 - y0
+
+    def _frame_scene_geom(self):
+        """**外框 / 表头**的定位基准 → 视口矩形 (ox, oy, pw, ph)。
+
+        与 `_viewport_scene_geom()`（可见热图 = 矩阵∩视口）的区别：
+        矩阵比视口小时（缩到全景、或拖到数据边缘），交集会跟着矩阵跑，
+        于是"表头和外框被一起拖走"。改用视口矩形后——外框四条边钉死在
+        视口上、表头钉在视口左上，**拖拽/平移只动里面的矩阵图像**；
+        表头文字仍按数据坐标映射，所以内容照样随平移/缩放更新。
+        """
+        vb = self.vb.sceneBoundingRect()
+        if vb.width() < 2 or vb.height() < 2:
+            return self._viewport_scene_geom()
+        return vb.left(), vb.top(), vb.width(), vb.height()
 
     def _update_decorations(self):
         if not self._dim:
@@ -875,7 +890,7 @@ class HamiltonianViewer(QWidget):
         show_sec = self._P >= 2 and n_sec >= 2
         if not (show_grp or show_sec):
             return
-        ox, oy, pw, ph = self._viewport_scene_geom()
+        ox, oy, pw, ph = self._frame_scene_geom()
         fx, fy, fw, fh = self._full_scene_geom()
         if fw <= 0 or pw <= 0:
             return
@@ -1017,7 +1032,7 @@ class HamiltonianViewer(QWidget):
         show_sec = self._P >= 2 and n_sec >= 2
         if not (show_grp or show_sec):
             return
-        ox, oy, pw, ph = self._viewport_scene_geom()
+        ox, oy, pw, ph = self._frame_scene_geom()
         fx, fy, fw, fh = self._full_scene_geom()
         if fh <= 0 or ph <= 0:
             return
@@ -1153,7 +1168,7 @@ class HamiltonianViewer(QWidget):
 
     # ---------- L2 逐维标注（自适应密度/字号/内容） ----------
     def _draw_axis_ticks(self):
-        ox, oy, pw, ph = self._viewport_scene_geom()
+        ox, oy, pw, ph = self._frame_scene_geom()
         fx, fy, fw, fh = self._full_scene_geom()
         self._draw_dim_ticks_x(ox, oy, pw, ph, fx, fw)
         self._draw_dim_ticks_y(ox, oy, pw, ph, fy, fh)
@@ -1258,12 +1273,13 @@ class HamiltonianViewer(QWidget):
         return None
 
     def _draw_matrix_frame(self):
-        """给**可见热图**加一圈细边框。
+        """外框：给**视口**加一圈细边框（位置钉死在视口上，拖拽不动）。
 
-        底边/右边没有标注带，零值区又是白底，矩阵到哪儿结束看不出来——
-        整页显得"飘"。这圈框把绘图区收住。
+        底边/右边没有标注带、零值区又是白底，矩阵到哪儿结束看不出来——
+        这圈框把绘图区收住。上/左两条边与表头带自己的边线重合，画重了
+        也看不出来；保留整圈是为了"无表头"档（单组视图）外框仍完整。
         """
-        ox, oy, pw, ph = self._viewport_scene_geom()
+        ox, oy, pw, ph = self._frame_scene_geom()
         if pw <= 0 or ph <= 0:
             return
         r = QGraphicsRectItem(QRectF(ox, oy, pw, ph))

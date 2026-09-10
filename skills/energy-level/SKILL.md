@@ -56,11 +56,11 @@ result = out
 |---|---|---|
 | `summary` | 轻量摘要（组数/场/方法/波形数） | **每次会话先调这个建立认知** |
 | `get_state(scope)` | 全量/分模块状态导出 | scope ∈ 空/groups/field/dynamic |
-| `list_params` | 可改参数 path 与当前值 | set_param 的字典 |
+| `list_params(prefix)` | 参数 schema：type/unit/desc/range/options/value | set_param 的字典 |
 | `set_param(path, value, reason)` | 改白名单参数 | 过控件校验；reason 写动机 |
 | `add_level_group(n,l,j,reason)` | 加能级组 | 自动校验+配色 |
 | `remove_level_group(index,reason)` | 删能级组 | 索引见 get_state |
-| `set_waves(waves, atom, reason)` | 整表替换波形 | 格式见下 |
+| `set_waves(waves, atom, reason)` | 整表替换波形 | atom=single/A/B（三套独立），格式见下 |
 | `run_compute()` | 启动演化计算 | 立即返回 job_id，GUI 同步显示 |
 | `job_status(job_id)` | 查进度 | 轮询到 done=true |
 | `job_result(job_id, save_npz)` | 取结果摘要 | 大数组落 npz 给路径 |
@@ -106,14 +106,15 @@ result = out
 
 ## 坑（已知）
 
-1. **mixed 引擎需光场**：纯微波波形会被自动降级 hard（GUI 日志有提示，
-   `get_activity`/`screenshot` 可见）。
+1. **mixed 纯微波亦可**（t77 起）：没有光场时光子维退化 P=1，等价于微波/V_dd
+   当场精确积分（与 hard 同物理）。唯一会强制改道的是**任意波形**（无单载频，
+   光子块引擎不支持）→ 运行时自动改用 hard，GUI 日志有提示。
 2. **run_compute 阻塞预处理**：两体 V_dd 预计算可达数十秒，工具返回前
    主线程在泵进度——超时设长一点（默认 300s）。
 3. **undo 是整快照回滚**：撤销 set_param 会连带恢复该步之后的所有
    同 op 影响；逐步操作逐步撤，别攒。
-4. **双原子模式**：`dynamic.pair.*` 仅双原子模式生效；模式切换目前
-   不开放给 AI（视图/工作流耦合深，需人在 GUI 上切）。
+4. **双原子模式**：`dynamic.pair.*` 仅双原子模式生效；切模式用
+   `set_param('dynamic.mode', 0|1)`（0 单原子 / 1 双原子，= 人点单选钮同路）。
 5. **上帝模式（diag 旋钮）**不开放给 AI：检视器属人侧调试通道。
 6. 计算失败时 `job_result` 的 msg 含原因；常见=光强过大不收敛，
    降 intensity 或换 hard。

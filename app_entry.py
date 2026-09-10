@@ -42,7 +42,8 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHeaderView, QLineEdit, QMenu, QAbstractItemView)
 
 from arc import Rubidium87
-from src import core
+from src.core import core
+from src import archive
 from src import fields
 from src import ui_dynamic
 from src import ui_theme
@@ -133,20 +134,8 @@ class MainWindow(QMainWindow):
                               f"{'（' + op.reason + '）' if op.reason else ''}"
                         self.log(txt, 6000)
                 j.subscribe(_on_op)
-
-                # 人侧流水：既有信号链上挂 user 记录钩子（AI 写入窗口内跳过，
-                # 防级联信号误归因）。无快照——undo 只撤 AI。
-                def _user_hook(where):
-                    def _f(*_):
-                        from src.ai.journal import is_ai_writing
-                        if not is_ai_writing():
-                            j.record('user', 'edit', {'where': where}, '', None)
-                    return _f
-                self.groups_store.changed.connect(
-                    _user_hook('能级组'))
-                self.field.data_changed.connect(_user_hook('场面板'))
-                self.dynamic.wave_panel.changed.connect(_user_hook('波形A'))
-                self.dynamic.wave_panel_B.changed.connect(_user_hook('波形B'))
+                # 人机写操作统一落账由 param_framework op→journal 桥完成
+                # （server.start_server 内 reg.on_op(_journal_bridge) 接线）
             return port
         except Exception as e:
             self.log(f'[AI] 端点启动失败（软件功能不受影响）: {e}')
@@ -214,6 +203,9 @@ class MainWindow(QMainWindow):
                     self.group_panel.level_table.setItem(r, 2, QTableWidgetItem(''))
 
     def _build_ui(self):
+        # 参数注册表先建（面板构造时标准件就地登记 = 定义即注册）
+        from src.pm_setup import new_registry
+        self.param_reg = new_registry(self)
         main_widget = QWidget(self)
         self.setCentralWidget(main_widget)
         root = QVBoxLayout(main_widget)
@@ -266,6 +258,13 @@ class MainWindow(QMainWindow):
         top.addWidget(self.panel_scroll, 2)
 
         self._on_canvas_tab_changed(0)
+        # 参数登记收尾：标准件已在面板创建处工厂就地登记（定义即注册），
+        # 这里补登外部/非标参数（光场表/能级组/波形/psi/衰变/模式）+ 播种。
+        # 存档/恢复/AI 三条路都吃这一张册（登记即存档）。
+        from src.pm_setup import register_panel_params
+        for _panel in ('field', 'group', 'dynamic'):
+            register_panel_params(self.param_reg, self, _panel)
+        self.param_reg.seed_baseline()
         menubar = self.menuBar()
         fm = menubar.addMenu('文件')
         fm.addAction('保存状态', self._save_state)
@@ -295,13 +294,7 @@ class MainWindow(QMainWindow):
         path, _ = QFileDialog.getSaveFileName(self, '保存状态', 'rb87_state.json', 'JSON (*.json)')
         if not path:
             return
-        snapshot = {
-            'meta': {'version': 2},   # v2：只存科学数据/参数（去 topn/wave_data），
-                                     # 新增双原子 mode/pair 几何/A·B 波形/A·B 初态
-            'groups': self.group_panel.serialize_state(),
-            'field': self.field.serialize_state(),
-            'dynamic': self.dynamic.serialize_state(),
-        }
+        snapshot = archive.snapshot(self.param_reg)   # v3：登记册即存档
         try:
             with open(path, 'w', encoding='utf-8') as f:
                 json.dump(snapshot, f, ensure_ascii=False, indent=1)
@@ -321,17 +314,9 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, '恢复失败', str(e))
             return
         try:
-            if isinstance(state, dict) and 'groups' in state or 'field' in state or 'dynamic' in state:
-                self.group_panel.restore_state(state.get('groups', {}))
-                self.field.restore_state(state.get('field', {}))
-                self.dynamic.restore_state(state.get('dynamic', {}))
-            else:
-                self.group_panel.restore_state({'groups': state.get('groups', [])})
-                self.field.restore_state({
-                    'B_gauss': state.get('B_gauss', 0.0),
-                    'E_vpcm': state.get('E_vpcm', 0.0),
-                })
-                self.dynamic.restore_state(state)
+            unknown = archive.restore(self.param_reg, state)
+            if unknown:
+                self.log(f'存档含 {len(unknown)} 个未识别键（已忽略）', 6000)
         except Exception as e:
             QMessageBox.warning(self, '恢复失败', str(e))
             return

@@ -17,6 +17,7 @@ from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 from PyQt5.QtWidgets import *
 
 from ..core import core
+from .. import pm_setup as pm
 
 
 class FieldPanel(QWidget):
@@ -46,43 +47,50 @@ class FieldPanel(QWidget):
         # ---- 静磁场 + 静电场 + 添加光 一行 ----
         row = QHBoxLayout()
         row.addWidget(QLabel('磁场 B (G)'))
-        self.b_spin = QDoubleSpinBox()
-        self.b_spin.setRange(0.0, 1000000.0); self.b_spin.setDecimals(2)
-        self.b_spin.setValue(21.7)
+        _reg = self.page.param_reg
+        self.b_spin = pm.spinbox(_reg, 'field.B_gauss', 21.7, 0.0, 1000000.0,
+                                 decimals=2, width=90,
+                                 spec=pm.ParamSpec(
+                                     'float', unit='G',
+                                     desc='静磁场（量子化轴 z）',
+                                     aliases=['B', '磁场']))
         self.b_spin.setToolTip('静磁场（量子化轴 z）：三页共用，Zeeman 能移')
-        self.b_spin.setFixedWidth(90)              # 紧凑：避免大 range 撑宽
         row.addWidget(self.b_spin)
         row.addWidget(QLabel('电场 E (V/cm)'))
-        self.e_spin = QDoubleSpinBox()
-        self.e_spin.setRange(-1e6, 1e6); self.e_spin.setDecimals(3)
-        self.e_spin.setValue(0.0)
+        self.e_spin = pm.spinbox(_reg, 'field.E_vpcm', 0.0, -1e6, 1e6,
+                                 decimals=3, width=90, parent=self,
+                                 spec=pm.ParamSpec(
+                                     'float', unit='V/cm',
+                                     desc='静电场（DC-Stark）',
+                                     aliases=['E', '电场']))
         self.e_spin.setToolTip('静电场（DC-Stark 二阶能移）：三页共用')
-        self.e_spin.setFixedWidth(90)
         row.addWidget(self.e_spin)
         row.addStretch(1)
         # ---- 偶极伙伴窗口 + 光子块阶数（AC-Stark Floquet 精度/成本权衡）----
         row.addWidget(QLabel('窗口'))
-        self.window_spin = QSpinBox()
-        self.window_spin.setRange(1, 5)
-        self.window_spin.setValue(3)
+        self.window_spin = pm.spinbox(_reg, 'field.window', 3, 1, 5,
+                                      width=52,
+                                      spec=pm.ParamSpec(
+                                          'int',
+                                          desc='AC 偶极伙伴窗口（Δn 圈数）'))
         self.window_spin.setToolTip(
             'AC 能移基组的偶极伙伴窗口（Δn 圈数）。\n'
             'window=3 全伙伴（N~400，n=4 时 ~13s/次）；\n'
             'window=1 只最近圈（~60 态，快 ~300×，误差 <0.3% 级）。\n'
             '两级收敛思路：先 window=1 快速定位，必要时 window=2/3 精化。')
-        self.window_spin.setFixedWidth(52)
         self.window_spin.valueChanged.connect(self._changed)
         row.addWidget(self.window_spin)
         row.addWidget(QLabel('光子块'))
-        self.n_photon_spin = QSpinBox()
-        self.n_photon_spin.setRange(1, 12)
-        self.n_photon_spin.setValue(4)
+        self.n_photon_spin = pm.spinbox(_reg, 'field.n_photon', 4, 1, 12,
+                                        width=56,
+                                        spec=pm.ParamSpec(
+                                            'int',
+                                            desc='AC Floquet 光子块阶数'))
         self.n_photon_spin.setToolTip(
             'AC 能移 Floquet 光子块阶数（块数 = 2n+1）。\n'
             'n=4（默认）近/远失谐均收敛（n=1 与 n=4 差约 6%）；\n'
             '阶数越高越精确，但计算量立方增长（n:1/2/4/8 ≈ '
             '1.5s/4s/13s/61s@406 态）。')
-        self.n_photon_spin.setFixedWidth(56)
         self.n_photon_spin.valueChanged.connect(self._changed)
         row.addWidget(self.n_photon_spin)
         self.add_btn = QPushButton('＋添加光')
@@ -166,87 +174,6 @@ class FieldPanel(QWidget):
     def set_lights_visible(self, show):
         """控制光场表格/关注跃迁/初态区显隐（B/E 行恒显，三页共用）。"""
         self.lights_box.setVisible(show)
-
-    def serialize_state(self):
-        """只导出本模块真实的业务状态，不含纯显示状态。"""
-        rows = []
-        for r in range(self.table.rowCount()):
-            freq_item = self.table.item(r, 1)
-            inten_item = self.table.item(r, 2)
-            scope_w = self.table.cellWidget(r, 4)
-            pol_w = self.table.cellWidget(r, 3)
-            rows.append({
-                'frequency_ghz': float(freq_item.text()) if freq_item is not None and freq_item.text() else 0.0,
-                'intensity': float(inten_item.text()) if inten_item is not None and inten_item.text() else 0.0,
-                'polarization': pol_w.currentText() if isinstance(pol_w, QComboBox) else self._pol_text(r),
-                'scope': scope_w.currentText() if isinstance(scope_w, QComboBox) else 'both',
-                'elliptical': dict(self._ellip.get(r, {})),
-            })
-        return {
-            'B_gauss': self.b_gauss(),
-            'E_vpcm': self.e_vpcm(),
-            'window': int(self.window_spin.value()),
-            'n_photon': int(self.n_photon_spin.value()),
-            'lights': rows,
-            'focus_index': int(self.focus_box.currentIndex()),
-            'psi': {
-                'n': int(self.psi_n.value()),
-                'l': int(self.psi_l.value()),
-                'j': float(self.psi_j.value()),
-                'm': float(self.psi_m.value()),
-            },
-        }
-
-    def restore_state(self, state):
-        """恢复本模块状态。"""
-        if not isinstance(state, dict):
-            return
-        self.b_spin.setValue(float(state.get('B_gauss', self.b_gauss())))
-        self.e_spin.setValue(float(state.get('E_vpcm', self.e_vpcm())))
-        self.window_spin.setValue(int(state.get('window', 3)))
-        self.n_photon_spin.setValue(int(state.get('n_photon', 4)))
-        self.table.blockSignals(True)
-        self.table.setRowCount(0)
-        self._ellip.clear()
-        for row in state.get('lights', []):
-            self.add_light()
-            rr = self.table.rowCount() - 1
-            if self.table.item(rr, 1) is not None:
-                self.table.item(rr, 1).setText(str(row.get('frequency_ghz', 0.0)))
-            if self.table.item(rr, 2) is not None:
-                self.table.item(rr, 2).setText(str(row.get('intensity', 0.0)))
-            pol_w = self.table.cellWidget(rr, 3)
-            if isinstance(pol_w, QComboBox):
-                pol = row.get('polarization', 'π')
-                # blockSignals：恢复期间不触发 _on_pol_selected
-                # （否则"椭圆偏"会弹出非模态参数对话框，且其默认值(0,0,0)
-                # 会在后续重算中经 _apply_ellip 回写覆盖已恢复的参数）
-                pol_w.blockSignals(True)
-                if pol_w.findText(pol) >= 0:
-                    pol_w.setCurrentText(pol)
-                pol_w.blockSignals(False)
-            scope_w = self.table.cellWidget(rr, 4)
-            if isinstance(scope_w, QComboBox):
-                val = row.get('scope', 'both')
-                scope_w.blockSignals(True)
-                if val in [scope_w.itemText(i) for i in range(scope_w.count())]:
-                    scope_w.setCurrentText(val)
-                scope_w.blockSignals(False)
-            ell = row.get('elliptical') or {}
-            if ell:
-                self._ellip[rr] = dict(ell)
-        self.table.blockSignals(False)
-        focus_index = int(state.get('focus_index', 0))
-        if self.focus_box.count() > 0:
-            self.focus_box.setCurrentIndex(max(0, min(focus_index, self.focus_box.count() - 1)))
-        psi = state.get('psi', {})
-        if isinstance(psi, dict):
-            self.psi_n.setValue(int(psi.get('n', self.psi_n.value())))
-            self.psi_l.setValue(int(psi.get('l', self.psi_l.value())))
-            self.psi_j.setValue(float(psi.get('j', self.psi_j.value())))
-            self.psi_m.setValue(float(psi.get('m', self.psi_m.value())))
-        self.rebuild_focus(getattr(self, '_focus_exchange', False))
-        self._changed()
 
     # ---------------- 值接口 ----------------
     def _selection_changed(self, *_):
@@ -485,6 +412,44 @@ class FieldPanel(QWidget):
                                              eps_deg=e['eps_deg'])
             cfgs.append(cfg)
         return cfgs
+
+    def set_lights(self, cfgs):
+        """整表替换光场（light_cfgs 同构 list；参数管理 write 通道）。
+
+        与 light_cfgs 同构往返（人恢复存档 / AI 载入走的都是这套控件写入），
+        仅入参改为 light_cfgs 形制（frequency_hz），不碰存档格式。
+        """
+        self.table.blockSignals(True)
+        self.table.setRowCount(0)
+        self._ellip.clear()
+        for cfg in (cfgs or []):
+            self.add_light()
+            r = self.table.rowCount() - 1
+            if self.table.item(r, 1) is not None:
+                self.table.item(r, 1).setText(
+                    f"{float(cfg.get('frequency_hz', 0.0)) / 1e9:.6f}")
+            if self.table.item(r, 2) is not None:
+                self.table.item(r, 2).setText(
+                    f"{float(cfg.get('intensity', 0.0)):.6g}")
+            pol_w = self.table.cellWidget(r, 3)
+            if isinstance(pol_w, QComboBox):
+                pol_w.blockSignals(True)
+                if pol_w.findText(cfg.get('polarization', 'π')) >= 0:
+                    pol_w.setCurrentText(cfg.get('polarization', 'π'))
+                pol_w.blockSignals(False)
+            scope_w = self.table.cellWidget(r, 4)
+            if isinstance(scope_w, QComboBox):
+                scope_w.blockSignals(True)
+                v = cfg.get('scope', 'both')
+                if scope_w.findText(v) >= 0:
+                    scope_w.setCurrentText(v)
+                scope_w.blockSignals(False)
+            ell = cfg.get('elliptical') or {}
+            if ell:
+                self._ellip[r] = dict(ell)
+        self.table.blockSignals(False)
+        self.rebuild_focus(getattr(self, '_focus_exchange', False))
+        self._changed()
 
     def first_cfg(self):
         """第一份光的配置（用于单体 address 同步）；无光返回 None。"""

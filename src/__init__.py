@@ -7,8 +7,10 @@
 - src.ui/     界面：fields / ui_theme / ui_single / ui_radar /
               ui_waves / ui_dynamic / evolve_worker / app_state / serialization / pages
 
-兼容导出：`from src import core, evolve, ...` 继续工作（委托到 src.core.* / src.ui.*），
-历史脚本（checks/scripts）无需改动。
+兼容导出：`from src import waveforms, pair_core, ui_theme, ...` 继续工作
+（委托到 src.core.* / src.ui.*），历史脚本（checks/scripts）无需改动。
+⚠ 例外：`core` **不再从 src 层导出**（会遮蔽同名子包 `src.core`，见文件末尾注释）——
+旧写法 `from src import core` 请改为 `from src.core import core`。
 
 导入本包即自动把 ARC（Alkali Rydberg Calculator）的数据目录重定向到项目内
 .arcdata/（见 _patch_arc_datafolder）：ARC 的 Rubidium87() 实例化会在其数据
@@ -103,7 +105,12 @@ def _patch_arc_datafolder():
 _patch_arc_datafolder()
 
 # ---------------- 兼容导出（from src import X 委托到 core./ui.） ----------------
-from .core import core            # noqa: E402,F401
+# ⚠ `core` **故意不在此列**（t78 修）：`from .core import core` 会给 src 绑定一个
+#   与子包同名的属性 `core` → 遮蔽真正的 `src.core` 子包，导致
+#   `import src.core.<x> as <别名>` 报 `cannot import name '<x>' from
+#   src.core.static_atom`（CPython 对带 as 的点号导入走父模块属性遍历）。
+#   旧写法 `from src import core` 的调用方请改用 `from src.core import core`
+#   （两者是同一个 static_atom 对象），语义不变。
 from .core import pair_core       # noqa: E402,F401
 from .core import evolve_exact    # noqa: E402,F401
 from .core import waveforms       # noqa: E402,F401
@@ -115,5 +122,4 @@ from .ui import ui_waves          # noqa: E402,F401
 from .ui import ui_dynamic        # noqa: E402,F401
 from .ui import evolve_worker     # noqa: E402,F401
 from .ui import app_state         # noqa: E402,F401
-from .ui import serialization     # noqa: E402,F401
 #from .ui import pages             # noqa: E402,F401

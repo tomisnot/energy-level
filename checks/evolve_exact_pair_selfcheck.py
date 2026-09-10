@@ -51,7 +51,7 @@ def pair_reference_dense(states, vdd, psi0_2d, t, fields=None):
 # ============================================================
 def ep1():
     from arc import Rubidium87
-    from src import core, waveforms
+    from src.core import core, waveforms
     from src.core.evolve_util import decay
     from src.core.atomic_levels import make_levels
     from src.core.sambe import evolve_sambe as ex  # t74：ex.evolve_exact → evolve_sambe

@@ -19,7 +19,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np
 from arc import Rubidium87
 
-from src import core, evolve, waveforms
+from src.core import core, waveforms
+from src import evolve
 
 cache = core.ArcCache(Rubidium87())
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

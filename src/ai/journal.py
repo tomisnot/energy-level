@@ -43,9 +43,13 @@ class OpJournal:
         self._seq = 0
         self._root = root_dir
         self._listeners = []        # callable(op) —— GUI 订阅
+        self.suppress_snapshot = False   # CodeAct 期间：op 照记但不带快照
+                                          # （整段撤销由一条 run_python op 承担）
 
     # ---------- 记录 ----------
     def record(self, actor, kind, detail, reason='', snapshot=None):
+        if self.suppress_snapshot:
+            snapshot = None
         self._seq += 1
         op = Op(self._seq, actor, kind, detail, reason, snapshot)
         self._ops.append(op)
@@ -98,21 +102,6 @@ class OpJournal:
 
 
 _JOURNAL = None
-# AI 写入窗口：显式布尔覆盖写入全程（含 run_compute 的秒级预处理泵），
-# 尾巴时间戳 0.6s 覆盖写完成后才发射的 field 防抖信号（180ms）等级联。
-_ai_active = False
-_ai_busy_until = 0.0
-
-
-def set_ai_writing(on):
-    global _ai_active, _ai_busy_until
-    _ai_active = bool(on)
-    if not on:
-        _ai_busy_until = time.time() + 0.6
-
-
-def is_ai_writing():
-    return _ai_active or time.time() < _ai_busy_until
 
 
 def get_journal(root_dir=None):

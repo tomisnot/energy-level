@@ -34,7 +34,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 from arc import Rubidium87
-from src import core
+from src.core import core
 # t74：evolve shim 已删——按新家直连
 from src.core.atomic_levels import gaussian, square, make_levels
 from src.core.field_build import field, real_field, _sublevel_row

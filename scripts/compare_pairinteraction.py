@@ -12,7 +12,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np
 import pairinteraction as pi
-from src import core
+from src.core import core
 from arc.alkali_atom_data import Rubidium87
 
 cache = core.ArcCache(Rubidium87())

@@ -7,13 +7,13 @@
 context。
 
 安全与等效边界：
-  - 命名空间只注入语义入口（state 门面方法 + job 助手 + numpy/json/time），
+  - 命名空间只注入语义入口（注册表方法 + job 助手 + numpy/json/time），
     不给 os/sys/subprocess——不是防模型（本机本就有权限），而是保证
-    每次状态变更都走 SimState → 走控件同路 → 进 journal（P2/P3 不因
+    每次状态变更都走 ParamRegistry → 走控件同路 → op 归因（P2/P3 不因
     传输形态而失效）。
-  - 代码在 Qt 主线程 exec（可直接碰控件），期间 user 钩子静默；整段
-    执行前拍一次快照，undo 一步回到执行前（粒度变粗，符合"撤掉这次
-    脚本"的直觉）。
+  - 代码在 Qt 主线程 exec（可直接碰控件）。整段执行期间 journal 逐 op
+    照记但**抑制快照**（suppress_snapshot），结束后补记一条带执行前
+    快照的 run_python op——undo 一步回到脚本开始前，流水仍完整。
   - 等待计算用泵事件循环（processEvents），不冻结 GUI，人可随时取消。
 """
 import io
@@ -24,7 +24,7 @@ from contextlib import redirect_stdout
 
 import numpy as np
 
-from .journal import get_journal, set_ai_writing
+from .journal import get_journal
 
 
 def _make_namespace(state_mod, root, jobs, t_run, t_status, t_result,
@@ -32,25 +32,8 @@ def _make_namespace(state_mod, root, jobs, t_run, t_status, t_result,
     """构造受限命名空间。
 
     函数语义与细粒度 MCP 工具**保持一致**（同名、返回 dict、接受
-    reason），模型在两个通道共用一套心智模型。per-op journal 不在这里
-    记——整段脚本是一个 undo 单元 + 一条 run_python 流水（见 run_code）。
+    reason），模型在两个通道共用一套心智模型。
     """
-
-    def _dict(fn, *a):
-        ok, msg, delta = fn(*a)
-        return {'ok': ok, 'msg': msg, **delta}
-
-    def set_param(path, value, reason=''):
-        return _dict(state_mod.set_param, path, value)
-
-    def add_level_group(n, l, j, reason=''):
-        return _dict(state_mod.add_level_group, n, l, j)
-
-    def remove_level_group(index, reason=''):
-        return _dict(state_mod.remove_level_group, index)
-
-    def set_waves(waves, atom='A', reason=''):
-        return _dict(state_mod.set_waves, waves, atom)
 
     def run_compute_and_wait(timeout=1800, poll=1.0, save_npz=False):
         """启动演化并阻塞等待完成（期间泵 GUI 事件，人可看可取消）。
@@ -84,10 +67,10 @@ def _make_namespace(state_mod, root, jobs, t_run, t_status, t_result,
         'ROOT': root,
         'get_state': state_mod.get_state,
         'summary': state_mod.summary,
-        'set_param': set_param,
-        'add_level_group': add_level_group,
-        'remove_level_group': remove_level_group,
-        'set_waves': set_waves,
+        'set_param': state_mod.set_param,
+        'add_level_group': state_mod.add_level_group,
+        'remove_level_group': state_mod.remove_level_group,
+        'set_waves': state_mod.set_waves,
         'load_archive': t_load or (lambda path: {'ok': False,
                                                  'msg': 'load_archive 不可用'}),
         'save_archive': t_save or (lambda path='save_state/ai_state.json':
@@ -98,18 +81,18 @@ def _make_namespace(state_mod, root, jobs, t_run, t_status, t_result,
 
 
 def run_code(code, state_mod, root, jobs, t_run, t_status, t_result,
-             timeout=1800.0, journal=None, t_load=None, t_save=None):
+             timeout=1800.0, t_load=None, t_save=None):
     """在主线程 exec 模型写的代码；返回 {ok, stdout, result, error}。
 
     调用方（server.run_python）负责经 dispatch.run_on_main 投递到这里。
     """
-    j = journal or get_journal(root)
+    j = get_journal(root)
     snap = state_mod.to_dict()
     buf = io.StringIO()
     env = _make_namespace(state_mod, root, jobs, t_run, t_status, t_result,
                           t_load=t_load, t_save=t_save)
     env['result'] = None
-    set_ai_writing(True)
+    j.suppress_snapshot = True          # 脚本内逐 op 照记、快照统一挂到末尾
     t0 = time.time()
     try:
         compiled = compile(code, '<ai_code>', 'exec')
@@ -130,7 +113,7 @@ def run_code(code, state_mod, root, jobs, t_run, t_status, t_result,
                 'error': tb[-2000:],
                 'elapsed_s': round(time.time() - t0, 2)}
     finally:
-        set_ai_writing(False)
+        j.suppress_snapshot = False
 
 
 def _jsonable(v):

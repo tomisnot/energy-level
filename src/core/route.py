@@ -76,9 +76,10 @@ def route_auto(states, waves, t_grid=None, two_body=False, cache=None):
     if arb:
         return ('hard', '含任意波形/变频场（无单频）→ hard 唯一支持')
 
-    # 判据 C：无光场（纯微波）→ hard（微波无 RWA + 快 100×）
+    # 判据 C：无光场（纯微波）→ hard。t77 起 mixed 同样支持纯微波（光子维退化
+    # P=1，与 hard 数值等价），故此处只是"传统默认推荐路径"，不再是必要改道。
     if not opt:
-        return ('hard', '纯微波（无光场）→ hard 微波硬积分精确且快')
+        return ('hard', '纯微波（无光场）→ hard 微波硬积分精确（mixed 亦等价支持）')
 
     # 判据 B：有光场——评估强度
     if not _has_strong_optical(states, opt, cache=cache):

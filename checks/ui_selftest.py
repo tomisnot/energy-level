@@ -32,7 +32,8 @@ QMessageBox.information = staticmethod(lambda *a, **k: None)
 QMessageBox.warning = staticmethod(lambda *a, **k: None)
 
 import 能级 as main_mod
-from src import waveforms, core, ui_theme
+from src.core import core, waveforms
+from src import ui_theme, archive
 from src.core.evolve_util import decay, auto_decays
 from src.core.field_build import field
 from src.core.atomic_levels import make_levels, gaussian, square
@@ -217,18 +218,14 @@ def test_dynamic(app, win):
     dyn.display_mode_cb.setCurrentIndex(0); app.processEvents()
     check('显示模式恢复态布居', not dyn.readout_cb.isVisible())
     check('态布居时 topn 显示（t27 互斥）', dyn.topn_sb.isVisible())
-    # t30：serialize 含 readout_weights 且 round-trip 一致
-    sv = dyn.serialize_state()
+    # t30：读出权重/读出态=显示参数（v3 不入册不存档）；基组重建重置权重、
+    # 哨兵项回退真实能级
     dyn._readout_weights = np.array([0.1, 0.2, 0.3] + [0.0] * (N - 3))
-    sv2 = dyn.serialize_state()
-    check('serialize 含 readout_weights',
-          'readout_weights' in sv2['dynamic']
-          and len(sv2['dynamic']['readout_weights']) == N)
-    dyn.restore_state(sv2); app.processEvents()
-    check('restore 恢复 readout_weights',
-          np.allclose(dyn._readout_weights,
-                      [0.1, 0.2, 0.3] + [0.0] * (N - 3)))
-    check('复杂配置不可作默认（恢复回退真实能级）',
+    dyn.refresh_groups(); app.processEvents()
+    check('基组重建重置读出率权重', np.allclose(dyn._readout_weights, 0))
+    dyn.readout_cb.setCurrentIndex(dyn.readout_cb.count() - 1)   # 复杂配置哨兵
+    dyn.refresh_groups(); app.processEvents()
+    check('复杂配置不可作默认（重建回退真实能级）',
           dyn.readout_cb.currentData() != -1)
 
     # ---- 自发辐射三档：自动（ARC 寿命）/ 禁用 / 自定义 ----
@@ -331,11 +328,12 @@ def test_wave_serde(app):
     check('波形 → real_field 场（近共振驱动对）', len(fields) >= 2)
 
 
-# ================= 5. 状态保存：只存科学参数，双原子完整，往返一致 =================
+# ================= 5. 状态保存：登记册即存档（v3），双原子完整，往返一致 =================
 def test_state_save(app):
-    """serialize/restore：不存显示参数（topn/wave_data）；双原子科学参数
-    （mode/pair 几何/A·B 波形/A·B 初态）完整；旧档兼容。"""
+    """archive.snapshot/restore：不存显示参数（topn/readout/psi 索引）；
+    双原子科学参数（mode/pair 几何/A·B 波形/A·B 初态身份键）完整；旧档兼容。"""
     win = main_mod.MainWindow()
+    reg = win.param_reg
     for n, l, j in ((60, 0, 0.5), (60, 1, 0.5)):
         win.group_panel.n_spin.setValue(n)
         win.group_panel.l_spin.setValue(l)
@@ -354,21 +352,25 @@ def test_state_save(app):
     dyn.psi_combo_B.setCurrentIndex(2)
     dyn.topn_sb.setValue(12)         # 显示参数：不应保存
     app.processEvents()
-    snap = dyn.serialize_state()
-    check('存档：不含显示参数（topn/wave_data）',
-          'topn' not in snap['dynamic'] and 'wave_data' not in snap)
-    check('存档：双原子科学参数完整（mode/pair/A·B 波形/A·B 初态）',
-          snap['dynamic']['mode'] == 1
-          and snap['pair'] == {'R_um': 7.3, 'theta_deg': 45.0, 'phi_deg': 90.0}
-          and len(snap['waves']) == 1             # A ≡ 共享面板：波形在 waves
-          and snap['waves_A'] == []               # 共享去重（见 serialize_state）
-          and len(snap['waves_B']) == 1
-          and snap['dynamic']['psi_A'] == 1
-          and snap['dynamic']['psi_B'] == 2)
+    snap = archive.snapshot(reg)
+    p = snap['params']
+    check('存档：不含显示参数（topn/readout/psi 索引）',
+          'topn' not in str(p) and 'readout' not in str(p)
+          and not any(k.endswith('.psi') for k in p))
+    check('存档：双原子科学参数完整（v3 三面板独立：mode/pair/A·B 波形/初态键）',
+          p['dynamic.mode'] == 1
+          and p['dynamic.pair.R_um'] == 7.3
+          and p['dynamic.pair.theta_deg'] == 45.0
+          and p['dynamic.pair.phi_deg'] == 90.0
+          and p['dynamic.waves_single'] == []     # 单原子面板未加波形
+          and len(p['dynamic.waves_A']) == 1      # v3：A 独立存
+          and len(p['dynamic.waves_B']) == 1
+          and p['dynamic.psi_A'] is not None      # 身份键（非索引）
+          and p['dynamic.psi_B'] is not None)
     # 往返
     dyn.vdd_R_sb.setValue(1.0)
     dyn.wave_panel_A.waves.clear()
-    dyn.restore_state(snap)
+    archive.restore(reg, snap)
     app.processEvents()
     check('恢复：双原子模式 + 科学参数一致（显示参数保持当前值）',
           dyn._is_two_body
@@ -376,14 +378,25 @@ def test_state_save(app):
           and len(dyn.wave_panel_A.waves) == 1
           and dyn.psi_combo_A.currentIndex() == 1
           and dyn.topn_sb.value() == 12)
-    # 旧档兼容（_legacy/STIRAP_v1.json：顶层旧格式 v1，无 mode/pair/waves_A/B）
+    # 旧档兼容①（_legacy/STIRAP_v1.json：顶层旧格式 v1，无 mode/pair/waves_A/B）
     data = json.load(open(os.path.join(
         _ROOT, 'save_state', '_legacy', 'STIRAP_v1.json'),
         encoding='utf-8'))
-    dyn.restore_state(data)
+    archive.restore(reg, data)
     app.processEvents()
     check('旧档兼容：无 mode/pair → 单原子 + 波形恢复',
           not dyn._is_two_body and len(dyn.wave_panel.waves) >= 2)
+    # 旧档兼容②（v2 双原子档：A 数据在 'waves'，waves_A 去重为空）
+    v2 = {'meta': {'version': 2}, 'dynamic': {
+              'dynamic': {'mode': 1, 'psi_A': 0, 'psi_B': 0,
+                          't_max': 100.0, 'npts': 101, 'method': 'hard'},
+              'pair': {'R_um': 5.0, 'theta_deg': 0.0, 'phi_deg': 0.0},
+              'waves': p['dynamic.waves_A'], 'waves_A': [], 'waves_B': [],
+              'decays': []}}
+    archive.restore(reg, v2)
+    app.processEvents()
+    check('旧档兼容：v2 双原子档 A 数据自 waves 回填原子 A',
+          dyn._is_two_body and len(dyn.wave_panel_A.waves) == 1)
     win.close(); app.processEvents()
 
 
@@ -451,6 +464,60 @@ def test_progress(app):
           and np.max(np.abs(r2['pops'].sum(axis=1) - 1)) < 1e-6)
 
 
+# ================= 6b. 存档/恢复走 GUI 真实方法（t78） =================
+def test_archive_roundtrip(app, win):
+    """驱动 app_entry 的 `_save_state` / `_load_state`（= 工具栏两个按钮的真实入口）。
+
+    为什么要单独测：参数管理改造把存档实现换成 `archive.snapshot/restore(...)`
+    却漏了 `from src import archive`，保存与恢复**两个按钮都 NameError**；
+    而下面的 test_stir_states 是自己 `json.load` 旧存档再手工搭场，
+    **覆盖不到这条路径**——所以 57/57 全绿时按钮仍不可用。此处 monkeypatch 掉
+    文件对话框，直接跑真实方法，并覆盖 v3 自身与 v1 legacy 的迁移路径。
+    """
+    import app_entry as _ae
+    import tempfile
+    from PyQt5.QtWidgets import QFileDialog
+
+    msgs = []
+    _ae.QMessageBox.warning = staticmethod(
+        lambda *a, **k: msgs.append(str(a[2]) if len(a) > 2 else ''))
+    # 写到系统临时目录（不污染 save_state/）；删除套 try/except——受限沙箱的
+    # 安全删除策略会**拒绝**删除操作（fail-closed），不能因此判测试失败
+    # （src/ai/server.py 的 .mcp-port 清理也是这么做的）。
+    out = os.path.join(tempfile.gettempdir(), '_ui_selftest_roundtrip.json')
+    orig_save = QFileDialog.getSaveFileName
+    orig_open = QFileDialog.getOpenFileName
+    try:
+        QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (out, ''))
+        win._save_state()
+        snap = (json.load(open(out, encoding='utf-8'))
+                if os.path.isfile(out) else {})
+        check('存档：_save_state 写出 v3（meta.version==3 + params）',
+              snap.get('meta', {}).get('version') == 3
+              and isinstance(snap.get('params'), dict))
+        for p in (out, os.path.join(_ROOT, 'save_state', '_legacy',
+                                    'STIRAP_v1.json')):
+            msgs.clear()
+            QFileDialog.getOpenFileName = staticmethod(
+                lambda *a, _p=p, **k: (_p, ''))
+            try:
+                win._load_state()
+                exc = None
+            except Exception as e:                       # noqa: BLE001
+                exc = f'{type(e).__name__}: {e}'
+            check(f'存档：_load_state 恢复 {os.path.basename(p)} 无异常/无警告'
+                  f'（exc={exc} warn={msgs}）', exc is None and not msgs)
+    finally:
+        QFileDialog.getSaveFileName = orig_save
+        QFileDialog.getOpenFileName = orig_open
+        _ae.QMessageBox.warning = staticmethod(lambda *a, **k: None)
+        try:
+            if os.path.isfile(out):
+                os.remove(out)
+        except OSError:
+            pass
+
+
 # ================= 6. STIRAP/拉曼 存档恢复端到端 =================
 def test_stir_states(app):
     """恢复 save_state/_legacy/STIRAP_v1.json（v1 旧格式）→ build_fields
@@ -481,7 +548,7 @@ def test_stir_states(app):
           len(fields) >= 2 and len(waves) >= 2)
     # 演化保真度由 stir_rap_selfcheck（引擎级）与 scripts/make_stir_rap_states.py
     # （独立进程）覆盖——本环境全流程长演化偶发 Qt/ARC 堆损坏干扰（隔离跑正常，
-    # 见 README §4.6），此处只保证「恢复状态 → 建场」管线可用。
+    # 见 README §3.12 已知问题），此处只保证「恢复状态 → 建场」管线可用。
 
 
 def main():
@@ -491,6 +558,7 @@ def main():
     test_dynamic(app, win)
     test_wave_serde(app)
     test_state_save(app)
+    test_archive_roundtrip(app, win)
     test_progress(app)
     test_stir_states(app)
     win.close(); app.processEvents()
