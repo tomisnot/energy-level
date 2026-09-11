@@ -18,6 +18,14 @@
 >    语义入口函数，与 MCP 工具同名同返回形状）、主线程 exec、
 >    run_compute_and_wait 泵 GUI 事件、整段一个 undo 单元 + 一条 journal。
 >    验证：checks/ai_codeact_test.py 13/13（两轮 B 场扫描一次调用完成）。
+>
+> **v3 换轨（2026-09-10，参数管理改造）**：登记收口到 `src/pm_setup.py`
+> （定义即注册：标准件工厂就地登记 + 外部参数 register），存档/恢复切
+> `src/archive.py` v3（登记册即存档，v2/v1 自动迁移）；SimState 门面建于
+> 注册表之上，AI 可及面 = 在册面（独立白名单已废）。§0 现状盘点里的
+> "各组件自治 serialize_state/restore_state" 已随改造删除，仅作历史记录。
+> 验证：ai_selftest 11 + ai_compute 17 + ai_codeact 13 + ui_selftest 60
+> + MCP 全链路探针 32 项全绿（mcp 2.2.0）。
 
 > 顶层依据见《AI协同-项目目标与原则.md》。本文是 Energy Level 项目
 > 落地的具体技术方案，含现状盘点、架构、分期与风险。

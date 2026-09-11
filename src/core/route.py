@@ -2,7 +2,8 @@
 """auto 引擎路由（目标 4）：按用户配置的场与能级，判断动态分析用哪个引擎。
 
 判据（docs/auto路由方案-动态引擎选择.md 的落地）：
-- 硬路由：有 ArbitraryWave（无单频）→ 只能 hard（sambe 光子块需固定载频）
+- 硬路由：有 ArbitraryWave（无单频）→ hard。只有 hard 具备 cos(φ_f(t))
+  任意相位积分路径；sambe / mixed 在 GUI 侧遇到同类波形会先自动改道 hard
 - 光场强度：强光近共振（大 Rabi/小失谐）→ 需无 RWA（sambe frozen / 混合）
   弱光（RWA 误差 ~(Ω/Δ)² 可忽略）→ hard 够（快 100×）
 - 微波主导：无光场/光弱 → hard（微波无 RWA + 快）
@@ -13,8 +14,7 @@
 """
 import numpy as np
 
-# 与 evolve_twofield.MW_MAX_MHZ 一致的微波/光场分界（载频 ≤ 100 GHz 视为微波）
-_MW_MAX_MHZ = 1e5
+from .params import MW_MAX_MHZ as _MW_MAX_MHZ   # t80：分界常量单源
 
 
 def _split_waves(waves):
@@ -72,9 +72,11 @@ def route_auto(states, waves, t_grid=None, two_body=False, cache=None):
     """
     opt, mw, arb = _split_waves(waves)
 
-    # 判据 A：存在任意波形（无单频）→ hard（唯一能处理变频/任意相位）
+    # 判据 A：存在任意波形（无单频）→ hard。任意波形经 arbitrary_mw_group
+    # 转成微波组，只有 hard 有 cos(φ_f(t)) 任意相位积分路径；sambe/mixed
+    # 在 GUI 侧遇同类波形会先自动改道 hard（t78），故此处直接给 hard。
     if arb:
-        return ('hard', '含任意波形/变频场（无单频）→ hard 唯一支持')
+        return ('hard', '含任意波形（无单频）→ 需 hard 的任意相位路径')
 
     # 判据 C：无光场（纯微波）→ hard。t77 起 mixed 同样支持纯微波（光子维退化
     # P=1，与 hard 数值等价），故此处只是"传统默认推荐路径"，不再是必要改道。

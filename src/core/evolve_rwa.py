@@ -16,7 +16,7 @@ from .evolve_util import _CONV             # t74：常量单源
 from .evolve_util import (_POL_Q, _onehot, _as_vector, decay, auto_decays,
                           _resolve_state_idx, _decay_ops)  # t74 工具归位
 from .field_build import _field_geometry  # t74：ip4 场格式归一归位场层
-from .params import IP4_RWA_THRESH  # t74c 参数单源
+from .params import RWA_TOL  # t74c 参数单源
 # 光频/微波分界：Ω/ωL < 此值 → RWA（反旋转误差 ~1e-7）；≥ → 非 RWA
 
 
@@ -112,8 +112,8 @@ def _rwa_reference(states, fields):
     def _ratio(g):
         return (g.get('real_omega0_mhz', g['omega0_mhz'])
                 / max(g['omega_L_mhz'], 1e-9))
-    rwa_g = [g for g in geoms if _ratio(g) < IP4_RWA_THRESH]
-    non_g = [g for g in geoms if _ratio(g) >= IP4_RWA_THRESH]
+    rwa_g = [g for g in geoms if _ratio(g) < RWA_TOL]
+    non_g = [g for g in geoms if _ratio(g) >= RWA_TOL]
 
     def _key(i):
         s = states[i]
@@ -349,7 +349,7 @@ def _evolve_rwa(E, states, fields, psi0, t, frac=40.0, record_amp=False,
                 progress_arr=None):
     """相互作用绘景 RK4（第一性原理）。
 
-    - 光频（Ω/ωL < IP4_RWA_THRESH）→ RWA 旋转系耦合（反旋转误差 ~1e-7）；
+    - 光频（Ω/ωL < RWA_TOL）→ RWA 旋转系耦合（反旋转误差 ~1e-7）；
     - 微波等强驱动 → 非 RWA：保留 cos(ω t) 反旋转项（第一性原理）。
     - 参考系：RWA 级联 + 非 RWA 共享（_rwa_reference）。
     - 相互作用绘景 H0=diag(E−ref)：相位精确除去 → 每步误差 ~(Ω·dt)³，
@@ -604,7 +604,7 @@ def _lindblad_eligible(states, fields, t_end):
     for g in geoms:
         ratio = (g.get('real_omega0_mhz', g['omega0_mhz'])
                  / max(g['omega_L_mhz'], 1e-9))
-        if ratio >= IP4_RWA_THRESH:
+        if ratio >= RWA_TOL:
             return False
         if not _env_samples(g['waveform'], t_end)[1]:
             return False
@@ -1179,8 +1179,9 @@ def evolve(states, fields, psi0, t_grid, method='auto', backend='auto',
     if method == 'arbitrary':
         raise ValueError(
             "method='arbitrary' 已随旧 build_fields 管线归档（t74，"
-            "src/_archive/evolve_arbitrary.py）——GUI 的 ArbitraryWave 走 "
-            "hard 的 cos(φ_f(t)) 任意相位路径；脚本请改用 method='hard'。")
+            "src/_archive/evolve_arbitrary.py）——GUI 的 ArbitraryWave 经 "
+            "arbitrary_mw_group 并入两场 meta，走 hard 的 cos(φ_f(t)) "
+            "任意相位路径；脚本请改用 method='hard'。")
 
     if method == 'ip4':
         t, pops, psi = _evolve_rwa(E, states, fields, psi0v, t,

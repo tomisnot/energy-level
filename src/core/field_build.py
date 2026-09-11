@@ -1,15 +1,18 @@
 # -*- coding: utf-8 -*-
-"""场构造（t19：evolve.py 拆分）——field/group_field/real_field/arbitrary_field
-+ 助手（_env_samples/_sublevel_row/_floquet_ac_static）。"""
+"""场构造：field / group_field / real_field / build_fields_exact + 助手。
+
+任意波形（ArbitraryWave，无载频）的场构造**不在本模块**：见
+`evolve_twofield.arbitrary_mw_group()`（Hilbert 分解 env/φ → 两场 meta →
+hard / mixed 的 cos(φ_f(t)) 任意相位通道）。"""
 import numpy as np
 
 from . import static_atom as core
 from .atomic_levels import square
 
-from .evolve_util import _CONV              # t74：常量单源
-from .params import (_ENV_SAMPLES, AC_NEAR_CUTOFF_MHZ,  # t74c
+from .params import (_ENV_SAMPLES, AC_NEAR_CUTOFF_MHZ,
                      MW_MAX_MHZ)
-from .evolve_util import _POL_Q            # t74：工具归位
+from .evolve_util import _POL_Q
+# AC_NEAR_CUTOFF_MHZ 直连 params 单源（勿经 static_atom 转发）
 # 上态总衰变率缓存（(n,l,j) → Γ MHz；远失谐散射损失用）
 _lifetime_cache = {}
 
@@ -82,7 +85,7 @@ def _sublevel_row(s):
 def _field_geometry(states, f):
     """解析光场 → dict(A, g_idx, e_idx, omega0_mhz, omega_L_mhz, waveform)。
 
-    （t74 自 evolve_rwa 归位——ip4 族场格式的归一化与场构造同源。）
+    （ip4 族场格式的归一化与场构造同源。）
     """
     N = len(states)
     if f['kind'] == 'multi':
@@ -158,9 +161,10 @@ def build_fields_exact(cache, states, waves):
     for w in waves:
         if getattr(w, 'kind', None) == 'arb':
             raise ValueError(
-                '第一性引擎（sambe/mixed）不支持任意波形——其扩展空间需要'
-                '**单一载频**，而任意波形无载频概念。请把该文件按「光强包络」'
-                '导入（Wave + 载频，三引擎全支持），或改用「完整驱动」+ hard。')
+                'build_fields_exact（sambe / mixed 的 kind="exact" 场）不支持'
+                '任意波形——其扩展空间需要**单一载频**，而任意波形无载频概念。'
+                '请把该文件按「光强包络」导入（Wave + 载频，三引擎全支持），'
+                '或改用「完整驱动」（经 arbitrary_mw_group 走 hard 任意相位路径）。')
         q = _POL_Q.get(w.pol, 0)
         E0_sq = core.field_e0_sq(float(w.intensity_mwcm2))
         A = np.zeros((N, N))
@@ -186,7 +190,8 @@ def build_fields_exact(cache, states, waves):
 def arb_applicability(cache, states, wave, t_end_ns=None):
     """任意波形（ArbitraryWave）对当前基组的适用性体检 → 警告文本列表。
 
-    任意波形走「文件即驱动」路径（无载频，H ⊃ amp(t)·A），三个已知陷阱：
+    任意波形经 arbitrary_mw_group 转成微波组（Hilbert 分解 env·cosφ，
+    无载频），三个已知陷阱：
       ① 文件带宽 f_max 必须覆盖目标跃迁频率——否则**静默零效果**（实测：基带
          包络驱动 17 GHz 跃迁，转移布居恒为 0；采样不足同样归零，不是轻微失真）；
       ② 基组若含光学流形（跃迁 ≫ 微波分界），该路径**不参与光场旋转** → RHS 带
@@ -309,12 +314,12 @@ def real_field(cache, states, freq_mhz, intensity_mwcm2, pol='π',
 
     **AC 位移后端（B_gauss 提供时）**：统一由 core.direct_ac_stark_shifts
     （Floquet 直接对角化，含全部偶极伙伴基组、近共振 dressed 与远失谐
-    反旋项、n_photon 阶光子块）计算，**不分近/远**——取代旧的近/远分流
-    far_sos 逐对求和（后者受基组范围剧烈影响）。F 态（低激发超精细）
+    反旋项、n_photon 阶光子块）计算，**不分近/远**（优于 far_sos 逐对求和——
+    后者受基组范围剧烈影响）。F 态（低激发超精细）
     位移 = 按 mJ 分量 |amps|² 加权投影。近共振 Rabi 驱动 A 矩阵仍按
     near_cutoff 筛选（RK4 步长的 RWA 硬约束，与位移无关）。
 
-    near_cutoff_mhz：近/远分流边界（MHz），缺省 = core.AC_NEAR_CUTOFF_MHZ
+    near_cutoff_mhz：近/远分流边界（MHz），缺省 = params.AC_NEAR_CUTOFF_MHZ
     （5 GHz 保守地板：覆盖超精细/精细结构流形，宁多算相干）。协议场景
     （如 STIRAP 想只相干驱动目标对、把 ~150 MHz 外的流形其余态作远失谐
     AC 处理）可显式调小（如 25 MHz）；边界仍随 Rabi 走 max(cutoff, Ω)。
@@ -354,7 +359,7 @@ def real_field(cache, states, freq_mhz, intensity_mwcm2, pol='π',
             nu_mhz = states[hi]['E_mhz'] - states[lo]['E_mhz']   # 裸差
             Delta = freq_mhz - nu_mhz
             Om = _c.rabi_mhz(abs(d), E0_sq)
-            if abs(Delta) < max(near_cutoff_mhz or _c.AC_NEAR_CUTOFF_MHZ, Om):
+            if abs(Delta) < max(near_cutoff_mhz or AC_NEAR_CUTOFF_MHZ, Om):
                 # 近共振 → 多对驱动（A 存真实 Rabi，ω_L = 光频）
                 A[lo, hi] = A[hi, lo] = Om
                 g_idx.append(lo); e_idx.append(hi)
@@ -412,52 +417,5 @@ def real_field(cache, states, freq_mhz, intensity_mwcm2, pol='π',
 
 
 
-
-def arbitrary_field(cache, states, t_ns, amp, pol='π', intensity_mwcm2=100.0,
-                    offset_ns=0.0):
-    """任意外包络载波整段? 不——**任意波形场**（第一性原理，无载频概念）。
-
-    用户提供任意时域信号（样品序列 t_ns, amp；amp 峰值归一化 |amp|≤1，
-    可负/可任意形状），本函数只做一件事：把「偏振 q 的偶极耦合算子」按
-    峰值光强换算成 MHz 单位，供 _evolve_arbitrary 直接数值积分——
-
-        H(t) = H0 + Σ_k amp_k(t)·V̂_k        （实验室系，无 RWA、无旋转系、
-                                              无近/远失谐分流；全部频率成分
-                                              以数值积分原样还原）
-
-    V̂ 含**复相位**（dipole_amplitude 的复振幅），任意信号中不一致的相对
-    相位也能正确干涉——这是对 real_field（单一载频 + 包络）的推广。
-
-    返回 field dict：{'kind':'arb', 'V': V, 'V_max': Ωmax_mhz,
-                      't_ns': t_ns, 'amp': amp, 'offset_ns', 'pol',
-                      'intensity_mwcm2', 'omega0_mhz': Ωmax}
-    """
-    from . import static_atom as _c
-    q = {'π': 0, 'σ+': 1, 'σ-': -1}.get(pol, 0)
-    N = len(states)
-    E0_sq = _c.field_e0_sq(intensity_mwcm2)
-    V = np.zeros((N, N), complex)
-    vmax = 0.0
-    for i in range(N):
-        for j in range(i + 1, N):
-            d = _c.dipole_amplitude(
-                cache, _sublevel_row(states[i]), _sublevel_row(states[j]), q)
-            if abs(d) < 1e-12:
-                continue
-            Om = _c.rabi_mhz(abs(d), E0_sq)      # 峰值 E0 下该对 Rabi（MHz）
-            if Om <= 0:
-                continue
-            ph = d / abs(d)                      # 矩阵元复相位（|d|≠0）
-            V[i, j] = Om * ph
-            V[j, i] = Om * ph.conjugate()
-            vmax = max(vmax, Om)
-    if vmax <= 0:
-        raise ValueError('任意波形场：偏振下无任何偶极耦合（检查偏振/基组）')
-    return {'kind': 'arb', 'V': V, 'V_max': float(vmax),
-            't_ns': np.asarray(t_ns, float),
-            'amp': np.asarray(amp, float),
-            'offset_ns': float(offset_ns), 'pol': pol,
-            'intensity_mwcm2': float(intensity_mwcm2),
-            'omega0_mhz': float(vmax)}
 
 

@@ -7,6 +7,7 @@
   sim_state.py  状态门面：读写经现有 store/序列化路径，人机等效
   server.py     进程内 MCP server（streamable HTTP），暴露语义工具
   codeact.py    CodeAct 通道：受限 run_python，一次调用完成多步编排
+  run_store.py  CodeAct 运行记录落盘（ai_results/）：算完不丢、断线可取回
 
 设计依据见 docs/AI协同-项目目标与原则.md、docs/AI协同-实现方案草案.md。
 """

@@ -26,7 +26,7 @@ import numpy as np
 
 from ..core.evolve_rwa import _assign_reference
 from ..core.evolve_util import _as_vector, _decay_ops
-from ..core.evolve_rwa import IP4_RWA_THRESH
+from ..core.evolve_rwa import RWA_TOL  # t80: 原 IP4_RWA_THRESH 更名
 from ..core.field_build import _env_samples, _field_geometry
 
 _CONV = 2 * np.pi * 1e-3          # MHz·ns → rad
@@ -269,7 +269,7 @@ def evolve_pwc(states, fields, psi0, t_grid, ac_shift_mhz=None,
                          if (bs and wL > 1e-6) else 0.0)
         r0 = g.get('real_omega0_mhz', g['omega0_mhz'])
         ratio = r0 / max(wL, 1e-9)
-        if ratio >= IP4_RWA_THRESH:
+        if ratio >= RWA_TOL:
             # 强驱动（Ω/ωL ≥ 1e-4）：RWA 误差非可忽略，提示用 ip4
             pass
     use_torch = _pick_backend(backend)

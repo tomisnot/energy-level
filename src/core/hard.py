@@ -23,11 +23,10 @@
 """
 
 # ============================================================
-# hard 单/两体同一内核（t19 合并文件；t73b 单原子并入两体路径）。
-# 单原子：evolve_hard_fast（= evolve_hard）——合成 N_B=1 旁观维走
-#         _pack_pair_hard + _rhs_hard_pair（旧单体内核已删）；
+# hard 单/两体同一内核（单原子 = N_B=1 旁观维）。
+# 单原子：evolve_hard_fast（= evolve_hard）走 _pack_pair_hard + _rhs_hard_pair；
 # 两体：  evolve_hard_pair（k=i·N+j 张量 + V_dd 相位扭曲 + njit DOP853）。
-# 驱动与 DOP853 系数在 dop853.py（t76 上收，消除 dop853 ⇄ hard 循环导入）；
+# 驱动与 DOP853 系数在 dop853.py（避免 dop853 ⇄ hard 循环导入）；
 # _env_at/_env_tab 单源在本模块。
 # ============================================================
 
@@ -36,10 +35,10 @@ from numba import njit
 from .dop853 import _dop853_driver   # 驱动（系数已随驱动上收 dop853）
 
 from . import tensor as _tensor
-from . import static_atom as core  # t74：build_two_field 系列归位所需
+from . import static_atom as core
 from .params import _TAB_N  # t74c 参数单源（其余阈值随函数收敛到 evolve_twofield）
 from .evolve_util import (_single_loss_rates, _loss_and_norm,
-                          _as_vector, env_at, _CONV)  # t74 工具归位
+                          _as_vector, env_at, _CONV)
 from .coupling import static_phase_keep  # t78：V_dd 统一判据（与 mixed 共用）
 
 # 包络查表点数（620ns → h≈0.0047ns；插值误差 ~3e-10）
@@ -331,10 +330,7 @@ def _pack_pair_hard(fields_meta_A, fields_meta_B, T, vdd_sp, n_tab,
         vals = np.asarray(_coo.data, complex)
         dE = E_lab_pair[rows] - E_lab_pair[cols]
         if vals.size:
-            # t78：V_dd 丢弃判据统一为「累积相位」Θ=C·T·|V|²/max(|ΔE|,|V|)
-            # ≥ POP_PHASE_TOL——取代原幅度阈值 _VDD_MIN_FRAC（随基组标度漂移、
-            # 且管不住"|V| 大但远失谐"的元素）。与 mixed 共用同一判据 → 两引擎
-            # 的 V_dd 存活集自动一致（不再有 ~1e-5 的固有差异）。
+            # V_dd 丢弃判据 = 累积相位 Θ（与 mixed 同一实现）→ 两引擎存活集一致
             _keep, _ = static_phase_keep(vals, dE, T)
             rows, cols, vals, dE = (rows[_keep], cols[_keep],
                                     vals[_keep], dE[_keep])
@@ -523,7 +519,7 @@ def evolve_hard_pair(states, fields_meta_A, fields_meta_B, psi0_A, psi0_B,
         stat = np.zeros(4)
         # 阶段 1（积分）由驱动在首个接受步置位（同 evolve_hard_fast）
         # 复用 dop853 核心层（first-class RHS 参数化，t11 验证逐位一致）
-        # t24：gamma_MHz 传入内核（落点=丢失 NonHermitian，此前只算不用）
+        # gamma_MHz 传入内核（落点=丢失，NonHermitian）
         y_out = dop853_driver_hard(psi0_2d, t, T,
                                    float(rtol), float(atol), np.inf,
                                    prog, stat, None, *pack, gamma_MHz)

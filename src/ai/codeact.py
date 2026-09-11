@@ -15,6 +15,11 @@ context。
     照记但**抑制快照**（suppress_snapshot），结束后补记一条带执行前
     快照的 run_python op——undo 一步回到脚本开始前，流水仍完整。
   - 等待计算用泵事件循环（processEvents），不冻结 GUI，人可随时取消。
+
+结果落盘（2026-09-10 加）：每次执行都在 `<root>/ai_results/` 留一份 JSON
+记录（先 running、结束覆写 ok/error），见 run_store 模块。这条是旁路：
+落盘失败不影响脚本本身，但**结果不再依赖调用方是否收到响应**——客户端
+断线后可用 list_runs / run_result 取回。
 """
 import io
 import json
@@ -24,6 +29,7 @@ from contextlib import redirect_stdout
 
 import numpy as np
 
+from . import run_store
 from .journal import get_journal
 
 
@@ -81,11 +87,15 @@ def _make_namespace(state_mod, root, jobs, t_run, t_status, t_result,
 
 
 def run_code(code, state_mod, root, jobs, t_run, t_status, t_result,
-             timeout=1800.0, t_load=None, t_save=None):
-    """在主线程 exec 模型写的代码；返回 {ok, stdout, result, error}。
+             timeout=1800.0, t_load=None, t_save=None, run_id=None):
+    """在主线程 exec 模型写的代码；返回 {ok, run_id, stdout, result, error}。
 
-    调用方（server.run_python）负责经 dispatch.run_on_main 投递到这里。
+    调用方（server 的 run_python / run_python_async）负责经
+    dispatch.run_on_main 投递到这里。run_id 由调用方给定或此处自动生成；
+    无论传不传，本次执行都会在 ai_results/ 留一份记录。
     """
+    rid = run_id or run_store.new_run_id()
+    run_store.start(root, rid, code)     # 先落 running，断线也能看到在跑
     j = get_journal(root)
     snap = state_mod.to_dict()
     buf = io.StringIO()
@@ -98,20 +108,24 @@ def run_code(code, state_mod, root, jobs, t_run, t_status, t_result,
         compiled = compile(code, '<ai_code>', 'exec')
         with redirect_stdout(buf):
             exec(compiled, env)               # noqa: S102 - 设计决定（见模块 docstring）
-        out = {'ok': True,
+        out = {'ok': True, 'run_id': rid,
                'stdout': buf.getvalue()[-8000:],
                'result': _jsonable(env.get('result')),
                'elapsed_s': round(time.time() - t0, 2)}
+        run_store.finish(root, rid, out, code=code)
         j.record('ai', 'run_python',
-                 {'lines': len(code.splitlines())}, '', snap)
+                 {'lines': len(code.splitlines()), 'run_id': rid}, '', snap)
         return out
     except Exception:                          # noqa: BLE001
         tb = traceback.format_exc()
+        out = {'ok': False, 'run_id': rid,
+               'stdout': buf.getvalue()[-8000:],
+               'error': tb[-2000:],
+               'elapsed_s': round(time.time() - t0, 2)}
+        run_store.finish(root, rid, out, code=code)
         j.record('ai', 'run_python_failed',
-                 {'error': tb[-500:]}, '', snap)
-        return {'ok': False, 'stdout': buf.getvalue()[-8000:],
-                'error': tb[-2000:],
-                'elapsed_s': round(time.time() - t0, 2)}
+                 {'run_id': rid, 'error': tb[-500:]}, '', snap)
+        return out
     finally:
         j.suppress_snapshot = False
 

@@ -319,13 +319,11 @@ def test_wave_serde(app):
           and isinstance(restored[0].envelope, waveforms.GaussianEnv)
           and abs(restored[1].envelope.start_ns - 50.0) < 1e-9
           and abs(restored[1].intensity_mwcm2 - 2e3) < 1e-9)
-    # build_fields 与 real_field 集成（60S/60P）
-    cache = core.ArcCache(__import__('arc').Rubidium87())
-    specs = [dict(n=60, l=0, j=0.5, kind='mJ', m=float(m)) for m in (-0.5, 0.5)]
-    specs += [dict(n=60, l=1, j=0.5, kind='mJ', m=float(m)) for m in (-0.5, 0.5)]
-    states = make_levels(cache, specs)
-    fields = waveforms.build_fields(waves, states, cache)
-    check('波形 → real_field 场（近共振驱动对）', len(fields) >= 2)
+    # t79：此处原有「波形 → real_field 场（近共振驱动对）」一项，依赖已删除的
+    # waveforms.build_fields（旧 ip4/Lindblad 管线，现行三引擎都不用）——
+    # 随函数一并删除。波形→场的集成由引擎自检覆盖
+    # （checks/mixed_nolight_selfcheck.py、evolve_exact_pair_selfcheck.py
+    #   均用现行入口 build_fields_exact）。
 
 
 # ================= 5. 状态保存：登记册即存档（v3），双原子完整，往返一致 =================
@@ -400,55 +398,15 @@ def test_state_save(app):
     win.close(); app.processEvents()
 
 
-# ================= 5. 进度数组 + 取消 =================
+# ================= 5. 进度数组 =================
 def test_progress(app):
-    data = json.load(open(os.path.join(_ROOT, 'save_state',
-                                       'rb87_state.json'), encoding='utf-8'))
+    """进度协议：正常完成 → prog[0]==1.0 且布居归一。
+
+    t79：原「取消」子用例依赖已删除的 waveforms.build_fields（旧 ip4 管线），
+    随函数一并删除。取消路径的覆盖仍在引擎级——见
+    checks/evolve_dissipative_selfcheck.py D7（progress_arr 置位 → RuntimeError）。
+    """
     cache = core.ArcCache(__import__('arc').Rubidium87())
-    B = float(data['B_gauss'])
-    specs = []
-    for g in data['groups']:
-        n, l, j = g['n'], g['l'], g['j']
-        hf = core.get_hyperfine_levels(cache, n, l, j, B)
-        if hf is None:
-            for m in np.arange(-j, j + 1e-9, 1.0):
-                specs.append(dict(n=n, l=l, j=j, kind='mJ', m=float(m)))
-        else:
-            for F, mF, e_hf, _w, amps in hf:
-                specs.append(dict(n=n, l=l, j=j, kind='F', F=F, mF=mF,
-                                  E_hf=float(e_hf), amps=amps))
-    states = make_levels(cache, specs)
-    waves = waveforms.restore_waves(data.get('waves', []))
-    fields = waveforms.build_fields(waves, states, cache)
-    # 取消测试用更慢的网格：大 t_max + 高点数，保证 1s 内跑不完（取消才可测）
-    t = np.linspace(0, float(data['dynamic']['t_max']) * 4,
-                    int(data['dynamic']['npts']) * 6)
-    psi0 = int(data['dynamic']['psi'])
-
-    # ---- 取消：1 秒后请求取消 → 快速停止 ----
-    pa = np.zeros(2)
-    result = {}
-
-    def run():
-        try:
-            evolve(states, fields, psi0, t, method='ip4',
-                          progress_arr=pa)
-            result['ok'] = True
-        except RuntimeError as e:
-            result['err'] = str(e)
-
-    th = threading.Thread(target=run)
-    th.start()
-    t0 = time.perf_counter()
-    while th.is_alive():
-        time.sleep(0.2)
-        if time.perf_counter() - t0 > 1.0:
-            pa[1] = 1.0                        # 1 秒后请求取消
-            break
-    th.join(timeout=30)
-    dt = time.perf_counter() - t0
-    check('取消生效（<15s 停止）', '用户取消' in str(result.get('err', ''))
-          and dt < 15)
 
     # ---- 正常完成：进度到 1.0 + 归一 ----
     import mw_bench_firstprinciples as mb
@@ -518,37 +476,11 @@ def test_archive_roundtrip(app, win):
             pass
 
 
-# ================= 6. STIRAP/拉曼 存档恢复端到端 =================
-def test_stir_states(app):
-    """恢复 save_state/_legacy/STIRAP_v1.json（v1 旧格式）→ build_fields
-    → 演化 → 60S 转移（协议存档回归；当前 save_state/STIRAP.json 已是 v2，
-    v1 样本归档在 _legacy 供兼容回归）。"""
-    data = json.load(open(os.path.join(
-        _ROOT, 'save_state', '_legacy', 'STIRAP_v1.json'),
-        encoding='utf-8'))
-    cache = core.ArcCache(__import__('arc').Rubidium87())
-    B = float(data['B_gauss'])
-    specs = []
-    for g in data['groups']:
-        n, l, j = g['n'], g['l'], g['j']
-        hf = core.get_hyperfine_levels(cache, n, l, j, B)
-        if hf is None:
-            for m in np.arange(-j, j + 1e-9, 1.0):
-                specs.append(dict(n=n, l=l, j=j, kind='mJ', m=float(m)))
-        else:
-            for F, mF, e_hf, _w, amps in hf:
-                specs.append(dict(n=n, l=l, j=j, kind='F', F=F, mF=mF,
-                                  E_hf=float(e_hf), amps=amps))
-    states = make_levels(cache, specs)
-    waves = waveforms.restore_waves(data.get('waves', []))
-    cut = 5000.0          # t25：near_cutoff 控件移除，ip4 用内部默认 5 GHz
-    fields = waveforms.build_fields(waves, states, cache,
-                                    near_cutoff_mhz=cut)
-    check('STIRAP 存档恢复：波形 + 场非空',
-          len(fields) >= 2 and len(waves) >= 2)
-    # 演化保真度由 stir_rap_selfcheck（引擎级）与 scripts/make_stir_rap_states.py
-    # （独立进程）覆盖——本环境全流程长演化偶发 Qt/ARC 堆损坏干扰（隔离跑正常，
-    # 见 README §3.12 已知问题），此处只保证「恢复状态 → 建场」管线可用。
+# ================= 6. （t79 删除）STIRAP v1 存档恢复建场 =================
+# 原 test_stir_states 恢复 save_state/_legacy/STIRAP_v1.json 后手工搭场，
+# 依赖已删除的 waveforms.build_fields（旧 ip4 管线）——随函数一并删除。
+# 存档/恢复本身仍由 test_archive_roundtrip（走 app_entry._save_state /
+# _load_state 真实入口，覆盖 v3 自身与 v1 legacy 迁移）覆盖。
 
 
 def main():
@@ -560,7 +492,6 @@ def main():
     test_state_save(app)
     test_archive_roundtrip(app, win)
     test_progress(app)
-    test_stir_states(app)
     win.close(); app.processEvents()
     failed = sum(1 for ok in _RESULTS if not ok)
     print(f'\n===== ui_selftest: '

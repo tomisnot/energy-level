@@ -11,8 +11,8 @@
      （稠密缺陷 / 稀疏 IP Volterra-GMRES / frozen）。
 物理模型（唯一定义）：实验室系 H(t)=H0+Σ env·cos(ω t)·A，无 RWA、
 无旋转系、无近/远分流；AC 位移 / Bloch–Siegert / 远失谐效应全部由
-精确传播自然涌现。旧文件名 evolve_sambe / evolve_sambe_pair 已删
-（t74b 拆除兼容层），调用方一律 `from .sambe import …`。
+精确传播自然涌现。
+调用方一律 `from .sambe import …`。
 """
 import numpy as np
 import scipy.sparse as sp
@@ -22,8 +22,8 @@ from scipy.sparse.linalg import expm_multiply, LinearOperator, gmres
 from .evolve_util import (_CONV, _POL_Q, _as_vector)  # t74 工具/常量单源
 from .field_build import _group_by_freq, _validate_fields
 from .tensor import (_pair_loss_vectors, _as_product_psi,
-                     _reduce_A, _reduce_B)  # t74：两体工具, _validate_fields  # t74 场分组/校验归位场层
-from .tensor_fields import _pair_groups               # t74 两体场分组归位
+                     _reduce_A, _reduce_B)
+from .tensor_fields import _pair_groups
 
 
 def _group_mats(g):
@@ -395,13 +395,15 @@ def sector_sum_pops(phi, P, n_phys):
 
 
 # ============================================================
-# 单体引擎（t74 自 evolve_sambe 并入）
+# 单体引擎
 # ============================================================
-from .params import (_M_START, _M_MAX, _M_ANALYTIC_BW_MHZ,
-                     _DENSE_MAX, _DENSE_MAX_PAIR, _ENV_PROBE_N,
+from .params import (_M_START, _M_MAX, M_EST_BW_MHZ,
+                     _DENSE_MAX, _ENV_PROBE_N,
                      _DT_MIN_FRAC, _SPARSE_SEG_MAX, _SPARSE_MAX_DEPTH,
                      _NODE_LADDER, _VOLT_MAX_ITER, _VOLT_PICARD_FRAC,
-                     _VOLT_PRE_SWEEPS, MW_MAX_MHZ, R_CRIT)  # t74c 参数单源
+                     _VOLT_PRE_SWEEPS, R_CRIT, MW_MAX_MHZ)  # t74c 参数单源
+# t80：删死导入 `_DENSE_MAX_PAIR`（从未接线，稠密上限一律由 `_DENSE_MAX` 决定）；
+#      `MW_MAX_MHZ` 原有 6 处行内 `1e5` 副本，已改回引用本常量。
 # M 判定的近共振带宽（MHz）：离共振 Rydberg-Rydberg 巨矩阵元（如光学频下
 # 60S↔60P 的 Ω~19 GHz）不参与 r 判定——其物理贡献是二阶微扰（~1e-9 相对），
 # 光子块阶数由与载频近共振的对决定（Mizuta 2025 / Kuwahara–Mori–Saito 2016
@@ -552,7 +554,7 @@ def _m_analytic(groups, tol, E_mhz=None):
     """
     Ms = []
     for g in groups:
-        vmax = _group_res_peak(g, E_mhz, _M_ANALYTIC_BW_MHZ)
+        vmax = _group_res_peak(g, E_mhz, M_EST_BW_MHZ)
         r = vmax / max(abs(g['omega_mhz']), 1e-9)
         M = _M_START - 1                      # 从 M=1（3 块）起步
         if r > 0.0:
@@ -846,7 +848,7 @@ def evolve_sambe(states, fields, psi0, t_grid, tol=1e-6, decays=None,
         stage_progress(progress_arr, 0, 0.2 + 0.6 * gi / max(G, 1))
         # 近共振峰 Ω（去离共振 Rydberg 巨矩阵元污染）；r 极小（光学量级
         # <1e-5）→ 解析界已证单光子阶收敛，探针验证纯属浪费——跳过。
-        vmax = _group_res_peak(groups[gi], E, _M_ANALYTIC_BW_MHZ)
+        vmax = _group_res_peak(groups[gi], E, M_EST_BW_MHZ)
         r_g = vmax / max(abs(groups[gi]['omega_mhz']), 1e-9)
         if r_g < 1e-5:
             continue
@@ -912,7 +914,7 @@ evolve_exact = evolve_sambe
 
 
 # ============================================================
-# 两体引擎（t74 自 evolve_sambe_pair 并入）
+# 两体引擎
 # ============================================================
 # 缺陷求积节点阶梯
 # 包络采样（活性判断/恒常判断）
@@ -944,8 +946,8 @@ def _defect_pass(setup, hamiltonian_seg, ta, tb, X, groups, nodes, ws, dense_eig
     """本征基 Duhamel 缺陷扫描。
 
     ΔK = Σ_g Σ_w (env_w(nodes)−env_w(mid))·Kcw_{gw}
-         + Σ_o (env_o(nodes)−env_o(mid))·Ko_o      ← t30 补光场项（此前缺，
-           两场变体下光场包络变化完全未被修正，只剩冻结中点零阶精度）
+         + Σ_o (env_o(nodes)−env_o(mid))·Ko_o      ← 光场项（两场变体下
+           光场包络变化必须一并修正，否则只剩冻结中点零阶精度）
 
     实现：逐节点循环改为矩阵乘批量化（原逐 q 循环等价，速度 ~n 倍）：
       W[:,q] = ΔK(nodes[q])·ψ_f(q)  →  W = Σ (M @ Psif)·dc[None,:]
@@ -1386,10 +1388,10 @@ def evolve_sambe_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
         from .evolve_mixed import ac_ize_physical_E, R_CRIT
         E2a, A_newA = ac_ize_physical_E(E0,
                                          [f for f in fields_A
-                                          if f['omega_L_mhz'] > 1e5])
+                                          if f['omega_L_mhz'] > MW_MAX_MHZ])
         E2b, A_newB = ac_ize_physical_E(E0,
                                          [f for f in fields_B
-                                          if f['omega_L_mhz'] > 1e5])
+                                          if f['omega_L_mhz'] > MW_MAX_MHZ])
         # A/B 同构假设：E_shift 取 A 侧（B 侧位移并入 A 侧——同场时同 δ）
         E_shift = E2a - E0
         if np.max(np.abs((E2b - E0) - E_shift)) > 1.0:
@@ -1398,15 +1400,15 @@ def evolve_sambe_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
                 f'（E_pair 位移近似；异构场建议 per_freq_M 大 M 或手工 AC 化）')
         n_opt = 0
         fa2, fb2 = [], []
-        for f, Anew in zip([f for f in fields_A if f['omega_L_mhz'] > 1e5],
+        for f, Anew in zip([f for f in fields_A if f['omega_L_mhz'] > MW_MAX_MHZ],
                            A_newA):
             fa2.append(dict(f, A=Anew)); n_opt += 1
-        for f, Anew in zip([f for f in fields_B if f['omega_L_mhz'] > 1e5],
+        for f, Anew in zip([f for f in fields_B if f['omega_L_mhz'] > MW_MAX_MHZ],
                            A_newB):
             fb2.append(dict(f, A=Anew))
         # 重组 fields（光场剔除后 + 微波原样）
-        fields_A = [f for f in fields_A if f['omega_L_mhz'] <= 1e5] + fa2
-        fields_B = [f for f in fields_B if f['omega_L_mhz'] <= 1e5] + fb2
+        fields_A = [f for f in fields_A if f['omega_L_mhz'] <= MW_MAX_MHZ] + fa2
+        fields_B = [f for f in fields_B if f['omega_L_mhz'] <= MW_MAX_MHZ] + fb2
         log(f'[pair_exact] AC 化 {n_opt} 组光场：E_shift 范围 '
             f'{E_shift.min():+.2f}..{E_shift.max():+.2f} MHz'
             f'（远强对剔除——t58 r 判据 r_crit={R_CRIT}）')

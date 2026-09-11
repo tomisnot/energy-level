@@ -52,9 +52,14 @@
 
 import numpy as np
 from scipy.constants import physical_constants as pc, h, hbar, c, epsilon_0
-from .params import (AC_FAR_DETUNE_CUTOFF_HZ, AC_NEAR_CUTOFF_MHZ,  # t74c
-                     DIRECT_SOS_N_WINDOW, AC_EFFECT_THRESHOLD_MHZ,
+from .params import (DIRECT_SOS_N_WINDOW, AC_EFFECT_THRESHOLD_MHZ,  # t74c/t80
                      RYDBERG_N_MIN)
+# t80：删两个本模块**自己不用**的 AC 分流常量导入：
+#   · `AC_FAR_DETUNE_CUTOFF_HZ` —— 只是 `AC_NEAR_CUTOFF_MHZ` 的 Hz 版定义式，
+#     仓库内无第二消费者；
+#   · `AC_NEAR_CUTOFF_MHZ` —— 本模块不引用，但 `field_build.real_field` 曾
+#     经 `static_atom.AC_NEAR_CUTOFF_MHZ` **绕道**取它（把本模块当转发站）。
+#     已改为 field_build 直连 params 单源，故这里可以清掉。
 
 # ---------------- 物理常数与单位换算 ----------------
 # ARC 的 getEnergy 返回的是能量相对电离阈的绑定能，单位是 eV（见 ARC 源码 docstring）。

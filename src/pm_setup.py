@@ -50,9 +50,21 @@ def new_registry(win):
 
     面板构造**之前**调用（MainWindow.__init__ 开头）——标准件在创建处
     就地登记（定义即注册），面板构造时即可拿到 reg。
+
+    auto-commit 防抖：EL 参数改了就即时生效（实时可视化语义），人连改
+    多个参数 / AI 连发会触发多次提交。注入单发可重启定时器（每次触摸
+    restart，最后一次触摸 150ms 后才 commit_pending）——把短窗口内的
+    多次触摸合并成一次提交，框架批语义天然把这一批全部成功项一起标绿
+    （无需任何逐参数清灯特例）。
     """
+    from PyQt5.QtCore import QTimer
     _register_painters()
     reg = ParamRegistry()
+    dt = QTimer()
+    dt.setSingleShot(True)                    # 每次 start 重启 = 防抖合并
+    dt.timeout.connect(reg.commit_pending)
+    reg._commit_debounce = dt                 # 持引用防 GC（reg 随 win 存活）
+    reg.set_commit_scheduler(lambda _c: dt.start(150))
     win.param_reg = reg
     return reg
 

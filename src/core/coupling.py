@@ -1,17 +1,18 @@
 # -*- coding: utf-8 -*-
-"""coupling.py（t63 第 1 层统一）：RHS 打包公共层——单/两体共用。
+"""RHS 打包公共层（单/两体共用）。
 
-从 evolve_mixed_pair._pack_rhs + evolve_mixed._MixedSetup 的波构建抽出泛化：
-- pack_rhs(pairs, t_end, n_tab)：pairs 7 元组 → njit 数组（分组键
-  (is_mw, w, id(env))——t62 用例 1 教训：光场/微波即使同一 env 对象也必须分属
-  不同组——is_mw 决定 cos 载波；env 表预采样 + 线性插值）
-- 返回 dict: iis, jjs, vals, dDs, is_mw, wcos, n_pairs_w, env_tab, env_dt
-- static_phase_keep(vals, dE, T)：静态耦合（V_dd）的累积相位判据（t78）——
-  hard / mixed 共用的唯一 V_dd 丢弃判据，替代原幅度阈值与能量间隙阈值。
-"""
+- `pack_rhs(pairs, t_end)`：pairs 7/8 元组 → njit 数组。分组键 (is_mw, w, id(env))
+  ——**is_mw 决定 cos 载波，故光场/微波即使共用同一 env 对象也必须分属不同组**。
+  env/相位预采样成表 + 线性插值。
+- `static_phase_keep(vals, dE, T)`：V_dd 累积相位判据（hard / mixed 共用）。
+- `mw_cap_mhz(T)` / `mw_candidate_mask(...)`：微波候选窗（成本 + 精度）。
+- `mw_pair_keep(Ω, Δ, T)`：单个微波对的精度判据。
+
+判据推导与历史动因见 `docs/参数与判据决策史.md`。"""
 import numpy as np
 
-from .params import POP_PHASE_TOL
+from .params import (PHASE_TOL, PHASE_BUDGET, MW_MAX_MHZ,
+                     _RHS_ENV_TAB_N)
 from .evolve_util import _CONV
 
 
@@ -30,24 +31,33 @@ def stage_progress(arr, st, frac):
         arr[2] = float(st)
 
 
-def pack_rhs(pairs, t_end, n_tab=20001):
-    """pairs → numba 数组（按 (is_mw, w, id(env)) 分组 + env 表预采样）。
+def pack_rhs(pairs, t_end, n_tab=_RHS_ENV_TAB_N):
+    """pairs → numba 数组（按 (is_mw, w, id(env), id(ph_fn)) 分组 + 查表预采样）。
 
-    pairs 元素：(a, b, v, dD, is_mw, w, env)——分组键含 is_mw/w（t62 用例 1
-    教训：光场/微波即使 env 同一对象也须分属不同组——is_mw 决定 cos 载波）。
+    pairs 元素：(a, b, v, dD, is_mw, w, env[, ph_fn])——分组键含 is_mw/w
+    （t62 用例 1 教训：光场/微波即使 env 同一对象也须分属不同组——is_mw 决定
+    cos 载波）。
+
+    **任意相位（t79）**：pairs 可选第 8 元 `ph_fn`（t→弧度，可为任意 callable）。
+    给了它则该波的载波取 `cos(ph_fn(t))` 而非解析的 `cos(Cv·w·t)`：
+      · 单调线性相位 φ=ωt 时两者**逐位相同**（线性函数线性插值零误差）；
+      · 任意波形（无单一载频）用它表达，与 hard 的 cos(φ_f(t)) 同构。
+    相位与包络共用同一时间基（linspace(0,t_end,n_tab)）与 env_dt。
     """
     grp = {}
     order = []
     for p in pairs:
-        a, b, v, dD, is_mw, w, env = p
-        key = (int(is_mw), float(w), id(env))
+        a, b, v, dD, is_mw, w, env = p[:7]
+        ph_fn = p[7] if len(p) > 7 else None
+        key = (int(is_mw), float(w), id(env), id(ph_fn))
         if key not in grp:
-            grp[key] = dict(is_mw=is_mw, w=w, env=env, items=[])
+            grp[key] = dict(is_mw=is_mw, w=w, env=env, ph_fn=ph_fn, items=[])
             order.append(key)
         grp[key]['items'].append((a, b, v, dD))
     iis, jjs, vals, dDs = [], [], [], []
-    is_mw_a, wcos_a, n_ppw = [], [], []
-    env_rows = []
+    is_mw_a, wcos_a, n_ppw, has_ph_a = [], [], [], []
+    env_rows, ph_rows = [], []
+    ts = np.linspace(0.0, t_end, n_tab)
     for key in order:
         g = grp[key]
         for (a, b, v, dD) in g['items']:
@@ -55,9 +65,15 @@ def pack_rhs(pairs, t_end, n_tab=20001):
         n_ppw.append(len(g['items']))
         is_mw_a.append(1 if g['is_mw'] else 0)
         wcos_a.append(g['w'])
-        ts = np.linspace(0.0, t_end, n_tab)
         env_rows.append(np.asarray(g['env'](ts), float))
+        if g['ph_fn'] is not None:
+            has_ph_a.append(1)
+            ph_rows.append(np.asarray(g['ph_fn'](ts), float))
+        else:
+            has_ph_a.append(0)
+            ph_rows.append(np.zeros(n_tab))
     env_tab = np.stack(env_rows) if env_rows else np.zeros((0, n_tab))
+    ph_tab = np.stack(ph_rows) if ph_rows else np.zeros((0, n_tab))
     env_dt = t_end / (n_tab - 1) if n_tab > 1 else 1.0
     return dict(iis=np.asarray(iis, np.int64),
                 jjs=np.asarray(jjs, np.int64),
@@ -66,20 +82,85 @@ def pack_rhs(pairs, t_end, n_tab=20001):
                 is_mw=np.asarray(is_mw_a, np.int64),
                 wcos=np.asarray(wcos_a, np.float64),
                 n_pairs_w=np.asarray(n_ppw, np.int64),
-                env_tab=env_tab, env_dt=env_dt)
+                env_tab=env_tab, env_dt=env_dt,
+                has_ph=np.asarray(has_ph_a, np.int64), ph_tab=ph_tab)
 
 
 # ============================================================
-# 静态耦合（V_dd）丢弃判据（t78）：累积相位 Θ —— hard / mixed 共用
+# 微波候选窗：相预算派生（成本侧）
 # ============================================================
-def static_phase_keep(vals, dE, T, theta_tol=POP_PHASE_TOL, Cv=_CONV):
+def mw_cap_mhz(T_ns, phase_budget=None, Cv=_CONV):
+    """微波候选窗上限（MHz）：ΔD_max = PHASE_BUDGET / (C · T)。
+
+    φ-帧微波项振荡在 (|ΔD| ± ω)，DOP853 步长按最快项走；把"愿意付多少步"
+    写成无量纲相预算，即得只随 T 自适应、与体系无关的窗。最坏总步数
+    ≈ PHASE_BUDGET/0.5，与 T、态数无关。
+
+    与 `mw_pair_keep`（PHASE_TOL，精度侧）配成一对。
+    phase_budget=None → params.PHASE_BUDGET。
+    """
+    b = PHASE_BUDGET if phase_budget is None else float(phase_budget)
+    T = max(float(T_ns), 1e-12)            # T→0 时由调用方的绝对上界兜
+    return b / (Cv * T)
+
+
+def mw_candidate_mask(Omega, dE, omega_mhz, T_ns, phase_budget=None,
+                      cap_abs_mhz=MW_MAX_MHZ, Cv=_CONV):
+    """向量化「微波候选对」筛选（成本 + 精度，与 mixed 同构 → 两引擎保留集一致）。
+
+      Ω : Rabi 矩阵（MHz）    dE: 两端能量差（MHz，实验室系）
+    返回布尔掩码（同 Ω 形状）。判定顺序：
+      ① Ω ≤ 0 → 丢
+      ② Δ = | |dE| − ω | > min(mw_cap_mhz(T), cap_abs_mhz) → 丢（成本）
+      ③ Θ = C·T·Ω²/max(Ω, Δ) < PHASE_TOL → 丢（精度）
+    """
+    Om = np.abs(np.asarray(Omega, float))
+    dE = np.abs(np.asarray(dE, float))
+    det = np.abs(dE - float(omega_mhz))
+    cap = min(mw_cap_mhz(T_ns, phase_budget, Cv), float(cap_abs_mhz))
+    keep = (Om > 0.0) & (det <= cap)
+    den = np.maximum(Om, det)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        theta = Cv * float(T_ns) * Om ** 2 / den
+    keep &= (theta >= PHASE_TOL)
+    return keep
+
+
+# ============================================================
+# 微波对精度判据（累积相位）
+# ============================================================
+def mw_pair_keep(Omega_mhz, det_mhz, T_ns, cap_mhz=None,
+                 theta_tol=PHASE_TOL, Cv=_CONV):
+    """单个微波耦合对是否保留（标量版；向量化见 `mw_candidate_mask`）。
+
+      Θ = Cv · T · Ω² / max(Δ, Ω) ≥ θ_tol  且  Δ ≤ cap_mhz
+      Ω = 该对 Rabi（MHz）；Δ = | |ΔD| − ω |（相对光子的失谐，MHz）
+
+    与 `static_phase_keep`（V_dd）同一判据，依赖 (Ω, Δ, T) 而非固定能量窗：
+    强场保留远失谐多光子通道（多光子路径自然涌现的前提），弱场自动丢弃
+    无贡献对，跨尺度 THz 对 Ω 极小 → Θ→0 必被丢。
+
+    `cap_mhz` 是成本预算（见 `mw_cap_mhz`），不是物理近似；None = 不设上限。
+    """
+    if Omega_mhz <= 0.0:
+        return False
+    if cap_mhz is not None and abs(det_mhz) > float(cap_mhz):
+        return False
+    den = max(abs(float(det_mhz)), abs(float(Omega_mhz)))   # Ω>0 且 Δ≥0 → den>0
+    return (Cv * float(T_ns) * float(Omega_mhz) ** 2 / den) >= theta_tol
+
+
+# ============================================================
+# 静态耦合（V_dd）丢弃判据：累积相位 Θ —— hard / mixed 共用
+# ============================================================
+def static_phase_keep(vals, dE, T, theta_tol=PHASE_TOL, Cv=_CONV):
     """V_dd 累积相位判据：Θ = C·T·|V|²/max(|ΔE|, |V|) ≥ theta_tol → 保留。
 
     参数
       vals     : 逐元素耦合矩阵元（MHz，复数取模；任意形状）
       dE       : 逐元素两端能量差（MHz，与 vals 同长）
       T        : 演化窗口（ns）——效应是累积量，窗口越长判据越严
-      theta_tol: 无量纲容差（rad），默认 params.POP_PHASE_TOL
+      theta_tol: 无量纲容差（rad），默认 params.PHASE_TOL
     返回
       (keep 布尔掩码, info dict)——info 供日志/自检：
         n_keep/n_drop、max_v_drop（被剔项最大 |V|）、max_theta_drop、
@@ -116,10 +197,16 @@ from numba import njit as _njit
 
 @_njit(cache=True, nogil=True)
 def rhs_phi_pairs(t, phi, iis, jjs, vals, dDs, is_mw, wcos, n_pairs_w,
-                  env_tab, env_dt, Cv, gamma=None,
+                  env_tab, env_dt, has_ph, ph_tab, Cv, gamma=None,
                   ac_base=None, ac_env_tab=None, ac_env_dt=1.0):
-    """φ-帧 RHS：−iC·[光场 env·Kc∘e^{iC·ΔD·t} + 微波 env·cos·A∘e^{iC·ΔD·t}
-    + V_dd 当场]·φ + 逐波时变 AC 对角 −iC·Σ shifts·env²·φ + 耗散对角。"""
+    """φ-帧 RHS：−iC·[光场 env·Kc∘e^{iC·ΔD·t} + 微波 env·cos(φ)·A∘e^{iC·ΔD·t}
+    + V_dd 当场]·φ + 逐波时变 AC 对角 −iC·Σ shifts·env²·φ + 耗散对角。
+
+    微波载波（t79）：`has_ph[w]=1` 时取查表插值的 `cos(φ(t))`（任意相位，
+    与 hard 的 cos(φ_f(t)) 同构）；否则取解析的 `cos(Cv·wcos[w]·t)`
+    （逐位保持旧行为——线性相位下两者等价）。相位与包络同时间基，故沿用
+    同一个 i0/f。
+    """
     tot = np.zeros_like(phi)
     ip = 0
     nw = len(wcos)
@@ -137,7 +224,11 @@ def rhs_phi_pairs(t, phi, iis, jjs, vals, dDs, is_mw, wcos, n_pairs_w,
             ip += np_w
             continue
         if is_mw[w]:
-            cw = envv * np.cos(Cv * wcos[w] * t)
+            if has_ph[w]:
+                phv = ph_tab[w, i0] * (1.0 - f) + ph_tab[w, i0 + 1] * f
+                cw = envv * np.cos(phv)
+            else:
+                cw = envv * np.cos(Cv * wcos[w] * t)
         else:
             cw = envv
         for k in range(np_w):

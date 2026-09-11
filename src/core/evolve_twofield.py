@@ -32,11 +32,11 @@ from . import static_atom as core
 from .evolve_util import _as_vector
 from .tensor import (_pair_loss_vectors, _as_product_psi, _reduce_A,
                      _reduce_B)
-from .sambe import (_CONV, _M_MAX, _M_ANALYTIC_BW_MHZ,
+from .sambe import (_CONV, _M_MAX,
                     _gl_nodes, _GL_CACHE, setup_P)
-from .field_build import _group_by_freq
-from .params import (MW_MAX_MHZ, OPT_NRES_BW_MHZ, MW_NRES_BW_MHZ,  # t74c
-                     _TF_MW_NRES_BW_MHZ, _TF_DENSE_MAX, _VDD_RWA_TOL_MHZ,
+from .coupling import mw_candidate_mask, mw_cap_mhz
+from .params import (MW_MAX_MHZ, OPT_NRES_BW_MHZ, M_EST_BW_MHZ,  # t74c/t80
+                     _TF_DENSE_MAX, FRAME_TOL_REL,
                      _M_MAX)
 from .sambe import env_at
 
@@ -71,12 +71,20 @@ def arbitrary_mw_group(cache, states, wave):
     ts = wave.t_ns + wave.offset_ns          # 绝对时间样品
     z = hilbert(wave.amp)
     env_h, phi_h = np.abs(z), np.unwrap(np.angle(z))
+    # 信号瞬时频率带宽（MHz）——t79：mixed 侧据此选微波耦合对。
+    # hard 侧不用（它在实验室系显式积 cos(φ)，全对容忍）；mixed 的 φ-帧
+    # 若全收会把**光学对**一起拉进来（THz 相位钉死积分器 + 与光场光子块
+    # 双重计入），故必须按信号带宽筛。常数频率信号下带宽塌缩为单频，
+    # 与旧 `|dE|-w` 判据一致。
+    f_inst = np.gradient(phi_h, ts) / _CONV if ts.size > 1 else np.zeros(1)
+    band = (float(np.min(f_inst)), float(np.max(f_inst)))
     return dict(omega_mhz=0.0, As=[A],
                 envs=[lambda tv: np.interp(np.asarray(tv, float), ts, env_h,
                                            left=0.0, right=0.0)],
                 phase_fn=lambda tv: np.interp(
                     np.asarray(tv, float), ts, phi_h,
                     left=phi_h[0], right=phi_h[-1]),
+                band_mhz=band,
                 labels=[wave.name])
 
 
@@ -155,7 +163,8 @@ def split_by_freq(waves, states=None):
     return opt, mw
 
 
-def build_two_field(cache, states, waves, mw_M=2):
+def build_two_field(cache, states, waves, mw_M=2, t_end_ns=None,
+                    phase_budget=None):
     """构造两场引擎所需结构。
 
     返回 dict:
@@ -163,6 +172,15 @@ def build_two_field(cache, states, waves, mw_M=2):
       opt_terms  : [(A_opt(N×N), waveform, omega_opt)] 光场（不占光子块）
       mw_groups  : _group_by_freq 格式的微波组（每载频一个，As 为其驱动矩阵）
       N          : 物理态数
+
+    t_end_ns : 演化窗口（ns），**仅影响微波对的保留筛选**（t79/t80）。
+      给定 → 微波矩阵元按 `coupling.mw_candidate_mask` 筛选 =
+        成本：| |ΔD|−ω | ≤ mw_cap_mhz(T)（相预算派生，随 T 自适应）
+        精度：Θ = C·T·Ω²/max(Δ,Ω) ≥ PHASE_TOL（强场保留远失谐多光子通道）
+      None → 无 T 可用，退回绝对上界 `MW_MAX_MHZ`（脚本直调/旧契约）。
+    phase_budget : 相预算覆写（rad），None → params.PHASE_BUDGET。
+    **不参与缓存的键**：本函数每次调用现算，调用方自行保证 T 变了要重建
+    （GUI 每次运行都重建）。
     """
     opt_w, mw_w = split_by_freq(waves, states)   # t20：自适应阈值（states 驱动）
     N = len(states)
@@ -208,13 +226,9 @@ def build_two_field(cache, states, waves, mw_M=2):
         # omega_ref，路径 B（hard）用 δ。
         mask = np.array([(s['n'], s['l'], s['j']) == low_k
                          for s in states], int)
-        # RWA 振幅 ×0.5（t17 船长裁决：两场引擎光场项此前用全 Rabi（rabi_mhz），
-        # 物理错误 2×——cos(ωt)=½(e^{iωt}+e^{−iωt}) 旋转系只留共振项 → 耦合
-        # = ½·rabi_mhz。与 exact 引擎 SambeSetup 的 0.5·A 对齐（evolve_exact.py:
-        # 226）。此前 AC-Stark 位移偏 4×（Ω²/Δ）——"AC 位移调交换共振"是本场景
-        # 核心物理。微波项保持 1.0（实验室系全 cos，硬积分无 RWA，正确）。
-        # 单点修复：所有消费方（Sambe opt_ext / defect / hard coupling_at / numba /
-        # pair 打包）自动获得 ½。om_mhz 报告随之变为 RWA 耦合振幅。
+        # 光场 RWA 振幅 ×0.5：cos(ωt)=½(e^{iωt}+e^{−iωt})，旋转系只留共振项
+        # → 耦合 = ½·rabi_mhz。与 Sambe 的 0.5·A 对齐；微波项保持 1.0
+        # （实验室系全 cos，硬积分无 RWA）。所有消费方自动获得这个 ½。
         A = 0.5 * A
         opt_terms.append((A, w.waveform, w.freq_mhz, w.name,
                           float(omega_ref), mask))
@@ -244,13 +258,27 @@ def build_two_field(cache, states, waves, mw_M=2):
                 filtered.append(dt)
         disc_times = filtered
 
-    # ---- 微波场：近共振对筛选（60S↔60P 等，|ΔE−ω|<5GHz）----
+    # ---- 微波场：候选对筛选（t79/t80：固定窗 → 成本预算 + 累积相位）----
+    # 与 mixed 的 `_MixedSetup` **完全同构**（先成本后精度），保证两引擎
+    # 微波保留集逐对一致（`checks/mw_pair_keep_selfcheck.py` C5 断言）：
+    #   ① 候选窗 = min(相预算派生 mw_cap_mhz(T), 绝对上界 MW_MAX_MHZ)
+    #      —— 「付不付得起」（无量纲 PHASE_BUDGET）
+    #   ② 逐对 Θ = C·T·Ω²/max(Δ,Ω) ≥ PHASE_TOL —— 「重不重要」（精度）
+    # 无 T（脚本直调）时只有 ①，且退化为绝对上界。
+    mw_cap_hz = (min(mw_cap_mhz(float(t_end_ns), phase_budget), MW_MAX_MHZ)
+                 if t_end_ns is not None else MW_MAX_MHZ)
+    dE_mat = np.abs(E[:, None] - E[None, :])
     mw_groups = []
     for w in mw_w:
         def _selm(i, j, E, w=w):
-            return abs(abs(E[i] - E[j]) - w.freq_mhz) < MW_NRES_BW_MHZ
+            return abs(abs(E[i] - E[j]) - w.freq_mhz) < mw_cap_hz
         A = _build_A(cache, states, w.freq_mhz, w.intensity_mwcm2, w.pol,
                      _selm)
+        if t_end_ns is not None:
+            # 向量化精度判据（与 mixed 同一实现，见 coupling.mw_candidate_mask）
+            keep = mw_candidate_mask(A, dE_mat, w.freq_mhz, float(t_end_ns),
+                                     phase_budget, cap_abs_mhz=mw_cap_hz)
+            A = np.where(keep, A, 0.0)
         if not np.any(A):
             continue
         hit = None
@@ -440,11 +468,10 @@ def evolve_two_field(states, fields_meta, psi0, t_grid, tol=1e-6,
     psi0v = _as_vector(states, psi0)
     T = float(t[-1])
     tol = float(tol)
-    # 多光场拍频防护（t30）：Sambe 冻结段只能承载"段内慢变"的项，而第 2+
-    # 光场相对共享参考的拍频 δ=ω_f−ω_ref（~200 MHz → C·δ ≈ 1.3 rad/ns）在
-    # ns 级段内已转过 O(1) 弧度，冻结中点 + 包络缺陷修正均无法表示 → 此前
-    # 静默丢弃相位（错误结果）。与其给错答案，不如显式拒绝：拍频场景请用
-    # evolve_hard（DOP853 逐时刻求值 exp(iδt)，已实现且 t10 验证通过）。
+    # 多光场拍频防护：Sambe 冻结段只能承载段内慢变项，而第 2+ 光场相对共享
+    # 参考的拍频 δ=ω_f−ω_ref（~200 MHz → C·δ≈1.3 rad/ns）在 ns 级段内已转过
+    # O(1) 弧度，冻结中点 + 缺陷修正均无法表示 → 显式拒绝而非静默给错答案。
+    # 拍频场景请用 hard（DOP853 逐时刻求值 exp(iδt)）。
     for _tup in opt_terms:
         if len(_tup) > 4:
             _of, _oref = float(_tup[2]), float(_tup[4])
@@ -466,7 +493,7 @@ def evolve_two_field(states, fields_meta, psi0, t_grid, tol=1e-6,
             if rows.size == 0:
                 continue
             det = np.abs((E[rows] - E[cols]) - g['omega_mhz'])
-            m = det < MW_NRES_BW_MHZ
+            m = det < M_EST_BW_MHZ
             if m.any():
                 vmax = max(vmax, float(np.abs(A[rows[m], cols[m]]).max()))
         return vmax / max(abs(g['omega_mhz']), 1e-9)
@@ -788,17 +815,13 @@ def evolve_hard(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
     return out
 
 
-# ---- t19 函数级改名兼容别名（旧名 = 新名，外部零改动）----
+# ---- 函数级改名兼容别名（旧名 = 新名，外部零改动）----
 _TwoFieldSetup.K_at = _TwoFieldSetup.hamiltonian_seg
 
 
-
 # ============================================================
-# 两场两体变体（t74 自 evolve_sambe_pair 归位——两场家族团聚：
-# 光场旋转系 + 微波-only 光子块的单/两体在同一模块）
+# 两场两体变体（光场旋转系 + 微波-only 光子块）
 # ============================================================
-# 微波近共振带宽（≡ evolve_twofield.MW_NRES_BW_MHZ）
-# V_dd 旋转系保留判据：|ΔE_rot − ΔE_lab| ≤ 此值（MHz）视为静态
 
 
 def _embed2d(A, side, N):
@@ -867,8 +890,14 @@ def build_two_field_pair(meta_A, meta_B, log=None):
 
 
 def vdd_rot_filter(V, E_pair_rot, E_pair_lab, log=None,
-                   tol_mhz=_VDD_RWA_TOL_MHZ):
-    """V_dd 旋转系 RWA 筛选：只保留 ΔE_rot = ΔE_lab 的元素（旋转系内静态）。
+                   tol_rel=FRAME_TOL_REL):
+    """V_dd 旋转系筛选：只保留在本征旋转系里**静态**的元素。
+
+    判据（t80 无量纲化）：`|d_rot − d_lab| ≤ tol_rel · max(|d_rot|, |d_lab|)`。
+    实际是**布尔分离器**——差值只会落在两档：
+      · ~0（两端同在本征旋转流形，或被同一参考旋转）→ 保留；
+      · ~±ω_opt（一端被旋转、另一端没有）→ 丢弃。
+    相差 8 个量级，故 tol_rel 取 [1e-7, 1e-1] 内谁都得到同一分区。
 
     返回 (V_filtered, info)；info 记录丢弃元素的数量 / max|V| / 净效应上界
     （|V|²/Δ，Δ 取丢弃元素的实验室系失谐）——供调用方日志与自检核对。
@@ -882,7 +911,8 @@ def vdd_rot_filter(V, E_pair_rot, E_pair_lab, log=None,
         return coo.tocsr(), info
     d_rot = E_pair_rot[coo.row] - E_pair_rot[coo.col]
     d_lab = E_pair_lab[coo.row] - E_pair_lab[coo.col]
-    keep = np.abs(d_rot - d_lab) <= tol_mhz
+    ref = np.maximum(np.abs(d_rot), np.abs(d_lab))
+    keep = np.abs(d_rot - d_lab) <= tol_rel * ref
     info['n_keep'] = int(keep.sum())
     info['n_drop'] = int((~keep).sum())
     if info['n_drop']:
@@ -901,7 +931,7 @@ def vdd_rot_filter(V, E_pair_rot, E_pair_lab, log=None,
     return Vf, info
 
 
-def _pair_mw_Ms(E_pair, groups, tol, bw=_TF_MW_NRES_BW_MHZ, m_min=2,
+def _pair_mw_Ms(E_pair, groups, tol, bw=M_EST_BW_MHZ, m_min=2,
                 m_max=_M_MAX):
     """逐微波载频解析光子块阶数（同单原子两场 evolve_two_field 的判据）。
 

@@ -9,6 +9,8 @@
     evolve_exact_pair_selfcheck.py 两体第一性引擎（完整 V_dd 无 secular，
                                    交换/直积极限/vdW/耗散/收敛，11 项）
     two_field_pair_selfcheck.py    两场两体引擎（11 项）
+    mw_pair_keep_selfcheck.py      微波对累积相位判据 + 三光子梯子回归锚
+                                   （24 项，~5s；t79 加的防"静默零物理"闸）
     ui_selftest.py                 UI 回归（主窗口/编辑器/TTL/动态页/存档恢复）
     pair_evolve_selfcheck.py       两体动态（pairinteraction 权威参考；
                                     未装 pairinteraction 时自动 SKIP）
@@ -45,6 +47,7 @@ _SCRIPTS = ['checks_sentinel.py',        # 存活哨兵（秒级，最先跑：�
             'core_selfcheck.py', 'evolve_dissipative_selfcheck.py',
             'evolve_exact_selfcheck.py', 'evolve_exact_pair_selfcheck.py',
             'two_field_pair_selfcheck.py',
+            'mw_pair_keep_selfcheck.py',
             'ui_selftest.py',
             'pair_evolve_selfcheck.py']
 

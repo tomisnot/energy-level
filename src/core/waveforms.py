@@ -10,17 +10,24 @@
   高斯：center_ns（相对起点）、sigma_ns、peak(0,1]
   方波：start_ns（相对起点）、edge_ns、height(0,1]、fall_start_ns（缺省 start+2·edge）
 
-数据源接口（对齐旧 ttl_pulse.field_waves / build_fields，供动态页复用）：
+数据源接口（供动态页复用）：
   waveforms_to_env(waves, t_grid) -> [(label, t, env, freq_mhz, intensity), ...]
-  build_fields(waves, states, cache, near_cutoff_mhz=None) -> fields 列表
   serialize_waves(waves) / restore_waves(data) -> Wave 列表
+
+场构造入口（现行三引擎全在此）：
+  · `field_build.build_fields_exact` —— sambe / mixed 的 kind='exact' 场；
+  · `evolve_twofield.build_two_field` —— hard / mixed 的两场 meta；
+  · `evolve_twofield.arbitrary_mw_group` —— ArbitraryWave → 微波组
+    （Hilbert 分解 env/φ，走 hard 的 cos(φ_f(t)) 任意相位路径）。
+
+旧 ip4/Lindblad 管线的 `build_fields`（本模块）与 `field_build.arbitrary_field`
+已删除——三引擎都不用它们（见 docs/t74b兼容层拆除.md）。
 """
 import numpy as np
 
 from .params import _TAB_N          # 相位/包络查表 Nyquist（见 f_max_mhz）
 
-from .field_build import (build_fields_exact, real_field,  # noqa: F401
-                          arbitrary_field)
+from .field_build import (build_fields_exact, real_field)  # noqa: F401
 
 # 与旧 pulse.py 一致的包络形状（数据类抽离 UI，纯计算）
 POLS = ['σ+', 'π', 'σ-', '椭圆偏']
@@ -200,10 +207,20 @@ class ArbitraryWave:
     - pol / offset_ns：偏振 / 波形绝对起点偏移；无单频 → 无辅助定参：
       drive 恒为 None（频率/失谐概念不适用）。
 
-    结算路径（第一性原理）：build_fields → evolve.arbitrary_field →
-    evolve.evolve（自动选 method='arbitrary'）：实验室系相互作用绘景
-    RK4，无 RWA / 无旋转系 / 无近远失谐分流——信号全部频率成分由数值
-    积分原样还原。代价是慢（步长受信号 Nyquist 约束），属必要。
+    **结算路径（t18 起，t74/t78 定型）**：`evolve_twofield.arbitrary_mw_group()`
+    对它做解析信号分解（Hilbert）：amp(t) = env(t)·cos(φ(t))，env/φ 打包成
+    查表，并入两场 meta 的 `mw_groups`，由 **hard 的 cos(φ_f(t)) 任意相位
+    路径**求解。
+
+    **引擎支持面**（现行仅 sambe / hard / mixed 三款）：
+      · 微波场支持任意波形 —— hard 直接支持；**sambe / mixed 选中时会自动
+        改道 hard**（src/ui/ui_dynamic.py 有日志提示）。
+      · 光学场**不支持**任意波形：无载频 → 不参与光场旋转 → RHS 带 THz
+        相位 → 积分器被钉死。光学只能用 `FileEnv`（光强包络 + 载频），
+        **三款引擎全支持**。
+
+    ⚠ 旧 `method='arbitrary'`（实验室系相互作用绘景 RK4）与 `build_fields`
+    管线已于 t74 归档（src/_archive/evolve_arbitrary.py），不要再引用。
     """
     kind = 'arb'
 
@@ -287,41 +304,6 @@ def waveforms_to_env(waves, t_grid):
         out.append((w.name, t, np.asarray(w.waveform(t), float),
                     float(w.freq_mhz), float(w.intensity_mwcm2)))
     return out
-
-
-def build_fields(waves, states, cache, near_cutoff_mhz=None, B_gauss=None,
-                 n_photon=None, sos_n_window=None):
-    """由波形列表的「真实光场参数」生成演化输入（ip4/Lindblad 管线）。
-
-    每波形 (freq_mhz, intensity_mwcm2, pol, waveform) → evolve.real_field；
-    ArbitraryWave（任意波形，无单频）→ evolve.arbitrary_field。
-    """
-    fields = []
-    for w in waves:
-        if isinstance(w, ArbitraryWave):
-            fields.append(arbitrary_field(
-                cache, states, w.t_ns, w.amp, w.pol,
-                w.intensity_mwcm2, w.offset_ns))
-            continue
-        fld, a, sc = real_field(
-            cache, states, w.freq_mhz, w.intensity_mwcm2, w.pol,
-            waveform=w.waveform, near_cutoff_mhz=near_cutoff_mhz,
-            return_scatter=True, B_gauss=B_gauss, n_photon=n_photon,
-            sos_n_window=sos_n_window)
-        if fld is not None:
-            fields.append(fld)
-        else:
-            acv = np.asarray(a, float)
-            scv = np.asarray(sc, float)
-            if np.any(acv != 0.0) or np.any(scv != 0.0):
-                fields.append({
-                    'kind': 'multi', 'M': np.diag(acv),
-                    'A': np.zeros((len(states), len(states))),
-                    'ac_shift': acv,
-                    'scatter': scv,
-                    'g_idx': [], 'e_idx': [], 'omega0_mhz': 1.0,
-                    'omega_L_mhz': w.freq_mhz, 'waveform': w.waveform})
-    return fields
 
 
 # ================= 状态管理（序列化 / 恢复） =================

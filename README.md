@@ -333,14 +333,16 @@ max_step 在求解过程页），改完点 **「应用并重跑」** 就地用�
 pip install "mcp>=2,<3" uvicorn    # 缺失时软件照常运行，仅状态栏提示 AI 接口未启用
 ```
 
-> ⚠ **当前实测：`mcp 2.2.0` 下 AI 通道不可用**（2026-09 发现）。
-> 症状：`initialize` 与 `tools/list` 正常返回 200、工具齐全，但
-> `tools/call` 一律 **404 Not Found**（transcript 里能看到每次响应后紧跟
-> `Terminating session: None`）→ 任何 harness 都调不动工具，`checks/ai_*`
-> 三件套也因此失败。这是 **SDK 的 stateless-HTTP 语义在 2.2 变化**所致，
-> 不是脚本或本仓库代码的问题。两条出路：① 回钉 `pip install "mcp<2.2"`
-> 立刻恢复；② 按官方迁移指南适配 `server.start_server` 的会话处理。
-> `requirements.txt` 目前的 `mcp>=2,<3` 偏宽，把 2.2 放进来了。
+> ✅ **`mcp 2.2.0` 下 AI 通道实测可用**（2026-09-10 复核推翻旧论断）。
+> 旧记录（2026-09 早前）称 `tools/list` 正常但 `tools/call` 一律 **404**，
+> 并把日志里的 `Terminating session: None` 当作失败证据。现经
+> `checks/ai_selftest`（11）+ `ai_compute_test`（17）+ `ai_codeact_test`（13）
+> 与全链路自检 `checks/ai_chain_selftest.py`（32 项，覆盖标量/external/psi/
+> mode/存档往返/undo/CodeAct/journal 归因）在 `mcp 2.2.0` 下**全部通过**——
+> `tools/call` 返回 200。
+> `Terminating session: None` 是 `stateless_http=True` 的正常会话收尾，
+> 不是错误。若再遇 404，先核对 `streamable_http_app(..., stateless_http=True)`
+> 与客户端 `streamable_http_client` 是否配套，而不是急着重钉版本。
 
 - 端口：默认 8765；环境变量 `EL_MCP_PORT` 可改；被占自动回退随机端口；
 - **Trae IDE**：项目根 `.trae/mcp.json` 已配好（`http://127.0.0.1:8765/mcp`），
@@ -363,9 +365,9 @@ pip install "mcp>=2,<3" uvicorn    # 缺失时软件照常运行，仅状态栏�
 | 工具 | 作用 |
 |---|---|
 | `summary` / `get_state(scope)` | 读当前状态（轻量摘要 / 全量或分模块导出） |
-| `list_params` / `set_param(path, value, reason)` | 查 / 改白名单参数（B、E、t_max、方法、V_dd 几何…） |
+| `list_params` / `set_param(path, value, reason)` | 查 / 改在册参数（登记面 = AI 可及面：B、E、t_max、方法、光场表、初态 psi、模式、V_dd 几何…） |
 | `add_level_group(n,l,j)` / `remove_level_group(i)` | 能级组增删（自动校验 + 配色） |
-| `set_waves(waves, atom)` | 整表替换 A/B 原子的波形序列 |
+| `set_waves(waves, atom)` | 整表替换波形序列（atom=single/A/B，三套独立） |
 | `run_compute` → `job_status` → `job_result(save_npz)` | 启动演化（与人点"运行"同一条路径）→ 轮询进度 → 取结果摘要（大数组落 npz 给路径） |
 | `cancel_job(job_id)` | 取消计算 |
 | `get_activity(since_seq)` / `undo(reason)` | 操作流水（人+AI）/ 撤销 AI 最近一步 |
@@ -384,7 +386,8 @@ pip install "mcp>=2,<3" uvicorn    # 缺失时软件照常运行，仅状态栏�
 > AI 侧完整操作手册（工具语义、单位约定、波形 JSON 格式、已知坑）在
 > `skills/energy-level/SKILL.md`——给 AI 看的说明书，AI 使用中发现不符可
 > 回头修正（自我迭代）。注意：上帝模式的 diag 精度旋钮**不开放给 AI**
-> （检视器属人侧调试通道）；单/双原子模式切换也需人在 GUI 上操作。
+> （检视器属人侧调试通道，不入册）；单/双原子模式 AI 可经
+> `set_param('dynamic.mode', 0|1)` 切换（= 人点单选钮同路）。
 
 ---
 
@@ -911,8 +914,9 @@ src/
 │   ├── coupling.py       # RHS 公共层（t73）：pack_rhs + φ-帧统一内核
 │   │                     #   rhs_phi_pairs（mixed 单/两体同一 RHS）
 │   │                     #   + 三槽进度协议 stage_progress
-│   │                     #   + static_phase_keep（t78：V_dd 累积相位判据，
-│   │                     #     与 hard 共用，取代幅度/能量间隙两个旧阈值）
+│   │                     #   + static_phase_keep（t78：V_dd 累积相位判据）
+│   │                     #   + mw_pair_keep（t79：微波对同族判据，
+│   │                     #     固定能量窗退役；caps 降级为步长兜底）
 │   ├── project.py        # 跨扇区投影公共层 project_pops
 │   ├── tensor_fields.py  # 两体场提升（lift_single_A/lift_side_A/lift_fields）
 │   ├── tensor.py         # 两体张量化（tensor_states/_reduce_*/_pair_loss_vectors）
@@ -935,8 +939,8 @@ src/
 ├── ai/                   # AI 协同（MCP 接口；可选依赖，缺失不影响软件本体）
 │   ├── server.py         # 进程内 MCP server（streamable HTTP :8765，17 工具；
 │   │                     #   端口写项目根 .mcp-port 供 harness 发现）
-│   ├── sim_state.py      # SimState 状态门面（人机等效的唯一语义入口 +
-│   │                     #   set_param 白名单 + AI 控件高亮）
+│   ├── sim_state.py      # SimState 状态门面（人机等效的唯一语义入口；
+│   │                     #   可及面 = 登记册在册面；AI 写入经 reg 刷紫边）
 │   ├── journal.py        # OpJournal 操作流水（actor/快照/undo；落盘 jsonl）
 │   ├── dispatch.py       # 主线程派发器（MCP 线程 → Qt 主线程 marshal）
 │   ├── codeact.py        # CodeAct：run_python 受限执行（一次调用多步编排）
@@ -1019,7 +1023,7 @@ src/
 |---|---|---|
 | `kind='exact'`（全偶极 A 矩阵 + 载频 + 包络） | `build_fields_exact(cache, states, waves)` | sambe / mixed / hard(两场 meta 内) |
 | `kind='pair'/'real'/'arb'`（单对/组/任意波形） | `field / group_field / real_field / arbitrary_field` | ip4 系（evolve_rwa） |
-| `two_field meta`（dict: E_rot + opt_terms + mw_groups） | `build_two_field(cache, states, waves)` | hard / evolve_two_field |
+| `two_field meta`（dict: E_rot + opt_terms + mw_groups） | `build_two_field(cache, states, waves, t_end_ns=None)` | hard / evolve_two_field |
 
 `kind='exact'` 场 dict：`{'kind':'exact', 'A': N×N 实对称 Rabi(MHz), 'omega_L_mhz': 载频,
 'waveform': t→[0,1] callable, 'label'}`。
@@ -1179,13 +1183,30 @@ res = evolve_engine('mixed', states,
   分组键 (is_mw, ω, id(env))。
 - **`coupling.static_phase_keep(vals, dE, T, theta_tol)`**（t78）：**V_dd 静态耦合的
   唯一丢弃判据**——累积相位 $\Theta=C T|V|^2/\max(|V|,|\Delta E|)\ge\theta_{tol}$
-  （默认 `params.POP_PHASE_TOL=1e-4` rad），返回 (keep 掩码, info)。hard 与 mixed
-  共用同一实现 → 两引擎 V_dd 存活集自动一致（实测差 4.3e-8，改前 1.1e-5）。
-  取代原 `_VDD_MIN_FRAC`（幅度阈值，随基组标度漂移）与 mixed 借用 `BW_OPT` 的
-  能量间隙阈值（与 |V| 无关，会误删 34.6 GHz 双翻转 Förster 通道）。
-- **`evolve_mixed.acize_physical(E, fields_opt, r_crit)`**（t74b 自 acize.py
-  并入）：AC 化唯一实现——r 判据分类 +
-  远强对剔除 + per-field far_sos 位移。
+  （默认 `params.PHASE_TOL=1e-4` rad，旧名 `POP_PHASE_TOL`），返回 (keep 掩码, info)。
+  hard 与 mixed 共用同一实现 → 两引擎 V_dd 存活集自动一致（实测差 4.3e-8，
+  改前 1.1e-5）。取代原 `_VDD_MIN_FRAC`（幅度阈值，随基组标度漂移）与 mixed 借用
+  `BW_OPT` 的能量间隙阈值（与 |V| 无关，会误删 34.6 GHz 双翻转 Förster 通道）。
+- **`coupling.mw_pair_keep(Omega, det, T, cap_mhz, theta_tol)`**（t79）：**微波耦合对
+  的丢弃判据**，与上面**同一族、同一常量**（$\Theta=C T\Omega^2/\max(\Omega,\Delta)$，
+  $\Delta=|\,|\Delta D|-\omega\,|$）。动机同理：与 $\Omega$ 无关的固定能量窗会误删
+  **强场下的远失谐多光子通道**——实测 freeze 三光子梯子 60P→59D→58F→58G 的第三级
+  单光子失谐 +7.08 GHz 被旧 5 GHz 窗整条删掉（400 ns 布居零变化、无报错）。
+- **`coupling.mw_cap_mhz(T, phase_budget)`**（t80）：候选窗宽 = `PHASE_BUDGET/(C·T)`
+  ——**相预算派生**，取代固定频率窗（`MW_NRES_BW_MHZ` 已删）。最坏总步数
+  ≈ `PHASE_BUDGET`/0.5，与 T、态数无关。配套向量化
+  **`coupling.mw_candidate_mask(Ω, dE, ω, T)`**（= 成本窗 + 精度 Θ，与标量判据逐对等价）。
+  消费方：`evolve_mixed._MixedSetup` / `evolve_mixed_pair`（先成本后精度），
+  以及 `evolve_twofield.build_two_field(..., t_end_ns=T)`（两场引擎同一判据 →
+  与 mixed 保留集逐对一致）。
+  自检：`checks/mw_pair_keep_selfcheck.py`（30 项，真实梯子 Rabi 实测锚 + 相预算标定）。
+- **`params.py` 分层**（t80）：控制面 = 5 个无量纲量（`PHASE_TOL` / `PHASE_BUDGET` /
+  `R_CRIT` / `RWA_TOL` / `M_EST_TOL`）+ `DEFAULT_RTOL`（`DEFAULT_ATOL` 由它按
+  `ATOL_RTOL_RATIO` 派生）；其余分【C】结构常量 /【D】模型边界 /【E】性能保护，
+  **都不是精度旋钮**。逐参数登记见 `docs/引擎参数总表.md` §0，
+  判据推导与历史动因见 `docs/参数与判据决策史.md`。
+- **`evolve_mixed.acize_physical(E, fields_opt, r_crit)`**：AC 化唯一实现——
+  r 判据分类 + 远强对剔除 + per-field far_sos 位移。
 - **`project.project_pops(X_t, P, N_phys, ns, ω, t)`**：跨扇区投影。
 - **`tensor_fields.lift_side_A / lift_fields`**：两体场提升（A⊗I / I⊗A）。
 - **`tensor.*`**：tensor_states / _reduce_A/B / _pair_loss_vectors。
@@ -1241,14 +1262,13 @@ python checks/route_auto_selfcheck.py      # route_auto 判据 6 项
 python checks/checks_sentinel.py           # 哨兵（也可单独跑）
 ```
 
-AI 协同三件套（需装 `mcp`/`uvicorn`；**当前被 mcp 2.2.0 的 stateless-HTTP 行为
-阻塞**——`tools/list` 正常但 `tools/call` 返回 404，需回钉 `mcp<2.2` 或适配新
-SDK，见 §1.9）：
+AI 协同三件套（需装 `mcp`/`uvicorn`；`mcp 2.2.0` 实测可用，见 §1.9）：
 
 ```bash
 python checks/ai_selftest.py      # MCP 工具语义 11 项（状态读写/journal/undo）
 python checks/ai_compute_test.py  # 计算通道 17 项（run_compute→job_status/result）
 python checks/ai_codeact_test.py  # CodeAct 13 项（含两轮 B 场扫描一次调用完成）
+python checks/ai_chain_selftest.py  # v3 登记册↔MCP 全链路 32 项（独立端口 18799）
 ```
 
 > 2026-09-10 清理：`hard_numba_selfcheck.py`、`two_field_selfcheck.py`、
@@ -1309,7 +1329,7 @@ AI 的通道是对**语义操作的直接调用**（不是点像素）；人与 
 | 模块 | 职责 |
 |---|---|
 | `server.py` | 进程内 MCP server：uvicorn 专用线程跑 streamable HTTP（127.0.0.1，默认 8765，写 `.mcp-port`）；注册 17 个工具；`start_server(win)` 由 `app_entry._init_ai` 在 MainWindow 构造后调用，失败仅日志不影响软件本体 |
-| `sim_state.py` | **SimState 状态门面**：读写一律经**参数登记册**（`src/pm_setup.py` 的 `reg`）的绑定路径（如 `dynamic.waves_A`、`field.B_gauss`）——AI 写入、人的操作、存档恢复走同一组语义入口，自动经既有信号链刷新 GUI；含 `set_param` 白名单与 AI 控件紫色描边 |
+| `sim_state.py` | **SimState 状态门面**：读写一律经**参数登记册**（`src/pm_setup.py` 的 `reg`）的绑定路径（如 `dynamic.waves_A`、`field.B_gauss`）——AI 写入、人的操作、存档恢复走同一组语义入口，自动经既有信号链刷新 GUI。**AI 可及面 = 登记在册面**（不再有独立白名单：入册即可改，未入册即不可见；显示类字段与上帝模式旋钮不入册故 AI 碰不到），来源归因经 `source='ai'` 刷控件紫色描边 |
 | `journal.py` | OpJournal：每次变更记 `{seq, ts, actor, kind, detail, reason, snapshot}`；落盘 `_journal/<日期>.jsonl`；undo = 整 op 快照回滚（粒度粗但绝对正确） |
 | `dispatch.py` | 主线程派发器：MCP 线程经 queued-signal 把闭包投递 Qt 主线程执行（`run_on_main`），Event 回传结果——Qt 状态只允许主线程读写，长计算阻塞时超时报错不死锁 |
 | `codeact.py` | CodeAct：受限命名空间 exec（只注入语义入口 + numpy/json/time，不给 os/sys），主线程执行、泵事件循环等待计算；整段一个 undo 单元 + 一条 journal |
@@ -1332,10 +1352,9 @@ AI 的通道是对**语义操作的直接调用**（不是点像素）；人与 
   `.trae/mcp.json` 为 Trae 接入样板。
 
 测试与验收：`checks/ai_selftest.py`（11）+ `checks/ai_compute_test.py`（17）+
-`checks/ai_codeact_test.py`（13）；`ui_selftest` 60 项无回归（含 §3.11 的
-存档往返用例）。
-> ⚠ 三件套目前**因 `mcp 2.2.0` 的 `tools/call` 404 而失败**，见 §1.9 的警告——
-> 这是环境问题，不是测试或代码问题。
+`checks/ai_codeact_test.py`（13）+ `checks/ai_chain_selftest.py`（32，v3 登记册
+↔MCP 全链路）；`ui_selftest` 60 项无回归（含 §3.11 的
+存档往返用例，覆盖菜单 `_save_state`/`_load_state` 真实入口）。
 
 ---
 
@@ -1380,7 +1399,7 @@ AI 的通道是对**语义操作的直接调用**（不是点像素）；人与 
 
 | 问题 | 现状 | 处置 |
 |---|---|---|
-| **AI 通道在 `mcp 2.2.0` 下不可用** | `tools/list` 200 正常但 `tools/call` 一律 404（stateless-HTTP 语义变化），任何 harness 都调不动工具 | 回钉 `pip install "mcp<2.2"`，或按官方迁移指南适配 `server.start_server`（§1.9） |
+| ~~AI 通道在 `mcp 2.2.0` 下不可用~~ | **已排除（2026-09-10 复核）**：三件套 + `ai_chain_selftest` 在 2.2.0 下全绿，`tools/call` 返回 200；旧记录把 `stateless_http` 的正常会话收尾日志 `Terminating session: None` 误判为 404 故障 | 无需处理；真要复现问题先核对 server 端 `stateless_http=True` 与客户端是否配套（§1.9） |
 | **任意波形 + 含光学流形的基组 → 极慢/疑似挂死** | 任意波形走 `mw_group` 路径、**不参与光场旋转** → RHS 带 295 THz 相位 → DOP853 步长被钉死。实测同一 2 ns 演化：基组无 6P 时 15.9 s 完成，含 6P 时 **60 s 未完成** | t78 起运行前会打印适用性警告（`field_build.arb_applicability`）；光学驱动请改用光场波形或按"光强包络"导入 |
 | **长演化偶发 Qt/ARC 堆损坏** | 全流程长演化（本机）偶发崩；**隔离单跑正常** → 判为环境/ARC 交互问题，与本仓库算法无关 | 自检里把长演化放在独立进程/隔离跑（见 `ui_selftest` 的 STIRAP 段注释） |
 | `scripts/` 三个脚本跑不起来 | `demo_pair_drive.py` / `demo_unified.py`（依赖已归档的 `driver`）、`make_stir_rap_states.py`（依赖 t74b 已拆的 `evolve`）——**改动前就已腐坏** | 需要时改指 `src._archive.*` 或一并归档；其余 `scripts/` 是可用的 |

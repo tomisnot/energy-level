@@ -178,8 +178,15 @@ def tp3():
             + env_mw(tt) * np.cos(_CONV * W_MW * tt) * A_mw_2d
         return -1j * _CONV * (H @ y)
 
+    # t79 计时优化：参考容差 1e-10/1e-13 → 1e-8/1e-11。本项的差异由**光学
+    # RWA 反旋项**主导（见下注释 ~1e-3），不是参考积分精度；参考只需准到
+    # ≪1e-3。原容差 + 光学载波使 DOP853 步长被钉死，单项耗时 57 s（占本
+    # 自检 97%）。
+    # ⚠ 实测边界：再放宽到 1e-6/1e-9 只要 17.9 s，但实测 Δ 从 2.25e-4 涨到
+    #   5.76e-4——参考自身误差已与被测物理差值（~2.3e-4）同量级，测试会
+    #   退化成"测参考误差"。故停在 1e-8/1e-11（32 s，Δ=2.25e-4 干净）。
     sol = solve_ivp(rhs, (0.0, float(t[-1])), psi0_2d, method='DOP853',
-                    t_eval=t, rtol=1e-10, atol=1e-13)
+                    t_eval=t, rtol=1e-8, atol=1e-11)
     assert sol.success, sol.message
     ref = np.abs(sol.y).T ** 2
     d = float(np.max(np.abs(r['pops_2d'] - ref)))

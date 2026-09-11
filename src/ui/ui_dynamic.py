@@ -987,15 +987,17 @@ class DynamicPanel(QWidget):
         """单原子演化路径（定时器/对话框已在 _run 启动）。"""
         waves = list(self.wave_panel.waves)
         method = self.method_cb.currentText()
-        # t77/t78：mixed 自持无光场（P=1 退化）；sambe / mixed 都不支持
-        # **完整驱动**（ArbitraryWave 无载频，而光子块扩展空间需要单一载频）
-        # → 一律改道 hard。光强包络（FileEnv）不受影响：它是普通 Wave。
-        if method in ('sambe', 'mixed') and any(
-                isinstance(w, waveforms.ArbitraryWave) for w in waves):
-            self.main.log(f'{method} 不支持任意波形（完整驱动无载频）→ '
-                          '自动改用 hard；若文件只是光强形状，请按'
-                          '「＋任意 → 作为光强包络」导入')
+        # t79：**mixed 已支持任意波形微波**（微波项 env·cos(ωt) →
+        # env·cos(φ(t))，相位走查表插值）——不再整体改道 hard：那会把光场
+        # 一起从 Sambe 光子块（无 RWA）降级到旋转系 RWA，等于作废用户选
+        # mixed 的意图。sambe 仍不支持（光子块扩展空间需单一载频）→ 只有它
+        # 改道 hard。光强包络（FileEnv）是普通 Wave，三者都不受影响。
+        has_arb = any(isinstance(w, waveforms.ArbitraryWave) for w in waves)
+        if method == 'sambe' and has_arb:
+            self.main.log('sambe 不支持任意波形（完整驱动无载频）→ 自动改用 '
+                          'hard；若文件只是光强形状，请按「＋任意 → 作为光强包络」导入')
             method = 'hard'
+        engine_kwargs = {}          # t79：mw_arb 与上帝模式覆写都挂这里
         self._sync_t_end(t)
         self._check_arb_applicability(waves, states, t)
         self._prep('构造驱动场', 0.85)
@@ -1006,7 +1008,21 @@ class DynamicPanel(QWidget):
         elif method == 'mixed':
             # t62 混合引擎（光 Sambe 光子块 + 微波当场）——fields 同构
             # build_fields_exact（evolve_mixed 正式版内部做 far_sos AC 化）
-            fields = waveforms.build_fields_exact(self.cache, states, waves)
+            # t79：任意波形（无载频）**不进** build_fields_exact（它按单一
+            # 载频建 kind='exact' 场，遇 arb 直接抛错）；改经
+            # arbitrary_mw_group 转成 mw_arb，由引擎的 cos(φ(t)) 通道积分。
+            from ..core.evolve_twofield import arbitrary_mw_group
+            _reg = [w for w in waves
+                    if not isinstance(w, waveforms.ArbitraryWave)]
+            _arb = [w for w in waves
+                    if isinstance(w, waveforms.ArbitraryWave)]
+            fields = waveforms.build_fields_exact(self.cache, states, _reg)
+            if _arb:
+                engine_kwargs['mw_arb'] = [
+                    arbitrary_mw_group(self.cache, states, w) for w in _arb]
+                self.main.log(
+                    f'mixed：任意波形微波 {len(_arb)} 条 → arbitrary_mw_group '
+                    '（Hilbert 分解 env/φ）→ 微波项 cos(φ(t)) 当场积分')
             self.main.log('mixed：光场 Sambe 光子块 + 微波当场'
                           '（φ-帧，t62 验证 ≡frozen 1e-5~1e-8 级）')
         else:
@@ -1019,7 +1035,8 @@ class DynamicPanel(QWidget):
                        if not isinstance(w, waveforms.ArbitraryWave)]
             arb = [w for w in waves
                    if isinstance(w, waveforms.ArbitraryWave)]
-            meta = build_two_field(self.cache, states, regular)
+            meta = build_two_field(self.cache, states, regular,
+                                   t_end_ns=float(t[-1]))
             for w in arb:
                 meta['mw_groups'].append(
                     arbitrary_mw_group(self.cache, states, w))
@@ -1029,9 +1046,10 @@ class DynamicPanel(QWidget):
 
         self._prep('驱动场就绪', 1.0)
         # t75：上帝模式覆写（mixed）——空输入=默认；diag 随上帝模式开启
-        engine_kwargs = None
+        # （engine_kwargs 已在分支前初始化；t79 的 mw_arb 也挂在同一字典里，
+        #   故此处用 update 而不是重新赋值，别把 mw_arb 冲掉）
         if method == 'mixed' and self.god_cb.isChecked():
-            engine_kwargs = self._collect_god_kwargs()
+            engine_kwargs.update(self._collect_god_kwargs())
         self._worker = EvolveWorker(states, fields, psi0, t,
                                      method,
                                      'auto',
@@ -1046,15 +1064,16 @@ class DynamicPanel(QWidget):
         waves_A = list(self.wave_panel_A.waves)
         waves_B = list(self.wave_panel_B.waves)
         method = self.method_cb.currentText()
-        # t77/t78：sambe / mixed 都不支持完整驱动（无载频）→ hard；
-        # 光强包络（FileEnv）是普通 Wave，不受影响。
-        if method in ('sambe', 'mixed') and any(
-                isinstance(w, waveforms.ArbitraryWave)
-                for w in waves_A + waves_B):
-            self.main.log(f'{method} 不支持任意波形（完整驱动无载频）→ '
-                          '自动改用 hard；若文件只是光强形状，请按'
-                          '「＋任意 → 作为光强包络」导入')
+        # t79：mixed 已支持任意波形微波（微波项 cos(φ(t))）——不再改道；
+        # 只有 sambe（光子块需单一载频）保留改道。光强包络（FileEnv）是
+        # 普通 Wave，三者都不受影响。
+        has_arb = any(isinstance(w, waveforms.ArbitraryWave)
+                      for w in waves_A + waves_B)
+        if method == 'sambe' and has_arb:
+            self.main.log('sambe 不支持任意波形（完整驱动无载频）→ 自动改用 '
+                          'hard；若文件只是光强形状，请按「＋任意 → 作为光强包络」导入')
             method = 'hard'
+        engine_kwargs = {}          # t79：mw_arb_A/B 与上帝模式覆写都挂这里
         self._sync_t_end(t)
         self._check_arb_applicability(waves_A + waves_B, states, t)
         if method == 'mixed':
@@ -1064,12 +1083,32 @@ class DynamicPanel(QWidget):
                           '（φ-帧，dim 5 倍降维）')
             # 第一性两体（mixed 吃 kind='exact' fields——build_fields_exact；
             # mixed 内部 AC 化远强对 + 当场微波）
+            # t79：任意波形不进 build_fields_exact（它按单一载频建场，遇 arb
+            # 直接抛错），分侧转成 mw_arb_A/B 交给引擎的 cos(φ(t)) 通道。
+            from ..core.evolve_twofield import arbitrary_mw_group
             self._prep('构造驱动场 A', 0.82)
-            fields_A = waveforms.build_fields_exact(self.cache, states,
-                                                    waves_A)
+            regA = [w for w in waves_A
+                    if not isinstance(w, waveforms.ArbitraryWave)]
+            arbA = [w for w in waves_A
+                    if isinstance(w, waveforms.ArbitraryWave)]
+            fields_A = waveforms.build_fields_exact(self.cache, states, regA)
             self._prep('构造驱动场 B', 0.87)
-            fields_B = waveforms.build_fields_exact(self.cache, states,
-                                                    waves_B)
+            regB = [w for w in waves_B
+                    if not isinstance(w, waveforms.ArbitraryWave)]
+            arbB = [w for w in waves_B
+                    if isinstance(w, waveforms.ArbitraryWave)]
+            fields_B = waveforms.build_fields_exact(self.cache, states, regB)
+            if arbA:
+                engine_kwargs['mw_arb_A'] = [
+                    arbitrary_mw_group(self.cache, states, w) for w in arbA]
+            if arbB:
+                engine_kwargs['mw_arb_B'] = [
+                    arbitrary_mw_group(self.cache, states, w) for w in arbB]
+            if arbA or arbB:
+                self.main.log(
+                    f'mixed 两体：任意波形微波 A={len(arbA)} B={len(arbB)} 条 '
+                    '→ arbitrary_mw_group（Hilbert 分解 env/φ）→ '
+                    '微波项 cos(φ(t)) 当场积分')
         elif method == 'sambe':
             # 第一性两体（Sambe 吃 kind='exact' fields）
             self._prep('构造驱动场 A', 0.82)
@@ -1090,7 +1129,8 @@ class DynamicPanel(QWidget):
                        if not isinstance(w, waveforms.ArbitraryWave)]
                 arb = [w for w in wvs
                        if isinstance(w, waveforms.ArbitraryWave)]
-                m = build_two_field(self.cache, states, reg)
+                m = build_two_field(self.cache, states, reg,
+                                    t_end_ns=float(t[-1]))
                 for w in arb:
                     m['mw_groups'].append(
                         arbitrary_mw_group(self.cache, states, w))
@@ -1167,9 +1207,10 @@ class DynamicPanel(QWidget):
         frozen_h, per_freq_M = (self._sambe_adv_params()
                                 if method == 'sambe' else (None, None))
         # t75：上帝模式覆写（mixed 两体——r_crit/max_step/tol/diag）
-        engine_kwargs = None
+        # （engine_kwargs 已在分支前初始化；t79 的 mw_arb_A/B 也挂在同一
+        #   字典里，故此处 update 而非重新赋值，别把它们冲掉）
         if method == 'mixed' and self.god_cb.isChecked():
-            engine_kwargs = self._collect_god_kwargs(pair=True)
+            engine_kwargs.update(self._collect_god_kwargs(pair=True))
         self._worker = EvolveWorkerPair(
             states, fields_A, fields_B, psi0_A, psi0_B,
             t, self.progress_arr,

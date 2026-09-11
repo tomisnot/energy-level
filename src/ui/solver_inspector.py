@@ -396,12 +396,19 @@ class SolverInspector(QDialog):
 
     # ---------- Tab 引擎参数（params.py 数值阈值覆写） ----------
     _E_PARAMS = [
+        ('phase_budget', 'PHASE_BUDGET',
+         '微波候选窗的**无量纲相预算**（rad）——取代旧的固定频率窗。'
+         '窗宽 = PHASE_BUDGET/(C·T)：T 短则宽、T 长则窄。'
+         '调大 → 保留更多远失谐对（更准更慢，最坏总步数 ≈ 值/0.5）；'
+         '调小 → 可能删掉强场多光子通道（freeze 三光子梯子第三级）。'),
         ('bw_opt', 'BW_OPT',
-         'mixed φ-帧：光场/V_dd 共振对过滤带宽 |ΔD| < 值保留（MHz）。'
+         'mixed φ-帧：**光场**对的过滤带宽 |ΔD| < 值保留（MHz）。'
+         't78 起只管光场对（V_dd 已改判据 <code>PHASE_TOL</code>）。'
          '调小 → 更多对进 φ-帧精确计算（更准更慢）；调大 → 反旋过滤更激进。'
          '注意：漏滤 THz 对会把步长钉死'),
-        ('mw_nres_bw', 'MW_NRES_BW_MHZ',
-         '微波近共振保留带宽 | |ΔD|−ω| < 值（MHz）。默认覆盖超精细/精细流形'),
+        ('mw_cap', 'MW_MAX_MHZ',
+         '微波候选窗的**绝对**上界（MHz）——只兜 T→0 与显式覆写；'
+         '正常窗宽由 <code>PHASE_BUDGET</code> 派生，不要动这个'),
         ('mw_max', 'MW_MAX_MHZ',
          '微波/光场分界：载频 ≤ 值按微波处理（MHz）。默认 1e5（100 GHz）'),
     ]

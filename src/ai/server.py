@@ -10,8 +10,8 @@
 卡住事件循环）。
 
 v1 策略：AI 写操作先斩后奏（草案 §开放问题，用户拍板）——直接生效，
-归因与记账由参数注册表的 op 事件统一驱动（src/ai/params.py +
-param_framework）：人经 touch→commit 自动 op(source='user')，AI 经
+归因与记账由参数注册表的 op 事件统一驱动（src/pm_setup.py 登记 +
+param_manager 框架）：人经 touch→commit 自动 op(source='user')，AI 经
 reg.set/mutate(source='ai', reason, 变更前快照)——本模块只把 op 桥接到
 journal，undo / get_activity 基于 journal 兜底可追溯。
 """
@@ -26,10 +26,12 @@ from typing import Any
 from .dispatch import run_on_main
 from .journal import get_journal
 from .sim_state import SimState, json_safe
+from . import run_store
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _PORT_FILE = os.path.join(_ROOT, '.mcp-port')
 _SHOT_DIR = os.path.join(_ROOT, 'ui_design', 'screenshots', '_ai')
+_NPZ_KEEP = 100                   # tempsimu 下 ai_*.npz 保留份数（防无限膨胀）
 
 _server_thread = None
 _server = None            # uvicorn.Server
@@ -73,8 +75,95 @@ def _win():
     return None
 
 
+# ---------------------------------------------------------------
+# 大数组瘦身：波形包络采样不走工具响应（另设 get_envelope 通道）
+# ---------------------------------------------------------------
+def _slim_env(env):
+    """file 型包络的采样数组 → 摘要。
+
+    2026-09-10：一个 12001 点的 FileEnv 让单次 list_params 响应到 1 MB。
+    摘要不丢语义（形状/量程/步长都在），要看或复用完整曲线用 get_envelope。
+    """
+    if not isinstance(env, (list, tuple)):
+        return env
+    env = list(env)
+    if len(env) < 3 or env[0] != 'file':
+        return env
+    t, a = env[1], env[2]
+    if not (isinstance(t, (list, tuple)) and isinstance(a, (list, tuple))
+            and t and a):
+        return env
+    dt = min(t[i + 1] - t[i] for i in range(len(t) - 1)) if len(t) > 1 else 0.0
+    return ['file', {'n': len(t), 't_span_ns': [t[0], t[-1]], 'dt_min_ns': dt,
+                     'amp_range': [min(a), max(a)],
+                     'note': '采样数组已省略，用 get_envelope(path, index) 取'}]
+
+
+def _slim_waves(v):
+    if not isinstance(v, list):
+        return v
+    out = []
+    for w in v:
+        if isinstance(w, dict) and 'env' in w:
+            w = dict(w)
+            w['env'] = _slim_env(w['env'])
+        out.append(w)
+    return out
+
+
+def _slim_params(params):
+    """波形参数（dynamic.waves_*）的包络采样 → 摘要；其余原样。
+
+    兼容两种返回形态：
+      · get_state  → {参数名: 值}
+      · list_params→ {参数名: {schema..., 'value': 值}}（值在 'value' 里）
+    漏掉后者会让 list_params 依旧整表回传（2026-09-10 自检抓到）。
+    """
+    out = {}
+    for k, v in (params or {}).items():
+        if str(k).startswith('dynamic.waves_'):
+            if isinstance(v, dict) and 'value' in v:
+                v = dict(v)
+                v['value'] = _slim_waves(v['value'])
+            else:
+                v = _slim_waves(v)
+        out[k] = v
+    return out
+
+
 def _t_get_state(scope):
-    return _state.get_state(scope)
+    d = _state.get_state(scope)
+    if isinstance(d, dict) and isinstance(d.get('params'), dict):
+        d = dict(d)
+        d['params'] = _slim_params(d['params'])
+    return d
+
+
+def _t_get_envelope(path, index):
+    """取一条波形的原始包络：file 型给采样数组，其他型给参数（即全量）。"""
+    try:
+        waves = _state.reg.read(path)
+    except Exception as e:                      # noqa: BLE001
+        return {'ok': False, 'msg': f'读 {path} 失败：{e}；可用 '
+                                    'dynamic.waves_single / waves_A / waves_B'}
+    if not isinstance(waves, list):
+        return {'ok': False, 'msg': f'{path} 不是波形列表；可用 '
+                                    'dynamic.waves_single / waves_A / waves_B'}
+    i = int(index)
+    if not (0 <= i < len(waves)):
+        return {'ok': False, 'msg': f'index {i} 越界（{path} 共 {len(waves)} 条）'}
+    w = waves[i]
+    env = list(w.get('env') or [])
+    base = {'ok': True, 'path': path, 'index': i, 'name': w.get('name'),
+            'freq_mhz': w.get('freq_mhz'), 'intensity': w.get('intensity'),
+            'pol': w.get('pol'), 'offset_ns': w.get('offset_ns')}
+    if env and env[0] == 'file' and len(env) >= 3:
+        base.update({'kind': 'file', 'n': len(env[1]),
+                     't_ns': list(env[1]), 'amp': list(env[2])})
+    else:
+        base.update({'kind': env[0] if env else None, 'env': env,
+                     'msg': '非 file 型包络，env 参数即全量'})
+    return base
 
 
 def _t_summary():
@@ -280,30 +369,58 @@ def _t_job_status(job_id):
             'error': job['error']}
 
 
-def _res_summary(res, save_npz=False, tag=''):
-    """演化结果 dict → 摘要（top/终态布居 + 可选 npz 落盘）。"""
+def _res_labels(res, pops2):
+    """结果数组的态标签。
+
+    单体（pops）：用 GUI 的 _run_states（单原子态，长度 = 列数）。
+    两体（pops_2d 是 484 = 22² 的乘积基）：**必须**用 res['states_2d'] 的
+    成对标签。此前直接照搬 _run_states，于是 484 维两体布居被 22 个单原子
+    标签标注、索引 ≥22 的退化成裸数字（如键名 "247"），读数被误导
+    （2026-09-10 修）。拿不到成对标签时宁可不标，也不误标。
+    """
     import numpy as np
-    out = {}
+    if pops2 is not None:
+        s2 = res.get('states_2d')
+        if s2 is None:
+            return []
+        labs = []
+        for x in np.asarray(s2).ravel():
+            labs.append(str(x.get('label', '?')) if isinstance(x, dict) else str(x))
+        return labs
+    states = getattr(_win().dynamic, '_run_states', None) or []
+    return [s.get('label', '?') for s in states]
+
+
+def _res_summary(res, save_npz=False, tag=''):
+    """演化结果 dict → 摘要（top/终态布居 + 可选 npz 落盘）。
+
+    两体标签取自 res['states_2d'] 的成对标签（见 _res_labels）。
+    落盘的 npz 会按 _NPZ_KEEP 保留最近若干份，防 tempsimu 无限膨胀
+    （2026-09-10：一次抖动研究就堆了 200+ 个、共 189 MB）。
+    """
+    import numpy as np
     if res is None:
         return {'msg': '无结果（可能被取消）'}
     t = np.asarray(res.get('t', []))
     pops = res.get('pops')
     pops2 = res.get('pops_2d')
-    states = getattr(_win().dynamic, '_run_states', None) or []
-    labels = [s.get('label', '?') for s in states]
-    summary = {'t_ns': [float(t[0]), float(t[-1])] if len(t) else None,
-               'n_steps': int(len(t)), 'states': labels[:40],
-               'n_states': len(labels)}
     arr = pops if pops is not None else pops2
+    labels = _res_labels(res, pops2 if pops is None else None)
+    n_col = (int(np.asarray(arr).shape[1])
+             if arr is not None and np.asarray(arr).ndim > 1 else len(labels))
+    summary = {'t_ns': [float(t[0]), float(t[-1])] if len(t) else None,
+               'n_steps': int(len(t)),
+               'two_body': pops is None and pops2 is not None,
+               'states': labels[:40], 'n_states': n_col}
     if arr is not None:
         arr = np.asarray(arr)
         avg = arr.mean(axis=0)
         order = np.argsort(-avg)[:8]
         summary['top_states_avg_pop'] = {
-            (labels[i] if i < len(labels) else str(i)): round(float(avg[i]), 5)
+            (labels[i] if i < len(labels) else f'#{i}'): round(float(avg[i]), 5)
             for i in order}
         summary['final_pop'] = {
-            (labels[i] if i < len(labels) else str(i)): round(float(arr[-1][i]), 5)
+            (labels[i] if i < len(labels) else f'#{i}'): round(float(arr[-1][i]), 5)
             for i in order}
         if save_npz:
             path = os.path.join(_ROOT, 'tempsimu',
@@ -314,7 +431,28 @@ def _res_summary(res, save_npz=False, tag=''):
                                          if isinstance(v, (np.ndarray, list, tuple))
                                          or hasattr(v, 'dtype')})
             summary['npz'] = path
+            summary['npz_pruned'] = _prune_npz()
     return summary
+
+
+def _prune_npz(keep=_NPZ_KEEP):
+    """只保留 tempsimu 下最近的 keep 份 ai_*.npz（按名倒序=时序）。返回删除数。"""
+    d = os.path.join(_ROOT, 'tempsimu')
+    if keep <= 0 or not os.path.isdir(d):
+        return 0
+    try:
+        names = sorted(n for n in os.listdir(d)
+                       if n.startswith('ai_') and n.endswith('.npz'))
+    except OSError:
+        return 0
+    n = 0
+    for nm in names[:-keep]:
+        try:
+            os.remove(os.path.join(d, nm))
+            n += 1
+        except OSError:
+            pass
+    return n
 
 
 def _t_job_result(job_id, save_npz):
@@ -348,6 +486,9 @@ _INSTRUCTIONS = """Energy Level：Rb-87 里德堡原子仿真软件的 AI 接口
 两种驱动形态：单步探索用细粒度工具（summary → set_param → run_compute →
 job_status/job_result）；重复/组合动作（参数扫描、批量对比、结果后处理）
 用 run_python 一次跑完，省回合且大数组不离境。
+**结果不会丢**：每次 run_python 都会把 result/stdout/代码存到项目根
+ai_results/ 下的 JSON（返回值含 run_id）。超长任务用 run_python_async
+立即拿 run_id 后台跑，再用 run_result / list_runs 取回——客户端断线也不丢。
 写操作先斩后奏：直接生效、GUI 实时反映；不满意用 undo（只撤 AI 自己的
 最近一步；run_python 整段算一步）。get_activity 可查所有操作流水
 （人/AI 混合）。"""
@@ -356,7 +497,8 @@ job_status/job_result）；重复/组合动作（参数扫描、批量对比、�
 def _register_tools(mcp):
     d = run_on_main   # 简写
 
-    @mcp.tool(description='读当前仿真状态（scope: 空=全部 / groups / field / dynamic）')
+    @mcp.tool(description='读当前仿真状态（scope: 空=全部 / groups / field / dynamic）。'
+                         '波形参数的包络采样只给摘要，完整曲线用 get_envelope。')
     async def get_state(scope: str = '') -> dict:
         return await asyncio.to_thread(d, lambda: _t_get_state(scope or None))
 
@@ -368,9 +510,21 @@ def _register_tools(mcp):
     async def set_param(path: str, value: Any = None, reason: str = '') -> dict:
         return await asyncio.to_thread(d, lambda: _t_set_param(path, value, reason))
 
-    @mcp.tool(description='列出所有可改参数的 schema（type/unit/desc/range/options/value）')
+    @mcp.tool(description='列出所有可改参数的 schema（type/unit/desc/range/options/value）。'
+                         '波形参数（dynamic.waves_*）的包络采样**只给摘要**'
+                         '（点数/dt/幅值范围/时间跨度）——完整曲线用 '
+                         'get_envelope(path, index) 取。')
     async def list_params(prefix: str = '') -> dict:
-        return await asyncio.to_thread(d, lambda: {'params': _state.schema(prefix)})
+        return await asyncio.to_thread(
+            d, lambda: {'params': _slim_params(_state.schema(prefix))})
+
+    @mcp.tool(description='取某个波形参数的**原始包络采样数组**（大数组专用通道）。'
+                         'path 如 dynamic.waves_A（或 waves_single / waves_B），'
+                         'index 为波形序号，顺序同 get_state 里该列表。'
+                         'file 型（光强包络）返回 t_ns / amp 两个等长数组；'
+                         'gauss/square 型 env 参数本身就是全量。')
+    async def get_envelope(path: str, index: int = 0) -> dict:
+        return await asyncio.to_thread(d, lambda: _t_get_envelope(path, index))
 
     @mcp.tool(description='添加能级组（n 主量子数, l 轨道角动量, j 总角动量），自动校验+配色')
     async def add_level_group(n: int, l: int, j: float, reason: str = '') -> dict:
@@ -426,11 +580,19 @@ def _register_tools(mcp):
         return await asyncio.to_thread(d, _t_screenshot)
 
     @mcp.tool(description='CodeAct：一次调用跑一段 Python，完成循环/扫描/后处理等'
-                         '多步编排（省回合）。可用名字：summary/get_state/set_param/'
-                         'add_level_group/remove_level_group/set_waves/load_archive/'
-                         'save_archive/run_compute_and_wait(启动并等完成,返回摘要)/'
-                         'activity/np/json/time/ROOT。把结论赋给变量 result。'
-                         '大数组用 print 出统计量、别整体回传。整段算一个 undo 单元。')
+                         '多步编排（省回合）。'
+                         '命名空间白名单——**仅**这些名字，无 os / sys / subprocess / open：'
+                         'np(=numpy)、json、time、ROOT(项目根绝对路径)、'
+                         'summary()、get_state(scope)、set_param(path,value,reason)、'
+                         'add_level_group(n,l,j)、remove_level_group(i)、'
+                         'set_waves(waves,atom)、load_archive(path)、save_archive(path)、'
+                         'run_compute_and_wait(timeout=1800,poll=1.0,save_npz=False)、'
+                         'activity(since=0)。'
+                         '要把数据写文件请拼路径：np.savez(ROOT + "/ai_results/x.npz", ...)，'
+                         '不要用 os.path.join（os 不存在）。'
+                         '把结论赋给变量 result（自动回传 + 自动落盘）。'
+                         '大数组用 print 出统计量、别整体回传。整段算一个 undo 单元。'
+                         '本次执行已自动存为 ai_results/<run_id>.json，返回值含 run_id。')
     async def run_python(code: str, timeout: float = 1800.0) -> dict:
         from .codeact import run_code
         return await asyncio.to_thread(
@@ -439,6 +601,70 @@ def _register_tools(mcp):
                 _t_run_compute, _t_job_status, _t_job_result,
                 timeout=timeout, t_load=_t_load_archive,
                 t_save=_t_save_archive), timeout + 60)
+
+    @mcp.tool(description='CodeAct 异步版：立即返回 run_id，脚本在后台执行，'
+                         '不再占住本次调用。长扫描/大系综用它——即使客户端断线，'
+                         '结果也已落盘 ai_results/<run_id>.json，重连后用 run_result '
+                         '或 list_runs 取回。用 run_result(run_id) 轮询进度。')
+    async def run_python_async(code: str, timeout: float = 1800.0) -> dict:
+        from .codeact import run_code
+        rid = run_store.new_run_id()
+        # 先登记 running：保证 run_id 一返回就有效（消除工作线程启动前的
+        # 空窗），run_code 内的第二次登记会保留这里的 started（见 run_store）。
+        run_store.start(_ROOT, rid, code)
+
+        def _worker():
+            try:
+                d(lambda: run_code(
+                    code, _state, _ROOT, {'seq': _job_seq},
+                    _t_run_compute, _t_job_status, _t_job_result,
+                    timeout=timeout, t_load=_t_load_archive,
+                    t_save=_t_save_archive, run_id=rid), timeout + 60)
+            except Exception:                  # noqa: BLE001 - 落盘失败原因
+                import traceback as _tb
+                run_store.finish(_ROOT, rid, {
+                    'ok': False, 'run_id': rid, 'stdout': '',
+                    'error': _tb.format_exc()[-2000:]})
+
+        threading.Thread(target=_worker, daemon=True,
+                         name=f'codeact-{rid}').start()
+        return {'ok': True, 'run_id': rid,
+                'msg': f'已启动（后台执行）。用 run_result({rid!r}) 轮询；'
+                       f'记录在 ai_results/{rid}.json'}
+
+    @mcp.tool(description='取 CodeAct 运行的状态与结果。run_id 来自 run_python / '
+                         'run_python_async 的返回值，或 list_runs。'
+                         '只读 ai_results/ 下的文件、**不经 Qt 主线程**，'
+                         '所以长任务正在跑时也能查（这正是它存在的理由：'
+                         'run_python 的脚本占用主线程，别的工具会被排队）。')
+    async def run_result(run_id: str) -> dict:
+        rec = run_store.read(_ROOT, run_id)
+        if rec is None:
+            return {'ok': False, 'msg': f'未知 run {run_id}；用 list_runs 看最近记录'}
+        st = rec.get('status')
+        out = {'ok': True, 'run_id': run_id, 'status': st,
+               'started_iso': rec.get('started_iso'),
+               'elapsed_s': rec.get('elapsed_s'),
+               'lines': rec.get('lines')}
+        if st == 'running':
+            out['live_s'] = (round(time.time() - rec['started'], 1)
+                             if rec.get('started') else None)
+            out['msg'] = '仍在执行；稍后再查（live_s 是已跑墙钟秒数）'
+            return out
+        out['ok_run'] = rec.get('ok')
+        out['stdout'] = (rec.get('stdout') or '')[-4000:]
+        if rec.get('ok'):
+            out['result'] = rec.get('result')
+        else:
+            out['error'] = (rec.get('error') or '')[-3000:]
+        return out
+
+    @mcp.tool(description='列出最近的 CodeAct 运行记录（run_id / 状态 / 耗时 / '
+                         '是否含结果 / 错误头部）。用途：客户端断线重连后，'
+                         '找回之前那次跑丢的 run_id，再用 run_result 取结果。')
+    async def list_runs(limit: int = 20) -> dict:
+        return {'runs': run_store.list_runs(_ROOT, limit),
+                'dir': run_store.results_dir(_ROOT)}
 
 
 # ============================================================

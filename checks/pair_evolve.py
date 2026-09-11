@@ -34,7 +34,7 @@ from src.core.sambe import env_at
 from src.core.field_build import _env_samples
 from src.core.evolve_rwa import (_evolve_rwa, _rwa_reference, _e_rot,
                                  _assign_reference, _field_geometry,
-                                 IP4_RWA_THRESH)
+                                 RWA_TOL)
 from src.core import static_atom as core
 from src.core import tensor as _tensor  # noqa: E402  （t14张量化调度层搬移）
 
@@ -219,7 +219,7 @@ def _pack_pair_terms(fields_2d, N2, G, dt, t_end):
         wL = float(f['omega_L_mhz'])
         ratio = (f.get('real_omega0_mhz', f['omega0_mhz'])
                  / max(wL, 1e-9))
-        is_rwa = wL > 0 and ratio < IP4_RWA_THRESH
+        is_rwa = wL > 0 and ratio < RWA_TOL
         env_arr = _env_samples(f['waveform'])
 
         def _push(csr, tt, coef, omg, env):
@@ -556,7 +556,7 @@ def _pair_rwa(E_rot_2d, fields_2d, psi0, t, frac=20.0,
         wL = f['omega_L_mhz']
         ratio = (f.get('real_omega0_mhz', f['omega0_mhz'])
                  / max(wL, 1e-9))
-        return wL > 0 and ratio < IP4_RWA_THRESH
+        return wL > 0 and ratio < RWA_TOL
 
     # ---- 全 RWA 且包络恒常且无振荡非 RWA 场 → 对角化精确解 ----
     # 非 RWA 场（微波）即使包络恒常也含 cos(ω_L t) 载波，哈密顿量时变，

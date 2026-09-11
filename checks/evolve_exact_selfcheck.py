@@ -138,13 +138,21 @@ ck.check(f'E6a 解析衰变 e^{{−Γt}} max|Δ|={d6:.2e} ≤ 1e-6',
          d6 <= 1e-6 and cons6 <= 1e-9, f'Δ={d6} cons={cons6}')
 # CW 驱动稳态：共振二能级 + 衰变 e→g：
 # ρ_ee = c²/(γ²/4 + 2c²)，c = π·1e-3·Ω_MHz（RWA 耦合，rad/ns），γ = Γ·1e-3
+# t79 计时优化（两轮）：
+#   ① 原 Γ=2 MHz + 窗口 6000 ns + tol=1e-6 → 单项 271 s（占本自检 73%）。
+#   ② 时间常数 = 1/(Γ·1e-3)：2 MHz → 500 ns，收敛需 ~12 个常数。
+#      改 Γ=10 MHz（常数 100 ns）→ 窗口 600 ns = 6 个时间常数，
+#      **载频(1000 MHz)、能级、稳态公式、断言形式全部未动**，只是弛豫快 5 倍。
+#      （曾试过只缩窗口：1500 ns 时 ρ_ee=0.4201 远未收敛直接 FAIL——
+#        时间常数不是 1/(2π·1e-3·Γ) 而是 1/(Γ·1e-3)，别按 2π 算。）
+#      tol 收到 1e-5（断言只需 ~1e-3 精度）。
 c6 = np.pi * 1e-3 * 1.0
-g6 = 2.0 * 1e-3
+g6 = 10.0 * 1e-3
 rho_th = c6 ** 2 / (g6 ** 2 / 4.0 + 2.0 * c6 ** 2)
-t6b = np.linspace(0, 6000.0, 1201)
+t6b = np.linspace(0, 600.0, 121)
 A6 = np.zeros((2, 2)); A6[0, 1] = A6[1, 0] = 1.0
 r6b = ex_ev(two_states(), [fld(A6, 1000.0, ones)], 1, t6b,
-                      tol=1e-6, decays=[decay(1, 2.0, 0)])
+                      tol=1e-5, decays=[decay(1, 10.0, 0)])
 pe_ss = float(r6b['pops'][-1, 1])
 ck.check(f'E6b CW 驱动稳态 ρ_ee={pe_ss:.4f} ≈ {rho_th:.4f}',
          abs(pe_ss - rho_th) < 1.5e-2, f'ρ_ee={pe_ss} th={rho_th}')
@@ -164,7 +172,10 @@ ws_ = lambda t: np.exp(-((np.asarray(t, float) - 120.0) ** 2)
                        / (2 * 60.0 ** 2))
 flds7 = [fld(Ap, 1000.0, wp, 'pump'), fld(As_, 970.0, ws_, 'stokes')]
 t7 = np.linspace(0, 500.0, 501)
-r7 = ex_ev(st7, flds7, 0, t7, tol=1e-6)
+# t79 计时优化：tol 1e-6 → 1e-5。本项是**冒烟**（断言 P_s>0.95、P_e_max<0.05，
+# 实测余量极大：0.9997 / 0.0206），tol 收敛行为另由 E5a 专门覆盖
+# （err(1e-4)=1.03e-6 > err(1e-7)=3.48e-8）。原 1e-6 单项耗时 83 s。
+r7 = ex_ev(st7, flds7, 0, t7, tol=1e-5)
 ps_end = float(r7['pops'][-1, 2])
 pe_max = float(np.max(r7['pops'][:, 1]))
 ck.check(f'E7a STIRAP 末态 P_s={ps_end:.4f} > 0.95（中间态峰值 '
