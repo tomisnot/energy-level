@@ -514,51 +514,15 @@ def _np_stat(a):
 
 
 def _diag_summary(d):
-    """诊断摘要：全是标量/短列表，可直接进 context。"""
-    import numpy as _np
-    meta = d.get('meta') or {}
-    ac = d.get('acize') or {}
-    ph = d.get('photon') or {}
-    pr = d.get('pairs') or {}
-    sv = d.get('solver') or {}
-    out = {
-        'meta': {k: meta.get(k) for k in (
-            'method', 'backend', 'N', 'P', 'dim', 't_end', 'tol', 'max_step',
-            'r_crit', 'bw', 'mw_cap', 'mw_max', 'M', 'n_pairs')},
-        'labels': (meta.get('labels') or [])[:8],
-        'n_labels': len(meta.get('labels') or []),
-        'acize': {
-            'r_crit': ac.get('r_crit'),
-            'fields': ac.get('fields'),
-            'shift_range_mhz': _np_stat(ac.get('shift')),
-            'n_shifted': (int(_np.count_nonzero(
-                _np.asarray(ac.get('shift'), float)))
-                if ac.get('shift') is not None else 0),
-        },
-        'photon': {'Ms': ph.get('Ms'), 'P': ph.get('P'), 'dim': ph.get('dim'),
-                   'strides': ph.get('strides'),
-                   'nvecs': (list(_np.asarray(ph['nvecs']).ravel())
-                             if ph.get('nvecs') is not None else None)},
-        'solver': {
-            'nfev': sv.get('nfev'), 'n_acc': sv.get('n_acc'),
-            'n_rej': sv.get('n_rej'), 'norm_dev': sv.get('norm_dev'),
-            'n_steps': int(_arr(sv.get('dt')).size),
-            'dt_ns': _np_stat(sv.get('dt'))},
-    }
-    if pr:
-        is_mw = _arr(pr.get('is_mw'), int)
-        v = _np.abs(_arr(pr.get('v'), complex))
-        dD = _arr(pr.get('dD'), float)
-        out['pairs'] = {
-            'n': int(is_mw.size),
-            'n_microwave': int((is_mw == 1).sum()),
-            'n_optical_vdd': int((is_mw == 0).sum()),
-            'max_abs_v_mhz': float(v.max()) if v.size else 0.0,
-            'dD_mhz': _np_stat(dD),
-            'note': ('微波/光场保留判据：成本窗 mw_cap + 精度 Θ≥PHASE_TOL；'
-                     'V_dd 走 static_phase_keep（同判据族）'),
-        }
-    return out
+    """诊断摘要（P5：与 GUI 检视器、模型卡共用 core.diag.summarize）。
+
+    此前这里是**第三套**摘要逻辑（GUI/get_diag/模型卡各一份 → 数字会分叉，
+    例如模型卡 n_microwave=None 而 get_diag 有值）。现统一到 core/diag.py。
+    """
+    from ..core.diag import summarize as _sum
+    from ..core.diag import config_hints as _hints
+    cfg = _hints(_state.reg.read) if _state is not None else {}
+    return _sum(d, cfg)
 
 
 def _downsample(arr, limit):

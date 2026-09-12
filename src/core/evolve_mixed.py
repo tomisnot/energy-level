@@ -21,6 +21,8 @@ import numpy as np
 from .evolve_util import (_as_vector, _single_loss_rates, _loss_and_norm,
                           _CONV)
 from . import tensor as _tensor
+from .diag import h_snapshot_ok as _h_snap_ok
+from .diag import h_snapshot_note as _h_snap_note
 from .coupling import (rhs_phi_pairs, pack_rhs, stage_progress,
                        static_phase_keep, mw_pair_keep, mw_cap_mhz,
                        dop853_driver_mixed)  # 薄包装：让磁盘缓存命中
@@ -89,10 +91,6 @@ def ac_ize_physical_E(E, f_opt, r_crit=None):
 
 
 
-# 诊断 H 快照的稠密分项上限（MB）。超过则只回元信息、**绝不尝试分配**——
-# 2026-09-12 实测：dim=8112 时单项 = 8112²×16 B = 1004 MiB，正是那次
-# "Unable to allocate 1004 MiB for shape (8112, 8112)" 的来源。
-_H_SNAPSHOT_MAX_MB = 256.0
 
 def _assemble_H_snapshot(D_full, pairs, t, C, ac_base=None, ac_waves=None,
                          gamma=None, tags=None):
@@ -106,18 +104,9 @@ def _assemble_H_snapshot(D_full, pairs, t, C, ac_base=None, ac_waves=None,
     """
     t = float(t)
     dim = np.asarray(D_full).size
-    # ── 尺寸保护（2026-09-12）────────────────────────────────────
-    # 本函数按 dim×dim complex128 建稠密分项矩阵；大维数下单项即可上 GB
-    # （dim=8112 → 1004 MiB，实测导致演化失败）。超阈值只回元信息。
-    _mb_each = dim * dim * 16.0 / (1024.0 ** 2)
-    if _mb_each > _H_SNAPSHOT_MAX_MB:
-        return {'too_large': True, 'dim': int(dim),
-                'term_mb_each': round(_mb_each, 1),
-                'limit_mb': _H_SNAPSHOT_MAX_MB,
-                'note': ('H 快照跳过：稠密分项每项约 %.0f MB（上限 %.0f MB）；'
-                         '诊断的配对/步长/扇区等不受影响，'
-                         '需要 H 请缩小基组或降低维数'
-                         % (_mb_each, _H_SNAPSHOT_MAX_MB))}
+    # 尺寸保护：策略的唯一所有者在 core/diag.py（阈值/判定/说明同源）
+    if not _h_snap_ok(dim):
+        return _h_snap_note(dim)
     terms = dict(
         K0=np.diag(np.asarray(D_full, complex)),
         AC对角=np.zeros((dim, dim), complex),
@@ -561,12 +550,12 @@ def evolve_mixed(states, fields, psi0, t_grid, tol=None,
                        for p in range(setup.P)}
         ts_snap = sorted(set(float(x) for x in
                              np.linspace(0.0, T, 5)))
-        snaps = {}
-        for t0 in ts_snap:
-            snaps[t0] = _assemble_H_snapshot(
+        snaps = ({t0: _assemble_H_snapshot(
                 setup.D_full, pr, t0, C, ac_base=ac_base,
                 ac_waves=ac_waves if ac_base is not None else None,
-                gamma=gamma)
+                gamma=gamma) for t0 in ts_snap}
+        if _h_snap_ok(setup.dim) else
+        {'skipped': _h_snap_note(setup.dim)})
         diag_dt = (dt_hist[:int(stat[4])] if dt_hist is not None
                    else np.zeros((0, 2)))
         out_diag = dict(

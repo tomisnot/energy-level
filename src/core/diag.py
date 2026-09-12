@@ -139,3 +139,26 @@ def config_hints(reg_read):
     cfg['has_mw'] = any(0.0 < f < mw_max for f in freqs)
     cfg['has_opt'] = any(f >= mw_max for f in freqs)
     return cfg
+
+# ── 重型诊断（dim×dim 稠密 H 快照）的**唯一**尺寸策略 ──────────────
+# 2026-09-12 实测：dim=8112 时单项 = 8112²×16 B = 1004 MiB，而快照要取 5 个
+# 时刻 → 5×1 GB，直接分配失败。策略：轻量层永远采；重型层按尺寸自动决定。
+H_SNAPSHOT_MAX_MB = 256.0
+
+
+def h_snapshot_ok(dim):
+    """重型 H 快照是否可行（按 dim² × 16 B 估）。"""
+    try:
+        dim = int(dim)
+    except (TypeError, ValueError):
+        return False
+    return dim * dim * 16.0 / (1024.0 ** 2) <= H_SNAPSHOT_MAX_MB
+
+
+def h_snapshot_note(dim):
+    """跳过时的说明（进 diag，供 GUI/AI 显示，不再静默）。"""
+    mb = (int(dim) ** 2) * 16.0 / (1024.0 ** 2)
+    return {'skipped': True, 'dim': int(dim), 'term_mb_each': round(mb, 1),
+            'limit_mb': H_SNAPSHOT_MAX_MB,
+            'note': 'H 快照跳过：稠密分项每项约 %.0f MB（上限 %.0f MB）；'
+                    '诊断的配对/步长/扇区不受影响' % (mb, H_SNAPSHOT_MAX_MB)}
