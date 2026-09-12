@@ -716,52 +716,14 @@ def _res_summary(res, save_npz=False, tag=''):
     n_col = (int(np.asarray(arr).shape[1])
              if arr is not None and np.asarray(arr).ndim > 1 else len(labels))
     _card = None
-    # D（2026-09-12）：模型卡——把"静默物理"变成自述。
-    # 数据来自引擎 diag（未开诊断时给最小集），并做**可表达性判定**。
+    # D：模型卡与 get_diag / GUI 检视器**共用一套摘要**（P5：单一真值源）
     try:
-        _dg = res.get('diag') or {}
-        _meta = (_dg.get('meta') or {}) if isinstance(_dg, dict) else {}
-        _solv = (_dg.get('solver') or {}) if isinstance(_dg, dict) else {}
-        _pr = (_dg.get('pairs') or {}) if isinstance(_dg, dict) else {}
-        _ac = (_dg.get('acize') or {}) if isinstance(_dg, dict) else {}
-        _ph = (_dg.get('photon') or {}) if isinstance(_dg, dict) else {}
-        _warn = []
-        try:
-            _wl = []
-            for _a in ('single', 'A', 'B'):
-                try:
-                    _wl += list(_state.reg.read('dynamic.waves_' + _a) or [])
-                except Exception:                  # noqa: BLE001
-                    pass
-            _om = [float(_w.get('freq_mhz') or 0) for _w in _wl]
-            _mx = max(_om) if _om else 0.0
-            _vmax = float(_pr.get('max_abs_v_mhz') or 0.0)
-            if _mx > 0 and _vmax / _mx > 1.0:
-                _warn.append('maxΩ/ω=%.2f > 1（已出 RWA 适用区，'
-                             '物理存疑，数值未必错）' % (_vmax / _mx))
-        except Exception:                          # noqa: BLE001
-            _mx = _vmax = 0.0
-        if int(_pr.get('n_microwave') or 0) == 0 and int(_meta.get('dim') or 0):
-            _warn.append('微波候选对为 0：**基组可能缺中间态**（多光子通道需要'
-                         '真实中间态参与）或频率与能级间隔不匹配 —— '
-                         '该波不会产生任何转移')
-        _card = {
-            'method': _meta.get('method'), 'dim': _meta.get('dim'),
-            'n_pairs': _pr.get('n') or _meta.get('n_pairs'),
-            'n_microwave': _pr.get('n_microwave'),
-            'keep': (_meta.get('keep') if 'keep' in _meta else None),
-            'acized_states': _ac.get('n_shifted'),
-            'P': _ph.get('P') or _meta.get('P'), 'M': _ph.get('Ms'),
-            'max_abs_v_mhz': _pr.get('max_abs_v_mhz'),
-            'max_omega_over_omega': (round(_vmax / _mx, 4) if _mx else None),
-            'tol': _meta.get('tol'), 'max_step': _meta.get('max_step'),
-            't_end_ns': _meta.get('t_end'),
-            'n_steps': _solv.get('n_steps'), 'nfev': _solv.get('nfev'),
-            'norm_dev': _solv.get('norm_dev'),
-            'basis_n': len(labels),
-            'warnings': _warn,
-        }
-    except Exception as _e:                        # noqa: BLE001 - 卡片不阻塞结果
+        from ..core.diag import summarize as _diag_sum
+        from ..core.diag import config_hints as _diag_hints
+        _cfg = _diag_hints(_state.reg.read) if _state is not None else {}
+        _cfg['basis_n'] = len(labels)
+        _card = _diag_sum(res.get('diag'), _cfg)
+    except Exception as _e:                        # noqa: BLE001 - 不阻塞结果
         _card = {'error': 'model_card 生成失败：%s' % _e}
     summary = {'t_ns': [float(t[0]), float(t[-1])] if len(t) else None,
                'n_steps': int(len(t)),
