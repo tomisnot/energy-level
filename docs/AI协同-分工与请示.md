@@ -246,6 +246,54 @@
 > 与离线批量通道（68 态）**4 位小数吻合**（0.9982 / 0.9994）→ 引擎与批量通道自洽；
 > 且 6P 的 F 展开**不影响** 7.4 GHz 微波结果（6P 在 296 THz 外）。
 
+- [ ] #11 类型：**事故（进程静默消失、成果全丢）** 场景：AI 提交的两体 job20
+      （13 组、dim=7056、t_max=150/npts=301、20:09:51 `run_compute` 提交）
+      **20:33:24 崩溃**：Windows `Application Error` faulting module **Qt5Core.dll**，
+      exception **0xc0000409**（fail-fast）、WER **BEX64**；应用 stderr 出现
+      `QThread: Destroyed while thread is still running`；`.mcp-port` 未被重写
+      ⇒ 不是正常关窗（`stop_server` 未调用）。
+      | **已证实（受控复现）**：崩溃机制 = `qFatal` in **`QThread::~QThread`**
+      当 `running && !finished`。隔离探针强制销毁运行中的 QThread →
+      打印**同一句**消息 + 进程退出码 **−1073740791 = 0xC0000409**（与事件日志逐位一致）。
+      | **已证伪**：假说 A 的**前提**（"AI 路径只持局部变量、无强引用"）**不成立**——
+      `server._t_run_compute` 与 GUI 走**同一条** `dyn._run()`，worker 都存在面板属性
+      `self._worker`（`ui_dynamic.py:1161` 单体 / `:1333` 两体）。
+      且"仅丢 Python 引用"**不足以**销毁运行中的 QThread：三个隔离探针（含
+      "唯一强引用在 done 槽里被清空 + emit 后 sleep 0.3 s"）都**未**触发消息/崩溃
+      ⇒ PyQt 在虚函数调用期间自持引用。
+      | **仍未定位**：真正的销毁者（C++ 侧删除路径）。已排除：无 `sip.delete`/
+      `deleteLater`（worker 上）、无 Qt 父对象（`parent=None`）、
+      `src/` 内无 `quit()/sys.exit` 可达路径。
+      | **下一步取证（需要使用者配合）**：① 提供**完整 stderr**（PyQt 在 qFatal 前
+      通常会先打印 Python traceback —— 那会直接点名触发槽）；② 配 WER LocalDumps
+      （`HKCU\...\Windows Error Reporting\LocalDumps\python.exe`，DumpType=2）下次拿全 dump，
+      用 cdb 看 `~QThread` 的调用栈即可钉死销毁者。
+- [x] #11 处置：**防御性修复 + 加固；销毁者仍待 dump 定性（2026-09-12）**：
+      **假说 B（内存）已被使用者实测排除**：同类型两体作业（job3，dim=4624）全程
+      **私有内存逐位不动 1358 MB**（WS 407–431 MB），系统可用始终 ≥5.2 GB ⇒
+      "dim=7056 吃爆内存"站不住；且我的标定锚点（dim=4624→1.36 GB）与实测**逐位一致**。
+      **假说 A**：**前提被证伪**（AI 与 GUI 走同一条 `dyn._run()`，worker 都存在面板
+      `self._worker`），且隔离探针显示"仅丢 Python 引用"**不足以**销毁运行中的 QThread；
+      但"`done` 槽早于 `run()` 返回就丢引用"这条时序**仍是潜在危险**，已堵死。
+      | 已做：① `_finish_run_ui` 仍在跑就交给 `finished` 释放（`_retired_workers`）；
+      ② 作业登记表新增 `thread_finished`（worker.finished 置位）——**引用活得比线程久**，
+      登记表只记状态不参与生命周期；③ **成果抗崩溃**：done 一到即落盘
+      `ai_results/job_<jid>.json` **+ 全量 npz**（`tempsimu/ai_job<jid>_*.npz`），
+      且 `job_result` 即使 `save_npz=False` 也回传该路径（长两体作业的价值不靠"记得再存"）；
+      ④ 自检：`checks/gui_worker_lifetime_test.py`（8 项，qInstallMessageHandler 抓 Qt 消息）、
+      `checks/pair_mem_estimate_selfcheck.py`（13 项，已跑通）。
+      | **仍需使用者**：① 完整 stderr（PyQt 通常在 qFatal 前先打印 Python traceback，
+      那会直接点名触发槽）；② WER LocalDumps（`python.exe`, DumpType=2）下次拿全 dump。
+      在拿到这两样之前**不动别处**——避免"猜着改"引入新风险。
+
+- [x] #12 类型：请教（开发者→使用者）→ **随 #11 一并降级（2026-09-12）**
+      场景：两体 dim 的操作上限。**B 被实测排除后**，这条从"风险"降为**参考**：
+      内存粗估保留（`estimate_cost().est_peak_gb/mem_advice`，dim² 外推，**偏保守上界**），
+      "峰值 ≤ 可用内存 40%"作为**软建议**（不再建议据此拒绝运行）。
+      实测锚点：dim=4624 → 1358 MB（平直）。**是否需要硬阈值，等你定**。
+
+
+
 ## 七、重要结构性事实（2026-09-12 探针实测）
 
 **子代理不会继承 energy-level 的 MCP 工具。** 用一个最小探针子代理验证：

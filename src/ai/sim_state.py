@@ -98,6 +98,50 @@ def estimate_pair_cost(basis_n, t_max_ns, npts=201):
     return float(s)
 
 
+# ---- 两体**峰值内存**粗估（2026-09-12 事故事后加固：#11/B 假说）----
+# 标定：使用者实测 12 组（N=68 → dim=4624）两体作业，进程**私有内存 1.36 GB**
+# （运行中稳定）；近似按 dim² 外推（V_dd 装配的稠密中间量 + CSR/COO 拷贝占主导，
+# y_out/pops 等线性项在小 dim 时次要）。**只用于"要不要降规模"**，不是承诺。
+_PAIR_MEM_CAL = {'dim': 4624, 'gb': 1.36}
+
+
+def estimate_pair_peak_gb(dim, factor=1.0):
+    """两体运行峰值内存粗估（GB）：按实测锚点 dim=4624 → 1.36 GB 做 dim² 外推。"""
+    if not dim or float(dim) <= 0:
+        return None
+    return float(_PAIR_MEM_CAL['gb']) * (float(dim) / _PAIR_MEM_CAL['dim']) ** 2 \
+        * float(factor)
+
+
+def avail_ram_gb():
+    """当前**可用**物理内存（GB）；取不到 → None（绝不因此报错）。"""
+    try:                                    # 首选 psutil（若装了）
+        import psutil
+        return float(psutil.virtual_memory().available) / 1e9
+    except Exception:                       # noqa: BLE001
+        pass
+    try:                                    # Windows 原生
+        import ctypes
+
+        class _MS(ctypes.Structure):
+            _fields_ = [('dwLength', ctypes.c_ulong),
+                        ('dwMemoryLoad', ctypes.c_ulong),
+                        ('ullTotalPhys', ctypes.c_ulonglong),
+                        ('ullAvailPhys', ctypes.c_ulonglong),
+                        ('ullTotalPageFile', ctypes.c_ulonglong),
+                        ('ullAvailPageFile', ctypes.c_ulonglong),
+                        ('ullTotalVirtual', ctypes.c_ulonglong),
+                        ('ullAvailVirtual', ctypes.c_ulonglong),
+                        ('ullAvailExtendedVirtual', ctypes.c_ulonglong)]
+        st = _MS()
+        st.dwLength = ctypes.sizeof(_MS)
+        if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(st)):
+            return None
+        return float(st.ullAvailPhys) / 1e9
+    except Exception:                       # noqa: BLE001
+        return None
+
+
 
 # ---------- 叠加态初态（AI 优先） ----------
 
@@ -444,7 +488,8 @@ class SimState:
         """事前成本：要不要走异步、要不要开短窗口，先看这个数。
 
         单体：走引擎 dry_run 的真值报告（`_cost_report`：保留对数/最远失谐/
-        预计步数）。两体：按实测标定的 N⁴·t 粗估（`estimate_pair_cost`）。
+        预计步数）。两体：按实测标定的 N⁴·t 粗估（`estimate_pair_cost`）
+        **+ 峰值内存粗估**（`estimate_pair_peak_gb`，2026-09-12 事故事后加的）。
         """
         p = self.reg.collect()
         mode = int(p.get('dynamic.mode') or 0)
@@ -461,12 +506,28 @@ class SimState:
                               for a in ('single', 'A', 'B'))}
         if mode == 1:
             sec = estimate_pair_cost(N, t_max, npts)
-            out.update({'dim': N * N if N else None,
+            dim = N * N if N else None
+            gb = estimate_pair_peak_gb(dim) if dim else None
+            avail = avail_ram_gb()
+            out.update({'dim': dim,
                         'est_seconds': round(sec, 1),
                         'est_minutes': round(sec / 60.0, 1),
                         'advice': ('建议 run_python_async' if sec > 120
                                    else '可同步等待'),
-                        'note': '两体：按实测标定 N⁴·t 粗估（36 态/300 ns≈120 s）'})
+                        'est_peak_gb': (round(gb, 2) if gb else None),
+                        'avail_ram_gb': (round(avail, 2) if avail else None),
+                        'note': '两体：按实测标定 N⁴·t 粗估（36 态/300 ns≈120 s）；'
+                                '峰值内存按实测锚点 dim=4624→1.36 GB 做 dim² 外推'})
+            if gb and avail:
+                ratio = gb / avail
+                out['mem_advice'] = (
+                    '⚠ 预计峰值 ~%.2f GB / 当前可用 ~%.2f GB（占 %.0f%%）——'
+                    '建议降规模（减能级组或 npts）或避免与其他进程并发；'
+                    '两体 dim 越大越危险，崩溃时是**整进程消失**（Qt fail-fast），'
+                    '结果会随进程丢失。' % (gb, avail, 100 * ratio)
+                    if ratio > 0.6 else
+                    '预计峰值 ~%.2f GB / 可用 ~%.2f GB（占 %.0f%%），余量充足'
+                    % (gb, avail, 100 * ratio))
         else:
             out.update({'dim': N,
                         'note': '单体的引擎真值报告：见 evolve_mixed(dry_run=True) '

@@ -306,8 +306,12 @@ env 采样   = √[ (1 + δ(t)) / (1 + b) ]    # 峰值恰为 1
    GUI 的"取消"不覆盖 AI 作业，AI 侧也拿不到 job_id → 一旦提交重活双方都被卡住（后续
    `run_compute_and_wait` 全被拒："已有演化在运行（人或 AI 发起）"）。**重活一律用 `run_python_async`**，
    两体+光学场的窗口开短（t_max ≤ 200 ns、npts ≈ 101），提交前先估量级。
-10. **两体模式 `save_npz` 不回传 npz 路径**（2026-09-12）：单体正常、两体拿不到 →
-    取不到逐时刻曲线，改用 `job_result` 或 `get_diag(scope='traj')`。
+10. **两体作业的 npz 现在**自动**落盘（2026-09-12 起，原坑已修）**：AI 作业一完成，
+    `_jobs` 里就存了 `ai_results/job_<jid>.json`（摘要）**与全量 npz**
+    （`tempsimu/ai_job<jid>_*.npz`）；`job_result(jid)` **即使不给 `save_npz`**
+    也会回传该 npz 路径（`summary.npz` / 顶层 `npz`，带 `npz_auto=True`）。
+    仍建议：**跑完立刻** `job_result(jid, save_npz=True)` 再存一份并记下路径
+    （npz 只保留最近 100 份）。
 11. **基组编辑会静默重置初态**（2026-09-12）：改完组后 `psi_A` 曾从 60P_3/2 变回 60S（无提示）；
     改完组务必用 `list_params('dynamic.psi_A')` 复核 `value` 与 `last_committed` 是否一致。
 12. **初态键的能量若猜错会静默选到别的能级**：`psi` 的 `options` 目前是 null，不要凭能量猜；
@@ -376,12 +380,35 @@ env 采样   = √[ (1 + δ(t)) / (1 + b) ]    # 峰值恰为 1
       （对上实测峰间隔 10 MHz）；实测峰比裸共振**高 ~+40 MHz**（I=5 的 AC Stark）
       ⇒ **不能按裸共振布点，必须扫**；共振宽 ≈ 1/(3τ) ≈ **4 MHz**（τ=FWHM 40 ns）；
     - **交付条件**：必须给**频率精度要求（~1–2 MHz 级）**；"参数抖动平坦"在当前方案不成立；
-    - **平坦化路线**：❌ 纯圆偏振不行（σ+ 全窗口 `C_ent ≤ 0.42`：只剩单条 Δm=±3 路径，
-      每圆分量场强 1/√2 ⇒ 三光子振幅 ∝(1/√2)³，同强度补不回来；提 I 则 60S 损伤）
+    - **平坦化路线**：❌ **纯圆偏振不行**（使用者全窗口扫描：**σ+ ≤ 0.42、σ− ≤ 0.37**，
+      多数 0.0–0.3 甚至为负：只剩单条 Δm=±3 路径，每圆分量场强 1/√2 ⇒ 三光子振幅
+      ∝(1/√2)³，同强度补不回来；提 I 则 60S 损伤）
       ｜ ⚠ 更短脉冲（要更高 I，有损伤风险）｜ ⭐ **啁啾/绝热脉冲**（扫频 ⇒ 天然宽带；
       通道：微波**任意波形（完整时域驱动）** 由 `hard` 支持，`sambe/mixed` 自动改道
       `hard`；⚠ 任意波形不经 `set_waves`，需走存档）。
-      路线选择等用户裁决。
+    - **平坦性的正确表述（使用者 2026-09-12 实测）**：椭圆偏在 **7355–7400 MHz 有宽的高
+      平台**（`C_ent` 0.74–0.99，叠 ~5 MHz 精细结构）→ 交付口径是
+      **"保证 0.79、标称 0.99"**（±10 MHz 窗口的保证值 = **0.786 @ 中心 7375**），
+      而**不是**"完全不平坦"。路线选择等用户裁决。
+21. **⚠ 长两体作业曾"跑完时整进程消失、成果全丢"**（2026-09-12 事故；销毁者仍未定性）：
+    - 现象：13 组 / dim=7056 的 AI 两体作业在尾段进程**静默消失**（Windows：
+      faulting module **Qt5Core.dll**、exception **0xc0000409**、WER BEX64）；
+      stderr 最后一句 `QThread: Destroyed while thread is still running`；
+      `.mcp-port` 未变 ⇒ 不是正常关窗；结果随进程丢失。
+    - **机制已证实**：那句话 = `qFatal` in `QThread::~QThread`（`running && !finished`）——
+      隔离复现（销毁运行中的 QThread）给出**同一句消息 + 退出码 0xC0000409**。
+    - **触发者未定位；假说 B（内存）已被实测排除**：同类型两体作业（dim=4624）全程
+      **私有内存逐位不动 1358 MB**、系统可用 ≥5.2 GB ⇒ 不是"dim 吃爆内存"。
+      已排除的还有：AI 没持强引用（AI 与 GUI 走**同一条** `dyn._run()`，worker 都存在
+      面板 `self._worker`）、无 `sip.delete`/`deleteLater`、无 Qt 父对象、
+      `src/` 内无 `quit()/sys.exit` 可达路径。定性需要**完整 stderr**
+      （PyQt 通常在 qFatal 前先打印 Python traceback）或 WER 全 dump。
+    - **你现在就该做的**：① 大两体作业先读 `estimate_cost()` 的
+      `est_peak_gb / avail_ram_gb / mem_advice`（锚点 dim=4624→1.36 GB，dim² 外推，
+      **偏保守上界**；软建议峰值 ≤ 可用内存 40%）；
+      ② 作业一完成**摘要 + 全量 npz 已自动落盘**（`ai_results/job_<jid>.json`、
+      `tempsimu/ai_job<jid>_*.npz`），进程随后死掉也拿得到；
+      ③ 仍建议跑完立刻 `job_result(jid, save_npz=True)` 再存一份并记路径。
 
 ## 人机协同约定
 

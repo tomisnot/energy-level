@@ -409,6 +409,34 @@ class _QuietModals:
         return False
 
 
+def _dump_job_json(jid, res):
+    """AI 作业一完成就把**摘要 + npz**落盘 → 进程后来崩了也不至于"成果全丢"。
+
+    事故事后加固（2026-09-12）：两体 job20（dim=7056，跑了 24 分钟）跑完时进程
+    被 Qt fail-fast 杀掉（`QThread: Destroyed while thread is still running`，
+    见 `ui_dynamic._finish_run_ui`），`_jobs` 里的结果随进程消失。
+    现在 done 一到就：
+      · 写 `ai_results/job_<jid>.json`（摘要，几 KB）；
+      · 写 `tempsimu/ai_job<jid>_<HHMMSS>.npz`（**全量数组**：两体的 pops_2d
+        ~n_t·dim 量级，13 组/301 点 ≈ 8.5 MB —— 长作业的价值就在这里）。
+    返回 (json_path, npz_path)（失败项为 None；绝不抛）。
+    """
+    jpath = npath = None
+    try:
+        import json as _json
+        s = json_safe(_res_summary(res, save_npz=True, tag='job' + jid))
+        npath = s.get('npz')
+        s['job_id'] = jid
+        s['saved_at'] = time.time()
+        jpath = os.path.join(_ROOT, 'ai_results', f'job_{jid}.json')
+        os.makedirs(os.path.dirname(jpath), exist_ok=True)
+        with open(jpath, 'w', encoding='utf-8') as f:
+            _json.dump(s, f, ensure_ascii=False)
+    except Exception:                              # noqa: BLE001 - 不影响主流程
+        pass
+    return jpath, npath
+
+
 def _t_run_compute(jid, diag=True):
     """触发与"人点运行"完全同一条 _run 路径；立即返回 job_id。
 
@@ -456,6 +484,10 @@ def _t_run_compute(jid, diag=True):
                 job['error'] = None if error in (None, 'cancelled') \
                     else str(error)
                 job['res'] = res
+                # 事故加固（2026-09-12）：done 一到就**摘要+npz 落盘**——此前两体
+                # job20（24 分钟）跑完时进程被 Qt fail-fast 杀掉，`_jobs` 里的结果
+                # 随进程消失（"成果全丢"）。
+                job['saved_json'], job['saved_npz'] = _dump_job_json(jid, res)
             _restore()              # 一次性：done 后立即还原，人后续运行不受扰
             with _QuietModals(w):
                 orig(res, error)
@@ -478,6 +510,21 @@ def _t_run_compute(jid, diag=True):
         job = _jobs.pop(jid, None)
         msg = (job or {}).get('error') or '未启动（校验未过或无波形，见 GUI 日志）'
         return {'ok': False, 'msg': msg}
+    # 事故加固（2026-09-12，使用者建议③）：作业登记表不仅**持结果**，还要能看出
+    # "线程确实退出了"。`done` 是 worker 在 run() **内部** emit 的（可能早于线程
+    # 真正结束），所以另记 thread_finished = worker.finished。
+    # worker 的强引用在 `dyn._worker` / `dyn._retired_workers`（见
+    # ui_dynamic._finish_run_ui），登记表只记状态，不参与生命周期。
+    try:
+        if _jobs.get(jid) is not None:
+            if not worker.isRunning():
+                _jobs[jid]['thread_finished'] = True
+            else:
+                worker.finished.connect(
+                    lambda _j=jid: _jobs.get(_j, {}).__setitem__(
+                        'thread_finished', True))
+    except Exception:                              # noqa: BLE001
+        pass
     get_journal(_ROOT).record('ai', 'run_compute', {'job': jid}, '', None)
     return {'ok': True, 'job_id': jid,
             'msg': '已启动（GUI 同步显示进度）；用 job_status 轮询'}
@@ -752,6 +799,12 @@ def _t_job_result(job_id, save_npz, states=None, series=False):
         return {'ok': False, 'msg': f"失败: {job['error']}"}
     out = {'ok': True, 'job_id': job_id}
     out['summary'] = _res_summary(job['res'], save_npz, tag=job_id)
+    # 事故加固（2026-09-12）：AI 作业在 done 时已**自动落盘** npz
+    # （`_dump_job_json`），这里即使 save_npz=False 也把那份路径回传——
+    # 长两体作业的价值不该靠"记得再调一次"来保住（SKILL 坑 10 的原痛点）。
+    if not out['summary'].get('npz') and job.get('saved_npz'):
+        out['summary']['npz'] = job['saved_npz']
+        out['summary']['npz_auto'] = True
     if states:
         # C：请求了指定态 → 摘要里直接带"按态名"的终态（与 result_states 同源）
         _q = _t_result_states(job_id, states, series=bool(series))

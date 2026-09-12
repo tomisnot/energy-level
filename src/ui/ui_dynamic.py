@@ -57,6 +57,9 @@ class DynamicPanel(QWidget):
         # dynamic.psi_pair 的真值；两体运行时取代逐原子 psi_A/psi_B。
         # GUI 尚无编辑器（后议），目前由 AI 面 set_pair_superposition 设置。
         self._psi_pair_spec = None
+        # 已结束但线程可能仍在收尾的 worker（强引用，防 QThread 在运行时被销毁
+        # → Qt fail-fast；见 _finish_run_ui 的 2026-09-12 事故说明）。
+        self._retired_workers = []
         # 逐原子**叠加态** spec（['sup', […]] / None）——登记项
         # dynamic.psi_single/A/B 的**持久真值**（#3/#5 裁决 A）。
         # combo 表达不了叠加态，故 spec 存这里；下拉显示哨兵项
@@ -797,6 +800,7 @@ class DynamicPanel(QWidget):
                 and self._worker.isRunning():
             QMessageBox.information(self, '提示', '已有演化在运行，请先等待或取消。')
             return
+        self._sweep_retired_workers()   # 上一轮线程若已退出，丢掉它的引用
         self.refresh_groups()          # 运行前取最新共用能级组（无需外部散布同步）
         if not self.main_groups:
             QMessageBox.information(self, '提示', '请先在主程序添加能级组。')
@@ -892,7 +896,20 @@ class DynamicPanel(QWidget):
             raise RuntimeError('用户取消')
 
     def _finish_run_ui(self):
-        """运行结束（完成/失败/取消/预处理中止）统一的 UI 收尾。"""
+        """运行结束（完成/失败/取消/预处理中止）统一的 UI 收尾。
+
+        ⚠ **2026-09-12 事故修（QThread 生命周期）**：这里**不得**在 QThread
+        还在跑时丢掉它的最后一根引用。
+        `done` 是在 worker 线程的 `run()` **内部** emit 的（queued 投递到主线程），
+        主线程完全可能在 `run()` 尚未返回（正在退出 `_P.override` 上下文、释放
+        大结果数组）时就处理完这个槽 → 原来的 `self._worker = None` 把唯一引用
+        丢掉 → Qt 打印
+            `QThread: Destroyed while thread is still running`
+        并 **fail-fast**（实测 0xc0000409 / BEX64：两体 job20 dim=7056 跑完时
+        进程静默消失、结果全丢）。
+        现在：仍在跑 → 交给它的 `finished` 信号释放（那时线程确已退出）；已退出
+        → 直接丢。收尾时刻的强引用保存在 `_retired_workers`。
+        """
         if getattr(self, '_dlg_timer', None) is not None:
             self._dlg_timer.stop()
         if getattr(self, '_timer', None) is not None:
@@ -903,8 +920,36 @@ class DynamicPanel(QWidget):
         self._pbar = None
         self._stage_label = None
         self._run_active = False
+        w = getattr(self, '_worker', None)
+        if w is not None:
+            try:
+                if w.isRunning():                 # 还在收尾 → 先留着引用
+                    if w not in self._retired_workers:
+                        self._retired_workers.append(w)
+                    try:
+                        w.finished.connect(self._sweep_retired_workers)
+                    except Exception:             # noqa: BLE001
+                        pass
+            except RuntimeError:                  # C++ 对象已删（异常路径）
+                pass
         self._worker = None
         self.run_btn.setEnabled(True)
+
+    def _sweep_retired_workers(self):
+        """丢掉**已经退出**的 worker 引用（防 `_retired_workers` 无界增长）。
+
+        只丢 `isRunning()` 为 False 的——引用一丢 QThread 就会被销毁，
+        所以"确实不跑了"是硬条件（见 `_finish_run_ui` 的事故说明）。
+        """
+        cur = list(getattr(self, '_retired_workers', None) or [])
+        keep = []
+        for w in cur:
+            try:
+                if w.isRunning():
+                    keep.append(w)
+            except RuntimeError:                  # C++ 对象已删
+                pass
+        self._retired_workers = keep
 
     def _field_B(self):
         """动态演化的磁场（从主窗口场面板取，供 Floquet AC 位移后端）。"""
