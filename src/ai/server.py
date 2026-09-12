@@ -200,8 +200,32 @@ def _running_job():
 
 
 def _t_list_params(prefix=''):
-    """参数 schema（与 MCP 工具 list_params 同源）——A1：CodeAct 里也能查。"""
-    return {'params': _slim_params(_state.schema(prefix))}
+    """参数 schema（与 MCP 工具 list_params 同源）——A1：CodeAct 里也能查。
+
+    A2（2026-09-12）：`dynamic.psi_*` 的 `options` 此前恒为 null，AI 只能猜能量键
+    （实测猜错会静默选到别的能级）→ 这里注入 `list_levels()` 给出的**合法身份键**。
+    无面板/无基组时静默跳过（不影响其它参数）。
+    """
+    params = _slim_params(_state.schema(prefix))
+    try:
+        if any(k.startswith('dynamic.psi') for k in params):
+            lv = _state.list_levels() or {}
+            opts = [x.get('key') for x in (lv.get('levels') or [])
+                    if x.get('key')]
+            if opts:
+                for k, v in params.items():
+                    if k.startswith('dynamic.psi') and isinstance(v, dict):
+                        v['options'] = opts
+                        v['options_count'] = len(opts)
+    except Exception:                              # noqa: BLE001 - 无面板则跳过
+        pass
+    return {'params': params}
+
+
+def _last_job_id():
+    """最近一个已完成的作业（缺 job_id 时的默认目标）。"""
+    done = [j for j, v in _jobs.items() if v.get('done') and not v.get('error')]
+    return max(done) if done else ''
 
 
 def _t_list_jobs(limit=20):
@@ -784,7 +808,7 @@ def _prune_npz(keep=_NPZ_KEEP):
     return n
 
 
-def _t_job_result(job_id, save_npz):
+def _t_job_result(job_id, save_npz, states=None, series=False):
     job = _jobs.get(job_id)
     if job is None:
         return {'ok': False, 'msg': f'未知 job {job_id}'}
@@ -794,10 +818,83 @@ def _t_job_result(job_id, save_npz):
         return {'ok': False, 'msg': f"失败: {job['error']}"}
     out = {'ok': True, 'job_id': job_id}
     out['summary'] = _res_summary(job['res'], save_npz, tag=job_id)
+    if states:
+        # C：请求了指定态 → 摘要里直接带"按态名"的终态（与 result_states 同源）
+        _q = _t_result_states(job_id, states, series=bool(series))
+        if _q.get('ok'):
+            out['summary']['requested'] = _q.get('final')
+            if series:
+                out['summary']['requested_series'] = _q
     # A5：npz 路径同时给顶层键（单体/两体一致，脚本别再猜键名）
     _p = (out['summary'] or {}).get('npz')
     if _p:
         out['npz'] = _p
+    return out
+
+
+def _indexed_result(job_id):
+    """(res, arr[t,state], labels) —— 结果取数的统一入口（C）。"""
+    import numpy as np
+    job = _jobs.get(job_id)
+    if job is None or not job.get('done') or job.get('error'):
+        return None, None, None
+    res = job.get('res') or {}
+    pops, pops2 = res.get('pops'), res.get('pops_2d')
+    arr = pops if pops is not None else pops2
+    if arr is None:
+        return res, None, None
+    labels = _res_labels(res, pops2 if pops is None else None)
+    return res, np.asarray(arr), labels
+
+
+def _t_result_states(job_id, states=None, series=True, t0=None, t1=None,
+                     max_points=200):
+    """按**态名**取结果：终态布居 + （可选）时间序列。
+
+    states：名称片段列表（子串匹配，大小写不敏感）；空 = 全部里取均值最大的
+    前 8 个（与 final_pop 同序）。序列按时长**降采样到 ≤max_points**，
+    避免把 MB 级数组灌回模型上下文（与 list_params 防膨胀同纪律）。
+    """
+    import numpy as np
+    import re as _re
+    res, arr, labels = _indexed_result(job_id)
+    if arr is None:
+        return {'ok': False, 'msg': '无结果或结果不可用（job=%s）' % job_id}
+    t = np.asarray(res.get('t', []), float)
+    want = [str(s) for s in (states or []) if str(s).strip()]
+    idx, used = [], []
+    if want:
+        for w in want:
+            hit = [i for i, L in enumerate(labels) if w.lower() in L.lower()]
+            if not hit:
+                m = _re.match(r'^#(\d+)$', w)
+                hit = [int(m.group(1))] if m else []
+            if hit:
+                used.append(w)
+                idx.extend(hit)
+        miss = [w for w in want if w not in used]
+    else:
+        avg = arr.mean(axis=0)
+        idx = list(np.argsort(-avg)[:8])
+        miss = []
+    idx = list(dict.fromkeys(idx))
+    if t0 is not None or t1 is not None:
+        lo = 0 if t0 is None else int(np.searchsorted(t, float(t0)))
+        hi = len(t) if t1 is None else int(np.searchsorted(t, float(t1)))
+    else:
+        lo, hi = 0, len(t)
+    step = max(1, int(np.ceil(max(1, hi - lo) / float(max_points))))
+    out = {'ok': True, 'job_id': job_id, 'n_states_matched': len(idx),
+           'matched': [labels[i] if i < len(labels) else '#%d' % i
+                       for i in idx],
+           'missing': miss,
+           'final': {labels[i] if i < len(labels) else '#%d' % i:
+                     round(float(arr[-1][i]), 6) for i in idx}}
+    if series:
+        out['t_ns'] = t[lo:hi:step].round(3).tolist()
+        out['series'] = {labels[i] if i < len(labels) else '#%d' % i:
+                         arr[lo:hi:step, i].round(6).tolist() for i in idx}
+        out['downsample_step'] = step
     return out
 
 
@@ -858,6 +955,16 @@ def _register_tools(mcp):
                          'gauss/square 型 env 参数本身就是全量。')
     async def get_envelope(path: str, index: int = 0) -> dict:
         return await asyncio.to_thread(d, lambda: _t_get_envelope(path, index))
+
+    @mcp.tool(description='按**态名**取结果（C）：states 为名称片段列表'
+                          '（子串匹配），返回终态布居与（series=true 时）'
+                          '降采样时间序列；序列 ≤200 点防上下文膨胀')
+    async def result_states(job_id: str = '', states: list = None,
+                            series: bool = True, t0: float = None,
+                            t1: float = None) -> dict:
+        return await asyncio.to_thread(
+            d, lambda: _t_result_states(job_id or _last_job_id(),
+                                        states, series, t0, t1))
 
     @mcp.tool(description='统一作业视图（B1）：AI 作业 + 人正在跑的，'
                           '含 owner/status/elapsed。取消用 cancel_job(job_id)')
@@ -980,7 +1087,7 @@ def _register_tools(mcp):
                 code, _state, _ROOT, {'seq': _job_seq},
                 _t_run_compute, _t_job_status, _t_job_result,
                 timeout=timeout, t_load=_t_load_archive,
-                t_save=_t_save_archive, t_list_params=_t_list_params, t_diag=_t_get_diag, t_cancel=_t_cancel_job, t_jobs=_t_list_jobs), timeout + 60)
+                t_save=_t_save_archive, t_list_params=_t_list_params, t_diag=_t_get_diag, t_cancel=_t_cancel_job, t_jobs=_t_list_jobs, t_states=_t_result_states), timeout + 60)
 
     @mcp.tool(description='CodeAct 异步版：立即返回 run_id，脚本在后台执行，'
                          '不再占住本次调用。长扫描/大系综用它——即使客户端断线，'
@@ -999,7 +1106,7 @@ def _register_tools(mcp):
                     code, _state, _ROOT, {'seq': _job_seq},
                     _t_run_compute, _t_job_status, _t_job_result,
                     timeout=timeout, t_load=_t_load_archive,
-                    t_save=_t_save_archive, run_id=rid, t_list_params=_t_list_params, t_diag=_t_get_diag, t_cancel=_t_cancel_job, t_jobs=_t_list_jobs), timeout + 60)
+                    t_save=_t_save_archive, run_id=rid, t_list_params=_t_list_params, t_diag=_t_get_diag, t_cancel=_t_cancel_job, t_jobs=_t_list_jobs, t_states=_t_result_states), timeout + 60)
             except Exception:                  # noqa: BLE001 - 落盘失败原因
                 import traceback as _tb
                 run_store.finish(_ROOT, rid, {

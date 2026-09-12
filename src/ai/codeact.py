@@ -33,9 +33,46 @@ from . import run_store
 from .journal import get_journal
 
 
+
+
+def _brief(v, n=6):
+    """长值摘要化：列表/字典超过 n 项只回形状（防 changes 把上下文灌满）。"""
+    if isinstance(v, (list, tuple)):
+        return list(v) if len(v) <= n else '<%s len=%d>' % (type(v).__name__,
+                                                            len(v))
+    if isinstance(v, dict):
+        return v if len(v) <= n else '<dict len=%d>' % len(v)
+    return v
+
+def _diff_changes(before, after, jids):
+    """A10：本脚本**改了什么**（P3 可归因 / G3 可见）。
+
+    before/after = state_mod.to_dict()；jids = 本脚本起的作业号。
+    params 截断到 40 条防响应膨胀。
+    """
+    b = ((before or {}).get('params') or {})
+    a = ((after or {}).get('params') or {})
+    ch = []
+    for k in sorted(set(b) | set(a)):
+        if k == 'groups.list':
+            continue          # 组变更由 groups_added/removed 语义化呈现，避免灌大列表
+        if b.get(k, '<缺>') != a.get(k, '<缺>'):
+            ch.append({'param': k, 'old': _brief(b.get(k, '<缺>')),
+                       'new': _brief(a.get(k, '<缺>'))})
+    bg = ((b.get('groups.list') or []), (a.get('groups.list') or []))
+    _key = lambda g: (int(g.get('n', -1)), int(g.get('l', -1)),
+                      round(float(g.get('j', -1)), 2))
+    kb = {_key(g) for g in bg[0]}
+    ka = {_key(g) for g in bg[1]}
+    return {'params': ch[:40], 'params_total': len(ch),
+            'groups_added': sorted([list(x) for x in (ka - kb)]),
+            'groups_removed': sorted([list(x) for x in (kb - ka)]),
+            'jobs': list(jids or [])}
+
+
 def _make_namespace(state_mod, root, jobs, t_run, t_status, t_result,
                     t_load=None, t_save=None, t_list_params=None, t_diag=None,
-                    t_cancel=None, t_jobs=None):
+                    t_cancel=None, t_jobs=None, t_states=None):
     """构造受限命名空间。
 
     函数语义与细粒度 MCP 工具**保持一致**（同名、返回 dict、接受
@@ -99,7 +136,8 @@ def _make_namespace(state_mod, root, jobs, t_run, t_status, t_result,
         'job_result': t_result,
     }
     for _k, _v in (('list_params', t_list_params), ('get_diag', t_diag),
-                   ('cancel_job', t_cancel), ('list_jobs', t_jobs)):
+                   ('cancel_job', t_cancel), ('list_jobs', t_jobs),
+                   ('result_states', t_states)):
         if _v is not None:
             ns[_k] = _v
     return ns
@@ -107,7 +145,8 @@ def _make_namespace(state_mod, root, jobs, t_run, t_status, t_result,
 
 def run_code(code, state_mod, root, jobs, t_run, t_status, t_result,
              timeout=1800.0, t_load=None, t_save=None, run_id=None,
-             t_list_params=None, t_diag=None, t_cancel=None, t_jobs=None):
+             t_list_params=None, t_diag=None, t_cancel=None, t_jobs=None,
+             t_states=None):
     """在主线程 exec 模型写的代码；返回 {ok, run_id, stdout, result, error}。
 
     调用方（server 的 run_python / run_python_async）负责经
@@ -116,13 +155,15 @@ def run_code(code, state_mod, root, jobs, t_run, t_status, t_result,
     """
     rid = run_id or run_store.new_run_id()
     run_store.start(root, rid, code)     # 先落 running，断线也能看到在跑
+    _seq0 = (jobs.get('seq') or [0])[0]
     j = get_journal(root)
     snap = state_mod.to_dict()
     buf = io.StringIO()
     env = _make_namespace(state_mod, root, jobs, t_run, t_status, t_result,
                           t_load=t_load, t_save=t_save,
                           t_list_params=t_list_params, t_diag=t_diag,
-                          t_cancel=t_cancel, t_jobs=t_jobs)
+                          t_cancel=t_cancel, t_jobs=t_jobs,
+                          t_states=t_states)
     env['result'] = None
     j.suppress_snapshot = True          # 脚本内逐 op 照记、快照统一挂到末尾
     t0 = time.time()
@@ -130,7 +171,10 @@ def run_code(code, state_mod, root, jobs, t_run, t_status, t_result,
         compiled = compile(code, '<ai_code>', 'exec')
         with redirect_stdout(buf):
             exec(compiled, env)               # noqa: S102 - 设计决定（见模块 docstring）
+        _seq1 = (jobs.get('seq') or [0])[0]
+        _jids = ['job%d' % i for i in range(_seq0 + 1, _seq1 + 1)]
         out = {'ok': True, 'run_id': rid,
+               'changes': _diff_changes(snap, state_mod.to_dict(), _jids),
                'stdout': buf.getvalue()[-8000:],
                'result': _jsonable(env.get('result')),
                'elapsed_s': round(time.time() - t0, 2)}

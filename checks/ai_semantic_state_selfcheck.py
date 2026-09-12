@@ -146,5 +146,61 @@ ns2 = codeact._make_namespace(_S(), '.', {'seq': [0]}, lambda j: {},
 chk('list_jobs' in ns2, '命名空间含 list_jobs')
 chk(ns2['list_jobs']()['ok'], 'list_jobs 可调用')
 
+
+print('6) 二期 C/A10：变更清单 _diff_changes（P3 可归因，纯函数）')
+from src.ai.codeact import _diff_changes                          # noqa: E402
+before = {'params': {'dynamic.t_max': 100.0, 'groups.list': [
+    {'n': 60, 'l': 0, 'j': 0.5}, {'n': 6, 'l': 1, 'j': 1.5}]}}
+after = {'params': {'dynamic.t_max': 250.0, 'groups.list': [
+    {'n': 60, 'l': 0, 'j': 0.5}, {'n': 58, 'l': 4, 'j': 3.5}]}}
+d = _diff_changes(before, after, ['job7'])
+chk(d['params'] == [{'param': 'dynamic.t_max', 'old': 100.0, 'new': 250.0}],
+    '参数变更被识别：%s' % (d['params'],))
+chk(d['groups_added'] == [[58, 4, 3.5]] and d['groups_removed'] == [[6, 1, 1.5]],
+    '组增删被识别：+%s −%s' % (d['groups_added'], d['groups_removed']))
+chk(d['jobs'] == ['job7'], '本脚本起的作业被列出')
+d2 = _diff_changes(before, before, [])
+chk(d2['params'] == [] and d2['groups_added'] == []
+    and d2['groups_removed'] == [], '无变更 → 全空')
+
+print('7) run_code 返回 changes[]（本脚本改了什么，P3）')
+import tempfile                                                 # noqa: E402
+import os as _os                                                 # noqa: E402
+
+
+class _S2:
+    def get_state(self, scope=None):
+        return {}
+
+    def summary(self):
+        return {}
+
+    def set_param(self, *a, **k):
+        return {}
+
+    def add_level_group(self, *a, **k):
+        return {}
+
+    def remove_level_group(self, *a, **k):
+        return {}
+
+    def set_waves(self, *a, **k):
+        return {}
+
+    def to_dict(self):
+        return {'params': {'dynamic.t_max': 123.0}}
+
+    def restore_snapshot(self, snap):
+        return None
+
+
+_root = tempfile.mkdtemp(prefix='ai_chk_')
+out = codeact.run_code('x = 1 + 1', _S2(), _root, {'seq': [0]},
+                       lambda jid: {'ok': True}, lambda jid: {'done': True},
+                       lambda jid, s=False: {'ok': True})
+chk(isinstance(out.get('changes'), dict) and 'params' in out['changes']
+    and 'jobs' in out['changes'], 'changes 结构齐备：%s'
+    % sorted((out.get('changes') or {}).keys()))
+
 print('\n结果：%s' % ('全部通过' if not FAIL else '%d 项失败' % len(FAIL)))
 sys.exit(1 if FAIL else 0)
