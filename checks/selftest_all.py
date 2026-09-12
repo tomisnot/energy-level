@@ -29,6 +29,9 @@
                                     下拉显式显示"叠加态（自定义…）"，22 项，~30s）
     solve_max_step_hard_selfcheck.py 步长硬上限 solve.MAX_STEP_HARD（默认关；
                                     关时逐位一致 / 开时 dt_max ≤ 设定 / 接线，13 项，秒级）
+    ai_code_freshness_selfcheck.py 代码新鲜度（T3/A12）：`summary()['code']` 与
+                                   `run_python['stale_code_warning']`——"改了 src/ 没重启"
+                                   一眼可见（26 项，毫秒级、无 Qt/无 ARC）
     gui_cost_dialog_test.py        运行前成本对话框（进度框遮挡回归，8 项）
     gui_ellip_row_test.py          椭圆偏参数行（平时隐藏/选后出现，10 项）
     ui_selftest.py                 UI 回归（主窗口/编辑器/TTL/动态页/存档恢复）
@@ -84,6 +87,7 @@ _SCRIPTS = ['checks_sentinel.py',        # 存活哨兵（秒级，最先跑：�
     'ai_semantic_state_selfcheck.py',
     'ai_pair_superposition_selfcheck.py',
     'ai_superposition_selfcheck.py',
+    'ai_code_freshness_selfcheck.py',
     'solve_max_step_hard_selfcheck.py',
     'port_file_ownership_selfcheck.py',
     'gui_ai_job_indicator_test.py',

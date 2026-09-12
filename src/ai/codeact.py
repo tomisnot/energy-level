@@ -197,6 +197,7 @@ def run_code(code, state_mod, root, jobs, t_run, t_status, t_result,
                'stdout': buf.getvalue()[-8000:],
                'result': _jsonable(env.get('result')),
                'elapsed_s': round(time.time() - t0, 2)}
+        out['stale_code_warning'] = _stale_code_warning(root)
         run_store.finish(root, rid, out, code=code)
         j.record('ai', 'run_python',
                  {'lines': len(code.splitlines()), 'run_id': rid}, '', snap)
@@ -207,12 +208,26 @@ def run_code(code, state_mod, root, jobs, t_run, t_status, t_result,
                'stdout': buf.getvalue()[-8000:],
                'error': tb[-2000:],
                'elapsed_s': round(time.time() - t0, 2)}
+        out['stale_code_warning'] = _stale_code_warning(root)
         run_store.finish(root, rid, out, code=code)
         j.record('ai', 'run_python_failed',
                  {'run_id': rid, 'error': tb[-500:]}, '', snap)
         return out
     finally:
         j.suppress_snapshot = False
+
+
+def _stale_code_warning(root):
+    """T3/A12：本进程的代码是否比磁盘旧（陈旧 → 一句话；新鲜 → None）。
+
+    引擎/服务端是**进程内**代码：改了 src/ 不重启，脚本跑的还是旧代码——
+    这条警告让 AI 在**这次 run_python 的返回里**就看见，而不是靠猜。
+    """
+    try:
+        from .code_freshness import stale_warning
+        return stale_warning(root=root)
+    except Exception:                              # noqa: BLE001
+        return None
 
 
 def _jsonable(v):

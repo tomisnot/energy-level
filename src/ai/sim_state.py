@@ -182,6 +182,15 @@ def build_pair_sup_spec(components):
                                                for p in pops]}
 
 
+def _code_status():
+    """代码新鲜度（T3/A12）：失败绝不影响 summary（旁路信息）。"""
+    try:
+        from .code_freshness import code_status
+        return code_status()
+    except Exception:                              # noqa: BLE001
+        return {'stale': None, 'note': 'code_freshness 不可用'}
+
+
 class SimState:
     """门面：持有 MainWindow + 注册表，不持有状态。"""
 
@@ -517,6 +526,8 @@ class SimState:
             't_max_ns': p.get('dynamic.t_max'),
             'n_waves': len(ws) + len(wa) + len(wb),
             'two_body': bool(p.get('dynamic.mode')),
+            # T3/A12：代码新鲜度——改了 src/ 不重启时，AI 要能**一眼看出** stale
+            'code': _code_status(),
         }
 
     def schema(self, prefix=''):

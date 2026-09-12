@@ -68,11 +68,24 @@ for B in [20, 25, 30]:
 result = out
 ```
 
+### ⚠ 先看 `summary()['code']`（T3/A12，2026-09-12 加）
+引擎/服务端是**进程内**代码：改了 `src/` 不重启，你看到的仍是旧行为（本会话曾因此白烧整轮）。
+```python
+summary()['code']
+# {'stale': True, 'n_stale': 7, 'n_files': 118, 'age_s': 812.0,
+#  'loaded_at': …, 'src_core_mtime': …, 'src_ai_mtime': …,
+#  'newest': [{'path': 'src/ai/sim_state.py', 'mtime': …, 'stale': True}, …],
+#  'hint': '⚠ 代码已陈旧：… **需要重启软件** 才生效；当前结果仍来自旧代码。'}
+```
+- `stale=True` → **别下结论**：先让人重启再重跑；
+- `run_python` 的返回里也带 `stale_code_warning`（陈旧时一句话，新鲜时 `None`）；
+- 基准 = "本进程加载代码的时刻"（`server.py` 导入期盖戳，first-wins）→ 只要有人改过 `src/` 就能立刻看出。
+
 ## 工具清单
 
 | 工具 | 作用 | 备注 |
 |---|---|---|
-| `summary` | 轻量摘要（组数/场/方法/波形数） | **每次会话先调这个建立认知** |
+| `summary` | 轻量摘要（组数/场/方法/波形数）+ **`code` 代码新鲜度** | **每次会话先调这个建立认知**；`code.stale=True` ⇒ 进程跑的是**旧代码**，让人重启 |
 | `get_state(scope)` | 全量/分模块状态导出 | scope ∈ 空/groups/field/dynamic |
 | `list_params(prefix)` | 参数 schema：type/unit/desc/range/options/value | set_param 的字典；**波形包络只给摘要** |
 | `get_envelope(path, index)` | 取某条波形的**原始包络采样数组** | 大数组专用通道（list_params 只给摘要，防响应膨胀）|
@@ -344,6 +357,12 @@ env 采样   = √[ (1 + δ(t)) / (1 + b) ]    # 峰值恰为 1
     `make_levels(..., kind='mJ')` 把 6P_3/2 展开成 4 个 mJ 态，而软件登记册展开成
     **16 个 (F,m_F)** 态——两者基组定义不同。本次两条通道 4 位小数吻合（碰巧：6P 在
     296 THz 外）。**交叉验证前先确认基组同源**，否则"对得上"是运气、"对不上"是白查。
+19. **⚠ 教训：写入侧通了 ≠ 引擎侧通了——验收必须打到引擎**（2026-09-12）：
+    "叠加态初态"曾按"写入侧已实现"记进文档（spec 能写进 param、能读回），
+    但**引擎侧 `_as_vector` 只认另一种形态** → 一跑就 `IndexError`，即**从未跑通过**。
+    同一轮的 `psi_pair` 也踩过"GUI 通道丢失、运行期静默回落 0 号态"。
+    → 任何"接口已实现"的结论，必须用**真引擎跑一次**（哪怕合成小基组）才算数；
+      自检要打在**引擎入口**，不是打在存储/序列化层。
 
 ## 人机协同约定
 

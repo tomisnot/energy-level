@@ -27,6 +27,11 @@ from .dispatch import run_on_main
 from .journal import get_journal
 from .sim_state import SimState, json_safe
 from . import run_store
+from . import code_freshness
+
+# T3/A12：在**模块导入期**盖代码基准戳（≈ 进程启动，见 app_entry._init_ai）。
+# first-wins：此后即使有人再调 mark_loaded 也不会把基准推到"编辑之后"。
+code_freshness.mark_loaded()
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _PORT_FILE = os.path.join(_ROOT, '.mcp-port')
