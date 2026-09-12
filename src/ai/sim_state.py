@@ -35,12 +35,179 @@ def json_safe(obj):
     return str(obj)
 
 
+
+# ---------- 二期 A：语义状态面（P1/P5：AI 只操作语义对象） ----------
+
+def groups_delta(cur, want):
+    """纯函数：cur/want = [(n,l,j),…] → (to_add, to_remove)。
+
+    声明式组操作的判定核心（可 headless 自检）。按 (n,l,j) 比较，
+    顺序无关、重复无关；返回的 to_add 保持 want 的顺序。
+    """
+    ck = {(int(n), int(l), round(float(j), 2)) for (n, l, j) in cur}
+    wk = [(int(n), int(l), round(float(j), 2)) for (n, l, j) in want]
+    wset = set(wk)
+    to_add, seen = [], set()
+    for k in wk:
+        if k not in ck and k not in seen:
+            to_add.append(k)
+            seen.add(k)
+    # 排序保证确定性（集合迭代顺序不定会让 journal 与自检抖动）
+    to_remove = sorted(k for k in ck if k not in wset)
+    return to_add, to_remove
+
+
+def _key_builder():
+    """找既有的身份键构造器（真值源），找不到则由调用方回退手拼。"""
+    import importlib
+    for mod, name in (('..core.atomic_levels', 'state_key'),
+                      ('..ui.ui_dynamic', 'state_key'),
+                      ('..core.project', 'state_key')):
+        try:
+            f = getattr(importlib.import_module(mod, __package__), name, None)
+            if callable(f):
+                return f
+        except Exception:                          # noqa: BLE001
+            pass
+    return None
+
+
+def _manual_key(st):
+    return ['mJ', int(st['n']), int(st['l']), float(st['j']),
+            float(st['m']), float(st.get('E_mhz', st.get('E', 0.0)))]
+
+
 class SimState:
     """门面：持有 MainWindow + 注册表，不持有状态。"""
 
     def __init__(self, win):
         self.win = win
         self.reg = getattr(win, 'param_reg', None) or build_registry(win)
+
+    # ---------- 二期 A：语义状态面 ----------
+    def _states_now(self):
+        """基组当前的全部子能级（真值源 = 面板的 _current_states）。"""
+        dyn = self.win.dynamic
+        try:
+            dyn.refresh_groups()
+        except Exception:                          # noqa: BLE001 - 无面板时忽略
+            pass
+        st = getattr(dyn, '_states', None)
+        if not st:
+            st = dyn._current_states()
+            dyn._states = list(st)
+        return list(st)
+
+    def _key_of(self, st):
+        f = _key_builder()
+        return list(f(st)) if f else _manual_key(st)
+
+    def list_levels(self, scope='basis'):
+        """基组内子能级清单：index / (n,l,j,m) / **合法身份键**。
+
+        这是 AI 设初态的唯一正确入口（此前 options 为 null，AI 只能猜能量，
+        实测猜错会静默落到别的能级）。
+        """
+        out = []
+        for i, st in enumerate(self._states_now()):
+            out.append({'index': i, 'n': int(st['n']), 'l': int(st['l']),
+                        'j': float(st['j']), 'm': float(st['m']),
+                        'key': self._key_of(st),
+                        'label': st.get('label') or st.get('name')})
+        return {'ok': True, 'n': len(out), 'levels': out}
+
+    def set_initial_state(self, atom, n, l, j, m, reason=''):
+        """按**语义身份**设初态；不在基组内就报错（不再静默选错能级）。"""
+        want = (int(n), int(l), round(float(j), 2), round(float(m), 2))
+        hit = None
+        for st in self._states_now():
+            if (int(st['n']), int(st['l']), round(float(st['j']), 2),
+                    round(float(st['m']), 2)) == want:
+                hit = st
+                break
+        if hit is None:
+            return {'ok': False, 'msg': '该能级不在当前基组：n=%d,l=%d,j=%g,m=%g'
+                                        '（先 set_groups 或 add_level_group）'
+                    % want,
+                    'hint': 'list_levels() 可看全部合法项'}
+        path = {'single': 'dynamic.psi_single', 'A': 'dynamic.psi_A',
+                'B': 'dynamic.psi_B'}.get(atom)
+        if path is None:
+            return {'ok': False, 'msg': "atom 必须为 single/A/B，收到 %r" % atom}
+        key = self._key_of(hit)
+        self.set_param(path, key, reason=reason or '设初态 %s' % (want,))
+        return {'ok': True, 'atom': atom, 'path': path, 'key': key}
+
+    def set_groups(self, groups, reason=''):
+        """**声明式**设定能级组：让基组恰好包含给定 (n,l,j) 集合。
+
+        原子 + 幂等 + 回增量（P1/P5：语义操作，不是按索引点删）。
+        本会话两次翻车都源于"按标签前缀判重"（删错组 / 漏加组）。
+        """
+        cur = [(g['n'], g['l'], g['j'])
+               for g in (self.reg.read('groups.list') or [])]
+        to_add, to_remove = groups_delta(cur, groups)
+        removed, added = [], []
+        for (n, l, j) in to_remove:                # 从后往前删，避免索引漂移
+            lst = self.reg.read('groups.list') or []
+            for k in range(len(lst) - 1, -1, -1):
+                g = lst[k]
+                if (int(g['n']), int(g['l']), round(float(g['j']), 2)) == \
+                        (n, l, round(float(j), 2)):
+                    self.remove_level_group(k, reason=reason or 'set_groups')
+                    removed.append([n, l, j])
+                    break
+        for (n, l, j) in to_add:
+            r = self.add_level_group(n, l, j, reason=reason or 'set_groups')
+            if isinstance(r, dict) and r.get('ok') is False:
+                return {'ok': False, 'msg': '加组失败 n=%d,l=%d,j=%g：%s'
+                        % (n, l, j, r.get('msg')), 'added': added,
+                        'removed': removed}
+            added.append([n, l, j])
+        kept = [[n, l, j] for (n, l, j) in cur
+                if (n, l, round(float(j), 2)) not in
+                {(a, b, round(float(c), 2)) for (a, b, c) in to_remove}]
+        # A8：组变了，初态可能失效——显式报告，不许静默
+        warn = []
+        for atom, path in (('single', 'dynamic.psi_single'),
+                           ('A', 'dynamic.psi_A'), ('B', 'dynamic.psi_B')):
+            try:
+                v = self.reg.read(path)
+            except Exception:                      # noqa: BLE001
+                continue
+            if not (isinstance(v, (list, tuple)) and len(v) >= 5):
+                continue
+            key = (int(v[1]), int(v[2]), round(float(v[3]), 2),
+                   round(float(v[4]), 2))
+            ok = any((int(s['n']), int(s['l']), round(float(s['j']), 2),
+                      round(float(s['m']), 2)) == key
+                     for s in self._states_now())
+            if not ok:
+                warn.append('%s 的初态 %s 已不在新基组内' % (atom, list(v)[:5]))
+        return {'ok': True, 'added': added, 'removed': removed, 'kept': kept,
+                'psi_warnings': warn}
+
+    def get_config(self):
+        """规范化运行配置（**唯一真值源**快照；P5）。
+
+        与 summary()/get_state() 的关系：后两者是"渲染视图"，本方法是
+        AI/脚本据以自检配置的规范形态。
+        """
+        p = self.reg.collect()
+        cfg = {'groups': [[int(g['n']), int(g['l']), float(g['j'])]
+                          for g in (p.get('groups.list') or [])]}
+        for k in ('mode', 'method', 't_max', 'npts'):
+            cfg[k] = p.get('dynamic.' + k)
+        for k in ('R_um', 'theta_deg', 'phi_deg'):
+            cfg[k] = p.get('dynamic.pair.' + k)
+        cfg['B_gauss'] = p.get('field.B_gauss')
+        cfg['E_vpcm'] = p.get('field.E_vpcm')
+        cfg['psi'] = {a: p.get('dynamic.psi_' + a)
+                      for a in ('single', 'A', 'B')}
+        cfg['n_waves'] = {a: len(p.get('dynamic.waves_' + a) or [])
+                          for a in ('single', 'A', 'B')}
+        cfg['lights'] = len(p.get('field.lights') or [])
+        return {'ok': True, 'config': json_safe(cfg)}
 
     # ---------- 读（登记册即存档） ----------
     def to_dict(self):

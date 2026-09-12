@@ -136,6 +136,23 @@ def _t_get_state(scope):
     if isinstance(d, dict) and isinstance(d.get('params'), dict):
         d = dict(d)
         d['params'] = _slim_params(d['params'])
+    # A9：mode / pair / t_max / npts 与 summary() 同源，免得脚本从
+    # get_state('dynamic') 拿不到这些字段、无法可靠自检"当前什么配置"。
+    # 只**新增** cfg 键，不覆盖既有字段（保持向后兼容）。
+    if isinstance(d, dict) and (not scope or scope == 'dynamic'):
+        cfg = {}
+        for _k in ('mode', 't_max', 'npts', 'method', 'near_cutoff'):
+            try:
+                cfg[_k] = _state.reg.read('dynamic.' + _k)
+            except Exception:                      # noqa: BLE001 - 缺项忽略
+                pass
+        for _k in ('R_um', 'theta_deg', 'phi_deg'):
+            try:
+                cfg[_k] = _state.reg.read('dynamic.pair.' + _k)
+            except Exception:                      # noqa: BLE001
+                pass
+        d = dict(d)
+        d['cfg'] = cfg
     return d
 
 
@@ -166,8 +183,45 @@ def _t_get_envelope(path, index):
     return base
 
 
+def _running_job():
+    """当前仍在跑的演化作业（A3：AI 发起的运行也要**可见、可取消**）。
+
+    本会话实测：AI 提交重活后用户既看不到弹窗、GUI 取消按钮也不覆盖它，
+    AI 侧又拿不到 job_id → 双方一起卡在"已有演化在运行"。
+    """
+    best = None
+    for _jid, _j in list(_jobs.items()):
+        if _j.get('done') or _j.get('error'):
+            continue
+        _el = time.time() - float(_j.get('started') or time.time())
+        if best is None or _jid > best['job_id']:
+            best = {'job_id': _jid, 'elapsed_s': round(_el, 1)}
+    return best
+
+
+def _t_list_params(prefix=''):
+    """参数 schema（与 MCP 工具 list_params 同源）——A1：CodeAct 里也能查。"""
+    return {'params': _slim_params(_state.schema(prefix))}
+
+
 def _t_summary():
-    return _state.summary()
+    out = _state.summary()
+    if isinstance(out, dict):
+        out = dict(out)
+        # A7：结构化能级组 (index, n, l, j) —— 不要再按标签字符串判重/删除
+        # （本会话两次踩坑：'60P' 前缀先匹配到 60P_3/2 而删错组；
+        #   '58G_{' 让 58G_9/2 被误判"已存在"而漏加）
+        import re as _re
+        nlj = []
+        for _i, _g in enumerate(out.get('groups') or []):
+            _m = _re.search(r'\(n=(\d+),l=(\d+),j=([\d.]+)\)', str(_g))
+            if _m:
+                nlj.append([_i, int(_m.group(1)), int(_m.group(2)),
+                            float(_m.group(3))])
+        out['groups_nlj'] = nlj
+        # A3：暴露当前占用引擎的作业
+        out['running_job'] = _running_job()
+    return out
 
 
 def _t_set_param(path, value, reason):
@@ -311,7 +365,13 @@ def _t_run_compute(jid, diag=True):
     dyn._ai_initiated = True
     if getattr(dyn, '_run_active', False):
         _jobs.pop(jid, None)
-        return {'ok': False, 'msg': '已有演化在运行（人或 AI 发起），先等待或取消'}
+        # A3：把"占用者"报出来，AI 侧才知道等谁 / 取消谁
+        _rj = _running_job()
+        _hint = ("占用作业 %s（已 %.0f s）；可 cancel_job('%s') 或等待"
+                 % (_rj['job_id'], _rj['elapsed_s'], _rj['job_id'])
+                 if _rj else '先等待或取消')
+        return {'ok': False, 'running_job': _rj,
+                'msg': '已有演化在运行（人或 AI 发起）：' + _hint}
     _jobs[jid] = {'started': time.time(), 'done': False, 'error': None,
                   'res': None}
 
@@ -596,6 +656,53 @@ def _res_summary(res, save_npz=False, tag=''):
     labels = _res_labels(res, pops2 if pops is None else None)
     n_col = (int(np.asarray(arr).shape[1])
              if arr is not None and np.asarray(arr).ndim > 1 else len(labels))
+    # D（2026-09-12）：模型卡——把"静默物理"变成自述。
+    # 数据来自引擎 diag（未开诊断时给最小集），并做**可表达性判定**。
+    try:
+        _dg = res.get('diag') or {}
+        _meta = (_dg.get('meta') or {}) if isinstance(_dg, dict) else {}
+        _solv = (_dg.get('solver') or {}) if isinstance(_dg, dict) else {}
+        _pr = (_dg.get('pairs') or {}) if isinstance(_dg, dict) else {}
+        _ac = (_dg.get('acize') or {}) if isinstance(_dg, dict) else {}
+        _ph = (_dg.get('photon') or {}) if isinstance(_dg, dict) else {}
+        _warn = []
+        try:
+            _wl = []
+            for _a in ('single', 'A', 'B'):
+                try:
+                    _wl += list(_state.reg.read('dynamic.waves_' + _a) or [])
+                except Exception:                  # noqa: BLE001
+                    pass
+            _om = [float(_w.get('freq_mhz') or 0) for _w in _wl]
+            _mx = max(_om) if _om else 0.0
+            _vmax = float(_pr.get('max_abs_v_mhz') or 0.0)
+            if _mx > 0 and _vmax / _mx > 1.0:
+                _warn.append('maxΩ/ω=%.2f > 1（已出 RWA 适用区，'
+                             '物理存疑，数值未必错）' % (_vmax / _mx))
+        except Exception:                          # noqa: BLE001
+            _mx = _vmax = 0.0
+        if int(_pr.get('n_microwave') or 0) == 0 and int(_meta.get('dim') or 0):
+            _warn.append('微波候选对为 0：**基组可能缺中间态**（多光子通道需要'
+                         '真实中间态参与）或频率与能级间隔不匹配 —— '
+                         '该波不会产生任何转移')
+        summary['model_card'] = {
+            'method': _meta.get('method'), 'dim': _meta.get('dim'),
+            'n_pairs': _pr.get('n') or _meta.get('n_pairs'),
+            'n_microwave': _pr.get('n_microwave'),
+            'keep': (_meta.get('keep') if 'keep' in _meta else None),
+            'acized_states': _ac.get('n_shifted'),
+            'P': _ph.get('P') or _meta.get('P'), 'M': _ph.get('Ms'),
+            'max_abs_v_mhz': _pr.get('max_abs_v_mhz'),
+            'max_omega_over_omega': (round(_vmax / _mx, 4) if _mx else None),
+            'tol': _meta.get('tol'), 'max_step': _meta.get('max_step'),
+            't_end_ns': _meta.get('t_end'),
+            'n_steps': _solv.get('n_steps'), 'nfev': _solv.get('nfev'),
+            'norm_dev': _solv.get('norm_dev'),
+            'basis_n': len(labels),
+            'warnings': _warn,
+        }
+    except Exception as _e:                        # noqa: BLE001 - 卡片不阻塞结果
+        summary['model_card'] = {'error': 'model_card 生成失败：%s' % _e}
     summary = {'t_ns': [float(t[0]), float(t[-1])] if len(t) else None,
                'n_steps': int(len(t)),
                'two_body': pops is None and pops2 is not None,
@@ -653,6 +760,10 @@ def _t_job_result(job_id, save_npz):
         return {'ok': False, 'msg': f"失败: {job['error']}"}
     out = {'ok': True, 'job_id': job_id}
     out['summary'] = _res_summary(job['res'], save_npz, tag=job_id)
+    # A5：npz 路径同时给顶层键（单体/两体一致，脚本别再猜键名）
+    _p = (out['summary'] or {}).get('npz')
+    if _p:
+        out['npz'] = _p
     return out
 
 
@@ -713,6 +824,32 @@ def _register_tools(mcp):
                          'gauss/square 型 env 参数本身就是全量。')
     async def get_envelope(path: str, index: int = 0) -> dict:
         return await asyncio.to_thread(d, lambda: _t_get_envelope(path, index))
+
+    @mcp.tool(description='**声明式**设定能级组：让基组恰好包含给定 '
+                          '[(n,l,j),…]（原子/幂等，回 {added,removed,kept}）。'
+                          '替代按索引增删——本会话两次因按标签判重而删错/漏加组')
+    async def set_groups(groups: list, reason: str = '') -> dict:
+        return await asyncio.to_thread(
+            d, lambda: _state.set_groups(groups, reason=reason))
+
+    @mcp.tool(description='按语义身份设初态：(atom,n,l,j,m)。不在基组则报错'
+                          '（不再静默选到别的能级）。list_levels() 看合法项')
+    async def set_initial_state(atom: str, n: int, l: int, j: float, m: float,
+                                reason: str = '') -> dict:
+        return await asyncio.to_thread(
+            d, lambda: _state.set_initial_state(atom, n, l, j, m,
+                                                reason=reason))
+
+    @mcp.tool(description='基组内子能级清单（含**合法身份键**）——设初态的唯一'
+                          '正确入口（此前 options 为 null，只能猜能量）')
+    async def list_levels(scope: str = 'basis') -> dict:
+        return await asyncio.to_thread(
+            d, lambda: _state.list_levels(scope))
+
+    @mcp.tool(description='规范化运行配置（groups/mode/pair/psi/t_max/npts/'
+                          '方法/波数）——唯一真值源快照')
+    async def get_config() -> dict:
+        return await asyncio.to_thread(d, lambda: _state.get_config())
 
     @mcp.tool(description='添加能级组（n 主量子数, l 轨道角动量, j 总角动量），自动校验+配色')
     async def add_level_group(n: int, l: int, j: float, reason: str = '') -> dict:
@@ -799,7 +936,7 @@ def _register_tools(mcp):
                 code, _state, _ROOT, {'seq': _job_seq},
                 _t_run_compute, _t_job_status, _t_job_result,
                 timeout=timeout, t_load=_t_load_archive,
-                t_save=_t_save_archive), timeout + 60)
+                t_save=_t_save_archive, t_list_params=_t_list_params, t_diag=_t_get_diag, t_cancel=_t_cancel_job), timeout + 60)
 
     @mcp.tool(description='CodeAct 异步版：立即返回 run_id，脚本在后台执行，'
                          '不再占住本次调用。长扫描/大系综用它——即使客户端断线，'
@@ -818,7 +955,7 @@ def _register_tools(mcp):
                     code, _state, _ROOT, {'seq': _job_seq},
                     _t_run_compute, _t_job_status, _t_job_result,
                     timeout=timeout, t_load=_t_load_archive,
-                    t_save=_t_save_archive, run_id=rid), timeout + 60)
+                    t_save=_t_save_archive, run_id=rid, t_list_params=_t_list_params, t_diag=_t_get_diag, t_cancel=_t_cancel_job), timeout + 60)
             except Exception:                  # noqa: BLE001 - 落盘失败原因
                 import traceback as _tb
                 run_store.finish(_ROOT, rid, {

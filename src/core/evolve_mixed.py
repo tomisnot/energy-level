@@ -449,6 +449,13 @@ def evolve_mixed(states, fields, psi0, t_grid, tol=None,
         f'成本预算剔除 {_st["drop_cap"]}，累积相位剔除 {_st["drop_phase"]}）'
         f'；微波候选窗 {setup.mw_cap:.4g} MHz'
         f'（成本预算 {_fmt_budget(phase_budget)} / T={T:g} ns）')
+    if len(setup.pairs) == 0 and int(setup._is_mw.sum()) > 0:
+        # S4a（2026-09-12）：多光子通道由基组内**真实单光子矩阵元**串起来；
+        # 缺中间态（如踢 60P→58G 却没有 59D/58F）时配对集为空，
+        # 表现为"频率对、强度对，却一点都踢不动"，此前完全静默。
+        log('⚠ [mixed] 微波波形在基组内找不到任何候选耦合对：'
+            '多半是**基组缺中间态**（多光子通道需要真实中间态），'
+            '或频率与任何能级间隔都不匹配 —— 该波不会产生任何转移。')
     if _st.get('drop_cost_loud'):
         # 成本剔除但 Θ 判据本来会保留 → 这是"拉长窗口反而丢路径"的典型信号，
         # 必须吵闹（否则只有"布居不动"这一个无从下手的现象）。
