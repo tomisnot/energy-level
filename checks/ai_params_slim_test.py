@@ -167,6 +167,8 @@ def main():
     win.show()
     app.processEvents()
     port = win._init_ai()
+    from checks.checklib import (require_ai_server as _need_ai)
+    _need_ai(port, 'ai_params_slim_test.py')
     check('固定端口 18767', port == 18767, str(port))
     if not port:
         return 1

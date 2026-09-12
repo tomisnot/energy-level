@@ -112,6 +112,8 @@ def main():
     win.show()
     app.processEvents()
     port = win._init_ai()
+    from checks.checklib import (require_ai_server as _need_ai)
+    _need_ai(port, 'ai_codeact_test.py')
     check('固定端口 18765', port == 18765)
     if not port:
         return 1

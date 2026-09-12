@@ -224,19 +224,33 @@ def _reg_dynamic_panel(reg, win):
                      widget=panel, touch_sig=sig, external=True,
                      painter='list')
 
-    # 初态 psi 三兄弟（值=身份键；写走 pending 键机制=恢复存档同路）。
+    # 初态 psi 三兄弟（值 = 身份键 **或** 叠加态 spec `['sup', […]]`）。
+    # #3/#5 裁决 A（2026-09-12）：叠加态是**持久真值**（存面板 `_psi_sups`，
+    # combo 只显示哨兵项"叠加态（自定义 n 项）"）——此前 spec 只走 pending
+    # 通道，`find_state_index` 匹配不到 → 运行期**静默回落 0 号态**。
     # touch=combo currentIndexChanged（人侧流水进 op）；_on_m_changed 重填
     # 期已 blockSignals，clear/addItem 中间态不发假信号。
     def _psi_read(which):
         combo = {'single': d.psi_combo, 'A': d.psi_combo_A,
                  'B': d.psi_combo_B}[which]
-        return lambda: d._psi_key_for(combo)
+
+        def _f():
+            sup = d._psi_sup(which)
+            return sup if sup is not None else d._psi_key_for(combo)
+        return _f
 
     def _psi_write(which):
         def _f(key):
-            cur = dict(getattr(d, '_pending_psi_keys', None) or {})
-            cur[which] = key
-            d._pending_psi_keys = cur
+            sups = dict(getattr(d, '_psi_sups', None) or {})
+            if (isinstance(key, (list, tuple)) and len(key) == 2
+                    and key[0] == 'sup'):
+                sups[which] = list(key)         # 叠加态 → 持久真值
+            else:
+                sups[which] = None              # 具体能级 → 清叠加态
+                cur = dict(getattr(d, '_pending_psi_keys', None) or {})
+                cur[which] = key
+                d._pending_psi_keys = cur
+            d._psi_sups = sups
             win.groups_changed.emit()
         return _f
 
@@ -244,7 +258,7 @@ def _reg_dynamic_panel(reg, win):
         combo = {'single': d.psi_combo, 'A': d.psi_combo_A,
                  'B': d.psi_combo_B}[which]
         reg.register(f'dynamic.psi_{which}',
-                     ParamSpec('list', desc=f'初态身份键（{which}）'),
+                     ParamSpec('list', desc=f'初态身份键或叠加态 spec（{which}）'),
                      read_fn=_psi_read(which), write_fn=_psi_write(which),
                      widget=combo, touch_sig=combo.currentIndexChanged,
                      external=True)
@@ -295,8 +309,13 @@ def _fmt_num(v):
 #           pipe.*   手动管线分步 —— 都是"真正的控制参数"，按同一通道登记。
 _SOLVE_SPECS = (
     # (名字, 框架 type, 说明, 单位, 下游 kwarg)
-    ('MAX_STEP', 'float', 'DOP853 最大步长（ns）；0 = 自适应不限',
+    ('MAX_STEP', 'float', 'DOP853 **初始**步长上限（ns）；0 = 自适应不限'
+     '（注意：它只管起步，之后步长按误差控制增长——要真压步长用 MAX_STEP_HARD）',
      'ns', 'max_step'),
+    ('MAX_STEP_HARD', 'float', 'DOP853 步长**硬上限**（ns）；留空/0 = 不限制'
+     '（默认，行为与改前逐位一致）。仅对 mixed/hard 的 DOP853 积分生效；'
+     'sambe 走自带传播子（其 frozen_h_ns/tol 是那一路的旋钮）',
+     'ns', 'max_step_hard'),
     ('PER_FREQ_M', 'list', '逐载频光子块阶数（int 或 [m1, m2…]）',
      '', 'per_freq_M'),
     ('FROZEN_H_NS', 'float', '纯冻结段长（两体 sambe；0=全自适应）',

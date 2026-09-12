@@ -112,6 +112,8 @@ def main():
     win.show()
     app.processEvents()
     port = win._init_ai()
+    from checks.checklib import (require_ai_server as _need_ai)
+    _need_ai(port, 'ai_compute_test.py')
     if not port:
         print('AI server 未启动')
         return 1

@@ -132,6 +132,8 @@ def main():
     win.show()
     app.processEvents()
     port = win._init_ai()
+    from checks.checklib import (require_ai_server as _need_ai)
+    _need_ai(port, 'gui_arb_mixed_wiring_test.py')
     check('固定端口 18768', port == 18768, str(port))
     if not port:
         return 1

@@ -278,20 +278,40 @@ class SimState:
                 {(a, b, round(float(c), 2)) for (a, b, c) in to_remove}]
         # A8：组变了，初态可能失效——显式报告，不许静默
         warn = []
+
+        def _missing_rows(rows, offs, lv):
+            """spec 行 → 不在 lv（(n,l,j,m) 集合）里的项（去重、保持顺序）。"""
+            gone = []
+            for row in rows:
+                for off in offs:
+                    q = row[off:off + 4]
+                    key = (int(q[0]), int(q[1]), round(float(q[2]), 2),
+                           round(float(q[3]), 2))
+                    item = [int(q[0]), int(q[1]), float(q[2]), float(q[3])]
+                    if key not in lv and item not in gone:
+                        gone.append(item)
+            return gone
+
+        lv_now = {(int(s['n']), int(s['l']), round(float(s['j']), 2),
+                   round(float(s['m']), 2)) for s in self._states_now()}
         for atom, path in (('single', 'dynamic.psi_single'),
                            ('A', 'dynamic.psi_A'), ('B', 'dynamic.psi_B')):
             try:
                 v = self.reg.read(path)
             except Exception:                      # noqa: BLE001
                 continue
+            if isinstance(v, (list, tuple)) and len(v) == 2 and v[0] == 'sup':
+                # 叠加态真值（#3/#5 裁决 A）：分量行 = [n,l,j,m,re,im]
+                gone = _missing_rows(v[1], (0,), lv_now)
+                if gone:
+                    warn.append('%s 的**叠加态**分量已不在新基组内：%s'
+                                % (atom, gone))
+                continue
             if not (isinstance(v, (list, tuple)) and len(v) >= 5):
                 continue
             key = (int(v[1]), int(v[2]), round(float(v[3]), 2),
                    round(float(v[4]), 2))
-            ok = any((int(s['n']), int(s['l']), round(float(s['j']), 2),
-                      round(float(s['m']), 2)) == key
-                     for s in self._states_now())
-            if not ok:
+            if key not in lv_now:
                 warn.append('%s 的初态 %s 已不在新基组内' % (atom, list(v)[:5]))
         # 两体纠缠初态同样要查（A8 的教训：基组变了初态失效必须出声）
         try:
@@ -299,17 +319,7 @@ class SimState:
         except Exception:                          # noqa: BLE001
             ps = None
         if isinstance(ps, (list, tuple)) and len(ps) == 2 and ps[0] == 'pair_sup':
-            lv = {(int(s['n']), int(s['l']), round(float(s['j']), 2),
-                   round(float(s['m']), 2)) for s in self._states_now()}
-            gone = []
-            for row in ps[1]:
-                for off in (0, 4):
-                    q = row[off:off + 4]
-                    if (int(q[0]), int(q[1]), round(float(q[2]), 2),
-                            round(float(q[3]), 2)) not in lv:
-                        item = [int(q[0]), int(q[1]), float(q[2]), float(q[3])]
-                        if item not in gone:
-                            gone.append(item)
+            gone = _missing_rows(ps[1], (0, 4), lv_now)
             if gone:
                 warn.append('两体纠缠初态 psi_pair 的分量已不在新基组内：%s'
                             % (gone,))

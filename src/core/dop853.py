@@ -226,7 +226,7 @@ def _dop853_dense_interp(y_old, y_new, f_old, f_new, K, t_old, h, x,
 # 本函数自身因此不再产生缓存条目（它被完整内联进薄包装）。
 @njit(cache=True, nogil=True, inline='always')
 def _dop853_driver(rhs, y0, t_eval, T, rtol, atol, max_step, prog, stat,
-                   dt_hist, rargs):
+                   dt_hist, rargs, max_step_hard=0.0):
     """scipy solve_ivp(DOP853) 主循环的 numba 移植（rhs 参数化，任意 N）。
 
     rhs(t, y, *rargs) -> dydt（njit 编译）。rargs 承载场矩阵/查表等附加参数。
@@ -234,6 +234,14 @@ def _dop853_driver(rhs, y0, t_eval, T, rtol, atol, max_step, prog, stat,
     dt_hist：None 或预分配 (M,2) float64——每接受步写 (t_new, h)，行数记
     stat[4]（t75 诊断；调用方传 dt_hist 时 stat 须 ≥6 行）。None=不记录。
     步进/误差/步长控制与 scipy rk.py 逐行一致（SAFETY=0.9 等）。
+
+    max_step_hard（2026-09-12 加，运行级 `solve.MAX_STEP_HARD`）：
+    **每个**接受步都复核的硬上限（ns）；0.0 = 不限制 → 与改前逐位一致。
+    为什么要单开一个键：`max_step` 只在**起步**参与
+    `h_abs = min(100·h0, h1, interval, max_step)`，之后 `h_abs *= factor`
+    按误差控制自由增长（实测：请求 0.05 ns 的 10 ns 演化里出现 **2.2 ns** 的
+    接受步）——它是"初始步长提示"，不是上限。需要真压步长（例如怀疑欠采样）
+    时显式给 max_step_hard，代价是步数/耗时上升。
     """
     n = y0.size
     n_eval = t_eval.size
@@ -286,6 +294,8 @@ def _dop853_driver(rhs, y0, t_eval, T, rtol, atol, max_step, prog, stat,
     else:
         h1 = (0.01 / max(d1, d2)) ** (1.0 / 8.0)
     h_abs = min(100.0 * h0, h1, interval, max_step)
+    if max_step_hard > 0.0 and h_abs > max_step_hard:
+        h_abs = max_step_hard          # 硬上限：起步步长也压住
 
     # ---- 主循环 ----
     t = t0
@@ -339,9 +349,13 @@ def _dop853_driver(rhs, y0, t_eval, T, rtol, atol, max_step, prog, stat,
                 if step_rejected:
                     factor = min(1.0, factor)
                 h_abs *= factor
+                if max_step_hard > 0.0 and h_abs > max_step_hard:
+                    h_abs = max_step_hard      # 接受步后立即压回硬上限
                 step_accepted = True
             else:
                 h_abs *= max(MIN_FACTOR, SAFETY * error_norm ** EXP)
+                if max_step_hard > 0.0 and h_abs > max_step_hard:
+                    h_abs = max_step_hard      # 拒绝分支同样压住
                 step_rejected = True
                 n_rej += 1
         h_step = h

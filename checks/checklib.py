@@ -38,3 +38,20 @@ class Checker:
         print(f'[{self.title}]  PASS={self.n_pass}  FAIL={self.n_fail}'
               f'  SKIP={self.n_skip}')
         return self.n_fail == 0
+
+
+def require_ai_server(port, why=''):
+    """AI 接口没起来 → SKIP 退出（退出码 0），返回 port 便于链式使用。
+
+    为什么要有这个：需要 MCP 端点的自检（`checks/ai_*test*.py`）过去一律
+    `port = win._init_ai()` 真起 server —— 在**人的软件正在跑实验**时会去抢
+    8765 / 覆盖 `.mcp-port`（2026-09-12 事故，见 docs/AI协同-分工与请示.md §六 #6）。
+    现在 `start_server` 有 `EL_NO_AI_SERVER` 与"端口被活实例占用则拒启"两道闸，
+    这些自检拿到 None 时应 **SKIP**（而不是把"没起来"误报成 FAIL）。
+    """
+    if port:
+        return port
+    import sys as _sys
+    print('  [SKIP] AI 接口未启动（EL_NO_AI_SERVER 置位 / .mcp-port 指向活实例 / '
+          '无 mcp SDK）→ 跳过本自检 %s' % why)
+    _sys.exit(0)

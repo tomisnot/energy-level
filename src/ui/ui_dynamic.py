@@ -57,6 +57,11 @@ class DynamicPanel(QWidget):
         # dynamic.psi_pair 的真值；两体运行时取代逐原子 psi_A/psi_B。
         # GUI 尚无编辑器（后议），目前由 AI 面 set_pair_superposition 设置。
         self._psi_pair_spec = None
+        # 逐原子**叠加态** spec（['sup', […]] / None）——登记项
+        # dynamic.psi_single/A/B 的**持久真值**（#3/#5 裁决 A）。
+        # combo 表达不了叠加态，故 spec 存这里；下拉显示哨兵项
+        # "叠加态（自定义 n 项）"（显式回落显示，不再静默显示 0 号态）。
+        self._psi_sups = {'single': None, 'A': None, 'B': None}
         # 能级组增删由主程序事件驱动刷新（统一机制，不散布同步调用）
         main.groups_changed.connect(self.refresh_groups)
         self._is_two_body = False
@@ -238,6 +243,15 @@ class DynamicPanel(QWidget):
         row2.addWidget(self.psi_combo, 1)
         row2.addWidget(self._psi_box, 1)
         self._psi_box.setVisible(False)
+        # 人在下拉里选了**具体能级** → 丢弃该原子的叠加态 spec（#3/#5 裁决 A：
+        # 叠加态是持久真值，但人显式重选能级时必须让位，且要记账）。
+        # 连接必须早于 pm_setup 的 touch_sig（register 在面板构造之后）——
+        # 那时 read_fn 已看到 spec 被清掉，落账的才是"人选的键"。
+        for _w, _cb in (('single', self.psi_combo),
+                        ('A', self.psi_combo_A),
+                        ('B', self.psi_combo_B)):
+            _cb.currentIndexChanged.connect(
+                lambda _i, w=_w: self._on_psi_pick(w))
         # t27：自发辐射从独立行移入初态行右侧（原"显示态数"位置）——
         # 单原子 psi_combo stretch=1 / 双原子 psi_box(A/B) 各 stretch=1，
         # 自发辐射档位自然宽度，整行协调不挤压。
@@ -456,13 +470,24 @@ class DynamicPanel(QWidget):
         self._states = list(states)      # 供 _psi_key_for 把初态索引映射为身份键
         pending = getattr(self, '_pending_psi_keys', None)
 
-        def _fill(combo, pending_key, fallback_text):
+        def _fill(combo, which, pending_key, fallback_text):
             # 重填期屏蔽信号：psi 参数接了 currentIndexChanged→note_change
             # （人侧流水），clear/addItem 的中间态会发假变更
             combo.blockSignals(True)
             combo.clear()
             for s in states:
                 combo.addItem(s['label'])
+            # 叠加态（持久 spec）优先：combo 表达不了叠加态，就加一个**显式**
+            # 哨兵项（#3/#5 裁决 A 的硬要求②）——绝不静默显示成某个具体能级。
+            sup = self._psi_sup(which)
+            if sup is None and isinstance(pending_key, (list, tuple)) \
+                    and len(pending_key) == 2 and pending_key[0] == 'sup':
+                sup = pending_key
+            if sup is not None:
+                combo.addItem('叠加态（自定义 %d 项）' % len(sup[1]))
+                combo.setCurrentIndex(combo.count() - 1)
+                combo.blockSignals(False)
+                return
             if pending_key:
                 i = find_state_index(states, pending_key)
                 if i >= 0:
@@ -479,12 +504,12 @@ class DynamicPanel(QWidget):
 
         # 单原子初态
         cur = self.psi_combo.currentText()
-        _fill(self.psi_combo,
+        _fill(self.psi_combo, 'single',
               pending.get('single') if pending else None, cur)
         # 双原子初态（A/B 各自独立选择）
         cur_t = [c.currentText() for c in (self.psi_combo_A, self.psi_combo_B)]
         for k, combo in enumerate((self.psi_combo_A, self.psi_combo_B)):
-            _fill(combo,
+            _fill(combo, 'A' if k == 0 else 'B',
                   pending.get('A' if k == 0 else 'B') if pending else None,
                   cur_t[k])
         # 荧光读出态下拉（基组全部子能级；label 含 F 区分——低激发超精细
@@ -696,6 +721,54 @@ class DynamicPanel(QWidget):
         if st and 0 <= i < len(st):
             return list(state_key(st[i]))
         return None
+
+    def _psi_sup(self, which):
+        """该原子的**叠加态 spec**（['sup', […]]）——非法/未设 → None。
+
+        #3/#5 裁决 A 的持久真值：叠加态存这里（不是 combo），AI/存档/undo
+        全经登记项 `dynamic.psi_*`，其 read_fn/write_fn 落到本属性。
+        """
+        v = (getattr(self, '_psi_sups', None) or {}).get(which)
+        if (isinstance(v, (list, tuple)) and len(v) == 2 and v[0] == 'sup'
+                and isinstance(v[1], (list, tuple)) and v[1]):
+            return list(v)
+        return None
+
+    def _psi0_for(self, which):
+        """运行期初态（single/A/B）：**spec 优先**，无 spec 才用 combo 索引。
+
+        硬要求（2026-09-12 用户裁决，P1 不许静默改初态）：
+          · 设了 spec → 原样交给引擎（引擎侧 `_as_vector` 按 (n,l,j,m) 校验，
+            缺项**报错**）；**绝不**回落到 0 号态；
+          · 没设 spec 但下拉没选中基组内能级（索引越界/空基组）→ 报错，
+            而不是把 -1 当"最后一个态"喂进引擎（`_onehot(N,-1)` 的静默错）。
+        """
+        combo = {'single': self.psi_combo, 'A': self.psi_combo_A,
+                 'B': self.psi_combo_B}[which]
+        spec = self._psi_sup(which)
+        if spec is not None:
+            return list(spec)
+        i = combo.currentIndex()
+        st = getattr(self, '_states', None) or []
+        if not st or not (0 <= i < len(st)):
+            raise ValueError(
+                '初态未选定（%s）：下拉里没有可用的基组内能级'
+                '（先添加能级组；叠加态用 set_superposition/%s）'
+                % (which, 'set_pair_superposition' if which != 'single'
+                   else 'set_superposition'))
+        return i
+
+    def _on_psi_pick(self, which):
+        """人在下拉里选了**具体能级** → 丢弃该原子的叠加态 spec（显式让位）。"""
+        combo = {'single': self.psi_combo, 'A': self.psi_combo_A,
+                 'B': self.psi_combo_B}[which]
+        st = getattr(self, '_states', None) or []
+        if not (0 <= combo.currentIndex() < len(st)):
+            return                      # 末尾哨兵项"叠加态（自定义…）"：不动 spec
+        sups = dict(getattr(self, '_psi_sups', None) or {})
+        if sups.get(which):
+            sups[which] = None
+            self._psi_sups = sups
 
     def _pair_psi0_spec(self):
         """两体纠缠初态 spec（dynamic.psi_pair）—— 非法/未设 → None。
@@ -1064,7 +1137,8 @@ class DynamicPanel(QWidget):
                     arbitrary_mw_group(self.cache, states, w))
             fields = meta
         self.wave_data = waveforms.waveforms_to_env(waves, t)
-        psi0 = self.psi_combo.currentIndex()
+        # 初态：spec 优先（叠加态持久真值）；没选到能级 → 报错，不静默回落
+        psi0 = self._psi0_for('single')
 
         self._prep('驱动场就绪', 1.0)
         # 上帝模式覆写：param_overrides（引擎参数页，任何引擎都吃）单独取出，
@@ -1180,8 +1254,8 @@ class DynamicPanel(QWidget):
                           for nm, th, env, f, I in env_A] \
                         + [(f'B:{nm}', th, env, f, I)
                            for nm, th, env, f, I in env_B]
-        psi0_A = self.psi_combo_A.currentIndex()
-        psi0_B = self.psi_combo_B.currentIndex()
+        psi0_A = self._psi0_for('A')
+        psi0_B = self._psi0_for('B')
         # 两体**纠缠**初态（AI 面 set_pair_superposition 写进 dynamic.psi_pair）：
         # 非 None 时引擎侧取代 psi_A/psi_B 的逐原子直积——这是
         # "交换后的结果"唯一能表达的通道（逐原子直积写不出纠缠）。

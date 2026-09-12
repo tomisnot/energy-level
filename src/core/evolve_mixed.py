@@ -347,7 +347,7 @@ class _MixedSetup:
 
 
 def evolve_mixed(states, fields, psi0, t_grid, tol=None,
-                 max_step=0.05,
+                 max_step=0.05, max_step_hard=None,
                  progress_arr=None, log=None, record_amp=False,
                  driver='numba', decays=None,
                  per_freq_M=None, r_crit=None, diag=False,
@@ -492,6 +492,7 @@ def evolve_mixed(states, fields, psi0, t_grid, tol=None,
         # 编译期保持阶段 0（"准备"标签 + 耗时），GUI 显示不失真
         y_out = dop853_driver_mixed(X0, t, T, float(tol), _P.get('DEFAULT_ATOL'),
                                     max_step, prog, stat, dt_hist,
+                                    float(max_step_hard or 0.0),
                                     pack['iis'], pack['jjs'],
                                     pack['vals'], pack['dDs'], pack['is_mw'],
                                     pack['wcos'], pack['n_pairs_w'],
@@ -699,7 +700,7 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
                       r_crit=None, diag=False,
                       bw_opt=None, mw_cap=None, mw_max=None,
                       mw_arb_A=None, mw_arb_B=None, phase_budget=None,
-                      psi0_pair=None):
+                      psi0_pair=None, max_step_hard=None):
     """两体混合引擎（正式版）：光场光子块 + 微波/V_dd 当场，φ-帧单 DOP853。
 
     fields_A/B : kind='exact' 场列表（build_fields_exact 输出——光场 + 微波）。
@@ -966,7 +967,8 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
     if driver == 'numba':
         y_out = dop853_driver_mixed(
             X0, t, T, float(tol), 1e-11, max_step,
-            progress_arr, stat, dt_hist, pack['iis'], pack['jjs'],
+            progress_arr, stat, dt_hist, float(max_step_hard or 0.0),
+            pack['iis'], pack['jjs'],
             pack['vals'], pack['dDs'], pack['is_mw'], pack['wcos'],
             pack['n_pairs_w'], pack['env_tab'], pack['env_dt'],
             pack['has_ph'], pack['ph_tab'], Cv, gamma,

@@ -197,6 +197,8 @@ def main():
     WIN.show()
     app.processEvents()
     port = WIN._init_ai()
+    from checks.checklib import (require_ai_server as _need_ai)
+    _need_ai(port, 'ai_chain_selftest.py')
     check('MCP server 启动', bool(port))
     if not port:
         return 1

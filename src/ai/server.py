@@ -1186,11 +1186,49 @@ _server_app = None
 _server_state = {}
 
 
+def _port_file_owner():
+    """`.mcp-port` 指向的端口 + 是否**已被占用**（= 疑似另一个活实例）。
+
+    返回 (port|None, busy: bool)。文件缺失/内容非法 → (None, False)。
+    "占用"= 绑不上 localhost 该端口（有活监听）——多实例判定就靠它
+    （2026-09-12 用户裁决 #6：**不支持多实例并存**，两个实例抢同一个
+    `.mcp-port` 会让 harness 按文件发现端口的那条路彻底错乱）。
+    """
+    try:
+        if not os.path.exists(_PORT_FILE):
+            return None, False
+        with open(_PORT_FILE, encoding='utf-8') as f:
+            p = int(f.read().strip())
+    except (OSError, ValueError):
+        return None, False
+    return p, (not _port_free(p))
+
+
 def start_server(win, port=None):
-    """MainWindow 构造完成后调用：安装派发器 + 起 MCP server 线程。"""
+    """MainWindow 构造完成后调用：安装派发器 + 起 MCP server 线程。
+
+    三道闸（2026-09-12 事故后加，见 docs/AI协同-分工与请示.md §六 #6）：
+      ① `EL_NO_AI_SERVER` 置位 → 不起（自检/selftest_all 用，防抢端口）；
+      ② 端口文件指向**另一个活实例** → 拒绝启动并吵出来（不支持多实例；
+         否则第二个实例会覆盖 `.mcp-port`，把第一个实例的客户端搞断）；
+      ③ 其余照旧（默认端口被占则重试后回退随机端口 + 明确告警）。
+    """
     global _server_app, _state, _mcp, _server_thread
     if _server_thread is not None:
         return _server_state.get('port')
+    if str(os.environ.get('EL_NO_AI_SERVER', '')).strip() not in ('', '0',
+                                                                  'false',
+                                                                  'False'):
+        win.log('[AI] EL_NO_AI_SERVER 已置位 → 本次不启动 AI 接口（自检/实验保护）')
+        return None
+    _other, _busy = _port_file_owner()
+    if _busy:
+        win.log(f'[AI] ⚠ .mcp-port 指向 {_other}，该端口**已被占用** —— 疑似另一个'
+                f'实例仍在运行。为免两个实例抢同一端口文件（AI 端点会错乱），'
+                f'本次**不启动 AI 接口**（软件本体照常可用）。请关掉另一个实例后'
+                f'重启，或设 EL_MCP_PORT=<别的端口>（并删除 .mcp-port 里的旧值）。',
+                30000)
+        return None
     from .dispatch import init
     init()
     _state = SimState(win)

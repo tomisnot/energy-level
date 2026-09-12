@@ -77,7 +77,8 @@ def _mw_terms_of(fields_meta):
 
 def evolve_hard_fast(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
                      progress_arr=None, log=None, record_amp=False,
-                     n_tab=None, driver='numba', decays=None):
+                     n_tab=None, driver='numba', decays=None,
+                     max_step_hard=None):
     """单原子 hard（t73b：与两体同一打包/内核/驱动——N_B=1 旁观维）。
 
     数学与旧单体内核逐项一致：u = exp(iC·E·t) 相互作用绘景、光场旋转系
@@ -117,6 +118,7 @@ def evolve_hard_fast(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
         stage_progress(prog, 0, 0.9)
         y_out = dop853_driver_hard(psi0_2d, t, T, float(rtol),
                                    float(atol), np.inf, prog, stat, None,
+                                   float(max_step_hard or 0.0),
                                    *pack, gamma)
         pops = np.abs(y_out) ** 2
         nfev = int(stat[0])
@@ -447,10 +449,13 @@ def _rhs_hard_pair(t, y, E_A, E_B, fld_rows, fld_cols, fld_vals, fld_envs,
 # 而拒绝缓存）。数值上只是原样转发同一批实参（附加参数走元组），逐位不变。
 @njit(cache=True, nogil=True)
 def dop853_driver_hard(y0, t_eval, T, rtol, atol, max_step, prog, stat,
-                       dt_hist, *rargs):
-    """hard 引擎（单/两体共用）：静态绑定 _rhs_hard_pair 的 DOP853 驱动。"""
+                       dt_hist, msh, *rargs):
+    """hard 引擎（单/两体共用）：静态绑定 _rhs_hard_pair 的 DOP853 驱动。
+
+    msh = `solve.MAX_STEP_HARD`（ns；0 = 不限制）——每步复核的步长硬上限。
+    """
     return _dop853_driver(_rhs_hard_pair, y0, t_eval, T, rtol, atol,
-                          max_step, prog, stat, dt_hist, rargs)
+                          max_step, prog, stat, dt_hist, rargs, msh)
 
 
 # ============================================================
@@ -461,7 +466,7 @@ def evolve_hard_pair(states, fields_meta_A, fields_meta_B, psi0_A, psi0_B,
                      phi_deg=0.0, cache=None, rtol=1e-9, atol=1e-11,
                      progress_arr=None, log=None, record_amp=False,
                      n_tab=None, decays_A=None, decays_B=None,
-                     driver='numba', psi0_pair=None):
+                     driver='numba', psi0_pair=None, max_step_hard=None):
     """两体 hard（第一性原理 DOP853 硬积分，零微波近似）。
 
     psi0_pair: **两体纠缠初态** spec（['pair_sup', […]]）——非 None 时取代
@@ -525,7 +530,9 @@ def evolve_hard_pair(states, fields_meta_A, fields_meta_B, psi0_A, psi0_B,
         # gamma_MHz 传入内核（落点=丢失，NonHermitian）
         y_out = dop853_driver_hard(psi0_2d, t, T,
                                    float(rtol), float(atol), np.inf,
-                                   prog, stat, None, *pack, gamma_MHz)
+                                   prog, stat, None,
+                                   float(max_step_hard or 0.0),
+                                   *pack, gamma_MHz)
         nfev = int(stat[0])
         n_acc = int(stat[1])
         n_rej = int(stat[2])

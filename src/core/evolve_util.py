@@ -30,19 +30,48 @@ def _as_vector(states, psi0):
     """初态 → 复向量。
 
     psi0 支持：索引 | (n,l,j,m) | dict(n,l,j,m) | 复数组 |
-    **叠加态** `('sup', [(spec, amp), …])`（2026-09-12 加）。
+    **叠加态** `['sup', [分量, …]]`（2026-09-12 加）。
 
-    叠加态里每个分量仍是上面任一合法 spec（递归复用），amp 为复数或实数；
-    结果按 Σ|amp·v|² = 1 **归一化**（零范数报错）。这样一处改动即可让
+    分量两种写法（**都要支持**，2026-09-12 修格式错配）：
+      · 规范形态 `[n, l, j, m, re, im]` —— `SimState.build_sup_spec` 的产出，
+        也是存进 `dynamic.psi_*` 的形态；
+      · 旧形态 `[spec, amp]`（spec 可为 (n,l,j,m)/索引/dict）；
+      · 简写 `[n, l, j, m]`（幅度默认 1）。
+    ⚠ 修前只认旧形态：规范形态的 `item[0]` 是主量子数 n（如 60）→ 被当成
+    **索引** → IndexError。即"叠加态初态"在引擎侧从未真正跑通过
+    （GUI 侧另有一处 pending 通道丢失，见 #3）——两处都修了才有 Option A。
+
+    结果按 Σ|amp|² = 1 **归一化**（零范数报错）。这样一处改动即可让
     全部引擎（mixed/sambe/hard，单体与两体）与两条通道同时支持叠加初态。
     """
     N = len(states)
     if isinstance(psi0, (tuple, list)) and psi0 and psi0[0] == 'sup':
         if len(psi0) < 2 or not psi0[1]:
-            raise ValueError("叠加态写法：('sup', [(spec, amp), …])，分量不能为空")
+            raise ValueError("叠加态写法：['sup', [[n,l,j,m,re,im], …]]"
+                             "（或 [[spec, amp], …]），分量不能为空")
         v = np.zeros(N, complex)
+
+        def _isnum(x):
+            return (isinstance(x, (int, float, np.integer, np.floating))
+                    and not isinstance(x, bool))
+
         for item in psi0[1]:
-            spec, amp = item[0], (item[1] if len(item) > 1 else 1.0)
+            if not isinstance(item, (list, tuple)):
+                raise ValueError('叠加态分量应为 list/tuple；收到 %r' % (item,))
+            if len(item) == 6 and _isnum(item[0]):
+                spec = (int(item[0]), int(item[1]), float(item[2]),
+                        float(item[3]))
+                amp = complex(float(item[4]), float(item[5]))
+            elif len(item) == 2:
+                spec, amp = item[0], item[1]
+            elif len(item) == 4 and _isnum(item[0]):
+                spec, amp = tuple(item), 1.0
+            else:
+                raise ValueError(
+                    '叠加态分量写法：[[n,l,j,m,re,im], …] 或 [[spec, amp], …]'
+                    '；收到 %r' % (item,))
+            if isinstance(amp, (list, tuple)) and len(amp) == 2:
+                amp = complex(float(amp[0]), float(amp[1]))   # amp 写 [re,im]
             v = v + complex(amp) * _as_vector(states, spec)
         nrm = float(np.linalg.norm(v))
         if nrm <= 0.0:

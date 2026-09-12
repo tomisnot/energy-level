@@ -149,6 +149,8 @@ def main():
     win.show()
     app.processEvents()
     port = win._init_ai()
+    from checks.checklib import (require_ai_server as _need_ai)
+    _need_ai(port, 'ai_runstore_mcp_test.py')
     check('固定端口 18766', port == 18766, str(port))
     if not port:
         return 1

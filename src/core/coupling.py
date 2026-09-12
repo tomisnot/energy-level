@@ -292,7 +292,11 @@ from .dop853 import _dop853_driver          # noqa: E402  （系数已上收 dop
 
 @_njit(cache=True, nogil=True)
 def dop853_driver_mixed(y0, t_eval, T, rtol, atol, max_step, prog, stat,
-                        dt_hist, *rargs):
-    """mixed 引擎（单/两体共用）：静态绑定 rhs_phi_pairs 的 DOP853 驱动。"""
+                        dt_hist, msh, *rargs):
+    """mixed 引擎（单/两体共用）：静态绑定 rhs_phi_pairs 的 DOP853 驱动。
+
+    msh = `solve.MAX_STEP_HARD`（ns；0 = 不限制）——**每步复核**的步长硬
+    上限，见 `dop853._dop853_driver` 的说明（`max_step` 只管起步）。
+    """
     return _dop853_driver(rhs_phi_pairs, y0, t_eval, T, rtol, atol,
-                          max_step, prog, stat, dt_hist, rargs)
+                          max_step, prog, stat, dt_hist, rargs, msh)
