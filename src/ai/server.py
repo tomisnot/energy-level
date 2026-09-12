@@ -715,6 +715,7 @@ def _res_summary(res, save_npz=False, tag=''):
     labels = _res_labels(res, pops2 if pops is None else None)
     n_col = (int(np.asarray(arr).shape[1])
              if arr is not None and np.asarray(arr).ndim > 1 else len(labels))
+    _card = None
     # D（2026-09-12）：模型卡——把"静默物理"变成自述。
     # 数据来自引擎 diag（未开诊断时给最小集），并做**可表达性判定**。
     try:
@@ -744,7 +745,7 @@ def _res_summary(res, save_npz=False, tag=''):
             _warn.append('微波候选对为 0：**基组可能缺中间态**（多光子通道需要'
                          '真实中间态参与）或频率与能级间隔不匹配 —— '
                          '该波不会产生任何转移')
-        summary['model_card'] = {
+        _card = {
             'method': _meta.get('method'), 'dim': _meta.get('dim'),
             'n_pairs': _pr.get('n') or _meta.get('n_pairs'),
             'n_microwave': _pr.get('n_microwave'),
@@ -761,11 +762,12 @@ def _res_summary(res, save_npz=False, tag=''):
             'warnings': _warn,
         }
     except Exception as _e:                        # noqa: BLE001 - 卡片不阻塞结果
-        summary['model_card'] = {'error': 'model_card 生成失败：%s' % _e}
+        _card = {'error': 'model_card 生成失败：%s' % _e}
     summary = {'t_ns': [float(t[0]), float(t[-1])] if len(t) else None,
                'n_steps': int(len(t)),
                'two_body': pops is None and pops2 is not None,
                'states': labels[:40], 'n_states': n_col}
+    summary['model_card'] = _card
     if arr is not None:
         arr = np.asarray(arr)
         avg = arr.mean(axis=0)
