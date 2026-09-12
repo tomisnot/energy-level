@@ -981,6 +981,15 @@ def _register_tools(mcp):
     async def get_envelope(path: str, index: int = 0) -> dict:
         return await asyncio.to_thread(d, lambda: _t_get_envelope(path, index))
 
+    @mcp.tool(description='设**叠加态初态**（AI 优先）：components 为 '
+                          "[{state:[n,l,j,m], amp:[re,im]} 或 {state:…, mag:…, "
+                          "phase_deg:…}, …]，自动归一；分量不在基组则报错")
+    async def set_superposition(atom: str, components: list,
+                                reason: str = '') -> dict:
+        return await asyncio.to_thread(
+            d, lambda: _state.set_superposition(atom, components,
+                                                reason=reason))
+
     @mcp.tool(description='按**态名**取结果（C）：states 为名称片段列表'
                           '（子串匹配），返回终态布居与（series=true 时）'
                           '降采样时间序列；序列 ≤200 点防上下文膨胀')

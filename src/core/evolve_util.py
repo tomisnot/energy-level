@@ -27,8 +27,27 @@ def _onehot(N, i):
 
 
 def _as_vector(states, psi0):
-    """初态 → 复向量。psi0 为：索引 | (n,l,j,m) | dict(n,l,j,m) | 复数组。"""
+    """初态 → 复向量。
+
+    psi0 支持：索引 | (n,l,j,m) | dict(n,l,j,m) | 复数组 |
+    **叠加态** `('sup', [(spec, amp), …])`（2026-09-12 加）。
+
+    叠加态里每个分量仍是上面任一合法 spec（递归复用），amp 为复数或实数；
+    结果按 Σ|amp·v|² = 1 **归一化**（零范数报错）。这样一处改动即可让
+    全部引擎（mixed/sambe/hard，单体与两体）与两条通道同时支持叠加初态。
+    """
     N = len(states)
+    if isinstance(psi0, (tuple, list)) and psi0 and psi0[0] == 'sup':
+        if len(psi0) < 2 or not psi0[1]:
+            raise ValueError("叠加态写法：('sup', [(spec, amp), …])，分量不能为空")
+        v = np.zeros(N, complex)
+        for item in psi0[1]:
+            spec, amp = item[0], (item[1] if len(item) > 1 else 1.0)
+            v = v + complex(amp) * _as_vector(states, spec)
+        nrm = float(np.linalg.norm(v))
+        if nrm <= 0.0:
+            raise ValueError('叠加态各分量幅度全为零')
+        return v / nrm
     if isinstance(psi0, np.ndarray):
         v = np.asarray(psi0, complex)
         if v.shape != (N,):

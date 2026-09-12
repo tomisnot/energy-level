@@ -98,6 +98,44 @@ def estimate_pair_cost(basis_n, t_max_ns, npts=201):
     return float(s)
 
 
+
+# ---------- 叠加态初态（AI 优先） ----------
+
+def build_sup_spec(components):
+    """[{state:[n,l,j,m], amp:[re,im] | mag/phase_deg}, …] → (spec, info)。
+
+    纯函数（headless 可测）：规格化幅度、算范数与占据谱，不碰窗口/注册表。
+    spec = ['sup', [[n,l,j,m,re,im], …]]（写进 dynamic.psi_* 的存储形态）。
+    """
+    out, pops, norm2 = [], [], 0.0
+    for c in (components or []):
+        st = c.get('state') if isinstance(c, dict) else c
+        if not (isinstance(st, (list, tuple)) and len(st) == 4):
+            raise ValueError('每个分量的 state 必须是 [n,l,j,m]：%r' % (st,))
+        n, l, j, m = (int(st[0]), int(st[1]), float(st[2]), float(st[3]))
+        if isinstance(c, dict) and 'amp' in c:
+            amp = complex(c['amp'][0], c['amp'][1])
+        elif isinstance(c, dict) and 'mag' in c:
+            import math
+            ph = math.radians(float(c.get('phase_deg') or 0.0))
+            amp = complex(float(c['mag']) * math.cos(ph),
+                          float(c['mag']) * math.sin(ph))
+        else:
+            amp = 1.0 + 0j
+        out.append([n, l, j, m, amp.real, amp.imag])
+        pops.append([n, l, j, m, abs(amp) ** 2])
+        norm2 += abs(amp) ** 2
+    if not out:
+        raise ValueError('叠加态分量不能为空')
+    if norm2 <= 0:
+        raise ValueError('叠加态各分量幅度全为零')
+    return ['sup', out], {'n_components': len(out),
+                          'norm_before': float(norm2 ** 0.5),
+                          'populations': [[p[0], p[1], p[2], p[3],
+                                           round(p[4] / norm2, 6)]
+                                          for p in pops]}
+
+
 class SimState:
     """门面：持有 MainWindow + 注册表，不持有状态。"""
 
@@ -207,6 +245,37 @@ class SimState:
                 warn.append('%s 的初态 %s 已不在新基组内' % (atom, list(v)[:5]))
         return {'ok': True, 'added': added, 'removed': removed, 'kept': kept,
                 'psi_warnings': warn}
+
+    def set_superposition(self, atom, components, reason=''):
+        """设**叠加态初态**（AI 优先；GUI 后议）。
+
+        components: [{'state': [n,l,j,m], 'amp': [re,im]}
+                     | {'state': [n,l,j,m], 'mag': 0.7, 'phase_deg': 45}, …]
+        · 每个分量必须在**当前基组**内，否则报错（不许静默丢项）
+        · 自动归一（返回归一前范数）；存储形态 ['sup', …] 写进 dynamic.psi_*
+        """
+        path = {'single': 'dynamic.psi_single', 'A': 'dynamic.psi_A',
+                'B': 'dynamic.psi_B'}.get(atom)
+        if path is None:
+            return {'ok': False, 'msg': "atom 必须为 single/A/B，收到 %r" % atom}
+        try:
+            spec, info = build_sup_spec(components)
+        except ValueError as e:
+            return {'ok': False, 'msg': str(e)}
+        levels = {(x['n'], x['l'], round(x['j'], 2), round(x['m'], 2))
+                  for x in (self.list_levels().get('levels') or [])}
+        missing = []
+        for (n, l, j, m, _re, _im) in spec[1]:
+            if (int(n), int(l), round(float(j), 2), round(float(m), 2)) \
+                    not in levels:
+                missing.append([n, l, j, m])
+        if missing:
+            return {'ok': False, 'missing': missing, 'n_levels': len(levels),
+                    'msg': '这些分量不在当前基组：%s（先 set_groups；'
+                           'list_levels() 看合法项）' % (missing,)}
+        self.set_param(path, spec, reason=reason or '设叠加态初态')
+        return {'ok': True, 'atom': atom, 'path': path,
+                'spec': spec, 'info': info}
 
     def estimate_cost(self):
         """事前成本：要不要走异步、要不要开短窗口，先看这个数。
