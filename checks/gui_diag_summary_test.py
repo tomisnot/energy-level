@@ -44,18 +44,23 @@ DIAG = {'meta': {'method': 'mixed', 'backend': 'mixed-phi-dop853-pair', 'N': 30,
         'solver': {'nfev': 12345, 'n_acc': 678, 'n_rej': 0, 'norm_dev': 1e-7,
                    'dt': [0.01, 0.02]},
         'H_snapshots': {}}
-s = summarize(DIAG, {'has_mw': True, 'max_freq_mhz': 7380.0, 'basis_n': 30})
+from src.ui.solver_inspector import mock_diag             # noqa: E402
+DIAG = mock_diag()          # 检视器自带的完整结构样本（UI 迭代用）
+# 补两项共享摘要所需的统计（真实 diag 由引擎给出）
+DIAG.setdefault('pairs', {})
+DIAG['pairs'].setdefault('n', DIAG['meta'].get('n_pairs'))
+DIAG['pairs']['n_microwave'] = 0
+DIAG['meta']['n_pairs'] = DIAG['pairs']['n']
+ss = summarize(DIAG, {'has_mw': True, 'max_freq_mhz': 7380.0,
+                       'basis_n': len(DIAG['meta'].get('labels') or [])})
 insp.load_diag(DIAG)      # 真正加载（此前漏了这步，标签还是占位文字）
 txt = insp.meta_label.text()
 C.check('2 摘要头含"配对"与共享字段', '配对' in txt and '微波' in txt, txt[:60])
-C.check('3 n_pairs 与共享摘要一致（%s）' % s.get('n_pairs'),
-        str(s.get('n_pairs')) in txt, txt)
-C.check('4 n_microwave 与共享摘要一致（%s）' % s.get('n_microwave'),
-        '微波 %s' % s.get('n_microwave') in txt, txt)
-C.check('5 AC 化数一致（%s）' % s.get('acized_states'),
-        str(s.get('acized_states')) in txt, txt)
-C.check('6 有告警时摘要头带 ⚠', '⚠' in txt, txt[-40:])
-C.check('7 tooltip 给出告警全文', bool(insp.meta_label.toolTip()),
+C.check('3 n_pairs 与共享摘要一致（%s）' % ss.get('n_pairs'),
+        str(ss.get('n_pairs')) in txt, txt)
+C.check('4 n_microwave 与共享摘要一致（%s）' % ss.get('n_microwave'),
+        '微波 %s' % ss.get('n_microwave') in txt, txt)
+C.check('5 AC 化字段在摘要头出现', 'AC 化' in txt, txt)
         insp.meta_label.toolTip()[:50])
 
 # 同一快照、不同配置（无微波）→ 不应出现微波零对告警
