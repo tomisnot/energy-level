@@ -303,6 +303,11 @@ class HamiltonianViewer(QWidget):
         photon: photon dict（含 D_full）。
         """
         self._snapshots = snapshots or {}
+        # 两层诊断策略（2026-09-12）：轻量层永远有；重型 H 快照在 dim 过大
+        # 时被跳过（{'skipped': …}）或为空 —— 此时不画图，否则 pyqtgraph
+        # 在 setImage(空) 之后 setRect 会 ZeroDivisionError。
+        self._h_skipped = ((not self._snapshots)
+                           or ('skipped' in self._snapshots))
         self._ts_sorted = sorted(self._snapshots.keys())
         self._meta = meta or {}
         self._photon = photon or {}
@@ -431,7 +436,7 @@ class HamiltonianViewer(QWidget):
         return H
 
     def _refresh_image(self):
-        if not self._dim:
+        if not self._dim or getattr(self, '_h_skipped', False):
             return
         H = self._current_H()
         A = np.abs(H)
