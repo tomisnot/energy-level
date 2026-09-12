@@ -916,6 +916,18 @@ def _register_tools(mcp):
             d, lambda: _state.set_superposition(atom, components,
                                                 reason=reason))
 
+    @mcp.tool(description='设**两体纠缠初态**（"交换后的结果"用它）：components 为 '
+                          "[{'pair': [[nA,lA,jA,mA],[nB,lB,jB,mB]], 'amp': [re,im]}"
+                          " 或 {…, 'mag':…, 'phase_deg':…}, …]，自动归一；"
+                          '任一分量不在当前基组则报错并列出缺失项。'
+                          '存入 dynamic.psi_pair，两体模式下**取代** psi_A/psi_B'
+                          '（逐原子直积表达不了纠缠）；传 [] 清除回到直积')
+    async def set_pair_superposition(components: list,
+                                     reason: str = '') -> dict:
+        return await asyncio.to_thread(
+            d, lambda: _state.set_pair_superposition(components,
+                                                     reason=reason))
+
     @mcp.tool(description='按**态名**取结果（C）：states 为名称片段列表'
                           '（子串匹配），返回终态布居与（series=true 时）'
                           '降采样时间序列；序列 ≤200 点防上下文膨胀')

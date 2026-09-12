@@ -147,7 +147,7 @@ def _make_namespace(state_mod, root, jobs, t_run, t_status, t_result,
         # 二期 A：语义状态操作（P1/P5）——存在才注入，兼容旧 state_mod
         **{k: getattr(state_mod, k) for k in
            ('set_groups', 'set_initial_state', 'list_levels', 'get_config',
-            'estimate_cost', 'set_superposition')
+            'estimate_cost', 'set_superposition', 'set_pair_superposition')
            if callable(getattr(state_mod, k, None))},
         # A1：只读查询 / 取消类工具进白名单——脚本里"先查再改"不必跳出去
         # 发独立 MCP 调用（本会话曾因缺 list_params 白跑一整个脚本）

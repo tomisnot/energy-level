@@ -103,7 +103,8 @@ class EvolveWorkerPair(QThread):
     def __init__(self, states, fields_A, fields_B, psi0_A, psi0_B,
                  t_grid, progress_arr, vdd_matrix=None, parent=None,
                  decays_A=None, decays_B=None, method='ip4',
-                 per_freq_M=None, frozen_h_ns=None, engine_kwargs=None):
+                 per_freq_M=None, frozen_h_ns=None, engine_kwargs=None,
+                 psi0_pair=None):
         super().__init__(parent)
         # t25/t26：显示名 'sambe' → 引擎 'exact'（Sambe 光子块；分支调度统一）
         self.method = {'sambe': 'exact'}.get(method, method)
@@ -112,6 +113,9 @@ class EvolveWorkerPair(QThread):
         self.fields_B = fields_B
         self.psi0_A = psi0_A
         self.psi0_B = psi0_B
+        # 两体**纠缠**初态 spec（['pair_sup', […]] / None）——非 None 时
+        # 引擎侧取代 psi0_A/psi0_B（逐原子直积）。
+        self.psi0_pair = psi0_pair
         self.t_grid = t_grid
         self.progress_arr = progress_arr
         self.vdd_matrix = vdd_matrix
@@ -138,6 +142,7 @@ class EvolveWorkerPair(QThread):
                     vdd_matrix=self.vdd_matrix,
                     decays_A=self.decays_A, decays_B=self.decays_B,
                     progress_arr=self.progress_arr,
+                    psi0_pair=self.psi0_pair,
                     log=self.log_msg.emit)
                 # t28：收尾阶段标记（同单原子 hard）
                 if len(self.progress_arr) > 2:
@@ -154,7 +159,8 @@ class EvolveWorkerPair(QThread):
                     progress_arr=self.progress_arr,
                     log=self.log_msg.emit,
                     frozen_h_ns=self.frozen_h_ns,
-                    per_freq_M=self.per_freq_M)
+                    per_freq_M=self.per_freq_M,
+                    psi0_pair=self.psi0_pair)
             elif self.method == 'mixed':
                 # t62 两体混合引擎（正式版）——光场光子块 + 微波/V_dd 当场；
                 # t70 定案：位移不注入——近对（60S↔6P）光子块 M=1
@@ -164,6 +170,8 @@ class EvolveWorkerPair(QThread):
                 from ..core.evolve_mixed import evolve_mixed_pair
                 ek = dict(self.engine_kwargs)
                 ek.setdefault('tol', _P.get('DEFAULT_RTOL'))
+                if self.psi0_pair is not None:
+                    ek['psi0_pair'] = self.psi0_pair
                 res = evolve_mixed_pair(
                     self.states, self.fields_A, self.fields_B,
                     self.psi0_A, self.psi0_B,

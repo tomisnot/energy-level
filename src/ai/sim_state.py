@@ -136,6 +136,52 @@ def build_sup_spec(components):
                                           for p in pops]}
 
 
+def build_pair_sup_spec(components):
+    """两体纠缠初态分量 → (spec, info)。纯函数（headless 可测）。
+
+    components: [{'pair': [[nA,lA,jA,mA], [nB,lB,jB,mB]],
+                  'amp': [re, im]} | {…, 'mag': 0.7, 'phase_deg': 45}, …]
+    spec = ['pair_sup', [[nA,lA,jA,mA, nB,lB,jB,mB, re, im], …]]
+    info 与 build_sup_spec 同构：n_components / norm_before / populations
+    （每项 [nA,lA,jA,mA,nB,lB,jB,mB, |amp|²/Σ|amp|²]）。
+
+    幅度**不在此归一**（与单体 build_sup_spec 一致）：归一在引擎侧
+    `evolve_util._as_pair_vector` 统一做，一处真值（P5）。
+    """
+    out, pops, norm2 = [], [], 0.0
+    for c in (components or []):
+        pair = c.get('pair') if isinstance(c, dict) else c
+        if not (isinstance(pair, (list, tuple)) and len(pair) == 2):
+            raise ValueError('每个分量的 pair 必须是 [[nA,lA,jA,mA],'
+                             ' [nB,lB,jB,mB]]：%r' % (pair,))
+        quads = []
+        for q in pair:
+            if not (isinstance(q, (list, tuple)) and len(q) == 4):
+                raise ValueError('pair 的每一项必须是 [n,l,j,m]：%r' % (q,))
+            quads.append([int(q[0]), int(q[1]), float(q[2]), float(q[3])])
+        if isinstance(c, dict) and 'amp' in c:
+            amp = complex(c['amp'][0], c['amp'][1])
+        elif isinstance(c, dict) and 'mag' in c:
+            import math
+            ph = math.radians(float(c.get('phase_deg') or 0.0))
+            amp = complex(float(c['mag']) * math.cos(ph),
+                          float(c['mag']) * math.sin(ph))
+        else:
+            amp = 1.0 + 0j
+        row = quads[0] + quads[1] + [amp.real, amp.imag]
+        out.append(row)
+        pops.append(row[:8] + [abs(amp) ** 2])
+        norm2 += abs(amp) ** 2
+    if not out:
+        raise ValueError('两体叠加初态分量不能为空')
+    if norm2 <= 0:
+        raise ValueError('两体叠加初态各分量幅度全为零')
+    return ['pair_sup', out], {'n_components': len(out),
+                               'norm_before': float(norm2 ** 0.5),
+                               'populations': [p[:8] + [round(p[8] / norm2, 6)]
+                                               for p in pops]}
+
+
 class SimState:
     """门面：持有 MainWindow + 注册表，不持有状态。"""
 
@@ -195,7 +241,11 @@ class SimState:
             return {'ok': False, 'msg': "atom 必须为 single/A/B，收到 %r" % atom}
         key = self._key_of(hit)
         self.set_param(path, key, reason=reason or '设初态 %s' % (want,))
-        return {'ok': True, 'atom': atom, 'path': path, 'key': key}
+        out = {'ok': True, 'atom': atom, 'path': path, 'key': key}
+        # 与 set_superposition 同一纪律：逐原子初态要让两体 spec 让位
+        if self._clear_pair_spec(reason='设逐原子初态 → 清除两体纠缠初态'):
+            out['pair_spec_cleared'] = True
+        return out
 
     def set_groups(self, groups, reason=''):
         """**声明式**设定能级组：让基组恰好包含给定 (n,l,j) 集合。
@@ -243,8 +293,96 @@ class SimState:
                      for s in self._states_now())
             if not ok:
                 warn.append('%s 的初态 %s 已不在新基组内' % (atom, list(v)[:5]))
+        # 两体纠缠初态同样要查（A8 的教训：基组变了初态失效必须出声）
+        try:
+            ps = self.reg.read('dynamic.psi_pair')
+        except Exception:                          # noqa: BLE001
+            ps = None
+        if isinstance(ps, (list, tuple)) and len(ps) == 2 and ps[0] == 'pair_sup':
+            lv = {(int(s['n']), int(s['l']), round(float(s['j']), 2),
+                   round(float(s['m']), 2)) for s in self._states_now()}
+            gone = []
+            for row in ps[1]:
+                for off in (0, 4):
+                    q = row[off:off + 4]
+                    if (int(q[0]), int(q[1]), round(float(q[2]), 2),
+                            round(float(q[3]), 2)) not in lv:
+                        item = [int(q[0]), int(q[1]), float(q[2]), float(q[3])]
+                        if item not in gone:
+                            gone.append(item)
+            if gone:
+                warn.append('两体纠缠初态 psi_pair 的分量已不在新基组内：%s'
+                            % (gone,))
         return {'ok': True, 'added': added, 'removed': removed, 'kept': kept,
                 'psi_warnings': warn}
+
+    def set_pair_superposition(self, components, reason=''):
+        """设**两体纠缠初态**（"交换后的结果"；AI 优先，GUI 后议）。
+
+        components: [{'pair': [[nA,lA,jA,mA],[nB,lB,jB,mB]], 'amp': [re,im]}
+                     | {…, 'mag': 0.7, 'phase_deg': 45}, …]
+        规则（沿 §2.2 设计 + A2 的教训）：
+        · 两个分量都必须在**当前基组**内，否则报错并列出缺失项（不许静默丢）；
+        · 自动归一（引擎侧统一归一，返回里报归一前范数）；
+        · 存进 `dynamic.psi_pair`（新登记项）——**两体模式下取代**
+          逐原子的 psi_A/psi_B（一旦是纠缠态，逐原子初态就无意义）；
+        · components 传空列表 = 清除，回到逐原子直积。
+        """
+        path = 'dynamic.psi_pair'
+        if path not in self.reg._bindings:
+            return {'ok': False,
+                    'msg': '本进程没登记 %s —— 引擎/服务端是进程内代码，'
+                           '需要**重启软件**后才有这个接口' % path}
+        if not components:
+            r = self.set_param(path, None, reason=reason or '清除两体纠缠初态')
+            if not r.get('ok'):
+                return r
+            return {'ok': True, 'cleared': True,
+                    'msg': '已回到逐原子直积初态（psi_A ⊗ psi_B）'}
+        try:
+            spec, info = build_pair_sup_spec(components)
+        except ValueError as e:
+            return {'ok': False, 'msg': str(e)}
+        levels = {(x['n'], x['l'], round(x['j'], 2), round(x['m'], 2))
+                  for x in (self.list_levels().get('levels') or [])}
+        missing = []
+        for row in spec[1]:
+            for off in (0, 4):
+                q = row[off:off + 4]
+                key = (int(q[0]), int(q[1]), round(float(q[2]), 2),
+                       round(float(q[3]), 2))
+                item = [int(q[0]), int(q[1]), float(q[2]), float(q[3])]
+                if key not in levels and item not in missing:
+                    missing.append(item)
+        if missing:
+            return {'ok': False, 'missing': missing, 'n_levels': len(levels),
+                    'msg': '这些分量不在当前基组：%s（先 set_groups；'
+                           'list_levels() 看合法项）' % (missing,)}
+        r = self.set_param(path, spec, reason=reason or '设两体纠缠初态')
+        if not r.get('ok'):
+            return r
+        out = {'ok': True, 'path': path, 'spec': spec, 'info': info,
+               'n_levels': len(levels)}
+        try:
+            two_body = int(self.reg.read('dynamic.mode') or 0) == 1
+        except Exception:                          # noqa: BLE001
+            two_body = True
+        if not two_body:
+            out['mode_warning'] = ('当前 dynamic.mode=0（单原子）——两体初态'
+                                   "只在双原子模式生效：set_param('dynamic.mode', 1)")
+        return out
+
+    def _clear_pair_spec(self, reason):
+        """设逐原子初态时清掉两体 spec（防"两体 spec 静默盖住新初态"）。"""
+        if 'dynamic.psi_pair' not in self.reg._bindings:
+            return False
+        try:
+            if not self.reg.read('dynamic.psi_pair'):
+                return False
+        except Exception:                          # noqa: BLE001
+            return False
+        r = self.set_param('dynamic.psi_pair', None, reason=reason)
+        return bool(r.get('ok'))
 
     def set_superposition(self, atom, components, reason=''):
         """设**叠加态初态**（AI 优先；GUI 后议）。
@@ -274,8 +412,14 @@ class SimState:
                     'msg': '这些分量不在当前基组：%s（先 set_groups；'
                            'list_levels() 看合法项）' % (missing,)}
         self.set_param(path, spec, reason=reason or '设叠加态初态')
-        return {'ok': True, 'atom': atom, 'path': path,
-                'spec': spec, 'info': info}
+        out = {'ok': True, 'atom': atom, 'path': path,
+               'spec': spec, 'info': info}
+        # 逐原子初态与"两体纠缠初态"互斥：设了前者就清掉后者（否则
+        # psi_pair 会在运行期静默盖住刚设的初态）
+        if not (isinstance(spec, (list, tuple)) and spec and spec[0] == 'pair_sup'):
+            if self._clear_pair_spec(reason='设逐原子初态 → 清除两体纠缠初态'):
+                out['pair_spec_cleared'] = True
+        return out
 
     def estimate_cost(self):
         """事前成本：要不要走异步、要不要开短窗口，先看这个数。
@@ -327,6 +471,7 @@ class SimState:
         cfg['E_vpcm'] = p.get('field.E_vpcm')
         cfg['psi'] = {a: p.get('dynamic.psi_' + a)
                       for a in ('single', 'A', 'B')}
+        cfg['psi_pair'] = p.get('dynamic.psi_pair')   # 两体纠缠初态 spec / None
         cfg['n_waves'] = {a: len(p.get('dynamic.waves_' + a) or [])
                           for a in ('single', 'A', 'B')}
         cfg['lights'] = len(p.get('field.lights') or [])

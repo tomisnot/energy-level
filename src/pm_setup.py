@@ -249,6 +249,15 @@ def _reg_dynamic_panel(reg, win):
                      widget=combo, touch_sig=combo.currentIndexChanged,
                      external=True)
 
+    # 两体**纠缠**初态（AI 优先；GUI 编辑器后议）：值 = ['pair_sup', […]] 或
+    # None。逐原子直积写不出"交换后的结果"（|60P_A,60S_B⟩±|60S_A,60P_B⟩）。
+    # 无控件 → 无指示灯（同 dynamic.mode）；真值 = 面板属性 _psi_pair_spec，
+    # 两体运行时由 ui_dynamic 取出交给引擎（psi0_pair，**取代** psi_A/psi_B）。
+    reg.register('dynamic.psi_pair',
+                 ParamSpec('list', desc='两体纠缠初态 spec（pair_sup）/ None'),
+                 read_fn=lambda: getattr(d, '_psi_pair_spec', None),
+                 write_fn=lambda v: setattr(d, '_psi_pair_spec', v))
+
     # 衰变通道（自定义档）
     reg.register('dynamic.decays', ParamSpec('list', desc='自定义衰变通道'),
                  read_fn=lambda: [dict(c) for c in d.decay_cfgs],

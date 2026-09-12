@@ -37,7 +37,7 @@ from .dop853 import _dop853_driver   # 驱动（系数已随驱动上收 dop853�
 from . import tensor as _tensor
 from . import static_atom as core
 from .evolve_util import (_single_loss_rates, _loss_and_norm,
-                          _as_vector, env_at, _CONV)
+                          _as_vector, env_at, pair_psi0_vector, _CONV)
 from .coupling import static_phase_keep  # t78：V_dd 统一判据（与 mixed 共用）
 from . import params as _P
 
@@ -461,8 +461,11 @@ def evolve_hard_pair(states, fields_meta_A, fields_meta_B, psi0_A, psi0_B,
                      phi_deg=0.0, cache=None, rtol=1e-9, atol=1e-11,
                      progress_arr=None, log=None, record_amp=False,
                      n_tab=None, decays_A=None, decays_B=None,
-                     driver='numba'):
+                     driver='numba', psi0_pair=None):
     """两体 hard（第一性原理 DOP853 硬积分，零微波近似）。
+
+    psi0_pair: **两体纠缠初态** spec（['pair_sup', […]]）——非 None 时取代
+    psi0_A/psi0_B 的逐原子直积（交换后的结果是纠缠态）。
 
     返回契约与 evolve_exact_pair 同键：t, pops_2d, pops_A, pops_B,
     loss_A, loss_B, states_2d, method='hard', backend='hard-numba-pair',
@@ -499,10 +502,8 @@ def evolve_hard_pair(states, fields_meta_A, fields_meta_B, psi0_A, psi0_B,
         gamma_MHz = (np.asarray(GammaA, float)
                      + np.asarray(GammaB, float)) / _CONV
 
-    # ---- 初态 ----
-    psi0_A_vec = _as_vector(states, psi0_A)
-    psi0_B_vec = _as_vector(states, psi0_B)
-    psi0_2d = _tensor._as_product_psi(psi0_A_vec, psi0_B_vec, N)
+    # ---- 初态（psi0_pair 优先：两体纠缠/任意两体叠加） ----
+    psi0_2d = pair_psi0_vector(states, psi0_A, psi0_B, psi0_pair)
 
     E_lab = np.array([st['E_mhz'] for st in states], float)
     pack = _pack_pair_hard(fields_meta_A, fields_meta_B, T, V, n_tab,

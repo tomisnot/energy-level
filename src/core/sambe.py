@@ -19,7 +19,8 @@ import scipy.sparse as sp
 import time as _time
 from scipy.sparse.linalg import expm_multiply, LinearOperator, gmres
 
-from .evolve_util import (_CONV, _POL_Q, _as_vector)  # t74 工具/常量单源
+from .evolve_util import (_CONV, _POL_Q, _as_vector,
+                          pair_psi0_vector)  # t74 工具/常量单源
 from .field_build import _group_by_freq, _validate_fields
 from .tensor import (_pair_loss_vectors, _as_product_psi,
                      _reduce_A, _reduce_B)
@@ -1357,7 +1358,7 @@ def evolve_sambe_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
                       decays_A=None, decays_B=None,
                       progress_arr=None, log=None, record_amp=False,
                       frozen_h_ns=None, per_freq_M=None, device='cpu',
-                      ac_ize=False):
+                      ac_ize=False, psi0_pair=None):
     """两体第一性原理含时演化（完整 V_dd，无 secular/RWA/旋转系）。
 
     签名与返回契约对齐 pair_evolve.pair_evolve（GUI 直接复用）；
@@ -1450,10 +1451,8 @@ def evolve_sambe_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
         # 的 gam/_CONV 约定，gam 单位 /ns）
         gamma_pair = (GammaA + GammaB) / _CONV
 
-    # ---- 初态与能量 ----
-    psi0_A_vec = _as_vector(states, psi0_A)
-    psi0_B_vec = _as_vector(states, psi0_B)
-    psi0_2d = _as_product_psi(psi0_A_vec, psi0_B_vec, N)
+    # ---- 初态与能量（psi0_pair 优先：两体纠缠/任意两体叠加）----
+    psi0_2d = pair_psi0_vector(states, psi0_A, psi0_B, psi0_pair)
     E = np.array([s['E_mhz'] for s in states], float)
     if ac_ize:
         # 目标 6：AC 位移注入物理能级——E_pair[i,j] 含 δ_i+δ_j（A/B 同构）

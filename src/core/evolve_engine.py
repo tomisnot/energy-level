@@ -5,20 +5,27 @@
   hard.evolve_hard
 - n_body=2：两体（fields_A/fields_B + psi0_A/psi0_B）→ evolve_mixed_pair /
   sambe.evolve_sambe_pair / hard.evolve_hard_pair
+  两体还可用 **psi0_pair**（两体纠缠初态 spec `['pair_sup', […]]`）取代
+  逐原子直积——交换结果 |60P_A,60S_B⟩±|60S_A,60P_B⟩ 必须走这条。
 """
 import numpy as np
 
 
 def evolve_engine(method, states, fields=None, fields_A=None, fields_B=None,
                   psi0=0, psi0_A=0, psi0_B=0, t_grid=None, n_body=1,
-                  **kwargs):
+                  psi0_pair=None, **kwargs):
     """统一引擎入口。method: 'mixed' | 'sambe' | 'hard' | 'ip4'。
 
-    n_body=1：用 fields + psi0；n_body=2：用 fields_A/B + psi0_A/B。
+    n_body=1：用 fields + psi0；n_body=2：用 fields_A/B + psi0_A/B
+    （psi0_pair 非 None 时**取代** psi0_A/B）。
     其余 kwargs（frozen_h_ns/per_freq_M/vdd_matrix/...）透传。
     """
     if t_grid is None:
         raise ValueError('t_grid 必填')
+    if psi0_pair is not None:
+        if n_body != 2:
+            raise ValueError('psi0_pair（两体纠缠初态）只在 n_body=2 下有效')
+        kwargs['psi0_pair'] = psi0_pair
     if n_body == 1:
         if method == 'mixed':
             from .evolve_mixed import evolve_mixed

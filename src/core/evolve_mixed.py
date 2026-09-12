@@ -19,7 +19,7 @@ DOP853 直接积分**即可，无需 Strang 分裂 + eigh 冻结（那会引入�
 import numpy as np
 
 from .evolve_util import (_as_vector, _single_loss_rates, _loss_and_norm,
-                          _CONV)
+                          pair_psi0_vector, _CONV)
 from . import tensor as _tensor
 from .diag import h_snapshot_ok as _h_snap_ok
 from .diag import h_snapshot_note as _h_snap_note
@@ -698,12 +698,16 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
                       decays_A=None, decays_B=None, driver='numba',
                       r_crit=None, diag=False,
                       bw_opt=None, mw_cap=None, mw_max=None,
-                      mw_arb_A=None, mw_arb_B=None, phase_budget=None):
+                      mw_arb_A=None, mw_arb_B=None, phase_budget=None,
+                      psi0_pair=None):
     """两体混合引擎（正式版）：光场光子块 + 微波/V_dd 当场，φ-帧单 DOP853。
 
     fields_A/B : kind='exact' 场列表（build_fields_exact 输出——光场 + 微波）。
              **无光场合法**（两侧都无光波，或光波被 AC 化/选择定则剔除）：
              光子维退化 P=1，自动等价于微波/V_dd 当场精确积分（t77）。
+    psi0_pair  : **两体纠缠初态** spec（['pair_sup', […]]；见
+             evolve_util._as_pair_vector）——非 None 时完全取代
+             psi0_A/psi0_B（逐原子直积）。交换后的结果就是这种态。
     vdd_matrix  : V_dd 稀疏/稠密矩阵（N²×N²）；None 且给 R_um/cache 时算
     r_crit : t75 上帝模式覆写——AC 化 r=Ω/ω 阈值（None=默认 R_CRIT）
     diag   : t75 诊断快照——True 时 out['diag'] 附结构化中间产物
@@ -931,9 +935,8 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
                                 pair_tags.append('微波')
 
     # ---- 初态嵌入（中心扇区 n=0）+ 积分 ----
-    psi0_A_vec = _as_vector(states, psi0_A)
-    psi0_B_vec = _as_vector(states, psi0_B)
-    psi0_2d = _tensor._as_product_psi(psi0_A_vec, psi0_B_vec, N)
+    # psi0_pair（两体 spec）非 None → 纠缠/任意两体叠加；否则逐原子直积。
+    psi0_2d = pair_psi0_vector(states, psi0_A, psi0_B, psi0_pair)
     X0 = np.zeros(dim, complex)
     pc = P // 2                      # t77：中心扇区随 P 走（有光场 3→1；无光场 1→0）
     X0[pc * N2: (pc + 1) * N2] = psi0_2d

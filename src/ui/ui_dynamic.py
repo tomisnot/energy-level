@@ -53,6 +53,10 @@ class DynamicPanel(QWidget):
         self.main_groups = []         # 同步自主程序的 (n,l,j) 组
         self.wave_data = []           # 最近一次波形光强曲线（画图用）
         self.decay_cfgs = []          # 衰变通道 [{'from': label, 'to': label|None, 'gamma_mhz': f}]
+        # 两体纠缠初态 spec（['pair_sup', […]] / None）——登记项
+        # dynamic.psi_pair 的真值；两体运行时取代逐原子 psi_A/psi_B。
+        # GUI 尚无编辑器（后议），目前由 AI 面 set_pair_superposition 设置。
+        self._psi_pair_spec = None
         # 能级组增删由主程序事件驱动刷新（统一机制，不散布同步调用）
         main.groups_changed.connect(self.refresh_groups)
         self._is_two_body = False
@@ -693,6 +697,27 @@ class DynamicPanel(QWidget):
             return list(state_key(st[i]))
         return None
 
+    def _pair_psi0_spec(self):
+        """两体纠缠初态 spec（dynamic.psi_pair）—— 非法/未设 → None。
+
+        真值优先取注册表（存档/undo/AI 改都经它）；注册表不可用时回落到
+        面板属性（自检/early 构造期）。只认 ['pair_sup', […]] 形态——
+        别的值一律当"未设"，绝不把垃圾喂进引擎（P1：不许静默改物理）。
+        """
+        v = None
+        reg = getattr(self.main, 'param_reg', None)
+        if reg is not None:
+            try:
+                v = reg.read('dynamic.psi_pair')
+            except Exception:                      # noqa: BLE001
+                v = None
+        if v is None:
+            v = getattr(self, '_psi_pair_spec', None)
+        if (isinstance(v, (list, tuple)) and len(v) == 2 and v[0] == 'pair_sup'
+                and isinstance(v[1], (list, tuple)) and v[1]):
+            return list(v)
+        return None
+
     # ---------- 运行演化（后台线程 + 进度条 + 可取消） ----------
     def _run(self):
         if getattr(self, '_worker', None) is not None \
@@ -1157,6 +1182,14 @@ class DynamicPanel(QWidget):
                            for nm, th, env, f, I in env_B]
         psi0_A = self.psi_combo_A.currentIndex()
         psi0_B = self.psi_combo_B.currentIndex()
+        # 两体**纠缠**初态（AI 面 set_pair_superposition 写进 dynamic.psi_pair）：
+        # 非 None 时引擎侧取代 psi_A/psi_B 的逐原子直积——这是
+        # "交换后的结果"唯一能表达的通道（逐原子直积写不出纠缠）。
+        psi0_pair = self._pair_psi0_spec()
+        if psi0_pair is not None:
+            self.main.log('[双原子] 初态 = 两体纠缠 spec（psi_pair，'
+                          '取代逐原子直积）：%d 个分量'
+                          % len(psi0_pair[1]))
         R_um = self.vdd_R_sb.value()
         theta_deg = self.vdd_theta_sb.value()
         phi_deg = self.vdd_phi_sb.value()
@@ -1230,6 +1263,7 @@ class DynamicPanel(QWidget):
             decays_A=decays_A, decays_B=decays_B,
             method=method,
             per_freq_M=per_freq_M, frozen_h_ns=frozen_h,
+            psi0_pair=psi0_pair,
             engine_kwargs=engine_kwargs)
         self._worker._cache_ref = self.cache
         self._worker.done.connect(self._on_pair_evolve_done)

@@ -80,6 +80,8 @@ result = out
 | `add_level_group(n,l,j,reason)` | 加能级组 | 自动校验+配色 |
 | `remove_level_group(index,reason)` | 删能级组 | 索引见 get_state |
 | `set_waves(waves, atom, reason)` | 整表替换波形 | atom=single/A/B（三套独立），格式见下 |
+| `set_superposition(atom, components)` | 设**逐原子叠加态**初态 | 分量须在基组内，自动归一。⚠ 见坑 14（运行期不生效） |
+| `set_pair_superposition(components, reason)` | 设**两体纠缠初态**（交换后的结果） | 分量须在当前两体基内；存 `dynamic.psi_pair`，**取代** psi_A/psi_B；传 `[]` 清除。见坑 13 |
 | `run_compute(diag=true)` | 启动演化计算 | 立即返回 job_id，GUI 同步显示。**diag=true（默认）**额外采集运行诊断供 `get_diag` 用（仅 mixed 引擎产出） |
 | `get_diag(scope,job_id,limit,save_npz)` | **只读：运行诊断** | 理解"为什么"的主通道。scope 空=摘要；`pairs`/`steps`/`sectors`/`traj`/`H` 给明细（截断/落盘）。job_id 空=最近一次或 GUI 当前 |
 | `job_status(job_id)` | 查进度 | 轮询到 done=true |
@@ -104,6 +106,10 @@ result = out
 - `dynamic.waves_single` / `waves_A` / `waves_B`：波形（用 `set_waves` 更顺手）；
 - `dynamic.psi_single` / `psi_A` / `psi_B`：初态**身份键**（非索引，跨 B 稳定）；
   读得到键即可写回；
+- `dynamic.psi_pair`（2026-09-12 加）：**两体纠缠初态 spec**，形如
+  `['pair_sup', [[nA,lA,jA,mA, nB,lB,jB,mB, re, im], …]]`，默认 `None`。
+  用 `set_pair_superposition` 写（别手拼）；两体模式下**取代** psi_A/psi_B。
+  新登记项 ⇒ **只在重启后的进程里有**（旧进程会报"没登记"）；
 - `dynamic.mode`：0 单原子 / 1 双原子（= 人点单选钮同路）；
 - `dynamic.decays`：自定义衰变通道。
 
@@ -174,6 +180,18 @@ result = out
 4. `set_param('dynamic.method','hard')`、`set_param('dynamic.t_max',500)`
 5. `run_compute` → `job_status` 轮询 → `job_result(save_npz=true)`
 6. 从 `top_states_avg_pop` / `final_pop` 解读布居转移
+
+**两体纠缠初态（"交换后的结果"当 freeze 的初态）**：
+```python
+set_groups([(60,0,0.5),(60,1,1.5)])            # 两体交换集（按需加中间态）
+r = set_pair_superposition([                    # (|P_A,S_B⟩ + i|S_A,P_B⟩)/√2
+    {'pair': [[60,1,1.5,-0.5],[60,0,0.5,+0.5]], 'amp': [1,0]},
+    {'pair': [[60,0,0.5,+0.5],[60,1,1.5,-0.5]], 'amp': [0,1]}])
+set_param('dynamic.mode', 1)                    # 双原子（否则只有 mode_warning）
+# r['info']['populations'] 复核占据谱；缺项会在这里报错
+submit_compute()                                # 重活走异步，别同步等
+```
+注意：对称组合（两个 amp 都是 1）是**暗态**，布居不摆（坑 13）。
 
 **改参数扫描**：`set_param` 逐个改 → 每次 `run_compute`；演化数组落在
 `tempsimu/ai_job*.npz`（`run_compute_and_wait(save_npz=True)` 会给路径），
@@ -276,6 +294,26 @@ env 采样   = √[ (1 + δ(t)) / (1 + b) ]    # 峰值恰为 1
     改完组务必用 `list_params('dynamic.psi_A')` 复核 `value` 与 `last_committed` 是否一致。
 12. **初态键的能量若猜错会静默选到别的能级**：`psi` 的 `options` 目前是 null，不要凭能量猜；
     实测猜错的键导致初态落到 `59D_{3/2} m=+1.5` 而运行仍报 ok。
+13. **两体纠缠初态怎么写**（2026-09-12 加，交换类实验的前置）：
+    `set_pair_superposition(components)`，分量 =
+    `{'pair': [[nA,lA,jA,mA], [nB,lB,jB,mB]], 'amp': [re,im]}`
+    （或 `{'mag':…, 'phase_deg':…}`；省略 amp 默认 1）。
+    - 分量按 **(n,l,j,m) 解析**（不是索引）→ 跨 B/基组重排稳定；缺项**报错并列出**
+      缺失项，绝不静默丢；
+    - 自动归一，**相对相位保留**（`[1,0]` 与 `[0,1]` = 相位差 i）；
+    - 存进 `dynamic.psi_pair`，两体模式下**取代** psi_A/psi_B；反过来设
+      `set_initial_state`/`set_superposition` 会清掉它（返回 `pair_spec_cleared: True`）；
+    - `dynamic.mode=0` 时返回带 `mode_warning`（**不**自动替你切模式）；
+    - ⚠ **对称组合 `(|ab⟩+|ba⟩)/√2` 是交换哈密顿量的暗态**：只吃全局相位、布居不动。
+      想看交换摆动，要么给相对相位（如 `[0,1]`=i），要么用逐原子直积初态。
+14. **`set_superposition`（逐原子叠加）写了不生效**（2026-09-12 查明，待修）：GUI 运行读的是
+    `psi_combo.currentIndex()`（**整数索引**），`['sup', …]` spec 只进了 `_pending_psi_keys`
+    通道，而 `find_state_index` 匹配不到该形态 → 下拉静默回落到 0 号态，**无任何提示**。
+    要叠加初态请走两体通道（坑 13）或等修复（分工文档 §六 #3）。
+15. **`solve.MAX_STEP` 不是硬上限**（2026-09-12 实测）：`dop853.py` 只在**起步**取
+    `min(…, max_step)`，之后步长由误差控制自由增长——实测请求 0.05 ns 的 10 ns 演化里
+    出现 **2.2 ns** 的接受步（7 步走完，nfev=98）。所以它更像"初始步长提示"；要真压步长
+    得加 `npts` / 缩短窗口（分工文档 §六 #4）。
 ## 人机协同约定
 
 - 你的每次写操作 GUI 实时反映（控件闪紫框 + 状态栏流水），人可随时

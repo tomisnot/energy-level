@@ -71,6 +71,74 @@ def _as_vector(states, psi0):
     raise ValueError(f'无法解析初态 psi0: {psi0}')
 
 
+def _resolve_level_idx(states, quad):
+    """(n,l,j,m) → 基组下标；不在基组 → ValueError（消息里点名该项）。
+
+    与 `SimState.set_initial_state` 同一语义（kind='F' 态的 s['m'] 是 m_F），
+    因此两体初态的"身份"在 B 漂移/能量漂移后仍稳定——**不用索引存**。
+    """
+    n, l, j, m = (int(quad[0]), int(quad[1]), float(quad[2]), float(quad[3]))
+    for i, s in enumerate(states):
+        if (int(s['n']) == n and int(s['l']) == l
+                and abs(float(s['j']) - j) < 1e-9
+                and abs(float(s['m']) - m) < 1e-9):
+            return i
+    raise ValueError('能级 (n,l,j,m)=(%d,%d,%g,%g) 不在当前基组内'
+                     % (n, l, j, m))
+
+
+def _as_pair_vector(states, spec):
+    """**两体初态 spec** → N² 复向量（索引 k = iA*N + iB，与 states_2d 一致）。
+
+    spec = ``['pair_sup', [[nA,lA,jA,mA, nB,lB,jB,mB, re, im], …]]``
+    （`SimState.build_pair_sup_spec` 产出）。逐分量按 (n,l,j,m) 在当前
+    states 里解析——所以 spec 跨 B/基组重排稳定（不是索引）。
+    结果按 Σ|amp|² = 1 归一；缺项/零范数 → ValueError（不许静默丢项：
+    A2 那次"猜能量键静默落到别的能级"的教训）。
+
+    为什么需要它：`|60P_A,60S_B⟩ ↔ |60S_A,60P_B⟩` 的交换结果是**纠缠态**，
+    逐原子直积 |ψ_A⟩⊗|ψ_B⟩ 表达不出来（见 docs/叠加态初态-接口设计.md §2.2）。
+    """
+    if not (isinstance(spec, (tuple, list)) and spec and spec[0] == 'pair_sup'):
+        raise ValueError("两体叠加初态写法：['pair_sup', [[nA,lA,jA,mA,"
+                         "nB,lB,jB,mB, re, im], …]]；收到 %r" % (spec,))
+    rows = spec[1] if len(spec) > 1 else []
+    if not rows:
+        raise ValueError('两体叠加初态的分量不能为空'
+                         '（要回到逐原子直积请把 dynamic.psi_pair 设为 None）')
+    N = len(states)
+    v = np.zeros(N * N, complex)
+    for row in rows:
+        if len(row) != 10:
+            raise ValueError('两体分量应为 10 个数（nA,lA,jA,mA, nB,lB,jB,mB,'
+                             ' re, im）；收到 %r' % (row,))
+        ia = _resolve_level_idx(states, row[0:4])
+        ib = _resolve_level_idx(states, row[4:8])
+        v[ia * N + ib] += complex(float(row[8]), float(row[9]))
+    nrm = float(np.linalg.norm(v))
+    if nrm <= 0.0:
+        raise ValueError('两体叠加初态各分量幅度全为零')
+    return v / nrm
+
+
+def pair_psi0_vector(states, psi0_A=None, psi0_B=None, psi0_pair=None):
+    """两体初态 → N² 复向量：**psi0_pair 优先**，否则逐原子直积。
+
+    psi0_pair（两体 spec）非 None 时完全取代 psi0_A/psi0_B——因为一旦
+    指定了纠缠态，"逐原子初态"就没有意义。AI 面 `set_initial_state` /
+    `set_superposition` 会把 `dynamic.psi_pair` 清掉，避免这条优先级变成
+    **静默覆盖**（P1：不许沉默改物理）。
+    """
+    if psi0_pair is not None:
+        return _as_pair_vector(states, psi0_pair)
+    if psi0_A is None or psi0_B is None:
+        raise ValueError('两体初态：要么给 psi0_pair（两体 spec），'
+                         '要么同时给 psi0_A 与 psi0_B')
+    a = _as_vector(states, psi0_A)
+    b = _as_vector(states, psi0_B)
+    return np.kron(a, b)          # k = iA*N + iB（与 tensor._as_product_psi 同）
+
+
 def decay(g, gamma_mhz, e=None):
     """衰变通道工厂 → {'from': g, 'to': e, 'gamma_mhz': Γ}。
 
