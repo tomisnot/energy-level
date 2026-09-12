@@ -158,7 +158,8 @@ def h_snapshot_ok(dim):
 def h_snapshot_note(dim):
     """跳过时的说明（进 diag，供 GUI/AI 显示，不再静默）。"""
     mb = (int(dim) ** 2) * 16.0 / (1024.0 ** 2)
-    return {'skipped': True, 'dim': int(dim), 'term_mb_each': round(mb, 1),
+    return {'too_large': True, 'skipped': True, 'dim': int(dim),
+            'term_mb_each': round(mb, 1),
             'limit_mb': H_SNAPSHOT_MAX_MB,
             'note': 'H 快照跳过：稠密分项每项约 %.0f MB（上限 %.0f MB）；'
                     '诊断的配对/步长/扇区不受影响' % (mb, H_SNAPSHOT_MAX_MB)}
