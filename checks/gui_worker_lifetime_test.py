@@ -100,7 +100,12 @@ def main():
         w = _SlowWorker(0.4)
         dyn._worker = w                     # 与真实路径一样：面板持有唯一强引用
         w.start()
-        app.processEvents()
+        # ⚠ `isRunning()` 在 `start()` 刚返回时可能**短暂为 False**（Qt 在新线程内部
+        #   才置 `d->running`）→ 必须等一下再断言（本自检第一版就在这里误报了）。
+        t0 = time.time()
+        while not w.isRunning() and time.time() - t0 < 2.0:
+            app.processEvents()
+            time.sleep(0.005)
         C.check('1 线程已启动', w.isRunning())
 
         # 【关键】模拟 done 槽在 run() 还没返回时执行收尾
@@ -131,7 +136,11 @@ def main():
         w2 = _SlowWorker(0.2)
         dyn._worker = w2
         w2.start()
-        app.processEvents()
+        t0 = time.time()
+        while not w2.isRunning() and time.time() - t0 < 2.0:
+            app.processEvents()
+            time.sleep(0.005)
+        C.check('8a 第二轮也已启动', w2.isRunning())
         dyn._finish_run_ui()
         t0 = time.time()
         while w2.isRunning() and time.time() - t0 < 5.0:

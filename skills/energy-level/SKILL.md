@@ -401,8 +401,16 @@ env 采样   = √[ (1 + δ(t)) / (1 + b) ]    # 峰值恰为 1
       **私有内存逐位不动 1358 MB**、系统可用 ≥5.2 GB ⇒ 不是"dim 吃爆内存"。
       已排除的还有：AI 没持强引用（AI 与 GUI 走**同一条** `dyn._run()`，worker 都存在
       面板 `self._worker`）、无 `sip.delete`/`deleteLater`、无 Qt 父对象、
-      `src/` 内无 `quit()/sys.exit` 可达路径。定性需要**完整 stderr**
-      （PyQt 通常在 qFatal 前先打印 Python traceback）或 WER 全 dump。
+      `src/` 内无 `quit()/sys.exit` 可达路径。**崩溃时确无 Python traceback**
+      （使用者抓到原 stderr：8 条 `Terminating session` + 唯一一条 Qt 原生消息）⇒
+      **没有 Python 层触发者**，销毁在 C++ 侧。
+      **WER 全 dump 已配好**（`tempsimu/crashdumps`、DumpType=2、DumpCount=3）→
+      下次崩溃自动落 dump，用 cdb 看 `~QThread` 调用栈即可钉死。
+      ✅ **已修并验**：`_finish_run_ui` 不再丢"仍在跑的 worker"的最后一根引用
+      （`_retired_workers` + `finished` 释放，同时覆盖取消路径）；自检
+      `checks/gui_worker_lifetime_test.py` **10/10 通过**（含"收尾时线程仍在跑"的时序）。
+      ⚠ **现场保全**：每个实例用**带 pid 的日志名**，崩溃后先复制现场再重启
+      （实测事故：实例 stderr 被下一次启动的同路径日志**截断覆盖**）。
     - **你现在就该做的**：① 大两体作业先读 `estimate_cost()` 的
       `est_peak_gb / avail_ram_gb / mem_advice`（锚点 dim=4624→1.36 GB，dim² 外推，
       **偏保守上界**；软建议峰值 ≤ 可用内存 40%）；

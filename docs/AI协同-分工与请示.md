@@ -264,10 +264,12 @@
       | **仍未定位**：真正的销毁者（C++ 侧删除路径）。已排除：无 `sip.delete`/
       `deleteLater`（worker 上）、无 Qt 父对象（`parent=None`）、
       `src/` 内无 `quit()/sys.exit` 可达路径。
-      | **下一步取证（需要使用者配合）**：① 提供**完整 stderr**（PyQt 在 qFatal 前
-      通常会先打印 Python traceback —— 那会直接点名触发槽）；② 配 WER LocalDumps
-      （`HKCU\...\Windows Error Reporting\LocalDumps\python.exe`，DumpType=2）下次拿全 dump，
-      用 cdb 看 `~QThread` 的调用栈即可钉死销毁者。
+      | **下一步取证**：① ~~完整 stderr~~ → **已提供：崩溃时确无 Python traceback**
+      （只有 8 条 `Terminating session` + 唯一一条 Qt 原生消息；**没有 Python 层触发者**，
+      与探针结论一致：销毁在 C++ 侧）；② **WER 全 dump 使用者已配好**
+      （`DumpFolder=<项目>\tempsimu\crashdumps`、`DumpType=2`、`DumpCount=3`）⇒
+      下次崩溃自动落 dump，用 cdb 看 `~QThread` 调用栈即可钉死销毁者。
+      ⚠ **原件已被覆盖**（重启沿用了同一 `_app_err.log` 路径）→ 已立"事故现场保全守则"见 §七.0。
 - [x] #11 处置：**防御性修复 + 加固；销毁者仍待 dump 定性（2026-09-12）**：
       **假说 B（内存）已被使用者实测排除**：同类型两体作业（job3，dim=4624）全程
       **私有内存逐位不动 1358 MB**（WS 407–431 MB），系统可用始终 ≥5.2 GB ⇒
@@ -282,9 +284,14 @@
       且 `job_result` 即使 `save_npz=False` 也回传该路径（长两体作业的价值不靠"记得再存"）；
       ④ 自检：`checks/gui_worker_lifetime_test.py`（8 项，qInstallMessageHandler 抓 Qt 消息）、
       `checks/pair_mem_estimate_selfcheck.py`（13 项，已跑通）。
-      | **仍需使用者**：① 完整 stderr（PyQt 通常在 qFatal 前先打印 Python traceback，
-      那会直接点名触发槽）；② WER LocalDumps（`python.exe`, DumpType=2）下次拿全 dump。
-      在拿到这两样之前**不动别处**——避免"猜着改"引入新风险。
+      | **仍需使用者**：① ~~完整 stderr~~ → **已给：确无 Python traceback**（销毁在 C++ 侧）；
+      ② ~~WER LocalDumps~~ → **已配好**（`tempsimu/crashdumps`，DumpType=2，DumpCount=3），
+      下次崩溃自动落全 dump，用 cdb 看 `~QThread` 调用栈即可钉死销毁者。
+      在拿到 dump 之前**不动别处**——避免"猜着改"引入新风险。
+      ✅ 本轮窗口已补跑的验收：`checks/gui_worker_lifetime_test.py` **10/10 通过**
+      （`_finish_run_ui` 在 run() 未返回时收尾 → 仍在跑的 worker 被 `_retired_workers`
+      持有、线程退出后释放、全程无 Qt 销毁告警）；7 个 AI 端点自检的
+      `EL_NO_AI_SERVER` SKIP 路径 **7/7 正常 SKIP（exit 0）**。
 
 - [x] #12 类型：请教（开发者→使用者）→ **随 #11 一并降级（2026-09-12）**
       场景：两体 dim 的操作上限。**B 被实测排除后**，这条从"风险"降为**参考**：
@@ -293,6 +300,18 @@
       实测锚点：dim=4624 → 1358 MB（平直）。**是否需要硬阈值，等你定**。
 
 
+## 七.0 事故现场保全守则（2026-09-12，用一次真实损失换来）
+
+1. **每个实例用带标识的日志名**，**绝不复用同一路径**：
+   `python main.py *> tempsimu/_app_out_<pid>_<HHMMSS>.log 2> tempsimu/_app_err_<pid>.log`。
+   教训：崩溃实例（PID 27228）的 stderr 尾 12 行虽被抓到，但 20:36 的重启沿用了
+   `tempsimu/_app_err.log` 同一路径 → **文件被截断覆盖**，当场丢失上下文。
+2. **崩溃后第一件事：保全现场**（`Copy-Item` 到 `tempsimu/crashdumps/` 再重启）。
+3. **WER 全 dump 已配**（`HKCU\...\LocalDumps\python.exe` → `tempsimu/crashdumps`、
+   `DumpType=2`、`DumpCount=3`）⇒ 下次崩溃自动落全 dump；
+   用 `cdb -z <dump> -c "!analyze -v; ~*k"` 看 `~QThread` 调用栈。
+4. **判据优先于猜测**：本次靠"消息 + 失败码"已能定位到 `qFatal` in `QThread::~QThread`
+   （受控复现给出同一消息与同一退出码 0xC0000409），但**触发销毁的那一行**必须靠 dump。
 
 ## 七、重要结构性事实（2026-09-12 探针实测）
 
