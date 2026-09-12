@@ -88,6 +88,12 @@ def ac_ize_physical_E(E, f_opt, r_crit=None):
     return E, A_new, shifts_list
 
 
+
+# 诊断 H 快照的稠密分项上限（MB）。超过则只回元信息、**绝不尝试分配**——
+# 2026-09-12 实测：dim=8112 时单项 = 8112²×16 B = 1004 MiB，正是那次
+# "Unable to allocate 1004 MiB for shape (8112, 8112)" 的来源。
+_H_SNAPSHOT_MAX_MB = 256.0
+
 def _assemble_H_snapshot(D_full, pairs, t, C, ac_base=None, ac_waves=None,
                          gamma=None, tags=None):
     """t75 诊断：重组 t 时刻的扩展空间哈密顿 H（MHz，数值显示用）。
@@ -100,6 +106,18 @@ def _assemble_H_snapshot(D_full, pairs, t, C, ac_base=None, ac_waves=None,
     """
     t = float(t)
     dim = np.asarray(D_full).size
+    # ── 尺寸保护（2026-09-12）────────────────────────────────────
+    # 本函数按 dim×dim complex128 建稠密分项矩阵；大维数下单项即可上 GB
+    # （dim=8112 → 1004 MiB，实测导致演化失败）。超阈值只回元信息。
+    _mb_each = dim * dim * 16.0 / (1024.0 ** 2)
+    if _mb_each > _H_SNAPSHOT_MAX_MB:
+        return {'too_large': True, 'dim': int(dim),
+                'term_mb_each': round(_mb_each, 1),
+                'limit_mb': _H_SNAPSHOT_MAX_MB,
+                'note': ('H 快照跳过：稠密分项每项约 %.0f MB（上限 %.0f MB）；'
+                         '诊断的配对/步长/扇区等不受影响，'
+                         '需要 H 请缩小基组或降低维数'
+                         % (_mb_each, _H_SNAPSHOT_MAX_MB))}
     terms = dict(
         K0=np.diag(np.asarray(D_full, complex)),
         AC对角=np.zeros((dim, dim), complex),
