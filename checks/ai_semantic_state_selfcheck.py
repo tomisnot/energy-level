@@ -127,5 +127,24 @@ ns_old = codeact._make_namespace(_Old(), '.', {'seq': [0]}, lambda j: {},
                                  lambda j: {}, lambda j, s=False: {})
 chk('set_groups' not in ns_old, '旧 state_mod（无这些方法）不注入、不报错')
 
+
+print('4) 二期 B：事前成本粗估 estimate_pair_cost（纯函数，可 headless 测）')
+from src.ai.sim_state import estimate_pair_cost                  # noqa: E402
+base = estimate_pair_cost(36, 300.0, 201)
+chk(abs(base - 120.0) < 1e-6, '标定锚点：N=36/t=300ns ≈ 120 s（得 %.1f s）' % base)
+chk(estimate_pair_cost(48, 300.0, 201) > 3.0 * base,
+    'dim∝N² → 成本∝N⁴：N=48 至少 3× 于 N=36')
+chk(estimate_pair_cost(36, 600.0, 201) > 1.9 * base,
+    '对 t_max 近似线性：600 ns ≈ 2× 300 ns')
+chk(estimate_pair_cost(18, 300.0, 201) < 0.2 * base,
+    'N 减半 → 成本降 ~16×')
+
+print('5) CodeAct 注入 list_jobs（服务端统一作业视图）')
+ns2 = codeact._make_namespace(_S(), '.', {'seq': [0]}, lambda j: {},
+                              lambda j: {}, lambda j, s=False: {},
+                              t_jobs=lambda limit=20: {'ok': True, 'jobs': []})
+chk('list_jobs' in ns2, '命名空间含 list_jobs')
+chk(ns2['list_jobs']()['ok'], 'list_jobs 可调用')
+
 print('\n结果：%s' % ('全部通过' if not FAIL else '%d 项失败' % len(FAIL)))
 sys.exit(1 if FAIL else 0)

@@ -204,6 +204,36 @@ def _t_list_params(prefix=''):
     return {'params': _slim_params(_state.schema(prefix))}
 
 
+def _t_list_jobs(limit=20):
+    """统一作业视图（B1）：AI 作业来自 _jobs，人正在跑的来自 dyn._run_active。
+
+    本会话的痛点：AI 提交的重活用户既看不到也取消不了、AI 也拿不到 job_id
+    → 双方一起卡在"已有演化在运行"。这里把两边放到同一张表里。
+    """
+    rows = []
+    for jid, j in list(_jobs.items()):
+        el = (time.time() - float(j.get('started') or time.time()))
+        st = ('done' if j.get('done') else
+              ('error' if j.get('error') else 'running'))
+        rows.append({'job_id': jid, 'owner': j.get('owner', 'ai'),
+                     'kind': j.get('kind'), 'status': st,
+                     'elapsed_s': round(el, 1),
+                     'error': j.get('error'),
+                     'npz': ((j.get('res') or {}).get('npz')
+                             if isinstance(j.get('res'), dict) else None)})
+    try:
+        dyn = _win().dynamic
+        if getattr(dyn, '_run_active', False):
+            rows.append({'job_id': '(gui)', 'owner': 'human', 'kind': 'gui',
+                         'status': 'running', 'elapsed_s': None,
+                         'error': None, 'npz': None,
+                         'note': '人手点的运行（GUI 取消按钮即可）'})
+    except Exception:                              # noqa: BLE001
+        pass
+    rows.sort(key=lambda r: (r['status'] != 'running', r['job_id']))
+    return {'ok': True, 'n': len(rows), 'jobs': rows[:int(limit)]}
+
+
 def _t_summary():
     out = _state.summary()
     if isinstance(out, dict):
@@ -373,7 +403,11 @@ def _t_run_compute(jid, diag=True):
         return {'ok': False, 'running_job': _rj,
                 'msg': '已有演化在运行（人或 AI 发起）：' + _hint}
     _jobs[jid] = {'started': time.time(), 'done': False, 'error': None,
-                  'res': None}
+                  'res': None, 'owner': 'ai',
+                  'kind': ('pair' if int(getattr(dyn, '_is_two_body', 0) or
+                                         getattr(dyn, 'mode', 0) or 0) else
+                           'single'),
+                  't_max': None}
 
     orig_s, orig_p = dyn._on_evolve_done, dyn._on_pair_evolve_done
     orig_show = dyn._show_progress
@@ -825,6 +859,16 @@ def _register_tools(mcp):
     async def get_envelope(path: str, index: int = 0) -> dict:
         return await asyncio.to_thread(d, lambda: _t_get_envelope(path, index))
 
+    @mcp.tool(description='统一作业视图（B1）：AI 作业 + 人正在跑的，'
+                          '含 owner/status/elapsed。取消用 cancel_job(job_id)')
+    async def list_jobs(limit: int = 20) -> dict:
+        return await asyncio.to_thread(d, lambda: _t_list_jobs(limit))
+
+    @mcp.tool(description='事前成本（B2）：单体给引擎真值报告要点，两体按实测'
+                          '标定 N⁴·t 粗估，并建议是否走异步/开短窗口')
+    async def estimate_cost() -> dict:
+        return await asyncio.to_thread(d, lambda: _state.estimate_cost())
+
     @mcp.tool(description='**声明式**设定能级组：让基组恰好包含给定 '
                           '[(n,l,j),…]（原子/幂等，回 {added,removed,kept}）。'
                           '替代按索引增删——本会话两次因按标签判重而删错/漏加组')
@@ -936,7 +980,7 @@ def _register_tools(mcp):
                 code, _state, _ROOT, {'seq': _job_seq},
                 _t_run_compute, _t_job_status, _t_job_result,
                 timeout=timeout, t_load=_t_load_archive,
-                t_save=_t_save_archive, t_list_params=_t_list_params, t_diag=_t_get_diag, t_cancel=_t_cancel_job), timeout + 60)
+                t_save=_t_save_archive, t_list_params=_t_list_params, t_diag=_t_get_diag, t_cancel=_t_cancel_job, t_jobs=_t_list_jobs), timeout + 60)
 
     @mcp.tool(description='CodeAct 异步版：立即返回 run_id，脚本在后台执行，'
                          '不再占住本次调用。长扫描/大系综用它——即使客户端断线，'
@@ -955,7 +999,7 @@ def _register_tools(mcp):
                     code, _state, _ROOT, {'seq': _job_seq},
                     _t_run_compute, _t_job_status, _t_job_result,
                     timeout=timeout, t_load=_t_load_archive,
-                    t_save=_t_save_archive, run_id=rid, t_list_params=_t_list_params, t_diag=_t_get_diag, t_cancel=_t_cancel_job), timeout + 60)
+                    t_save=_t_save_archive, run_id=rid, t_list_params=_t_list_params, t_diag=_t_get_diag, t_cancel=_t_cancel_job, t_jobs=_t_list_jobs), timeout + 60)
             except Exception:                  # noqa: BLE001 - 落盘失败原因
                 import traceback as _tb
                 run_store.finish(_ROOT, rid, {

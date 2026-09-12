@@ -77,6 +77,27 @@ def _manual_key(st):
             float(st['m']), float(st.get('E_mhz', st.get('E', 0.0)))]
 
 
+
+# ---------- 二期 B：事前成本（作业模型的一半） ----------
+
+_PAIR_CAL = {'N': 36, 't_ns': 300.0, 'sec': 120.0}   # 2026-09-12 实测标定
+
+
+def estimate_pair_cost(basis_n, t_max_ns, npts=201):
+    """两体运行耗时的**粗估**（秒）——按实测标定外推。
+
+    实测（2026-09-12）：N=36 态 → 1296 两体态、t_max=300 ns 时单次 ≈120 s，
+    nfev≈4.3e5、dt≈0.002 ns（被 GHz 载波钉死）。两体 RHS 成本 ∝ dim²，
+    dim=N² → 成本 ∝ N⁴；对 t_max 近似线性。**只用于判断"要不要异步"**，
+    不是精度承诺。
+    """
+    N = max(int(basis_n), 1)
+    s = _PAIR_CAL['sec'] * (N / _PAIR_CAL['N']) ** 4
+    s *= max(float(t_max_ns), 1e-9) / _PAIR_CAL['t_ns']
+    s *= max(int(npts), 2) / 201.0
+    return float(s)
+
+
 class SimState:
     """门面：持有 MainWindow + 注册表，不持有状态。"""
 
@@ -186,6 +207,39 @@ class SimState:
                 warn.append('%s 的初态 %s 已不在新基组内' % (atom, list(v)[:5]))
         return {'ok': True, 'added': added, 'removed': removed, 'kept': kept,
                 'psi_warnings': warn}
+
+    def estimate_cost(self):
+        """事前成本：要不要走异步、要不要开短窗口，先看这个数。
+
+        单体：走引擎 dry_run 的真值报告（`_cost_report`：保留对数/最远失谐/
+        预计步数）。两体：按实测标定的 N⁴·t 粗估（`estimate_pair_cost`）。
+        """
+        p = self.reg.collect()
+        mode = int(p.get('dynamic.mode') or 0)
+        t_max = float(p.get('dynamic.t_max') or 0.0)
+        npts = int(p.get('dynamic.npts') or 0)
+        try:
+            levels = self._states_now()
+        except Exception:                          # noqa: BLE001
+            levels = []
+        N = len(levels)
+        out = {'ok': True, 'mode': mode, 'basis_n': N, 't_max_ns': t_max,
+               'npts': npts, 'method': p.get('dynamic.method'),
+               'n_waves': sum(len(p.get('dynamic.waves_' + a) or [])
+                              for a in ('single', 'A', 'B'))}
+        if mode == 1:
+            sec = estimate_pair_cost(N, t_max, npts)
+            out.update({'dim': N * N if N else None,
+                        'est_seconds': round(sec, 1),
+                        'est_minutes': round(sec / 60.0, 1),
+                        'advice': ('建议 run_python_async' if sec > 120
+                                   else '可同步等待'),
+                        'note': '两体：按实测标定 N⁴·t 粗估（36 态/300 ns≈120 s）'})
+        else:
+            out.update({'dim': N,
+                        'note': '单体的引擎真值报告：见 evolve_mixed(dry_run=True) '
+                                '的 cost（配对/最远失谐/预计步数）'})
+        return out
 
     def get_config(self):
         """规范化运行配置（**唯一真值源**快照；P5）。

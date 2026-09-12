@@ -35,7 +35,7 @@ from .journal import get_journal
 
 def _make_namespace(state_mod, root, jobs, t_run, t_status, t_result,
                     t_load=None, t_save=None, t_list_params=None, t_diag=None,
-                    t_cancel=None):
+                    t_cancel=None, t_jobs=None):
     """构造受限命名空间。
 
     函数语义与细粒度 MCP 工具**保持一致**（同名、返回 dict、接受
@@ -90,7 +90,8 @@ def _make_namespace(state_mod, root, jobs, t_run, t_status, t_result,
         'activity': lambda since=0: get_journal(root).since(since),
         # 二期 A：语义状态操作（P1/P5）——存在才注入，兼容旧 state_mod
         **{k: getattr(state_mod, k) for k in
-           ('set_groups', 'set_initial_state', 'list_levels', 'get_config')
+           ('set_groups', 'set_initial_state', 'list_levels', 'get_config',
+            'estimate_cost')
            if callable(getattr(state_mod, k, None))},
         # A1：只读查询 / 取消类工具进白名单——脚本里"先查再改"不必跳出去
         # 发独立 MCP 调用（本会话曾因缺 list_params 白跑一整个脚本）
@@ -98,7 +99,7 @@ def _make_namespace(state_mod, root, jobs, t_run, t_status, t_result,
         'job_result': t_result,
     }
     for _k, _v in (('list_params', t_list_params), ('get_diag', t_diag),
-                   ('cancel_job', t_cancel)):
+                   ('cancel_job', t_cancel), ('list_jobs', t_jobs)):
         if _v is not None:
             ns[_k] = _v
     return ns
@@ -106,7 +107,7 @@ def _make_namespace(state_mod, root, jobs, t_run, t_status, t_result,
 
 def run_code(code, state_mod, root, jobs, t_run, t_status, t_result,
              timeout=1800.0, t_load=None, t_save=None, run_id=None,
-             t_list_params=None, t_diag=None, t_cancel=None):
+             t_list_params=None, t_diag=None, t_cancel=None, t_jobs=None):
     """在主线程 exec 模型写的代码；返回 {ok, run_id, stdout, result, error}。
 
     调用方（server 的 run_python / run_python_async）负责经
@@ -121,7 +122,7 @@ def run_code(code, state_mod, root, jobs, t_run, t_status, t_result,
     env = _make_namespace(state_mod, root, jobs, t_run, t_status, t_result,
                           t_load=t_load, t_save=t_save,
                           t_list_params=t_list_params, t_diag=t_diag,
-                          t_cancel=t_cancel)
+                          t_cancel=t_cancel, t_jobs=t_jobs)
     env['result'] = None
     j.suppress_snapshot = True          # 脚本内逐 op 照记、快照统一挂到末尾
     t0 = time.time()
