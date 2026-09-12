@@ -658,18 +658,36 @@ def _build_pair_geometry(E, optA_ac, optB_ac, omega_opt, bw_opt=None):
     dim = N2 * P
     K0 = np.real(np.asarray(setup.diag))
     pairs_opt = []
-    for Kcw, env in zip(setup.Kc_dense[0] if setup.Kc_dense else [],
-                        envs_out):
-        Kcw = np.asarray(Kcw, complex)
-        ii, jj = np.nonzero(np.abs(Kcw) > 1e-12)
-        for a, b in zip(ii, jj):
+    # ⚠ 2026-09-12 修「静默丢物理」（E1 真凶）：光场近对**必须**同时支持 setup 的
+    # 两种表示。`SambeSetup` 在 `dim > _DENSE_MAX`(2200) 时把 `Kc_dense` 置 None ——
+    # 那**只是性能选择**（稀疏 vs 稠密），但这里原来写成
+    #     `setup.Kc_dense[0] if setup.Kc_dense else []`
+    # 于是超阈值时**整批光场耦合化为乌有**、光场变成"没接线"：
+    #   实测 3 组（dim=1452 ≤ 2200）→ n_pairs=1206、频移光有效（B:60P=0.896）；
+    #   ＋58G_7/2（dim=2700 > 2200）→ n_pairs 掉到 150、频移光**完全失效**
+    #   （与"不加光"逐位相同）——这就是 E1"加一个远处能级配对数 1206→150"的真因，
+    #   与 Θ/PHASE_TOL/候选窗无关。
+    # 修法：稠密没有就用同源的**稀疏** `Kc_ext`（同矩阵、少一次 toarray）。
+    Kc_lists = (setup.Kc_dense[0] if setup.Kc_dense
+                else (getattr(setup, 'Kc_ext', None) or [[]])[0])
+    import scipy.sparse as _sp
+    for Kcw, env in zip(Kc_lists, envs_out):
+        if _sp.issparse(Kcw):
+            _co = Kcw.tocoo()
+            _m = np.abs(_co.data) > 1e-12
+            ii, jj, vv = _co.row[_m], _co.col[_m], _co.data[_m]
+        else:
+            Kcw = np.asarray(Kcw, complex)
+            ii, jj = np.nonzero(np.abs(Kcw) > 1e-12)
+            vv = Kcw[ii, jj]
+        for a, b, val in zip(ii, jj, vv):
             # a<b 三角过滤（t70）：Kcw 为 Hermitian 全矩阵，双向打包会把
             # 同一耦合驱动两次（Rabi 翻倍 → AC 位移失真 4×）；
             # 反向由 RHS 厄米补齐自动。
             if a >= b:
                 continue
             if abs(K0[a] - K0[b]) < bw_opt:
-                pairs_opt.append((int(a), int(b), Kcw[a, b],
+                pairs_opt.append((int(a), int(b), complex(val),
                                   float(K0[a] - K0[b]), env))
     return K0, pairs_opt, P, dim
 

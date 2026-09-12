@@ -417,14 +417,16 @@ def _dump_job_json(jid, res):
     见 `ui_dynamic._finish_run_ui`），`_jobs` 里的结果随进程消失。
     现在 done 一到就：
       · 写 `ai_results/job_<jid>.json`（摘要，几 KB）；
-      · 写 `tempsimu/ai_job<jid>_<HHMMSS>.npz`（**全量数组**：两体的 pops_2d
+      · 写 `tempsimu/ai_<jid>_<HHMMSS>.npz`（**全量数组**：两体的 pops_2d
         ~n_t·dim 量级，13 组/301 点 ≈ 8.5 MB —— 长作业的价值就在这里）。
+      ⚠ 文件名用 `ai_{jid}_*`：jid 本身已含 "job"（如 `job3`）——曾写成
+      `ai_job{jid}_*` 得到 `ai_jobjob3_*.npz`（使用者实测报告，难看但路径仍对得上）。
     返回 (json_path, npz_path)（失败项为 None；绝不抛）。
     """
     jpath = npath = None
     try:
         import json as _json
-        s = json_safe(_res_summary(res, save_npz=True, tag='job' + jid))
+        s = json_safe(_res_summary(res, save_npz=True, tag=jid))
         npath = s.get('npz')
         s['job_id'] = jid
         s['saved_at'] = time.time()
