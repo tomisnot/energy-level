@@ -25,9 +25,9 @@
 """
 import numpy as np
 
-from .params import _TAB_N          # 相位/包络查表 Nyquist（见 f_max_mhz）
 
 from .field_build import (build_fields_exact, real_field)  # noqa: F401
+from . import params as _P
 
 # 与旧 pulse.py 一致的包络形状（数据类抽离 UI，纯计算）
 POLS = ['σ+', 'π', 'σ-', '椭圆偏']
@@ -49,7 +49,7 @@ def _f_max_mhz(dt_min_ns, t_end_ns=None):
     """
     fn = 0.0 if dt_min_ns <= 0 else 0.5e3 / float(dt_min_ns)
     if t_end_ns and float(t_end_ns) > 0 and fn > 0.0:
-        fn = min(fn, 0.5e3 * (_TAB_N - 1) / float(t_end_ns))
+        fn = min(fn, 0.5e3 * (_P.get('_TAB_N') - 1) / float(t_end_ns))
     return fn
 
 
@@ -163,12 +163,21 @@ class Wave:
     """一个独立波形：频率 + 光强 + 偏振 + 包络 + 起始偏移（无通道无触发）。"""
 
     def __init__(self, name, freq_mhz, envelope, pol='π',
-                 offset_ns=0.0, intensity_mwcm2=100.0, drive=None):
+                 offset_ns=0.0, intensity_mwcm2=100.0, drive=None,
+                 elliptical=None):
         assert pol in POLS, f'偏振须为 {POLS}'
         self.name = name or '波形'
         self.freq_mhz = float(freq_mhz)
         self.envelope = envelope
         self.pol = pol
+        # 椭偏参数（α/θ/ε，度）：仅 pol=='椭圆偏' 时有效；含义见
+        # static_atom.elliptical_coeffs。None = 未配置（构建场时会报错）。
+        # 选了「椭圆偏」但没给参数 → 补齐为 (0,0,0)（= x 线偏，有明确物理
+        # 含义）。**不能**在这里抛异常：GUI 里常在 Qt 槽内建场，异常会变成
+        # PyQt qFatal → 进程原生崩溃且无回溯（本项目踩过多次）。
+        if pol == '椭圆偏' and not elliptical:
+            elliptical = dict(alpha_deg=0.0, theta_deg=0.0, eps_deg=0.0)
+        self.elliptical = dict(elliptical) if elliptical else None
         self.offset_ns = float(offset_ns)
         self.intensity_mwcm2 = float(intensity_mwcm2)
         # 辅助驱动对（仅用于辅助定频率/光强；不参与演化结算）
@@ -315,6 +324,7 @@ def serialize_waves(waves):
             out.append({'type': 'arb', 'name': w.name,
                         't_ns': list(w.t_ns), 'amp': list(w.amp),
                         'pol': w.pol, 'intensity': w.intensity_mwcm2,
+            'elliptical': getattr(w, 'elliptical', None),
                         'offset_ns': w.offset_ns})
             continue
         env = w.envelope
@@ -327,6 +337,7 @@ def serialize_waves(waves):
                  env.fall_start_ns)
         d = {'name': w.name, 'freq_mhz': w.freq_mhz,
              'intensity': w.intensity_mwcm2, 'pol': w.pol,
+        'elliptical': getattr(w, 'elliptical', None),
              'offset_ns': w.offset_ns, 'env': e, 'drive': w.drive}
         out.append(d)
     return out
@@ -340,6 +351,7 @@ def restore_waves(data):
             waves.append(ArbitraryWave(
                 d.get('name', '任意波形'), d['t_ns'], d['amp'],
                 pol=d.get('pol', 'π'),
+        elliptical=d.get('elliptical'),
                 intensity_mwcm2=d.get('intensity', 100.0),
                 offset_ns=d.get('offset_ns', 0.0)))
             continue
@@ -355,6 +367,7 @@ def restore_waves(data):
             dr = dict(g=tuple(dr['g']), e=tuple(dr['e']))
         waves.append(Wave(
             d.get('name', '波形'), d['freq_mhz'], env_obj, pol=d['pol'],
+            elliptical=d.get('elliptical'),
             offset_ns=d.get('offset_ns', 0.0),
             intensity_mwcm2=d.get('intensity', 100.0), drive=dr))
     return waves

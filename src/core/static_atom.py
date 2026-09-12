@@ -52,8 +52,7 @@
 
 import numpy as np
 from scipy.constants import physical_constants as pc, h, hbar, c, epsilon_0
-from .params import (DIRECT_SOS_N_WINDOW, AC_EFFECT_THRESHOLD_MHZ,  # t74c/t80
-                     RYDBERG_N_MIN)
+from . import params as _P
 # t80：删两个本模块**自己不用**的 AC 分流常量导入：
 #   · `AC_FAR_DETUNE_CUTOFF_HZ` —— 只是 `AC_NEAR_CUTOFF_MHZ` 的 Hz 版定义式，
 #     仓库内无第二消费者；
@@ -187,9 +186,9 @@ def _sos_basis_range(n):
     - 低激发态：只取近邻低态 [5, 19]，远里德堡伙伴贡献可忽略。
     这样避免大量慢速 Numerov 波函数计算，又不丢失重要物理贡献。
     """
-    if n >= RYDBERG_N_MIN:
-        return RYDBERG_N_MIN, SOS_BASIS_N_MAX
-    return SOS_BASIS_N_MIN, RYDBERG_N_MIN - 1
+    if n >= _P.get('RYDBERG_N_MIN'):
+        return _P.get('RYDBERG_N_MIN'), SOS_BASIS_N_MAX
+    return SOS_BASIS_N_MIN, _P.get('RYDBERG_N_MIN') - 1
 
 
 _dipole_partners_cache = {}
@@ -245,7 +244,7 @@ class ArcCache:
         info = self._state.get(key)
         if info is None:
             A_hz = B_hz = None
-            if n < RYDBERG_N_MIN:
+            if n < _P.get('RYDBERG_N_MIN'):
                 try:
                     A_hz, B_hz = self.atom.getHFSCoefficients(n, l, j)
                 except ValueError:
@@ -681,7 +680,7 @@ def direct_ac_stark_shifts(cache, groups, address_cfg, B_gauss=0.0,
         n_photon = _AC_UI_CFG['n_photon'] or 4          # 面板配置优先，缺省 4
     if sos_n_window is None:
         sos_n_window = (_AC_UI_CFG['sos_n_window']
-                        or DIRECT_SOS_N_WINDOW)
+                        or _P.get('DIRECT_SOS_N_WINDOW'))
     global _DIRECT_COUPLING_KEY, _DIRECT_COUPLING
     ckey = (tuple(sorted((g['n'], g['l'], g['j']) for g in groups)),
             round(float(B_gauss), 6),
@@ -791,7 +790,7 @@ def direct_ac_stark_sweep(cache, groups, address_cfg, B_gauss, intensities,
         n_photon = _AC_UI_CFG['n_photon'] or 4
     if sos_n_window is None:
         sos_n_window = (_AC_UI_CFG['sos_n_window']
-                        or DIRECT_SOS_N_WINDOW)
+                        or _P.get('DIRECT_SOS_N_WINDOW'))
     states = _direct_basis(cache, groups, B_gauss, sos_n_window)
     N = len(states)
     M = 2 * n_photon + 1
@@ -883,7 +882,7 @@ def _fill_ac(rows, acs):
     for r, ac in zip(rows, acs):
         r['ac'] = ac
         r['E'] = r['E0'] + ac
-        r['affected'] = abs(ac) > AC_EFFECT_THRESHOLD_MHZ
+        r['affected'] = abs(ac) > _P.get('AC_EFFECT_THRESHOLD_MHZ')
     return rows
 
 
@@ -1042,3 +1041,17 @@ def spectrum_lines(cache, rows, ac_on, coeffs=None):
             lines.append((nu, A, a['label'], b['label'], a['qstr'], b['qstr'],
                           a['color'], pol))
     return lines
+
+
+def __getattr__(name):
+    """PEP 562 回落：把历史 re-export 的引擎参数转发到注册表。
+
+    这些模块过去用 `from .params import X` 顺带充当转发站（外部代码
+    `core.RYDBERG_N_MIN` / `from .evolve_rwa import RWA_TOL`）。参数读取点
+    已改为 `_P.get(...)`，转发站随之消失——这里补一层回落，
+    使旧式属性访问继续可用，并且同样响应 `params.override()`。
+    """
+    from . import params as _p
+    if name in _p.DEFAULTS or name in _p.ALIASES:
+        return _p.get(name)
+    raise AttributeError(f'module {__name__!r} has no attribute {name!r}')

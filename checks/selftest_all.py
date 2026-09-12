@@ -11,14 +11,26 @@
     two_field_pair_selfcheck.py    两场两体引擎（11 项）
     mw_pair_keep_selfcheck.py      微波对累积相位判据 + 三光子梯子回归锚
                                    （24 项，~5s；t79 加的防"静默零物理"闸）
+    params_registry_selfcheck.py   引擎参数注册表（默认/覆写/线程隔离/
+                                   端到端覆写生效 + 链路契约，39 项）
+    mixed_nolight_selfcheck.py     mixed 无光场退化契约（10 项，~80s）
+    mixed_arb_mw_selfcheck.py      mixed 任意波形微波（12 项）
+    gui_params_page_test.py        引擎参数页接线（页面↔快照↔引擎，11 项）
+    gui_mode_switch_test.py        模式切换 + 检视器常驻 + 参数双向绑定（16 项）
+    gui_engine_lamps_test.py       engine.* 指示灯 + 双向绑定 + 假覆写防护（14 项）
+    ai_diag_test.py                只读观测通道 get_diag（摘要/明细/错误路径，16 项）
+    gui_cost_dialog_test.py        运行前成本对话框（进度框遮挡回归，8 项）
+    gui_ellip_row_test.py          椭圆偏参数行（平时隐藏/选后出现，10 项）
     ui_selftest.py                 UI 回归（主窗口/编辑器/TTL/动态页/存档恢复）
     pair_evolve_selfcheck.py       两体动态（pairinteraction 权威参考；
                                     未装 pairinteraction 时自动 SKIP）
 
 不在聚合里、按需单跑的独立自检：
-    mixed_nolight_selfcheck.py     mixed 无光场退化契约（10 项）
     hard_vdd_pack_selfcheck.py     hard 的 V_dd 打包 + Θ 判据语义（9 项）
     route_auto_selfcheck.py        route_auto 判据（6 项）
+    gui_arb_mixed_wiring_test.py   GUI 接线（任意波形 × 三引擎，10 项，~140s
+                                   ——慢，按需跑；但它能抓"只在 GUI 路径出现"
+                                   的错，改动 ui_dynamic / evolve_worker 后请跑）
     ai_selftest / ai_compute_test / ai_codeact_test   AI 协同三件套
                                    （需 mcp/uvicorn；当前被 mcp 2.2 的
                                    stateless-HTTP 行为阻塞）
@@ -48,6 +60,15 @@ _SCRIPTS = ['checks_sentinel.py',        # 存活哨兵（秒级，最先跑：�
             'evolve_exact_selfcheck.py', 'evolve_exact_pair_selfcheck.py',
             'two_field_pair_selfcheck.py',
             'mw_pair_keep_selfcheck.py',
+            'params_registry_selfcheck.py',
+            'mixed_nolight_selfcheck.py',
+            'mixed_arb_mw_selfcheck.py',
+            'gui_params_page_test.py',
+            'gui_mode_switch_test.py',
+            'gui_engine_lamps_test.py',
+            'ai_diag_test.py',
+            'gui_cost_dialog_test.py',
+            'gui_ellip_row_test.py',
             'ui_selftest.py',
             'pair_evolve_selfcheck.py']
 

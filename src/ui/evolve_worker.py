@@ -31,14 +31,18 @@ class EvolveWorker(QThread):
 
 
     def run(self):
+        from ..core import params as _P
+        ovr = dict(self.engine_kwargs.pop('param_overrides', None) or {})
         try:
+          with _P.override(ovr):
             if self.method == 'hard':
-                # t20/t24：hard 硬积分（numba 加速）——fields 为两场 meta；
-                # t24：decays 传透（落点=丢失 NonHermitian，此前静默忽略）
+                # hard 硬积分（numba 加速）——fields 为两场 meta；
+                # 容差走注册表（默认值与原硬编码 1e-8/1e-10 相同，但可覆写）
                 from ..core.evolve_twofield import evolve_hard
                 res = evolve_hard(
                     self.states, self.fields, self.psi0, self.t_grid,
-                    rtol=1e-8, atol=1e-10, numba=True,
+                    rtol=_P.get('DEFAULT_RTOL'), atol=_P.get('DEFAULT_ATOL'),
+                    numba=True,
                     progress_arr=self.progress_arr, log=self.log_msg.emit,
                     decays=self.decays)
                 # t28：收尾阶段标记（JIT 装载/准备 5% → 积分 5-95% → 收尾 95%）
@@ -53,20 +57,24 @@ class EvolveWorker(QThread):
                 # per_freq_M/r_crit/diag）
                 from ..core.evolve_mixed import evolve_mixed
                 ek = dict(self.engine_kwargs)
-                ek.setdefault('tol', 1e-8)
+                ek.setdefault('tol', _P.get('DEFAULT_RTOL'))
                 res = evolve_mixed(
                     self.states, self.fields, self.psi0, self.t_grid,
                     progress_arr=self.progress_arr, log=self.log_msg.emit,
                     decays=self.decays, **ek)
             else:
-                # t74：'sambe'（GUI 唯一可达档）直连 sambe 引擎——
-                # 不再经由 evolve.evolve 调度器（ip4/Lindblad 为 checks 参照）
+                # 'sambe' 直连 sambe 引擎（不经 evolve.evolve 调度器）
+                # 容差：只有用户**显式覆写** DEFAULT_RTOL 时才传，否则用
+                # sambe 自己的默认（它的 tol 同时兼作分段/截断容差）
                 from ..core.sambe import evolve_sambe
+                _sk = {}
+                if 'DEFAULT_RTOL' in ovr:
+                    _sk['tol'] = ovr['DEFAULT_RTOL']
                 res = evolve_sambe(self.states, self.fields, self.psi0,
                                    self.t_grid,
                                    progress_arr=self.progress_arr,
                                    log=self.log_msg.emit,
-                                   decays=self.decays)
+                                   decays=self.decays, **_sk)
             self.done.emit(res, None)
         except RuntimeError as e:
             # 用户取消：progress_arr[1]≠0 → 不算错误，静默
@@ -116,9 +124,12 @@ class EvolveWorkerPair(QThread):
         self._cache_ref = None
 
     def run(self):
+        from ..core import params as _P
+        ovr = dict(self.engine_kwargs.pop('param_overrides', None) or {})
         try:
+          with _P.override(ovr):
             if self.method == 'hard':
-                # t21：pair hard（fields_A/B 为 build_two_field meta）
+                # pair hard（fields_A/B 为 build_two_field meta）
                 from ..core.hard import evolve_hard_pair
                 res = evolve_hard_pair(
                     self.states, self.fields_A, self.fields_B,
@@ -152,7 +163,7 @@ class EvolveWorkerPair(QThread):
                 # t75：engine_kwargs 透传（r_crit/max_step/tol/diag）
                 from ..core.evolve_mixed import evolve_mixed_pair
                 ek = dict(self.engine_kwargs)
-                ek.setdefault('tol', 1e-8)
+                ek.setdefault('tol', _P.get('DEFAULT_RTOL'))
                 res = evolve_mixed_pair(
                     self.states, self.fields_A, self.fields_B,
                     self.psi0_A, self.psi0_B,

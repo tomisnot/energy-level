@@ -80,7 +80,8 @@ result = out
 | `add_level_group(n,l,j,reason)` | 加能级组 | 自动校验+配色 |
 | `remove_level_group(index,reason)` | 删能级组 | 索引见 get_state |
 | `set_waves(waves, atom, reason)` | 整表替换波形 | atom=single/A/B（三套独立），格式见下 |
-| `run_compute()` | 启动演化计算 | 立即返回 job_id，GUI 同步显示 |
+| `run_compute(diag=true)` | 启动演化计算 | 立即返回 job_id，GUI 同步显示。**diag=true（默认）**额外采集运行诊断供 `get_diag` 用（仅 mixed 引擎产出） |
+| `get_diag(scope,job_id,limit,save_npz)` | **只读：运行诊断** | 理解"为什么"的主通道。scope 空=摘要；`pairs`/`steps`/`sectors`/`traj`/`H` 给明细（截断/落盘）。job_id 空=最近一次或 GUI 当前 |
 | `job_status(job_id)` | 查进度 | 轮询到 done=true |
 | `job_result(job_id, save_npz)` | 取结果摘要 | 大数组落 npz 给路径 |
 | `cancel_job(job_id)` | 取消计算 | |
@@ -106,8 +107,40 @@ result = out
 - `dynamic.mode`：0 单原子 / 1 双原子（= 人点单选钮同路）；
 - `dynamic.decays`：自定义衰变通道。
 
+### 引擎/求解器控制量（2026-09 t83/t84：上帝模式的控制面已对 AI 开放）
+
+同一个注册表里还有两类**控制参数**（键 = 全路径）：
+
+- **`engine.*`** —— `src/core/params.py` 的 31 个**引擎**参数（默认值/分层/单位/
+  说明见 `list_params('engine.')`）。最常用的几个：
+  | 键 | 作用 | 何时动它 |
+  |---|---|---|
+  | `engine.PHASE_TOL` | 弱耦合丢弃门 Θ（rad，默认 1e-4） | 少留无贡献的弱对（提速）；调大可能丢多光子通道 |
+  | `engine.R_CRIT` | AC 化边界 r=Ω/ω（默认 0.0135） | 强驱动下远强对被剔出光子块 |
+  | `engine.MW_MAX_MHZ` | 微波/光场分界 + 候选窗绝对上界（1e5） | 一般不动 |
+  | `engine.BW_OPT` / `OPT_NRES_BW_MHZ` / `AC_NEAR_CUTOFF_MHZ` | 各引擎的对过滤/分流窗 | 模型边界，改=换模型 |
+- **`solve.*`** —— **运行级**参数（只管这一次怎么算，不改模型）：
+  | 键 | 作用 | 默认 |
+  |---|---|---|
+  | `solve.COST_BUDGET` | 微波候选窗的**成本上限**（rad）；窗宽 = 值/(C·T) | **空 = 不限制** |
+  | `solve.MAX_STEP` | DOP853 最大步长（ns） | 空 = 自适应 |
+  | `solve.PER_FREQ_M` | 逐载频光子块 M | 空 = 自动探针 |
+  | `solve.FROZEN_H_NS` | 两体纯冻结段长（ns） | 0 = 全自适应 |
+
+**成本预算已从"引擎参数"改为"运行级参数"（t84 用户裁决）**：它曾经默认 4e4 rad、
+在构造期就静默按成本窗删耦合对 —— 那是"为了跑得快悄悄改模型"。现在：
+① 默认**不限制**，真实存在的耦合一律保留；② 人在点"运行"时会看到**成本报告**
+对话框（保留对数 / 最远失谐 / 预计步数，可选"完整物理"或"剔除远对换速度"）；
+③ AI 发起的运行**不弹窗**（`_ai_initiated` 旗标），走完整物理路径并只写日志。
+**你要提速就显式 `set_param('solve.COST_BUDGET', 4e4)`**，并在结论里说明你
+剔掉了哪些远失谐通道 —— 那等于改物理，必须交代。
+
+改这些 = 改**会话真值**（进存档、可 undo、GUI 检视器即时回填+亮灯）。
+只想"这一次试试"就用 CodeAct 的 `params.override`（见 `run_python` 说明），
+别污染会话/存档。
+
 **不入册 = AI 碰不到**（也不入存档）：显示态数 topn、荧光读出态/权重、
-显示模式、关注跃迁、上帝模式 diag 精度旋钮。
+显示模式、关注跃迁；检视器的**窗口显隐/模式开关**属视图状态（AI 不改）。
 
 ## 单位约定（务必遵守）
 
@@ -142,7 +175,10 @@ stdout / 代码**则自动落在 `ai_results/`（见上"结果自动落盘"）�
  "offset_ns":0.0,"env":["gauss",200.0,40.0,1.0]}
 ```
 - env 高斯：`["gauss", 中心ns, σ_ns, 峰值]`
-- env 方波：`["square", 起点ns, 沿ns, 高度]`（可选第 5 元下降起点）
+- env 方波：**必须 5 个元素** `["square", 起点ns, 沿ns, 高度, 下降起点ns]`
+  （第 5 个是平台结束/开始下降的时刻；`serialize_waves` 就是这么输出的。
+  ⚠ 只给 4 个会被反序列化器判"波形数据不合法: list index out of range"——
+  实测踩过。平台到演化末尾就写 `t_max`）
 - **env 文件（光强包络，AI 可直接下发）**：`["file", t_ns 数组, amp 数组]`
   —— 保留载频，**sambe / mixed / hard 三引擎全支持**，是"任意包络 / 随机
   抖动 / 任意分段调制"的正确通道。实测与同参数方波 `env` **逐位等价**。
@@ -201,8 +237,17 @@ env 采样   = √[ (1 + δ(t)) / (1 + b) ]    # 峰值恰为 1
    同 op 影响；逐步操作逐步撤，别攒。
 4. **双原子模式**：`dynamic.pair.*` 仅双原子模式生效；切模式用
    `set_param('dynamic.mode', 0|1)`（0 单原子 / 1 双原子，= 人点单选钮同路）。
-5. **上帝模式（diag 旋钮）**不开放给 AI：检视器属人侧调试通道。
-6. 计算失败时 `job_result` 的 msg 含原因；常见=光强过大不收敛，
+5. **上帝模式怎么用（t83 更新，旧说明"不开放给 AI"已作废）**：
+   - **能用的**：引擎/求解器控制参数（`engine.*` / `solve.*`，见上）与
+     **运行诊断**（`get_diag`）。诊断是回答"为什么"的主通道；
+   - **不碰的**：检视器窗口显隐、极简/上帝模式开关（视图状态，P6）。
+6. **结果反直觉时的诊断套路**（比猜参数快得多）：
+   ① `get_diag('')` 看摘要（AC 化剔了几对、M=几、P/dim、步长分位数、归一偏差）；
+   ② 布居**完全不动** → `get_diag('pairs')` 看目标跃迁在不在保留集里
+   （不在 → 多为 `engine.PHASE_BUDGET` 砍了远失谐梯级，或基组缺中间态）；
+   ③ 跑得**异常慢** → 看 `solver.dt_ns` 与 `nfev`（光强过大 → Ω≫失谐 → 步长被钉死；
+   先降 intensity，别硬等）。
+7. 计算失败时 `job_result` 的 msg 含原因；常见=光强过大不收敛，
    降 intensity 或换 hard。
 
 ## 人机协同约定

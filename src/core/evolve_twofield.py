@@ -32,13 +32,10 @@ from . import static_atom as core
 from .evolve_util import _as_vector
 from .tensor import (_pair_loss_vectors, _as_product_psi, _reduce_A,
                      _reduce_B)
-from .sambe import (_CONV, _M_MAX,
-                    _gl_nodes, _GL_CACHE, setup_P)
+from .sambe import _CONV, _gl_nodes, _GL_CACHE, setup_P
 from .coupling import mw_candidate_mask, mw_cap_mhz
-from .params import (MW_MAX_MHZ, OPT_NRES_BW_MHZ, M_EST_BW_MHZ,  # t74c/t80
-                     _TF_DENSE_MAX, FRAME_TOL_REL,
-                     _M_MAX)
 from .sambe import env_at
+from . import params as _P
 
 # ---- 场分类 ----
 
@@ -116,7 +113,7 @@ def _build_A(cache, states, freq_mhz, intensity_mwcm2, pol, det_selector):
     return A
 
 
-def adaptive_split_threshold(states, default_mhz=MW_MAX_MHZ):
+def adaptive_split_threshold(states, default_mhz=None):
     """能级间隔分布 → 微波/光场自适应分界阈值（MHz）。
 
     物理：旋转系 RWA 只在载频 ≫ 里德堡尺度跃迁时有效；微波硬积分受
@@ -125,6 +122,7 @@ def adaptive_split_threshold(states, default_mhz=MW_MAX_MHZ):
     （DOP853 载波可行性安全带）。鲁棒性：无清晰两簇（单簇/退化）或
     孤立离群点（某侧间隙占比 < 5%）时回退 default_mhz。
     """
+    default_mhz = _P.get('MW_MAX_MHZ') if default_mhz is None else default_mhz
     E = np.array([s['E_mhz'] for s in states], float)
     if E.size < 2:
         return default_mhz
@@ -153,7 +151,7 @@ def split_by_freq(waves, states=None):
     否则回退固定 MW_MAX_MHZ（向后兼容）。
     """
     thr = (adaptive_split_threshold(states)
-           if states is not None else MW_MAX_MHZ)
+           if states is not None else _P.get('MW_MAX_MHZ'))
     opt, mw = [], []
     for w in waves:
         if w.freq_mhz > thr:
@@ -195,7 +193,7 @@ def build_two_field(cache, states, waves, mw_M=2, t_end_ns=None,
     for w in opt_w:
         # 近共振对（旋转前，以跃迁频率 ≈ ω 判）
         def _sel(i, j, E, w=w):
-            return abs(abs(E[i] - E[j]) - w.freq_mhz) < OPT_NRES_BW_MHZ
+            return abs(abs(E[i] - E[j]) - w.freq_mhz) < _P.get('OPT_NRES_BW_MHZ')
         A = _build_A(cache, states, w.freq_mhz, w.intensity_mwcm2, w.pol,
                      _sel)
         if not np.any(A):
@@ -265,8 +263,8 @@ def build_two_field(cache, states, waves, mw_M=2, t_end_ns=None,
     #      —— 「付不付得起」（无量纲 PHASE_BUDGET）
     #   ② 逐对 Θ = C·T·Ω²/max(Δ,Ω) ≥ PHASE_TOL —— 「重不重要」（精度）
     # 无 T（脚本直调）时只有 ①，且退化为绝对上界。
-    mw_cap_hz = (min(mw_cap_mhz(float(t_end_ns), phase_budget), MW_MAX_MHZ)
-                 if t_end_ns is not None else MW_MAX_MHZ)
+    mw_cap_hz = (min(mw_cap_mhz(float(t_end_ns), phase_budget), _P.get('MW_MAX_MHZ'))
+                 if t_end_ns is not None else _P.get('MW_MAX_MHZ'))
     dE_mat = np.abs(E[:, None] - E[None, :])
     mw_groups = []
     for w in mw_w:
@@ -493,7 +491,7 @@ def evolve_two_field(states, fields_meta, psi0, t_grid, tol=1e-6,
             if rows.size == 0:
                 continue
             det = np.abs((E[rows] - E[cols]) - g['omega_mhz'])
-            m = det < M_EST_BW_MHZ
+            m = det < _P.get('M_EST_BW_MHZ')
             if m.any():
                 vmax = max(vmax, float(np.abs(A[rows[m], cols[m]]).max()))
         return vmax / max(abs(g['omega_mhz']), 1e-9)
@@ -503,7 +501,7 @@ def evolve_two_field(states, fields_meta, psi0, t_grid, tol=1e-6,
         r = _peak_r(g)
         # 多光子显式：M ≥ 2（k=±2）；若 r 大到需要更高阶则升
         M = 2
-        while (r / 4.0) ** (2 * (M - 1)) > tol and M < _M_MAX:
+        while (r / 4.0) ** (2 * (M - 1)) > tol and M < _P.get('_M_MAX'):
             M += 1
         Ms.append(M)
     log(f'[two_field] 微波光子块 M={Ms}（扇区 {setup_P(Ms)}'
@@ -890,7 +888,7 @@ def build_two_field_pair(meta_A, meta_B, log=None):
 
 
 def vdd_rot_filter(V, E_pair_rot, E_pair_lab, log=None,
-                   tol_rel=FRAME_TOL_REL):
+                   tol_rel=None):
     """V_dd 旋转系筛选：只保留在本征旋转系里**静态**的元素。
 
     判据（t80 无量纲化）：`|d_rot − d_lab| ≤ tol_rel · max(|d_rot|, |d_lab|)`。
@@ -902,6 +900,7 @@ def vdd_rot_filter(V, E_pair_rot, E_pair_lab, log=None,
     返回 (V_filtered, info)；info 记录丢弃元素的数量 / max|V| / 净效应上界
     （|V|²/Δ，Δ 取丢弃元素的实验室系失谐）——供调用方日志与自检核对。
     """
+    tol_rel = _P.get('FRAME_TOL_REL') if tol_rel is None else tol_rel
     info = dict(n_keep=0, n_drop=0, max_v_drop=0.0, max_effect_mhz=0.0)
     if V is None:
         return None, info
@@ -931,13 +930,15 @@ def vdd_rot_filter(V, E_pair_rot, E_pair_lab, log=None,
     return Vf, info
 
 
-def _pair_mw_Ms(E_pair, groups, tol, bw=M_EST_BW_MHZ, m_min=2,
-                m_max=_M_MAX):
+def _pair_mw_Ms(E_pair, groups, tol, bw=None, m_min=2,
+                m_max=None):
     """逐微波载频解析光子块阶数（同单原子两场 evolve_two_field 的判据）。
 
     近共振峰值 r = max|A_近共振| / ω；M 取满足 (r/4)^{2(M−1)} ≤ tol 的最小值，
     下限 m_min=2（多光子显式保留）。
     """
+    bw = _P.get('M_EST_BW_MHZ') if bw is None else bw
+    m_max = _P.get('_M_MAX') if m_max is None else int(m_max)
     Ms = []
     for g in groups:
         r = 0.0
@@ -1050,7 +1051,7 @@ def evolve_two_field_pair(states, fields_meta_A, fields_meta_B, psi0_A,
     pops_2d, X_final, report, setup = _pair_propagate(
         E_pair_rot, N, groups, opt_terms, V, gamma_pair, psi0_2d, t, tol,
         Ms, progress_arr, log,
-        _TF_DENSE_MAX if dense_max is None else dense_max, frozen_h_ns)
+        _P.get('_TF_DENSE_MAX') if dense_max is None else dense_max, frozen_h_ns)
 
     # ---- loss 曲线（NonHermitian 速率积分）----
     loss_A = np.zeros(len(t))

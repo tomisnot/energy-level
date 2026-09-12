@@ -39,7 +39,6 @@ class FieldPanel(QWidget):
         super().__init__(parent)
         self.page = page
         self._ellip = {}        # 光场行 → 椭圆偏振参数 dict(alpha_deg, theta_deg, eps_deg)
-        self._ellip_dlg = None  # 非模态椭圆参数弹窗引用（防 GC）
         self._focus_exchange = False
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -169,6 +168,42 @@ class FieldPanel(QWidget):
         # 默认隐藏关注跃迁/初态（响应谱暂不实现）
         self.focus_row.setVisible(False)
         self.psi_row.setVisible(False)
+        # ---- 椭圆偏参数（t85：不再弹窗；平时隐藏，选"椭圆偏"后在表格下方
+        #      冒出来一行。改参数回车即实时重算，与旧弹窗行为一致）----
+        self.ellip_row = QWidget()
+        er = QHBoxLayout(self.ellip_row)
+        er.setContentsMargins(0, 0, 0, 0)
+        er.setSpacing(6)
+        self.ellip_label = QLabel('椭圆偏参数')
+        self.ellip_label.setToolTip(
+            '偏振选「椭圆偏」的光才有这三个角（单位：度）。\n'
+            '参数含义见 static_atom.elliptical_coeffs：θ 是椭圆主轴方位角。')
+        er.addWidget(self.ellip_label)
+        self.ellip_sel = QComboBox()
+        self.ellip_sel.setFixedWidth(78)
+        self.ellip_sel.setToolTip('哪一行光（多行同为椭圆偏时切换）')
+        self.ellip_sel.currentIndexChanged.connect(
+            lambda _i: self._fill_ellip_boxes())
+        er.addWidget(self.ellip_sel)
+        self.ellip_a = QDoubleSpinBox()
+        self.ellip_t = QDoubleSpinBox()
+        self.ellip_e = QDoubleSpinBox()
+        _ETIP = {'α': 'α：椭圆参数角（度）', 'θ': 'θ：椭圆主轴方位角（度）',
+                 'ε': 'ε：附加相位角（度）'}
+        for _lab, _w in (('α', self.ellip_a), ('θ', self.ellip_t),
+                         ('ε', self.ellip_e)):
+            _w.setRange(-180.0, 180.0)
+            _w.setDecimals(1)
+            _w.setSingleStep(5.0)
+            _w.setSuffix('°')
+            _w.setFixedWidth(74)
+            _w.setToolTip(_ETIP[_lab])
+            er.addWidget(QLabel(_lab))
+            er.addWidget(_w)
+            _w.editingFinished.connect(self._on_ellip_box)
+        er.addStretch(1)
+        lb.addWidget(self.ellip_row)
+        self.ellip_row.setVisible(False)
         lay.addWidget(self.lights_box)
 
     def set_lights_visible(self, show):
@@ -202,6 +237,10 @@ class FieldPanel(QWidget):
         self.changed.emit()
 
     def _table_changed(self, *_):
+        # 保险：任何表格变更都重瞄一次「椭圆偏参数」行（载入/程序化写偏振
+        # 走的是 blockSignals，不会触发 _on_pol_selected —— 实测漏过一次）
+        if getattr(self, 'ellip_row', None) is not None:
+            self._sync_ellip_row()
         show_exchange = getattr(self, '_focus_exchange', False)
         self.rebuild_focus(show_exchange)
         self._changed()
@@ -254,24 +293,63 @@ class FieldPanel(QWidget):
 
     # ---------------- 椭圆偏振 ----------------
     def _on_pol_selected(self, r, text):
-        """偏振下拉变化：选"椭圆偏"→ 打开参数弹窗；选标准偏振 → 清除椭圆参数。"""
+        """偏振下拉变化：选"椭圆偏"→ 参数行冒出来；标准偏振 → 收起并清除参数。
+
+        （旧版是弹一个非模态对话框 —— 关掉后参数就"不见了"，也不容易发现
+        哪一行还有椭圆参数。现在参数常驻在表格正下方，只在需要时出现。）
+        """
         if text == '椭圆偏':
-            self._open_ellip_dialog(r)
+            if self._ellip.get(r) is None:
+                self._ellip[r] = dict(alpha_deg=0.0, theta_deg=0.0,
+                                      eps_deg=0.0)
         else:
             self._ellip.pop(r, None)
             self._set_pol_tooltip(r)
+        self._sync_ellip_row(select=r if text == '椭圆偏' else None)
         self._table_changed()
 
-    def _open_ellip_dialog(self, r):
-        """打开椭圆偏振参数弹窗（非模态：改参数回车即实时触发重算）。"""
-        cur = self._ellip.get(r)
-        if cur is None:
-            cur = dict(alpha_deg=0.0, theta_deg=0.0, eps_deg=0.0)
-            self._ellip[r] = cur
-        self._ellip_dlg = EllipDialog(
-            self, cur,
-            lambda a, t, e, r=r: self._apply_ellip(r, a, t, e))
-        self._ellip_dlg.show()
+    def _ellip_rows(self):
+        """当前偏振为「椭圆偏」的表行（升序）。"""
+        return [r for r in range(self.table.rowCount())
+                if self._pol_text(r) == '椭圆偏']
+
+    def _sync_ellip_row(self, select=None):
+        """按当前偏振状态显示/填充下方「椭圆偏参数」行（无椭圆偏则整行隐藏）。"""
+        rows = self._ellip_rows()
+        self.ellip_row.setVisible(bool(rows))
+        if not rows:
+            return
+        prev = select if select in rows else self.ellip_sel.currentData()
+        self.ellip_sel.blockSignals(True)
+        self.ellip_sel.clear()
+        for r in rows:
+            self.ellip_sel.addItem(f'光{r + 1}', r)
+        self.ellip_sel.setCurrentIndex(rows.index(prev) if prev in rows else 0)
+        self.ellip_sel.blockSignals(False)
+        self._fill_ellip_boxes()
+
+    def _fill_ellip_boxes(self):
+        """把选中行的椭圆参数填进三个输入框（屏蔽信号，防回环）。"""
+        r = self.ellip_sel.currentData()
+        if r is None:
+            return
+        cur = self._ellip.get(r) or dict(alpha_deg=0.0, theta_deg=0.0,
+                                        eps_deg=0.0)
+        self._ellip[r] = cur
+        for box, key in ((self.ellip_a, 'alpha_deg'),
+                         (self.ellip_t, 'theta_deg'),
+                         (self.ellip_e, 'eps_deg')):
+            box.blockSignals(True)
+            box.setValue(float(cur.get(key, 0.0)))
+            box.blockSignals(False)
+
+    def _on_ellip_box(self, *_):
+        """参数框回车/失焦 → 写回存储 + tooltip + 重算（与旧弹窗同一路）。"""
+        r = self.ellip_sel.currentData()
+        if r is None:
+            return
+        self._apply_ellip(r, self.ellip_a.value(), self.ellip_t.value(),
+                          self.ellip_e.value())
 
     def _apply_ellip(self, r, alpha, theta, eps):
         """椭圆参数生效（回车实时）：写入存储 + tooltip + 触发重算。"""
@@ -303,7 +381,7 @@ class FieldPanel(QWidget):
         # 椭圆偏振：右键偏振列 → 修改参数弹窗（仅当该行当前是椭圆偏）
         act_ellip = None
         if col == 3 and self._pol_text(row) == '椭圆偏':
-            act_ellip = menu.addAction('修改椭圆偏振参数…')
+            act_ellip = menu.addAction('编辑下方「椭圆偏参数」行…')
         if act_freq or act_inten or act_ellip:
             menu.addSeparator()
         act_del = menu.addAction('删除此光')
@@ -313,10 +391,11 @@ class FieldPanel(QWidget):
         elif action == act_inten:
             self._open_intensity_dialog(row)
         elif action == act_ellip:
-            self._open_ellip_dialog(row)
+            self._sync_ellip_row(select=row)
         elif action == act_del:
             self.table.removeRow(row)
             self._ellip.pop(row, None)
+            self._sync_ellip_row()
             for r in range(self.table.rowCount()):
                 self.table.item(r, 0).setText(str(r + 1))
             self._table_changed()
@@ -422,6 +501,7 @@ class FieldPanel(QWidget):
         self.table.blockSignals(True)
         self.table.setRowCount(0)
         self._ellip.clear()
+        self._sync_ellip_row()
         for cfg in (cfgs or []):
             self.add_light()
             r = self.table.rowCount() - 1
@@ -447,6 +527,7 @@ class FieldPanel(QWidget):
             ell = cfg.get('elliptical') or {}
             if ell:
                 self._ellip[r] = dict(ell)
+        self._sync_ellip_row()
         self.table.blockSignals(False)
         self.rebuild_focus(getattr(self, '_focus_exchange', False))
         self._changed()
@@ -809,49 +890,3 @@ class IntensityScanDialog(QDialog):
         return self._I_best
 
 
-class EllipDialog(QDialog):
-    """椭圆偏振参数弹窗（α° 传播角 / θ° 主轴方位 / ε° 椭偏角）。
-
-    非模态：打开时改参数（回车/失焦 editingFinished）即实时生效并触发重算；
-    点"确定"关闭并固定；点"取消"关闭（保留已调参数）。
-    """
-
-    def __init__(self, parent, initial, on_param):
-        super().__init__(parent)
-        self.setWindowTitle('椭圆偏振参数')
-        self._on_param = on_param
-        form = QFormLayout(self)
-        self.alpha_spin = QDoubleSpinBox()
-        self.alpha_spin.setRange(0.0, 90.0)
-        self.alpha_spin.setDecimals(1)
-        self.alpha_spin.setSingleStep(1.0)
-        self.alpha_spin.setToolTip('传播方向与量子化轴 z 的夹角（0°=沿 z，90°=垂直 z）')
-        form.addRow('α° 传播角', self.alpha_spin)
-        self.theta_spin = QDoubleSpinBox()
-        self.theta_spin.setRange(0.0, 180.0)
-        self.theta_spin.setDecimals(1)
-        self.theta_spin.setSingleStep(1.0)
-        self.theta_spin.setToolTip('偏振椭圆主轴在垂直传播方向平面内的方位角（0~180°）')
-        form.addRow('θ° 主轴方位', self.theta_spin)
-        self.eps_spin = QDoubleSpinBox()
-        self.eps_spin.setRange(-45.0, 45.0)
-        self.eps_spin.setDecimals(1)
-        self.eps_spin.setSingleStep(1.0)
-        self.eps_spin.setToolTip('椭偏角（0=线偏，+45=左旋圆偏，−45=右旋圆偏）')
-        form.addRow('ε° 椭偏角', self.eps_spin)
-        if initial is not None:
-            self.alpha_spin.setValue(initial.get('alpha_deg', 0.0))
-            self.theta_spin.setValue(initial.get('theta_deg', 0.0))
-            self.eps_spin.setValue(initial.get('eps_deg', 0.0))
-        for s in (self.alpha_spin, self.theta_spin, self.eps_spin):
-            s.editingFinished.connect(self._emit)
-        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        btns.accepted.connect(self.accept)
-        btns.rejected.connect(self.reject)
-        form.addRow(btns)
-
-    def _emit(self):
-        """参数编辑完成（回车/失焦）→ 实时生效触发重算。"""
-        self._on_param(self.alpha_spin.value(),
-                       self.theta_spin.value(),
-                       self.eps_spin.value())

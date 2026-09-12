@@ -20,6 +20,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from arc import Rubidium87
 from src.core import core
+from src.core import params as _P
 _DIR = os.path.dirname(os.path.abspath(__file__))  # 输出到脚本所在目录
 
 FREQ_HZ = 295724.048e9      # 寻址光频率 (Hz)
@@ -44,7 +45,7 @@ intensities = np.concatenate(([0.0], I_log, I_lin))
 t0 = time.time()
 keys, shifts = core.direct_ac_stark_sweep(
     cache, groups, cfg, B_G, intensities,
-    sos_n_window=core.DIRECT_SOS_N_WINDOW)     # 软件默认全基组
+    sos_n_window=_P.get('DIRECT_SOS_N_WINDOW'))     # 软件默认全基组
 print(f'基组 {len(keys)} 个子能级 × {len(intensities)} 个光强点，'
       f'耗时 {time.time() - t0:.1f}s', flush=True)
 

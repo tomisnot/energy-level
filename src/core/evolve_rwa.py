@@ -16,7 +16,7 @@ from .evolve_util import _CONV             # t74：常量单源
 from .evolve_util import (_POL_Q, _onehot, _as_vector, decay, auto_decays,
                           _resolve_state_idx, _decay_ops)  # t74 工具归位
 from .field_build import _field_geometry  # t74：ip4 场格式归一归位场层
-from .params import RWA_TOL  # t74c 参数单源
+from . import params as _P
 # 光频/微波分界：Ω/ωL < 此值 → RWA（反旋转误差 ~1e-7）；≥ → 非 RWA
 
 
@@ -112,8 +112,8 @@ def _rwa_reference(states, fields):
     def _ratio(g):
         return (g.get('real_omega0_mhz', g['omega0_mhz'])
                 / max(g['omega_L_mhz'], 1e-9))
-    rwa_g = [g for g in geoms if _ratio(g) < RWA_TOL]
-    non_g = [g for g in geoms if _ratio(g) >= RWA_TOL]
+    rwa_g = [g for g in geoms if _ratio(g) < _P.get('RWA_TOL')]
+    non_g = [g for g in geoms if _ratio(g) >= _P.get('RWA_TOL')]
 
     def _key(i):
         s = states[i]
@@ -604,7 +604,7 @@ def _lindblad_eligible(states, fields, t_end):
     for g in geoms:
         ratio = (g.get('real_omega0_mhz', g['omega0_mhz'])
                  / max(g['omega_L_mhz'], 1e-9))
-        if ratio >= RWA_TOL:
+        if ratio >= _P.get('RWA_TOL'):
             return False
         if not _env_samples(g['waveform'], t_end)[1]:
             return False
@@ -1293,3 +1293,17 @@ _ip4_rk4_core = _rwa_rk4_core
 _evolve_ip4 = _evolve_rwa
 _evolve_full = _evolve_reference_lab
 _evolve_full_hybrid = _evolve_reference_hybrid
+
+
+def __getattr__(name):
+    """PEP 562 回落：把历史 re-export 的引擎参数转发到注册表。
+
+    这些模块过去用 `from .params import X` 顺带充当转发站（外部代码
+    `core.RYDBERG_N_MIN` / `from .evolve_rwa import RWA_TOL`）。参数读取点
+    已改为 `_P.get(...)`，转发站随之消失——这里补一层回落，
+    使旧式属性访问继续可用，并且同样响应 `params.override()`。
+    """
+    from . import params as _p
+    if name in _p.DEFAULTS or name in _p.ALIASES:
+        return _p.get(name)
+    raise AttributeError(f'module {__name__!r} has no attribute {name!r}')

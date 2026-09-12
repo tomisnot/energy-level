@@ -33,7 +33,7 @@ import numpy as np
 import matplotlib
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QObject
 from PyQt5.QtGui import QColor, QIcon, QPixmap
-from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
+from PyQt5.QtWidgets import (QButtonGroup, QPushButton, QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QTabWidget, QStackedWidget,
                              QScrollArea, QSizePolicy, QFileDialog,
                              QMessageBox, QLabel, QSpinBox, QDoubleSpinBox,
@@ -53,6 +53,15 @@ from src.ui.ui_spectrum import LevelAnalysisPanel
 matplotlib.rcParams['font.family'] = 'sans-serif'
 matplotlib.rcParams['font.sans-serif'] = ['Microsoft YaHei', 'SimHei', 'DejaVu Sans']
 matplotlib.rcParams['axes.unicode_minus'] = False
+
+
+_MODE_QSS = (
+    'QPushButton { padding: 3px 12px; border: 1px solid #d6d9de;'
+    ' background: #ffffff; color: #5b6270; font-size: 9pt; }'
+    'QPushButton:checked { background: #eef2ff; color: #2b3a67;'
+    ' font-weight: 600; border-color: #8fa6e8; }'
+    'QPushButton:hover { background: #f3f5f9; }'
+)
 
 
 class MainWindow(QMainWindow):
@@ -81,6 +90,10 @@ class MainWindow(QMainWindow):
         self._selected_spec_row = -1
         self._level_all = []
         self._level_by_key = {}
+        # t82：模式位 + 引擎参数会话覆写（唯一真值；检视器「引擎参数」页与
+        # 参数注册表 engine.* 都读写这一份，运行时装进 params.override 快照）
+        self.god_mode = False
+        self.engine_overrides = {}
         self._build_ui()
 
     def log(self, msg, timeout=8000):
@@ -262,14 +275,89 @@ class MainWindow(QMainWindow):
         # 这里补登外部/非标参数（光场表/能级组/波形/psi/衰变/模式）+ 播种。
         # 存档/恢复/AI 三条路都吃这一张册（登记即存档）。
         from src.pm_setup import register_panel_params
-        for _panel in ('field', 'group', 'dynamic'):
+        for _panel in ('field', 'group', 'dynamic', 'engine', 'solve'):
             register_panel_params(self.param_reg, self, _panel)
         self.param_reg.seed_baseline()
         menubar = self.menuBar()
         fm = menubar.addMenu('文件')
         fm.addAction('保存状态', self._save_state)
         fm.addAction('恢复状态', self._load_state)
+        self._build_mode_switch(menubar)
         QTimer.singleShot(0, self._apply_fullscreen_layout)
+
+    # ---------- 模式切换（极简 / 上帝）----------
+    # t82：上帝模式是**凌驾于各页之上的模式**，不是某一页的复选框 ——
+    # 开关放在菜单栏那一行（QMenuBar 右上角 corner widget），两个互斥按钮。
+    # 开上帝模式：检视器自动显示 + 运行采集 diag（更重的诊断） + 标题/徽标标记；
+    # 极简模式：检视器隐藏但**对象与绑定照旧存在**（登记跟真值源走，不跟显隐走）。
+    def _build_mode_switch(self, menubar):
+        box = QWidget()
+        hl = QHBoxLayout(box)
+        hl.setContentsMargins(0, 2, 8, 2)
+        hl.setSpacing(0)
+        self._mode_btns = {}
+        grp = QButtonGroup(self)
+        grp.setExclusive(True)
+        for key, text, tip in (
+                ('simple', '极简模式', '只做建模与算例：检视器窗口隐藏，'
+                                       '其余行为不变'),
+                ('god', '上帝模式', '求解过程可视化 + 引擎参数覆写：'
+                                    '检视器自动显示，运行采集诊断')):
+            b = QPushButton(text)
+            b.setCheckable(True)
+            b.setCursor(Qt.PointingHandCursor)
+            b.setToolTip(tip)
+            b.setStyleSheet(_MODE_QSS)
+            grp.addButton(b)
+            hl.addWidget(b)
+            self._mode_btns[key] = b
+            b.clicked.connect(lambda _c, k=key: self.set_mode(god=(k == 'god')))
+        self._mode_group = grp
+        menubar.setCornerWidget(box, Qt.TopRightCorner)
+        self.set_mode(god=False)          # 默认极简
+
+    def set_mode(self, god):
+        """切模式（菜单栏按钮 / 代码 / 将来 AI 都走这里，唯一入口）。"""
+        god = bool(god)
+        if god == self.god_mode and getattr(self, '_mode_ready', False):
+            return
+        self.god_mode = god
+        self._mode_ready = True
+        self._mode_btns['god'].setChecked(god)
+        self._mode_btns['simple'].setChecked(not god)
+        self.setWindowTitle('Rb-87 能级计算' + ('　· 上帝模式' if god else ''))
+        if hasattr(self, 'dynamic'):
+            self.dynamic.set_god_mode(god)
+        self.log('已切到' + ('上帝模式（检视器已打开）' if god else '极简模式'))
+
+    def set_engine_overrides(self, values):
+        """引擎参数会话覆写唯一写入口（注册表 engine.* 的 write_fn 调它）。
+
+        写进 store 后**必须同步检视器页**：否则 AI/程序改了参数，界面上的灯
+        亮了、数字还是旧的（实测踩过）。同步走各 binding 的 display 通道。
+        """
+        self.engine_overrides = dict(values or {})
+        insp = getattr(getattr(self, 'dynamic', None), '_inspector', None)
+        if insp is not None:
+            insp.set_engine_overrides(self.engine_overrides)
+
+    def _on_engine_param_edited(self, name, value):
+        """检视器页改**某一个**引擎参数 → 更新会话真值 + 注册表记账。
+
+        逐参数（不是整批替换）：非法/半成品输入不会牵连其它覆写。
+        `value=None` = 清该项覆写（回默认）。人这条路与 AI 走 `set_param`
+        最终都落在 `engine_overrides` 同一份状态上（P2/P3）。
+        """
+        from src import pm_setup as pm
+        # name 是**全路径**（engine.X / solve.Y）；统一走 god_write（判等→清覆写）
+        key = name if '.' in name else pm.god_key('engine', name)
+        pm.god_write(self, key, value)
+        reg = getattr(self, 'param_reg', None)
+        if reg is not None:
+            try:
+                reg.note_change(key, source='user')
+            except Exception:
+                pass
 
     def _on_canvas_tab_changed(self, idx):
         self.page_stack.setCurrentIndex(idx)

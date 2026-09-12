@@ -673,6 +673,44 @@ class WavePanel(QWidget):
         g.addWidget(_label('偏振'), 0, 4)
         g.addWidget(pol, 0, 5)
 
+        # ---- 椭偏参数行（t85）：**平时隐藏**，选「椭圆偏」才在下一行冒出来。
+        # 底层：field_build 用 static_atom.elliptical_coeffs 把这 α/θ/ε 换成
+        # 球基系数 (c₊,c₀,c₋) 做相干叠加；缺参数会显式报错（旧版静默按 π 算）。
+        ell_host = QWidget()
+        _eh = QHBoxLayout(ell_host)
+        _eh.setContentsMargins(0, 2, 0, 0)
+        _eh.setSpacing(4)
+        _eh.addWidget(_label('椭偏'))
+        _e0 = dict(getattr(w, 'elliptical', None)
+                   or dict(alpha_deg=0.0, theta_deg=0.0, eps_deg=0.0))
+        e_a = _spin(-180, 180, 1, float(_e0.get('alpha_deg', 0.0)), 5, '°', 84)
+        e_a.setToolTip('α：传播方向与量子化轴 z 的夹角（0~90°）')
+        e_t = _spin(-180, 180, 1, float(_e0.get('theta_deg', 0.0)), 5, '°', 84)
+        e_t.setToolTip('θ：偏振椭圆主轴方位角（0~180°）')
+        e_e = _spin(-180, 180, 1, float(_e0.get('eps_deg', 0.0)), 5, '°', 84)
+        e_e.setToolTip('ε：椭偏角（0=线偏，±45°=圆偏）')
+        for _lb, _w2 in (('α', e_a), ('θ', e_t), ('ε', e_e)):
+            _eh.addWidget(_label(_lb))
+            _eh.addWidget(_w2)
+        _eh.addStretch(1)
+        g.addWidget(ell_host, 2, 0, 1, 6)
+        ell_host.setVisible(pol.currentText() == '椭圆偏')
+
+        def _sync_ell(*_):
+            """偏振/角度变化 → 显隐参数行 + 写回 Wave.elliptical + 重画标题。"""
+            vis = pol.currentText() == '椭圆偏'
+            ell_host.setVisible(vis)
+            if vis:
+                w.elliptical = dict(alpha_deg=e_a.value(),
+                                    theta_deg=e_t.value(),
+                                    eps_deg=e_e.value())
+            head.setText(self._wave_title(w, idx))
+            self.changed.emit()
+
+        for _w2 in (e_a, e_t, e_e):
+            _w2.valueChanged.connect(_sync_ell)
+        pol.currentTextChanged.connect(_sync_ell)
+
         # ============ 行1：包络参数 | 起点偏移（独立 HBox，不占网格列，防溢出） ============
         e = w.envelope
         if isinstance(e, waveforms.GaussianEnv):

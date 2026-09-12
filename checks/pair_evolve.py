@@ -33,8 +33,8 @@ from src.core.evolve_util import _as_vector, _decay_ops, _resolve_state_idx
 from src.core.sambe import env_at
 from src.core.field_build import _env_samples
 from src.core.evolve_rwa import (_evolve_rwa, _rwa_reference, _e_rot,
-                                 _assign_reference, _field_geometry,
-                                 RWA_TOL)
+                                 _assign_reference, _field_geometry)
+from src.core.params import RWA_TOL
 from src.core import static_atom as core
 from src.core import tensor as _tensor  # noqa: E402  （t14张量化调度层搬移）
 

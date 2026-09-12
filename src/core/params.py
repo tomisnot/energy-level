@@ -1,179 +1,357 @@
 # -*- coding: utf-8 -*-
-"""引擎参数单源：全库硬编码参数的唯一定义点。
+"""引擎参数单源：**注册表 + 默认值 + 每次运行的覆写**。
 
-分层（t80）：
-  【A】精度控制面 —— 5 个无量纲量 + 1 组积分容差。**这是唯一的旋钮集。**
+============================================================
+怎么用（三条规则）
+============================================================
+1) **读**：一律 `P.get('NAME')`（`from . import params as _P`），
+   **不要**在函数签名默认值里写 `P.NAME`——默认值在 import 时求值，会绕过覆写。
+   签名里要可覆写就写 `arg=None`，函数体内 `arg = P.get('NAME') if arg is None else arg`。
+2) **覆写**：`with P.override({'PHASE_TOL': 1e-5}): engine(...)`。
+   覆写存在**线程本地栈**里 → 每次运行一个快照、天然线程安全、可嵌套、退出即还原。
+   GUI 的 `EvolveWorker` 就是这么做的（上帝模式"引擎参数"页 → 每次运行一个快照）。
+3) 模块级 `P.NAME` 仍然可用（PEP 562 `__getattr__` 回落到 `get()`），
+   故旧代码/脚本不必改；但**它只在"无覆写生效"时等于默认值**，
+   要真正吃到覆写必须走规则 1。
+
+============================================================
+分层（与 §A~§E 一致）
+============================================================
+  【A】精度控制面 —— 5 个无量纲量 + 积分容差。**这是唯一的精度旋钮集。**
   【B】由【A】派生的运行时有量纲量（不是独立自由度）
   【C】结构 / 物理事实常量
-  【D】模型边界（改它 = 换模型，不是调精度）
+  【D】模型边界（改它 = 换模型）
   【E】性能 / 数值保护（只影响速度与鲁棒性）
 
-【C】【D】【E】**都不是**精度旋钮。判据推导、实测锚、历史动因（谁取代了谁、
-为什么某些参数刻意不合并）见 `docs/参数与判据决策史.md`；逐参数登记表见
-`docs/引擎参数总表.md`。
+判据推导与历史动因见 `docs/参数与判据决策史.md`；
+逐参数登记表见 `docs/引擎参数总表.md`。
 
-本模块零依赖：只含标量 / 元组 / 纯 Python；需要 numpy 的派生式放在
-`coupling.py`（见【B】）。
+本模块零依赖（只用标准库）：不 import 任何 src 子模块。
 """
+import contextlib
+import threading
 
 # ============================================================
-# 【A】精度控制面（无量纲）——引擎"算多准"的唯一旋钮集
+# 元数据：ParamSpec / SPECS
 # ============================================================
-PHASE_TOL = 1e-4
-"""① 弱耦合可忽略门（rad）。
 
-    Θ = C · T · |V|² / max(|ΔE|, |V|)  ≥  本值   → 保留
 
-V_dd 与微波对共用同一实现（`coupling.static_phase_keep` / `mw_pair_keep`），
-故各引擎保留集自动一致。共振极限 Θ=C·T·|V|，远失谐极限 Θ=C·T·|V|²/Δ。"""
-POP_PHASE_TOL = PHASE_TOL          # 旧名别名（t78~t79 的调用点与文档在用）
+class ParamSpec:
+    """一个引擎参数的完整描述（默认值 + 单位 + 分层 + UI 元数据）。"""
 
-PHASE_BUDGET = 4e4
-"""② 成本预算（rad）——"这项付得起吗"，取代所有固定频率窗。
+    __slots__ = ('name', 'default', 'tier', 'kind', 'label', 'unit', 'desc',
+                 'lo', 'hi', 'log', 'settable')
 
-候选窗宽 = 本值 / (C · T)。最坏总步数 ≈ 本值 / 0.5 ≈ 8e4，**与 T、体系无关**：
-T 短则窗宽（本来就不用走那么多步），T 长则窗窄（同频率走更多周期，付不起）。
+    def __init__(self, name, default, tier, label, desc='', unit='',
+                 kind='float', lo=None, hi=None, log=False, settable=True):
+        self.name = name
+        self.default = default
+        self.tier = tier
+        self.kind = kind               # 'float' | 'int' | 'tuple'
+        self.label = label
+        self.desc = desc
+        self.unit = unit
+        self.lo = lo                   # UI 提示范围（不做硬校验）
+        self.hi = hi
+        self.log = log                 # 跨量级 → UI 用对数步长
+        self.settable = settable       # False = 派生量/别名，不出现在引擎参数页
 
-与 ① 是同一族的两个方向：① 管精度、② 管成本，都用相位表达、都随 T 自适应。
-派生式：`coupling.mw_cap_mhz(T)`。"""
 
-R_CRIT = 0.0135
-"""③ AC 化边界（无量纲比 r = Ω/ω）：r > 本值的远强对剔出光子块，
-其位移走 far_sos 注入。"""
+TIERS = (
+    ('A', '精度控制面（无量纲）——引擎"算多准"的唯一旋钮集'),
+    ('C', '结构 / 物理事实常量（不是精度旋钮）'),
+    ('D', '模型边界（改它 = 换模型）'),
+    ('E', '性能 / 数值保护（只影响速度与鲁棒性）'),
+)
 
-RWA_TOL = 1e-4
-"""④ RWA 有效性（无量纲比 Ω/ωL，ip4 遗留引擎）：Ω/ωL < 本值 → RWA 有效。
+SPECS = (
+    # ---------------- 【A】精度控制面 ----------------
+    ParamSpec(
+        'PHASE_TOL', 1e-4, 'A', '弱耦合可忽略门',
+        'Θ = C·T·|V|²/max(|ΔE|,|V|) ≥ 本值 → 保留。V_dd 与微波对共用同一判据，'
+        '各引擎保留集自动一致。共振极限 Θ=C·T·|V|，远失谐 Θ=C·T·|V|²/Δ。'
+        '调大 → 丢更多弱耦合（更快，但可能丢多光子通道）。',
+        unit='rad', lo=1e-9, hi=1e-1, log=True),
+    # ⚠ PHASE_BUDGET（成本预算）已**迁出引擎参数面**：它是运行级成本旋钮，
+    # 注册在 `solve.COST_BUDGET`（见 pm_setup._SOLVE_SPECS），默认 None
+    # = 不限制。引擎侧仍读模块级默认 None（无人指定 → 不做成本剔除），
+    # 真实存在的耦合一律保留；"可忽略"由上面的 Θ 判据回答。
+    ParamSpec(
+        'R_CRIT', 0.0135, 'A', 'AC 化边界 r=Ω/ω',
+        'r > 本值的远强对从光子块剔除，位移走 far_sos 注入。',
+        lo=1e-5, hi=1.0, log=True),
+    ParamSpec(
+        'RWA_TOL', 1e-4, 'A', 'RWA 有效性 Ω/ωL',
+        'Ω/ωL < 本值 → RWA 有效（ip4 遗留引擎）。与 R_CRIT 是同一族的两个'
+        '不同要求（块截断 vs 近似有效性），刻意分开。',
+        lo=1e-8, hi=1e-1, log=True),
+    ParamSpec(
+        'M_EST_TOL', 1e-6, 'A', '光子块截断容差',
+        '(r/4)^{2(M−1)} ≤ 本值 → M 收敛。mixed 路径用本值；sambe/两场用各自'
+        '入口的 tol（默认同值）。', lo=1e-12, hi=1e-1, log=True),
+    ParamSpec(
+        'DEFAULT_RTOL', 1e-8, 'A', '积分相对容差',
+        'mixed 引擎入口的默认 rtol。atol 由它按 ATOL_RTOL_RATIO 派生。',
+        lo=1e-14, hi=1e-2, log=True),
+    ParamSpec(
+        'ATOL_RTOL_RATIO', 1e-2, 'A', 'atol/rtol 比',
+        'atol = rtol × 本值（派生用，非独立旋钮）。',
+        lo=1e-6, hi=1.0, log=True),
+    ParamSpec(
+        'DEFAULT_ATOL', None, 'A', '积分绝对容差（派生）',
+        '= DEFAULT_RTOL × ATOL_RTOL_RATIO。只读：要改请改那两个。',
+        settable=False),
 
-与 ③ 是**同一族的两个不同要求**，刻意不合并：③ 问"远强对能否留在光子块里"
-（块截断），④ 问"旋转波近似本身够不够准"（近似有效性）。"""
+    # ---------------- 【C】结构 / 物理事实 ----------------
+    ParamSpec(
+        'MW_MAX_MHZ', 1e5, 'C', '微波/光场分界',
+        '载频 ≤ 本值按微波处理，> 按光场；兼作微波候选窗的绝对上界'
+        '（兜 T→0）。', unit='MHz', lo=1e3, hi=1e9, log=True),
+    ParamSpec(
+        '_M_START', 2, 'C', '光子块 M 起点',
+        'M 自适应起点（实际自 M=_M_START−1 起步）。', kind='int', lo=1, hi=8),
+    ParamSpec(
+        '_M_MAX', 8, 'C', '光子块 M 上限',
+        '截断上限；达上限会记"截断误差可能 > tol"警告。',
+        kind='int', lo=1, hi=16),
+    ParamSpec(
+        'DIRECT_SOS_N_WINDOW', 3, 'C', 'Floquet 偶极伙伴窗',
+        '静态 AC-Stark 的 Floquet 基组自动纳入偶极伙伴 |Δn| ≤ 本值。',
+        kind='int', lo=0, hi=12),
+    ParamSpec(
+        'RYDBERG_N_MIN', 20, 'C', '里德堡下限',
+        'n ≥ 本值视为里德堡态（超精细可忽略）——物理事实。',
+        kind='int', lo=1, hi=60),
+    ParamSpec(
+        'AC_EFFECT_THRESHOLD_MHZ', 0.05, 'C', 'UI「受影响」阈值',
+        '|AC| > 本值 → UI 标记"受寻址光影响"（**显示阈值**，非引擎精度）。',
+        unit='MHz', lo=1e-4, hi=1e3, log=True),
 
-M_EST_TOL = 1e-6
-"""⑤ 光子块截断容差：(r/4)^{2(M−1)} ≤ 本值 → M 收敛（r = 近共振峰值 Rabi/ω）。
+    # ---------------- 【D】模型边界 ----------------
+    ParamSpec(
+        'BW_OPT', 2e4, 'D', '光场对过滤带宽（mixed）',
+        'mixed φ-帧光场对 |ΔD| < 本值保留。是**双峰分离器**（共振对 ~0 vs '
+        '反旋伙伴 ~2ω≈7.6e8，差 4 个量级）→ 在 [1e3,1e6] 内取谁都一样；'
+        '调小会让更多对进精确计算。', unit='MHz', lo=1e3, hi=1e6, log=True),
+    ParamSpec(
+        'OPT_NRES_BW_MHZ', 2e3, 'D', '光场对近共振窗（两场）',
+        '两场引擎把光场耦合冻结为常量矩阵 ½Ω → 本窗是**正确性边界**'
+        '（远失谐对塞进去是系统性错误），不可换相位判据。',
+        unit='MHz', lo=1e1, hi=1e6, log=True),
+    ParamSpec(
+        'AC_NEAR_CUTOFF_MHZ', 5e3, 'D', '近/远失谐分流（field_build）',
+        '|Δ| ≥ max(本值, Ω) → 只走静态 SOS；否则相干驱动进 A 矩阵。'
+        '5 GHz 是覆盖超精细/精细流形的保守地板。',
+        unit='MHz', lo=1e1, hi=1e6, log=True),
+    ParamSpec(
+        'M_EST_BW_MHZ', 2e4, 'D', 'M 估计的 r 取样窗',
+        '只在此窗内取 max|A| 定 r（窗越宽 r 只增不减 → 最保守）。'
+        '不改变精度目标（那是 M_EST_TOL），只决定"哪些对算近共振"。',
+        unit='MHz', lo=1e2, hi=1e6, log=True),
+    ParamSpec(
+        'FRAME_TOL_REL', 1e-6, 'D', '旋转系有效性（相对）',
+        '|ΔE_rot−ΔE_lab| ≤ 本值·max(|ΔE_rot|,|ΔE_lab|) → 该 V_dd 元素在'
+        '本征旋转系里静态、可用。布尔分离器（差值只有 ~0 与 ~±ω_opt 两档）。',
+        lo=1e-9, hi=1e-1, log=True),
 
-mixed 路径用本常量；sambe / 两场路径用各自入口的 `tol`（默认同值）——
-那是有意的：截断误差应与积分误差同量级，共用一个旋钮比多设一个更少自由度。"""
+    # ---------------- 【E】性能 / 数值保护 ----------------
+    ParamSpec(
+        '_DENSE_MAX', 2200, 'E', '稠密 eigh 上限',
+        '扩展维 ≤ 本值走稠密 eigh，否则稀疏 expm_multiply。',
+        kind='int', lo=100, hi=20000),
+    ParamSpec(
+        '_TF_DENSE_MAX', 3000, 'E', '两场两体稠密上限',
+        '标准两场两体 22 态为 2420 维，须留稠密，否则 backend 翻成 '
+        'tf-sambe-sparse（有自检断言该契约）。',
+        kind='int', lo=100, hi=20000),
+    ParamSpec(
+        '_TAB_N', 2 ** 17, 'E', 'hard 包络表点数（契约）',
+        '线性插值表点数。**接口契约**：任意波形可驱动带宽 = '
+        '0.5·(_TAB_N−1)/T，报给用户（waveforms.f_max_mhz）→ 缩小它会改变'
+        '承诺的带宽。', kind='int', lo=1024, hi=2 ** 21),
+    ParamSpec(
+        '_RHS_ENV_TAB_N', 20001, 'E', 'mixed RHS 表点数',
+        'mixed RHS 包络/相位查表点数（内存/构建预算）。',
+        kind='int', lo=101, hi=2 ** 19),
+    ParamSpec(
+        '_AC_ENV_TAB_N', 4001, 'E', 'mixed AC 表点数',
+        'AC 时变对角的独立包络表点数（AC 只跟随慢变光强）。',
+        kind='int', lo=101, hi=2 ** 18),
+    ParamSpec(
+        '_ENV_PROBE_N', 2001, 'E', 'sambe 包络探针点数',
+        'sambe 包络活性/恒常判断采样点数。', kind='int', lo=17, hi=100001),
+    ParamSpec(
+        '_ENV_SAMPLES', 64, 'E', 'field_build 包络探针数',
+        'field_build 包络恒常判断采样数（粗粒度）。', kind='int', lo=8, hi=4097),
+    ParamSpec(
+        '_DT_MIN_FRAC', 2e5, 'E', '自适应细分下限分数',
+        '自适应细分绝对下限 = T/本值（防无限细分）。', lo=1e2, hi=1e9, log=True),
+    ParamSpec(
+        '_SPARSE_SEG_MAX', 50000, 'E', '稀疏分段上限',
+        '稀疏自适应细分总段数上限（防爆炸卡死）。',
+        kind='int', lo=100, hi=10 ** 7),
+    ParamSpec(
+        '_SPARSE_MAX_DEPTH', 4, 'E', '稀疏二分深度上限',
+        '稀疏自适应二分递归深度上限（正常 ≤3）。', kind='int', lo=1, hi=12),
+    ParamSpec(
+        '_NODE_LADDER', (16, 32, 64, 128), 'E', '求积节点阶梯',
+        'Volterra/GL 求积节点阶梯（逗号分隔整数）。', kind='tuple',
+        lo=None, hi=None),
+    ParamSpec(
+        '_VOLT_MAX_ITER', 60, 'E', 'GMRES 迭代上限',
+        'GMRES 求解上限迭代数。', kind='int', lo=1, hi=2000),
+    ParamSpec(
+        '_VOLT_PICARD_FRAC', 0.05, 'E', 'GMRES 容差比',
+        'GMRES atol = tol × 本值（Picard 残差容差比）。',
+        lo=1e-4, hi=1.0, log=True),
+    ParamSpec(
+        '_VOLT_PRE_SWEEPS', 8, 'E', '预条件扫掠次数',
+        '预条件因果（cumsum）Picard 扫掠次数。', kind='int', lo=1, hi=64),
+)
 
-ATOL_RTOL_RATIO = 1e-2
-"""atol = rtol × 本值（无量纲）——派生用，非独立旋钮。"""
+SPEC_BY_NAME = {s.name: s for s in SPECS}
 
-DEFAULT_RTOL = 1e-8
-"""积分相对容差——mixed 引擎入口的默认值单源。"""
+# 别名：旧名 → 规范名（不在 SPECS 里，故不出现在 UI；get() 会转发）
+ALIASES = {'POP_PHASE_TOL': 'PHASE_TOL'}
 
-DEFAULT_ATOL = DEFAULT_RTOL * ATOL_RTOL_RATIO
-"""积分绝对容差——**由 DEFAULT_RTOL 派生**（= 1e-10），不是自由参量。"""
+# 派生量：先算覆写后的依赖，再套这个函数（不占独立自由度）
+_DERIVED = {'DEFAULT_ATOL': lambda ef: ef['DEFAULT_RTOL'] * ef['ATOL_RTOL_RATIO']}
 
+
+def _defaults():
+    d = {s.name: s.default for s in SPECS}
+    for k, fn in _DERIVED.items():
+        d[k] = None                      # 占位，避免 __getattr__ 无限递归
+    d['DEFAULT_ATOL'] = d['DEFAULT_RTOL'] * d['ATOL_RTOL_RATIO']
+    # 成本预算已迁到运行级（solve.COST_BUDGET）；引擎侧仍需要这个**默认值**
+    # None（= 不限制）供 coupling.mw_cap_mhz 在无人指定时使用。
+    d['PHASE_BUDGET'] = None
+    return d
+
+
+DEFAULTS = _defaults()
 
 # ============================================================
-# 【B】由【A】派生的运行时有量纲量（不是独立自由度）
+# 取值 / 覆写
 # ============================================================
-#   coupling.mw_cap_mhz(T) = PHASE_BUDGET / (_CONV · T)   ← 取代旧的固定微波窗
-# 有量纲结果由物理量（T、Ω）与【A】自动生成，不占控制面自由度。
+_OVR = threading.local()
 
 
-# ============================================================
-# 【C】结构 / 物理事实常量（不是精度旋钮）
-# ============================================================
-MW_MAX_MHZ = 1e5
-"""载频 ≤ 本值按微波处理，> 按光场（MHz）；
-t80 起兼作微波**候选窗的绝对上界**（兜 T→0 的极端情形）。"""
-
-_M_START = 2
-"""光子块阶数 M 的自适应起点（实际自 `M = _M_START − 1 = 1` 起步）。"""
-
-_M_MAX = 8
-"""光子块阶数 M 的截断上限。达上限会记"截断误差可能 > tol"警告。"""
-
-DIRECT_SOS_N_WINDOW = 3
-"""Floquet 基组自动纳入的偶极伙伴 |Δn| ≤ 本值。"""
-
-RYDBERG_N_MIN = 20
-"""n ≥ 本值视为里德堡态（超精细可忽略）——物理事实。"""
-
-AC_EFFECT_THRESHOLD_MHZ = 0.05
-"""|AC| > 本值 → UI 标记"受寻址光影响"（显示阈值，非引擎精度）。"""
+def _stack():
+    st = getattr(_OVR, 'stack', None)
+    if st is None:
+        st = _OVR.stack = []
+    return st
 
 
-# ============================================================
-# 【D】模型边界（改它 = 换模型，不是调精度）
-# ============================================================
-BW_OPT = 2e4
-"""mixed φ-帧**光场对**的过滤带宽（MHz，|ΔD| < 本值保留）。
-
-是**双峰分离器**而非阈值：共振对 |ΔD|~0，反旋伙伴 |ΔD|~2ω_opt~7.6e8，相差
-4 个量级 → 本值在 [1e3, 1e6] 内取谁都得到同一分区。t78 起只管光场对。"""
-
-OPT_NRES_BW_MHZ = 2e3
-"""两场引擎**光场对**进耦合矩阵的近共振窗（MHz）。
-
-两场引擎把光场耦合**冻结为常量矩阵** ½Ω，常量近似只在近共振处成立 →
-本窗是**正确性边界**（远失谐对塞进去是系统性错误，不是"更慢"），
-故不可换累积相位判据（与微波窗不同族）。"""
-
-AC_NEAR_CUTOFF_MHZ = 5e3
-"""`field_build.real_field` 近/远失谐分流（MHz）：
-|Δ| ≥ max(本值, Ω) → 只走静态 SOS 背景；否则相干驱动进 A 矩阵。
-5 GHz 是**保守地板**（覆盖超精细/精细流形），且已随 Rabi 自适应。"""
-
-M_EST_BW_MHZ = 2e4
-"""M 估计的 r 取样窗（MHz，| |ΔE|−ω | < 本值）：只在此窗内取 max|A| 定 r。
-
-窗越宽 r 只增不减 → 取最宽者最保守。**不是精度旋钮**（精度目标是 M_EST_TOL），
-它只决定"哪些对算近共振"。三处同义常量（2e4/5e3/1e4）已于 t80 合并为此值。"""
-
-FRAME_TOL_REL = 1e-6
-"""两场两体：V_dd 旋转系有效性判据（**无量纲相对**形式）。
-
-    |ΔE_rot − ΔE_lab|  ≤  FRAME_TOL_REL · max(|ΔE_rot|, |ΔE_lab|)
-
-是**布尔分离器**而非阈值：差值只会是 ~0（同旋转流形）或 ~±ω_opt≈3.8e8
-（跨流形），相差 8 个量级 → 本值在 [1e-7, 1e-1] 内取谁都得到同一分区。
-（t80 前是绝对值 `_VDD_RWA_TOL_MHZ = 1 MHz`。）"""
+def _resolve(name):
+    """规范名（别名转发）。"""
+    return ALIASES.get(name, name)
 
 
-# ============================================================
-# 【E】性能 / 数值保护（只影响速度与鲁棒性）
-# ============================================================
-_DENSE_MAX = 2200
-"""扩展维 ≤ 本值走稠密 eigh，否则稀疏 expm_multiply（单体 / 两体 / 两场通用）。"""
+def get(name):
+    """当前生效值：线程本地覆写栈（就近优先）→ 派生 → 默认。"""
+    n = _resolve(name)
+    for frame in reversed(_stack()):
+        if n in frame:
+            return frame[n]
+    fn = _DERIVED.get(n)
+    if fn is not None:
+        return fn(effective())
+    if n not in DEFAULTS:
+        raise KeyError(f'未知引擎参数 {name!r}（见 params.SPECS）')
+    return DEFAULTS[n]
 
-_TF_DENSE_MAX = 3000
-"""两场两体稠密上限。与 `_DENSE_MAX` **不可合并**：标准两场两体 22 态为
-2420 维，必须留稠密，否则 backend 翻成 `tf-sambe-sparse`。"""
 
-_TAB_N = 2 ** 17
-"""hard 包络/相位查表点数。**接口契约，不只是精度旋钮**：
-任意波形可驱动带宽 = 0.5·(_TAB_N−1)/T，软件把它作为"引擎侧 Nyquist"报给用户
-（`waveforms.f_max_mhz`）→ 按 rtol 缩小它会改变承诺给用户的带宽。"""
+def effective():
+    """全部参数的当前生效值（dict，含派生量与别名不重复）。"""
+    out = {}
+    for frame in _stack():
+        out.update(frame)
+    for name, spec in SPEC_BY_NAME.items():
+        out.setdefault(name, spec.default)
+    for name, fn in _DERIVED.items():
+        out[name] = fn(out)
+    return out
 
-_RHS_ENV_TAB_N = 20001
-"""mixed RHS 包络/相位查表点数（`coupling.pack_rhs` 默认）。内存/构建预算。"""
 
-_AC_ENV_TAB_N = 4001
-"""mixed AC 时变对角的独立包络表点数。预算（AC 只跟随慢变光强）。"""
+def current_overrides():
+    """当前覆写栈的合并结果（不含默认值）——UI 用它回填输入框。"""
+    out = {}
+    for frame in _stack():
+        out.update(frame)
+    return out
 
-_ENV_PROBE_N = 2001
-"""sambe 包络活性/恒常判断采样点数。"""
 
-_ENV_SAMPLES = 64
-"""field_build 包络恒常判断采样数（粗粒度）。"""
+@contextlib.contextmanager
+def override(values=None, **kw):
+    """在本次（线程）内临时覆写引擎参数。
 
-_DT_MIN_FRAC = 2e5
-"""自适应细分绝对下限 = T / 本值（防无限细分）。"""
+        with params.override({'PHASE_TOL': 1e-5}):   # 或 override(PHASE_TOL=1e-5)
+            evolve_...()
 
-_SPARSE_SEG_MAX = 50000
-"""稀疏自适应细分总段数上限（防爆炸卡死）。"""
+    未知名字 → KeyError（早失败，别让 UI 打错字悄悄无效）。
+    可嵌套；退出時无条件还原。
+    """
+    vals = {}
+    for k, v in dict(values or {}).items():
+        n = _resolve(k)
+        if n not in SPEC_BY_NAME:
+            raise KeyError(f'未知引擎参数 {k!r}（见 params.SPECS）')
+        vals[n] = v
+    for k, v in kw.items():
+        n = _resolve(k)
+        if n not in SPEC_BY_NAME:
+            raise KeyError(f'未知引擎参数 {k!r}（见 params.SPECS）')
+        vals[n] = v
+    st = _stack()
+    st.append(vals)
+    try:
+        yield vals
+    finally:
+        st.pop()
 
-_SPARSE_MAX_DEPTH = 4
-"""稀疏自适应二分递归深度上限。"""
 
-_NODE_LADDER = (16, 32, 64, 128)
-"""Volterra / GL 求积节点阶梯。"""
+def coerce(name, raw):
+    """UI 用：把输入框文本转成类型化值 → (value, err)。空串/None → (None, None)。
 
-_VOLT_MAX_ITER = 60
-"""GMRES 迭代上限。"""
+    只做类型与形状校验；**不做物理范围校验**（范围提示见 ParamSpec.lo/hi）。
+    """
+    n = _resolve(name)
+    if n not in SPEC_BY_NAME:
+        return None, f'未知参数 {name}'
+    if raw is None:
+        return None, None
+    if isinstance(raw, (int, float, tuple)):
+        return raw, None
+    s = str(raw).strip()
+    if not s:
+        return None, None
+    kind = SPEC_BY_NAME[n].kind
+    try:
+        if kind == 'int':
+            return int(float(s)), None      # 容忍 "1e4" 这种写法
+        if kind == 'float':
+            return float(s), None
+        if kind == 'tuple':
+            parts = [p for p in s.replace('；', ',').replace(' ', ',').split(',')
+                     if p]
+            return tuple(int(float(p)) for p in parts), None
+    except ValueError:
+        return None, (f'{n} 解析失败：{s!r}（应为 {kind}；'
+                      '留空即用默认值）')
+    return None, f'{n} 类型 {kind} 不支持'
 
-_VOLT_PICARD_FRAC = 0.05
-"""GMRES atol = tol × 本值。"""
 
-_VOLT_PRE_SWEEPS = 8
-"""预条件因果 Picard 扫掠次数。"""
+def specs(tier=None, settable_only=True):
+    """按层取参数规格（UI 用）；settable_only=False 时含派生/别名。"""
+    return [s for s in SPECS
+            if (tier is None or s.tier == tier)
+            and (s.settable or not settable_only)]
+
+
+def __getattr__(name):
+    """PEP 562：`params.PHASE_TOL` 回落到 get()（含覆写）；旧代码零改动。"""
+    if name in DEFAULTS or name in ALIASES:
+        return get(name)
+    raise AttributeError(f'module {__name__!r} has no attribute {name!r}')

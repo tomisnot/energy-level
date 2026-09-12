@@ -1200,11 +1200,17 @@ res = evolve_engine('mixed', states,
   以及 `evolve_twofield.build_two_field(..., t_end_ns=T)`（两场引擎同一判据 →
   与 mixed 保留集逐对一致）。
   自检：`checks/mw_pair_keep_selfcheck.py`（30 项，真实梯子 Rabi 实测锚 + 相预算标定）。
-- **`params.py` 分层**（t80）：控制面 = 5 个无量纲量（`PHASE_TOL` / `PHASE_BUDGET` /
-  `R_CRIT` / `RWA_TOL` / `M_EST_TOL`）+ `DEFAULT_RTOL`（`DEFAULT_ATOL` 由它按
-  `ATOL_RTOL_RATIO` 派生）；其余分【C】结构常量 /【D】模型边界 /【E】性能保护，
-  **都不是精度旋钮**。逐参数登记见 `docs/引擎参数总表.md` §0，
-  判据推导与历史动因见 `docs/参数与判据决策史.md`。
+- **`params.py` 注册表**（t80 分层 / t81 升级为注册表）：控制面 = 5 个无量纲量
+  （`PHASE_TOL` / `PHASE_BUDGET` / `R_CRIT` / `RWA_TOL` / `M_EST_TOL`）+
+  `DEFAULT_RTOL`（`DEFAULT_ATOL` 由它按 `ATOL_RTOL_RATIO` 派生）；其余分
+  【C】结构常量 /【D】模型边界 /【E】性能保护，**都不是精度旋钮**。
+  - **读**：`P.get('NAME')`（签名默认写 `None`，体内解析——不要在默认值里求值）；
+  - **改**：GUI 上帝模式 → 检视器「引擎参数」页（由 `SPECS` 自动生成，
+    按层分组，只对本次运行生效），或脚本里
+    `with params.override({'PHASE_TOL': 1e-5}): ...`（线程本地快照，退出还原）；
+  - `P.NAME` 仍可用（PEP 562），旧代码零改动；
+  - 逐参数登记见 `docs/引擎参数总表.md` §0，判据推导与历史动因见
+    `docs/参数与判据决策史.md`，自检 `checks/params_registry_selfcheck.py`。
 - **`evolve_mixed.acize_physical(E, fields_opt, r_crit)`**：AC 化唯一实现——
   r 判据分类 + 远强对剔除 + per-field far_sos 位移。
 - **`project.project_pops(X_t, P, N_phys, ns, ω, t)`**：跨扇区投影。

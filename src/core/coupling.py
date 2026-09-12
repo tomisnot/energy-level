@@ -11,8 +11,6 @@
 判据推导与历史动因见 `docs/参数与判据决策史.md`。"""
 import numpy as np
 
-from .params import (PHASE_TOL, PHASE_BUDGET, MW_MAX_MHZ,
-                     _RHS_ENV_TAB_N)
 from .evolve_util import _CONV
 
 
@@ -31,7 +29,7 @@ def stage_progress(arr, st, frac):
         arr[2] = float(st)
 
 
-def pack_rhs(pairs, t_end, n_tab=_RHS_ENV_TAB_N):
+def pack_rhs(pairs, t_end, n_tab=None):
     """pairs → numba 数组（按 (is_mw, w, id(env), id(ph_fn)) 分组 + 查表预采样）。
 
     pairs 元素：(a, b, v, dD, is_mw, w, env[, ph_fn])——分组键含 is_mw/w
@@ -44,6 +42,7 @@ def pack_rhs(pairs, t_end, n_tab=_RHS_ENV_TAB_N):
       · 任意波形（无单一载频）用它表达，与 hard 的 cos(φ_f(t)) 同构。
     相位与包络共用同一时间基（linspace(0,t_end,n_tab)）与 env_dt。
     """
+    n_tab = _P.get('_RHS_ENV_TAB_N') if n_tab is None else int(n_tab)
     grp = {}
     order = []
     for p in pairs:
@@ -99,13 +98,17 @@ def mw_cap_mhz(T_ns, phase_budget=None, Cv=_CONV):
     与 `mw_pair_keep`（PHASE_TOL，精度侧）配成一对。
     phase_budget=None → params.PHASE_BUDGET。
     """
-    b = PHASE_BUDGET if phase_budget is None else float(phase_budget)
+    b = _P.get('PHASE_BUDGET') if phase_budget is None else float(phase_budget)
+    if b is None or float(b) <= 0.0:
+        # 未设预算（默认）= **不做成本剔除**：只留绝对上界，
+        # 于是"哪些耦合进 RHS"完全由精度判据 Θ 与物理尺度决定。
+        return float(_P.get('MW_MAX_MHZ'))
     T = max(float(T_ns), 1e-12)            # T→0 时由调用方的绝对上界兜
-    return b / (Cv * T)
+    return float(b) / (Cv * T)
 
 
 def mw_candidate_mask(Omega, dE, omega_mhz, T_ns, phase_budget=None,
-                      cap_abs_mhz=MW_MAX_MHZ, Cv=_CONV):
+                      cap_abs_mhz=None, Cv=_CONV):
     """向量化「微波候选对」筛选（成本 + 精度，与 mixed 同构 → 两引擎保留集一致）。
 
       Ω : Rabi 矩阵（MHz）    dE: 两端能量差（MHz，实验室系）
@@ -114,6 +117,7 @@ def mw_candidate_mask(Omega, dE, omega_mhz, T_ns, phase_budget=None,
       ② Δ = | |dE| − ω | > min(mw_cap_mhz(T), cap_abs_mhz) → 丢（成本）
       ③ Θ = C·T·Ω²/max(Ω, Δ) < PHASE_TOL → 丢（精度）
     """
+    cap_abs_mhz = _P.get('MW_MAX_MHZ') if cap_abs_mhz is None else cap_abs_mhz
     Om = np.abs(np.asarray(Omega, float))
     dE = np.abs(np.asarray(dE, float))
     det = np.abs(dE - float(omega_mhz))
@@ -122,7 +126,7 @@ def mw_candidate_mask(Omega, dE, omega_mhz, T_ns, phase_budget=None,
     den = np.maximum(Om, det)
     with np.errstate(divide='ignore', invalid='ignore'):
         theta = Cv * float(T_ns) * Om ** 2 / den
-    keep &= (theta >= PHASE_TOL)
+    keep &= (theta >= _P.get('PHASE_TOL'))
     return keep
 
 
@@ -130,7 +134,7 @@ def mw_candidate_mask(Omega, dE, omega_mhz, T_ns, phase_budget=None,
 # 微波对精度判据（累积相位）
 # ============================================================
 def mw_pair_keep(Omega_mhz, det_mhz, T_ns, cap_mhz=None,
-                 theta_tol=PHASE_TOL, Cv=_CONV):
+                 theta_tol=None, Cv=_CONV):
     """单个微波耦合对是否保留（标量版；向量化见 `mw_candidate_mask`）。
 
       Θ = Cv · T · Ω² / max(Δ, Ω) ≥ θ_tol  且  Δ ≤ cap_mhz
@@ -142,6 +146,7 @@ def mw_pair_keep(Omega_mhz, det_mhz, T_ns, cap_mhz=None,
 
     `cap_mhz` 是成本预算（见 `mw_cap_mhz`），不是物理近似；None = 不设上限。
     """
+    theta_tol = _P.get('PHASE_TOL') if theta_tol is None else theta_tol
     if Omega_mhz <= 0.0:
         return False
     if cap_mhz is not None and abs(det_mhz) > float(cap_mhz):
@@ -153,7 +158,7 @@ def mw_pair_keep(Omega_mhz, det_mhz, T_ns, cap_mhz=None,
 # ============================================================
 # 静态耦合（V_dd）丢弃判据：累积相位 Θ —— hard / mixed 共用
 # ============================================================
-def static_phase_keep(vals, dE, T, theta_tol=PHASE_TOL, Cv=_CONV):
+def static_phase_keep(vals, dE, T, theta_tol=None, Cv=_CONV):
     """V_dd 累积相位判据：Θ = C·T·|V|²/max(|ΔE|, |V|) ≥ theta_tol → 保留。
 
     参数
@@ -170,6 +175,7 @@ def static_phase_keep(vals, dE, T, theta_tol=PHASE_TOL, Cv=_CONV):
     判据只用 (|V|,|ΔE|,T)，**与基组标度、引擎、参考系无关**——故可跨算法共用。
     |V|=|ΔE|=0 的元素 Θ 记 0（丢弃）。
     """
+    theta_tol = _P.get('PHASE_TOL') if theta_tol is None else theta_tol
     v = np.abs(np.asarray(vals, complex)).ravel()
     d = np.abs(np.asarray(dE, float)).ravel()
     if v.shape != d.shape:
@@ -194,6 +200,7 @@ def static_phase_keep(vals, dE, T, theta_tol=PHASE_TOL, Cv=_CONV):
 # （env=恒 1）。gamma 为扩展空间长度 NonHermitian 对角（MHz）。
 # ============================================================
 from numba import njit as _njit
+from . import params as _P
 
 @_njit(cache=True, nogil=True)
 def rhs_phi_pairs(t, phi, iis, jjs, vals, dDs, is_mw, wcos, n_pairs_w,

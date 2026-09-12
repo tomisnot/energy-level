@@ -36,10 +36,10 @@ from .dop853 import _dop853_driver   # 驱动（系数已随驱动上收 dop853�
 
 from . import tensor as _tensor
 from . import static_atom as core
-from .params import _TAB_N  # t74c 参数单源（其余阈值随函数收敛到 evolve_twofield）
 from .evolve_util import (_single_loss_rates, _loss_and_norm,
                           _as_vector, env_at, _CONV)
 from .coupling import static_phase_keep  # t78：V_dd 统一判据（与 mixed 共用）
+from . import params as _P
 
 # 包络查表点数（620ns → h≈0.0047ns；插值误差 ~3e-10）
 
@@ -77,7 +77,7 @@ def _mw_terms_of(fields_meta):
 
 def evolve_hard_fast(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
                      progress_arr=None, log=None, record_amp=False,
-                     n_tab=_TAB_N, driver='numba', decays=None):
+                     n_tab=None, driver='numba', decays=None):
     """单原子 hard（t73b：与两体同一打包/内核/驱动——N_B=1 旁观维）。
 
     数学与旧单体内核逐项一致：u = exp(iC·E·t) 相互作用绘景、光场旋转系
@@ -87,6 +87,7 @@ def evolve_hard_fast(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
     driver='numba'（默认，dop853 核心层全编译主循环）| 'scipy'（对照）。
     backend='hard-numba-dop853'。
     """
+    n_tab = _P.get('_TAB_N') if n_tab is None else int(n_tab)
     log = log or (lambda *a: None)
     from .coupling import stage_progress
     t = np.asarray(t_grid, float)
@@ -459,7 +460,7 @@ def evolve_hard_pair(states, fields_meta_A, fields_meta_B, psi0_A, psi0_B,
                      t_grid, vdd_matrix=None, R_um=None, theta_deg=0.0,
                      phi_deg=0.0, cache=None, rtol=1e-9, atol=1e-11,
                      progress_arr=None, log=None, record_amp=False,
-                     n_tab=_TAB_N, decays_A=None, decays_B=None,
+                     n_tab=None, decays_A=None, decays_B=None,
                      driver='numba'):
     """两体 hard（第一性原理 DOP853 硬积分，零微波近似）。
 
@@ -467,6 +468,7 @@ def evolve_hard_pair(states, fields_meta_A, fields_meta_B, psi0_A, psi0_B,
     loss_A, loss_B, states_2d, method='hard', backend='hard-numba-pair',
     error_report。
     """
+    n_tab = _P.get('_TAB_N') if n_tab is None else int(n_tab)
     from . import pair_core as _pc
     log = log or (lambda *a: None)
     t = np.asarray(t_grid, float)

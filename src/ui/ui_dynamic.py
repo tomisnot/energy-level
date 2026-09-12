@@ -56,7 +56,10 @@ class DynamicPanel(QWidget):
         # 能级组增删由主程序事件驱动刷新（统一机制，不散布同步调用）
         main.groups_changed.connect(self.refresh_groups)
         self._is_two_body = False
-        self._inspector = None         # t75：求解检视器（上帝模式，惰性创建）
+        # t82：检视器**常驻**（两个模式都存在，组件与后台参数一一绑定）；
+        # 模式只决定它显不显示 + 运行采不采 diag。惰性建，但一旦建就不销毁。
+        self._inspector = None
+        self._god_mode = False
         self._last_god_kwargs = None   # t75：最近一次覆写（回填检视器旋钮）
         self._build_canvases()
         self.dynamic_widget = self._build_controls()
@@ -274,21 +277,15 @@ class DynamicPanel(QWidget):
                               desc='演化引擎'))
         self.method_cb.currentTextChanged.connect(self._on_method_changed)
         rowt.addWidget(self.method_cb)
-        # t75：上帝模式开关——开启即弹求解检视器（精度旋钮内嵌检视器各页，
-        # 不占主界面空间）；简单模式（默认关）行为完全不变。
-        self.god_cb = QCheckBox('上帝模式')
-        self.god_cb.setToolTip('求解过程可视化 + 精度旋钮（内嵌检视器各页，'
-                               '改完点「应用并重跑」）')
-        self.god_cb.setStyleSheet(
-            'QCheckBox{color:%s; font-weight:500;}' % ui_theme.COL_ACCENT)
-        rowt.addWidget(self.god_cb)
-        self.inspect_btn = QPushButton('检视器…')
-        self.inspect_btn.setToolTip('打开求解检视器（上帝模式）')
-        self.inspect_btn.setVisible(False)
-        # clicked 信号携带 checked bool——lambda 隔离，避免 bool 被当 diag
-        self.inspect_btn.clicked.connect(lambda: self._open_inspector())
-        rowt.addWidget(self.inspect_btn)
-        self.god_cb.toggled.connect(self._on_god_toggled)
+        # t82：上帝模式开关搬到菜单栏那一行（MainWindow 的「极简/上帝」分段钮）。
+        # 这里只留一个模式徽标——检视器窗口此时已存在（无论哪个模式）。
+        self.mode_badge = QLabel('')
+        self.mode_badge.setToolTip('当前处于上帝模式：检视器已打开，'
+                                   '运行会采集诊断数据')
+        self.mode_badge.setStyleSheet(
+            'color:%s; font-weight:600;' % ui_theme.COL_ACCENT)
+        self.mode_badge.setVisible(False)
+        rowt.addWidget(self.mode_badge)
         p.addLayout(rowt)
 
         # ---- 自发辐射（t27：档位选择移入初态行右侧；自定义折叠区保留原位）----
@@ -1045,11 +1042,23 @@ class DynamicPanel(QWidget):
         psi0 = self.psi_combo.currentIndex()
 
         self._prep('驱动场就绪', 1.0)
-        # t75：上帝模式覆写（mixed）——空输入=默认；diag 随上帝模式开启
-        # （engine_kwargs 已在分支前初始化；t79 的 mw_arb 也挂在同一字典里，
-        #   故此处用 update 而不是重新赋值，别把 mw_arb 冲掉）
-        if method == 'mixed' and self.god_cb.isChecked():
-            engine_kwargs.update(self._collect_god_kwargs())
+        # 上帝模式覆写：param_overrides（引擎参数页，任何引擎都吃）单独取出，
+        # 其余 kwargs（per_freq_M/r_crit/max_step/tol/diag…）只对 mixed 有效。
+        # （engine_kwargs 已在分支前初始化；mw_arb 也挂同一字典，故用 update）
+        gk = self._collect_god_kwargs()      # 引擎参数覆写与模式无关
+        pk = gk.pop('param_overrides', None)
+        if method == 'mixed':
+            engine_kwargs.update(gk)         # 只给 mixed 传它认得的 kwargs
+        if pk:
+            engine_kwargs['param_overrides'] = pk
+        # ── 运行前成本报告（t84）：成本只该"换速度"，不该默默改模型 ──
+        # 默认成本预算为空 = 不限制（真实耦合一律保留）→ 可能跑很久，
+        # 故先把代价摆给用户，由他决定是否上成本档。False = 取消本次运行。
+        if method == 'mixed' and not self._preflight_cost(
+                states, fields, t, engine_kwargs):
+            self._prep('已取消（成本预检）', 0.0)
+            self._finish_run_ui()          # 停表/关进度框/恢复运行按钮
+            return
         self._worker = EvolveWorker(states, fields, psi0, t,
                                      method,
                                      'auto',
@@ -1206,11 +1215,14 @@ class DynamicPanel(QWidget):
         # t62：sambe 两体高级参数（frozen_h_ns/per_freq_M——面板，目标 5）
         frozen_h, per_freq_M = (self._sambe_adv_params()
                                 if method == 'sambe' else (None, None))
-        # t75：上帝模式覆写（mixed 两体——r_crit/max_step/tol/diag）
-        # （engine_kwargs 已在分支前初始化；t79 的 mw_arb_A/B 也挂在同一
-        #   字典里，故此处 update 而非重新赋值，别把它们冲掉）
-        if method == 'mixed' and self.god_cb.isChecked():
-            engine_kwargs.update(self._collect_god_kwargs(pair=True))
+        # 上帝模式覆写：param_overrides 对任何引擎生效；其余只对 mixed 有效
+        # （engine_kwargs 已在分支前初始化；mw_arb_A/B 也挂同一字典，故用 update）
+        gk = self._collect_god_kwargs(pair=True)   # 引擎参数覆写与模式无关
+        pk = gk.pop('param_overrides', None)
+        if method == 'mixed':
+            engine_kwargs.update(gk)
+        if pk:
+            engine_kwargs['param_overrides'] = pk
         self._worker = EvolveWorkerPair(
             states, fields_A, fields_B, psi0_A, psi0_B,
             t, self.progress_arr,
@@ -1225,8 +1237,15 @@ class DynamicPanel(QWidget):
         self._worker.start()
 
     def _show_progress(self):
-        """延迟显示进度对话框（仅当本轮运行仍在进行时——含主线程预处理）。"""
+        """延迟显示进度对话框（仅当本轮运行仍在进行时——含主线程预处理）。
+
+        **幂等**：已存在进度框就直接返回。否则成本预检恢复过一次之后，
+        400ms 定时器到点还会再造一个（旧框没人更新 → 屏幕上出现两个进度框，
+        一个动一个不动 —— 实测 bug）。
+        """
         if not getattr(self, '_run_active', False):
+            return
+        if getattr(self, '_dlg', None) is not None:
             return
         dlg = QDialog(self)
         dlg.setWindowTitle('演化')
@@ -1280,45 +1299,189 @@ class DynamicPanel(QWidget):
         if getattr(self, '_stage_label', None) is not None:
             self._stage_label.setText(lab)
 
+    def _preflight_cost(self, states, fields, t, engine_kwargs):
+        """mixed 起算前的**成本报告** → 用户选择。返回 False = 取消运行。
+
+        背景（用户裁决）：成本预算曾作为引擎参数、默认 4e4 rad，于是构造期
+        就按成本窗删对且完全静默 —— 那是"为了跑得快悄悄改模型"。现在默认
+        不限制（`solve.COST_BUDGET` 留空），真实耦合一律保留；代价与省法都
+        摆到运行前这一次选择里。
+
+        AI 发起的运行**不弹窗**（会卡住没人点的模态）：服务器会置
+        `_ai_initiated`，此时只写日志并采用"完整物理"（忠实）路径。
+        """
+        try:
+            import numpy as _np
+
+            from ..core.evolve_mixed import evolve_mixed as _em
+            keys = ('per_freq_M', 'r_crit', 'bw_opt', 'mw_cap', 'mw_max',
+                    'mw_arb', 'phase_budget')
+            kw = {k: v for k, v in (engine_kwargs or {}).items() if k in keys}
+            rep = (_em(states, fields, _np.zeros(len(states), complex), t,
+                       dry_run=True, **kw) or {}).get('cost') or {}
+        except Exception as e:                        # noqa: BLE001
+            self.main.log(f'成本预检跳过（{e}）')
+            return True
+        dmax = float(rep.get('max_det_mhz') or 0.0)
+        alts = rep.get('alt') or {}
+        if not alts or dmax < 3000.0:
+            return True                    # 便宜算例：不打扰，直接跑
+        alt = alts.get(4e4) or alts[sorted(alts)[-1]]
+        worst = rep.get('worst') or {}
+        head = (f'本次「完整物理」保留 {rep.get("n_mw", 0)} 对微波耦合，'
+                f'最远失谐 {dmax:.4g} MHz')
+        detail = (
+            f'这些耦合 Θ 判据全部通过（真实存在，非数值噪声）。\n'
+            f'预计积分步数 ~{rep.get("est_steps", 0):.3g}'
+            f'（比只留近共振对慢约 {alt.get("speedup", 1):.1f}×）。\n'
+            + (f'最远一对：{worst.get("label_a", "?")} ↔ '
+               f'{worst.get("label_b", "?")}'
+               f'（|v|={worst.get("abs_v_mhz", 0):.4g} MHz，'
+               f'Δ={worst.get("det_mhz", 0):.4g} MHz）\n' if worst else '')
+            + f'\n成本预算：'
+              + ('不限制（保留全部真实耦合）'
+                 if rep.get("budget") in (None, 0) else
+                 f'{float(rep.get("budget")):g} rad')
+              + f'（窗宽 {rep.get("mw_cap_mhz", 0):.4g} MHz）\n'
+              f'若改上成本档 4e4 rad → 剔除 {alt.get("n_drop", 0)} 对，'
+              f'最远失谐降到 {alt.get("max_det_mhz", 0):.4g} MHz。\n'
+              f'注意：剔除的是**真实物理通道**（freeze 三光子梯子第三级'
+              f'就是这么丢的）。')
+        if getattr(self, '_ai_initiated', False):
+            self.main.log(f'[成本预检] {head}；{detail.splitlines()[1]}'
+                          f'AI 运行 → 采用完整物理路径（不弹窗）')
+            return True
+        # ⚠ 弹对话框之前**必须先把进度框撤下**：进度框在 _run 开头 400ms 后
+        # 自动弹出，且是 `Qt.WindowModal` —— 模态阻塞的是整个父窗口（含挂在
+        # 它下面的其它对话框），于是成本报告被压在下面、**根本点不到**（实测 bug）。
+        timer = getattr(self, '_dlg_timer', None)
+        if timer is not None:
+            timer.stop()
+        dlg = getattr(self, '_dlg', None)
+        dlg_was = bool(dlg is not None and dlg.isVisible())
+        if dlg_was:
+            dlg.hide()
+        from PyQt5.QtWidgets import QMessageBox
+        box = QMessageBox(self.main)
+        box.setWindowTitle('运行前成本报告')
+        box.setIcon(QMessageBox.Information)
+        box.setText(head)
+        box.setInformativeText(detail)
+        b_full = box.addButton('完整物理运行（推荐）', QMessageBox.AcceptRole)
+        b_fast = box.addButton(f'剔除远失谐对（快 ~{alt.get("speedup", 1):.1f}×）',
+                               QMessageBox.DestructiveRole)
+        b_cancel = box.addButton('取消', QMessageBox.RejectRole)
+        box.setDefaultButton(b_full)
+        box.setWindowModality(Qt.ApplicationModal)   # 独立于父窗口，确保可点
+        box.exec_()
+        clicked = box.clickedButton()
+        if clicked is b_cancel:
+            # 取消＝本轮未起算：进度框不再恢复，由调用方 _finish_run_ui 收尾
+            self.main.log('成本预检：用户取消本次运行')
+            return False
+        # 继续运行 → 恢复进度 UI。**不要**再启动 400ms 定时器：到点会再造
+        # 一个进度框（旧框没人更新 → 屏幕上两个框、一个动一个不动，实测 bug）。
+        if dlg_was and dlg is not None:
+            dlg.show()
+        else:
+            self._show_progress()        # 幂等：已有框就直接返回
+        if clicked is b_fast:
+            # 写会话真值（运行级参数）：进存档、可 undo、AI 也看得见
+            d = dict(getattr(self.main, 'engine_overrides', None) or {})
+            d['solve.COST_BUDGET'] = 4e4
+            self.main.set_engine_overrides(d)
+            engine_kwargs['phase_budget'] = 4e4
+            self.main.log(f'成本档已设 solve.COST_BUDGET=4e4 rad'
+                          f'（剔除 {alt.get("n_drop", 0)} 对远失谐耦合，'
+                          f'快 ~{alt.get("speedup", 1):.1f}×）')
+        return True
+
     def _collect_god_kwargs(self, pair=False):
         """t75：从检视器旋钮读取覆写 kwargs（空=默认不传；diag 恒开）。
 
         pair=True 时排除 per_freq_M（两体 P=3 固定，暂不支持覆写）。
         """
-        if self._inspector is None:
-            ek = {'diag': True}
-        else:
-            ek = self._inspector.god_values(pair=pair)
+        # 引擎参数覆写 = 会话真值（engine_overrides），**与模式无关**：
+        # 极简模式下它照样生效（否则切模式会偷偷改变结果语义）。
+        # 行编辑框默认"回车才提交"（框架约定），运行前统一提交一次，
+        # 免掉"打了字没回车 → 以为生效了"的坑；非法值提交时框架会红灯拒绝。
+        reg = getattr(self.main, 'param_reg', None)
+        if reg is not None and self._inspector is not None:
+            try:
+                reg.commit_pending()
+            except Exception:
+                pass
+        from .. import pm_setup as pm
+        # 单一映射点：会话 store → (数值容差覆写, 求解器 kwarg)
+        pk, solve_kw = pm.god_split(getattr(self.main, 'engine_overrides', None))
+        ek = {}
+        if pk:
+            ek['param_overrides'] = pk
+        ek.update(solve_kw)         # max_step / per_freq_M / frozen_h_ns
+        # 非法输入：非模态提示（状态栏），不弹框、也不牵连其它覆写
+        bad = (self._inspector.param_errors()
+               if self._inspector is not None else [])
+        if bad:
+            self.main.log('引擎参数有 %d 项非法已忽略：%s'
+                          % (len(bad), '；'.join(e for _n, e in bad[:3])), 9000)
+        # 场景级旋钮（per_freq_M / r_crit / max_step / tol）+ diag 只在上帝模式取
+        if self._god_mode and self._inspector is not None:
+            rest = self._inspector.god_values(pair=pair) or {}
+            rest.pop('param_overrides', None)
+            ek.update(rest)
+        # 诊断采集：上帝模式（人想看）或 AI 显式要求（run_compute(diag=True)）
+        if self._god_mode or getattr(self, '_ai_wants_diag', False):
+            ek['diag'] = True
         self._last_god_kwargs = dict(ek)
         return ek
 
-    def _on_god_toggled(self, checked):
-        """t75：上帝模式开关——开启即弹检视器（精度旋钮内嵌其中）。"""
-        self.inspect_btn.setVisible(checked)
-        if checked:
-            self._open_inspector()
+    def set_god_mode(self, on):
+        """菜单栏模式开关的唯一下游：显示/隐藏检视器 + 徽标。
+
+        **不销毁检视器**——极简模式下它照样存在、诊断与引擎参数绑定照旧，
+        只是窗口隐藏（登记跟真值源走，不跟显隐走）。
+        """
+        self._god_mode = bool(on)
+        self.mode_badge.setText('· 上帝模式' if on else '')
+        self.mode_badge.setVisible(bool(on))
+        if on:
+            self.show_inspector()
+        else:
+            self.hide_inspector()
+
+    def show_inspector(self, diag=None):
+        """确保检视器存在并显示（diag=None 时保留上次内容/占位说明）。"""
+        self._open_inspector(diag)
+
+    def hide_inspector(self):
+        if self._inspector is not None:
+            self._inspector.hide()
 
     def _on_inspector_rerun(self):
-        """t75：检视器「应用并重跑」→ 用旋钮当前值重跑演化。"""
-        if not self.god_cb.isChecked():
-            self.god_cb.setChecked(True)      # 会触发 _on_god_toggled 弹窗
-            return
+        """检视器「应用并重跑」→ 用旋钮当前值重跑演化。"""
+        if not self._god_mode:
+            self.main.set_mode(god=True)      # 唯一入口（会显示检视器）
         self.main.log('上帝模式：按检视器旋钮重跑…')
         self._run()
 
     def _open_inspector(self, diag=None):
-        """t75 上帝模式：打开求解检视器（非模态）。
+        """确保检视器存在（非模态）并按需装载诊断。
 
-        打开时把最近一次覆写回填进旋钮（无则全默认）。
+        常驻语义（t82）：建一次就不再销毁；回填会话覆写（engine_overrides
+        + 场景级旋钮）而不是"最近一次 kwargs"，保证组件与后台参数一一绑定。
         非 dict 入参（如 Qt 信号误传的 bool）一律按 None 处理。
         """
         from .solver_inspector import SolverInspector
         if not isinstance(diag, dict):
             diag = None
         if self._inspector is None:
-            self._inspector = SolverInspector(self)
+            self._inspector = SolverInspector(self, win=self.main)
             self._inspector.rerun_requested.connect(self._on_inspector_rerun)
-        self._inspector.set_god_params(self._last_god_kwargs)
+            self._inspector.param_edited.connect(
+                self.main._on_engine_param_edited)
+        # 回填只走会话真值（引擎参数页 + 求解旋钮都绑在同一批注册路径上）
+        self._inspector.set_engine_overrides(
+            getattr(self.main, 'engine_overrides', None) or {})
         if diag is not None:
             self._inspector.load_diag(diag)
         else:
@@ -1341,7 +1504,7 @@ class DynamicPanel(QWidget):
                 '或减小 t_max/点数。')
             return
         self._last_res = res
-        if self.god_cb.isChecked():                 # t75：上帝模式 → 检视器
+        if self._god_mode:                          # 上帝模式 → 检视器
             self._open_inspector((res or {}).get('diag'))
         self._draw_top(self.wave_data)
         states = getattr(self, '_run_states', None)
@@ -1357,7 +1520,7 @@ class DynamicPanel(QWidget):
             QMessageBox.warning(self, '演化失败', f'{error}')
             return
         self._last_res = res
-        if self.god_cb.isChecked():                 # t75：上帝模式 → 检视器
+        if self._god_mode:                          # 上帝模式 → 检视器
             self._open_inspector((res or {}).get('diag'))
         self._draw_top(self.wave_data)
         self._draw_bot_pair(res)

@@ -9,9 +9,8 @@ import numpy as np
 from . import static_atom as core
 from .atomic_levels import square
 
-from .params import (_ENV_SAMPLES, AC_NEAR_CUTOFF_MHZ,
-                     MW_MAX_MHZ)
 from .evolve_util import _POL_Q
+from . import params as _P
 # AC_NEAR_CUTOFF_MHZ 直连 params 单源（勿经 static_atom 转发）
 # 上态总衰变率缓存（(n,l,j) → Γ MHz；远失谐散射损失用）
 _lifetime_cache = {}
@@ -19,7 +18,7 @@ _lifetime_cache = {}
 
 def _env_samples(waveform, t_end):
     """采样包络判断恒常性。返回 (mean, is_constant)。"""
-    ts = np.linspace(0.0, float(t_end), _ENV_SAMPLES)
+    ts = np.linspace(0.0, float(t_end), _P.get('_ENV_SAMPLES'))
     vs = np.asarray(waveform(ts), float)
     return float(vs.mean()), bool(np.ptp(vs) < 1e-9)
 
@@ -165,14 +164,34 @@ def build_fields_exact(cache, states, waves):
                 '任意波形——其扩展空间需要**单一载频**，而任意波形无载频概念。'
                 '请把该文件按「光强包络」导入（Wave + 载频，三引擎全支持），'
                 '或改用「完整驱动」（经 arbitrary_mw_group 走 hard 任意相位路径）。')
-        q = _POL_Q.get(w.pol, 0)
+        # 偏振 → 球基复系数。旧版只取单个 q，于是 '椭圆偏' 落进
+        # `_POL_Q.get(..., 0)` 的默认值 0 = **静默按 π 算**（错的）；现在
+        # 椭圆偏走 (c₊d₊ + c₀d₀ + c₋d₋) 的相干幅度，与光场行同一套系数。
+        ell = getattr(w, 'elliptical', None)
+        if w.pol == '椭圆偏':
+            if not ell:
+                # 缺参数时补齐为 (0,0,0) = x 线偏。旧版是 q 默认 0 → 静默按
+                # **π** 算（错的）；这里走真正的椭偏系数路径。**不 raise**：
+                # 本函数会在 Qt 槽内被调用，异常 = qFatal = 进程崩溃。
+                ell = dict(alpha_deg=0.0, theta_deg=0.0, eps_deg=0.0)
+            ell = dict(ell)
+            cp, c0, cm = core.elliptical_coeffs(
+                float(ell.get('alpha_deg', 0.0)),
+                float(ell.get('theta_deg', 0.0)),
+                float(ell.get('eps_deg', 0.0)))
+            _qs = ((1, cp), (0, c0), (-1, cm))
+        else:
+            _qs = ((_POL_Q.get(w.pol, 0), 1.0 + 0.0j),)
         E0_sq = core.field_e0_sq(float(w.intensity_mwcm2))
         A = np.zeros((N, N))
         for i in range(N):
+            ri = _sublevel_row(states[i])
             for j in range(i + 1, N):
-                d = core.dipole_amplitude(
-                    cache, _sublevel_row(states[i]), _sublevel_row(states[j]),
-                    q)
+                rj = _sublevel_row(states[j])
+                d = 0.0 + 0.0j
+                for _q, _c in _qs:
+                    if abs(_c) > 1e-12:
+                        d += _c * core.dipole_amplitude(cache, ri, rj, _q)
                 if abs(d) < 1e-12:
                     continue
                 A[i, j] = A[j, i] = core.rabi_mhz(abs(d), E0_sq)
@@ -183,7 +202,7 @@ def build_fields_exact(cache, states, waves):
                     'waveform': w.waveform,
                     'label': getattr(w, 'name', '波'),
                     'intensity_mwcm2': float(w.intensity_mwcm2),
-                    'pol': w.pol})
+                    'pol': w.pol, 'elliptical': ell})
     return out
 
 
@@ -224,7 +243,7 @@ def arb_applicability(cache, states, wave, t_end_ns=None):
             f'{nu_min:.3g} MHz → 驱动不到任何跃迁（效果为零）。'
             '若这份文件其实是"光强形状"，请按「光强包络」导入'
             '（保留载频，sambe/mixed/hard 全支持）。')
-    if nu_max > MW_MAX_MHZ:
+    if nu_max > _P.get('MW_MAX_MHZ'):
         warns.append(
             f'基组含光学流形（最高偶极跃迁 {nu_max / 1e6:.1f} THz）：'
             '任意波形不参与光场旋转 → 积分器会被 THz 相位钉死'
@@ -359,7 +378,7 @@ def real_field(cache, states, freq_mhz, intensity_mwcm2, pol='π',
             nu_mhz = states[hi]['E_mhz'] - states[lo]['E_mhz']   # 裸差
             Delta = freq_mhz - nu_mhz
             Om = _c.rabi_mhz(abs(d), E0_sq)
-            if abs(Delta) < max(near_cutoff_mhz or AC_NEAR_CUTOFF_MHZ, Om):
+            if abs(Delta) < max(near_cutoff_mhz or _P.get('AC_NEAR_CUTOFF_MHZ'), Om):
                 # 近共振 → 多对驱动（A 存真实 Rabi，ω_L = 光频）
                 A[lo, hi] = A[hi, lo] = Om
                 g_idx.append(lo); e_idx.append(hi)

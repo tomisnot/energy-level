@@ -13,8 +13,8 @@ A⊗I + I⊗A（每原子各驱动一次）。复用 tensor.py 的直积工具�
 """
 import numpy as np
 import scipy.sparse as sp
+from . import params as _P
 
-from .params import MW_MAX_MHZ      # t80：微波/光场分界单源（原行内 1e5）
 
 
 def lift_single_A(A, N):
@@ -55,7 +55,7 @@ def lift_fields(fields_A, fields_B, N):
             w = float(f['omega_L_mhz'])
             A = np.asarray(f['A'], float)
             env = f.get('waveform') or _one
-            if w > MW_MAX_MHZ:
+            if w > _P.get('MW_MAX_MHZ'):
                 g = opt_by_w.setdefault(w, {'A': np.zeros((N2, N2)),
                                             'waves': []})
                 g['A'] = g['A'] + lift_single_A(A, N)

@@ -31,7 +31,8 @@ from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                              QTabWidget, QCheckBox, QTableWidget,
                              QTableWidgetItem, QSlider, QWidget, QHeaderView,
                              QAbstractItemView, QPushButton, QLineEdit,
-                             QMessageBox, QFrame, QSpinBox, QSizePolicy)
+                             QMessageBox, QFrame, QSpinBox, QSizePolicy,
+                             QScrollArea, QGroupBox)
 from matplotlib.figure import Figure
 from matplotlib.ticker import MaxNLocator
 from matplotlib.backends.backend_qt5agg import (
@@ -40,6 +41,21 @@ from matplotlib.backends.backend_qt5agg import (
 import pyqtgraph as pg
 
 from . import ui_theme
+
+
+def _fmt_num(v):
+    if v is None:
+        return "不限制"          # 成本预算等"空=不限"的旋钮
+    """数值 → 紧凑显示（整数不带小数点，跨量级用 %g）。"""
+    if isinstance(v, tuple):
+        return '(' + ', '.join(_fmt_num(x) for x in v) + ')'
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return str(v)
+    if f == int(f) and abs(f) < 1e15:
+        return str(int(f))
+    return '%g' % f
 
 _MOCK = None          # mock_diag() 惰性缓存（UI 迭代用，生产路径不触达）
 
@@ -241,9 +257,14 @@ class SolverInspector(QDialog):
     """
 
     rerun_requested = pyqtSignal()
+    # 引擎参数页 → 会话真值：**逐参数增量**（参数名, 值或 None=清覆写）。
+    # 不用整批 dict：那样一个非法框会把其它覆写一起抹掉（实测踩过）。
+    param_edited = pyqtSignal(str, object)
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, win=None):
         super().__init__(parent)
+        # win = MainWindow（参数注册表 + 会话引擎参数真值所在）
+        self.win = win
         self.setWindowTitle('求解检视器（上帝模式）')
         self.setModal(False)
         self.setWindowFlags(self.windowFlags() | Qt.WindowMinMaxButtonsHint)
@@ -301,6 +322,47 @@ class SolverInspector(QDialog):
         setattr(self, attr, e)
         return lab, e
 
+    def _bind_solver_knobs(self):
+        """把「处理链/求解过程」页的旋钮绑到**同一批注册路径**。
+
+        这些是"真正的控制参数"，以前走平行通道（_last_god_kwargs →
+        engine_kwargs），与引擎参数页的同一物理量有两个入口。现在：
+          r_crit     → engine.R_CRIT          （与引擎参数页同一个旋钮）
+          tol        → engine.DEFAULT_RTOL    （同上）
+          max_step   → solve.MAX_STEP
+          per_freq_M → solve.PER_FREQ_M
+        """
+        win = getattr(self, 'win', None)
+        reg = getattr(win, 'param_reg', None)
+        if win is None or reg is None:
+            return 0
+        from .. import pm_setup as pm
+        n = pm.register_god_group(reg, win, 'solve',
+                                  editors={'MAX_STEP': self.god_maxstep,
+                                           'PER_FREQ_M': self.god_perfreq_m})
+        # r_crit / tol 在引擎参数页已经被绑成灯控件（一个路径一个控件），
+        # 求解页这两个框改成**镜像**：改它 = 改同一个 store 项。
+        self._mirrors = [('engine.R_CRIT', self.god_rcrit),
+                         ('engine.DEFAULT_RTOL', self.god_tol)]
+        for path, w in self._mirrors:
+            w.textChanged.connect(
+                lambda _t, p=path, _w=w: self._mirror_write(p, _w))
+            w.setToolTip('与「引擎参数」页同一项（' + path + '）；留空 = 默认')
+        self._solver_knobs_bound = n
+        return n
+
+    def _mirror_write(self, path, w):
+        """镜像框 → 会话 store（合法才写；非法不写、不牵连）。"""
+        from ..core import params as _P
+        from .. import pm_setup as pm
+        short = path.split('.', 1)[1]
+        val, err = _P.coerce(short, w.text())
+        w.setToolTip(err or ('与「引擎参数」页同一项（' + path + '）；留空 = 默认'))
+        if err is None and getattr(self, 'win', None) is not None:
+            pm.god_write(self.win, path, val)
+            self.set_engine_overrides(self.win.engine_overrides or {})
+            self._refresh_e_count()
+
     def _make_rerun_btn(self):
         btn = QPushButton('⟳ 应用并重跑')
         btn.setToolTip('按当前旋钮值重新运行演化（diag 同步开启）')
@@ -308,58 +370,62 @@ class SolverInspector(QDialog):
         return btn
 
     def set_god_params(self, params):
-        """DynamicPanel 把当前覆写值填进旋钮（params: dict 或 None）。"""
-        p = params or {}
-        for key, attr in (('per_freq_M', 'god_perfreq_m'),
-                          ('r_crit', 'god_rcrit'),
-                          ('max_step', 'god_maxstep'),
-                          ('tol', 'god_tol')):
-            e = getattr(self, attr, None)
-            if e is None:
-                continue
-            val = p.get(key)
-            e.setText('' if val is None else str(val))
-        # 引擎参数页覆写回填
-        for kw, e in (getattr(self, '_e_edits', None) or {}).items():
-            val = p.get(kw)
-            e.setText('' if val is None else str(val))
+        """回填运行级覆写（存档/脚本）→ **统一转成注册路径**再写会话 store。
+
+        旧存档是平铺的 kwarg（r_crit/tol/max_step/per_freq_M/bw_opt/mw_cap…）；
+        现在一律映射到 `engine.*` / `solve.*` 全路径，与检视器页同一条路
+        （不再有平行回填循环）。
+        """
+        p = dict(params or {})
+        po = p.pop('param_overrides', None)
+        merged = {}
+        if isinstance(po, dict):
+            for k, v in po.items():
+                merged['engine.' + k if '.' not in k else k] = v
+        for k, v in p.items():
+            if k in ('diag', 'per_freq_M', 'max_step', 'tol', 'r_crit'):
+                target = self._LEGACY_KW2PATH.get(k)
+                if target:
+                    merged[target] = v
+            elif k in ('bw_opt', 'mw_cap', 'mw_max', 'mw_nres_bw', 'phase_budget'):
+                target = self._LEGACY_KW2PATH.get(k)
+                if target:
+                    merged[target] = v
+        win = getattr(self, 'win', None)
+        if win is not None:
+            win.set_engine_overrides(merged)
+        else:
+            # 独立构造（单测/脚本）：直接回填控件，保持旧行为可用
+            for name, e in (getattr(self, '_e_edits', None) or {}).items():
+                v = merged.get('engine.' + name, merged.get(name))
+                e.blockSignals(True)
+                e.setText('' if v is None else _fmt_num(v))
+                e.blockSignals(False)
+            self._refresh_e_count()
+
+    # 旧存档 kwarg 名 → 注册路径（唯一映射表）
+    _LEGACY_KW2PATH = {
+        'r_crit': 'engine.R_CRIT',
+        'tol': 'engine.DEFAULT_RTOL',
+        'max_step': 'solve.MAX_STEP',
+        'per_freq_M': 'solve.PER_FREQ_M',
+        'bw_opt': 'engine.BW_OPT',
+        'mw_cap': 'engine.MW_MAX_MHZ',
+        'mw_max': 'engine.MW_MAX_MHZ',
+        'mw_nres_bw': 'solve.COST_BUDGET',
+        'phase_budget': 'solve.COST_BUDGET',
+    }
+
+
 
     def god_values(self, pair=False):
-        """读取旋钮 → evolve_mixed(_pair) 覆写 kwargs（空=默认不传）。"""
-        ek = {}
-        if not pair:
-            m = self.god_perfreq_m.text().strip()
-            if m:
-                try:
-                    ek['per_freq_M'] = (int(m) if '[' not in m
-                                        else json.loads(m))
-                except Exception:
-                    QMessageBox.warning(self, '上帝参数',
-                                        f'per_freq_M 解析失败: {m}')
-                    return {}
-        for attr, key in (('god_rcrit', 'r_crit'),
-                          ('god_maxstep', 'max_step'),
-                          ('god_tol', 'tol')):
-            s = getattr(self, attr).text().strip()
-            if s:
-                try:
-                    ek[key] = float(s)
-                except ValueError:
-                    QMessageBox.warning(self, '上帝参数',
-                                        f'{key} 解析失败: {s}')
-                    return {}
-        # 引擎参数页覆写
-        for kw, e in (getattr(self, '_e_edits', None) or {}).items():
-            s = e.text().strip()
-            if s:
-                try:
-                    ek[kw] = float(s)
-                except ValueError:
-                    QMessageBox.warning(self, '引擎参数',
-                                        f'{kw} 解析失败: {s}')
-                    return {}
-        ek['diag'] = True
-        return ek
+        """→ 运行 kwargs。
+
+        引擎参数覆写与求解器参数**都不在这里出**：它们的唯一来源是会话
+        store（`MainWindow.engine_overrides`，由注册表 `engine.*`/`solve.*`
+        读写，见 pm_setup.god_split）。本方法只标注 diag。
+        """
+        return {'diag': True}
 
     # ---------- 数据入口 ----------
     def set_placeholder(self, text):
@@ -394,95 +460,367 @@ class SolverInspector(QDialog):
         self._refresh_solver()
         self._refresh_sectors()
 
-    # ---------- Tab 引擎参数（params.py 数值阈值覆写） ----------
-    _E_PARAMS = [
-        ('phase_budget', 'PHASE_BUDGET',
-         '微波候选窗的**无量纲相预算**（rad）——取代旧的固定频率窗。'
-         '窗宽 = PHASE_BUDGET/(C·T)：T 短则宽、T 长则窄。'
-         '调大 → 保留更多远失谐对（更准更慢，最坏总步数 ≈ 值/0.5）；'
-         '调小 → 可能删掉强场多光子通道（freeze 三光子梯子第三级）。'),
-        ('bw_opt', 'BW_OPT',
-         'mixed φ-帧：**光场**对的过滤带宽 |ΔD| < 值保留（MHz）。'
-         't78 起只管光场对（V_dd 已改判据 <code>PHASE_TOL</code>）。'
-         '调小 → 更多对进 φ-帧精确计算（更准更慢）；调大 → 反旋过滤更激进。'
-         '注意：漏滤 THz 对会把步长钉死'),
-        ('mw_cap', 'MW_MAX_MHZ',
-         '微波候选窗的**绝对**上界（MHz）——只兜 T→0 与显式覆写；'
-         '正常窗宽由 <code>PHASE_BUDGET</code> 派生，不要动这个'),
-        ('mw_max', 'MW_MAX_MHZ',
-         '微波/光场分界：载频 ≤ 值按微波处理（MHz）。默认 1e5（100 GHz）'),
-    ]
-
+    # ---------- Tab 引擎参数（params.py 注册表驱动） ----------
+    # 本页是**控制引擎参数的正式入口**：内容由 params.SPECS 生成，新增/改名
+    # 参数只需改 params.py，本页自动跟随。覆写经 params.override() 以
+    # "每次运行一个快照"生效（线程本地栈 → 线程安全、退出即还原）。
     def _make_tab_params(self):
-        from ..core import params as _params
-        w = QWidget()
-        lay = QVBoxLayout(w)
-        lay.setContentsMargins(10, 8, 10, 8)
-        lay.setSpacing(8)
-        info = QLabel(
-            '引擎数值收敛/过滤阈值（定义于 <b>params.py</b>，默认值实时读取）。'
-            '覆写仅对本次运行生效，不写回 params.py；清空 = 恢复默认。'
-            '物理含义较强的参数在各自页：r_crit / per_freq_M → 处理链，'
-            'tol / max_step → 求解过程。')
-        info.setWordWrap(True)
-        lay.addWidget(info)
+        """引擎参数页（t84）：**一行两个参数**的栅格，说明只在悬停时显示。
 
-        # 每个可覆写参数一张卡（与处理链页同一套视觉语言），三张 stretch=1
-        # 平分主体。原先是一张 3 行表格被拉满整页，下面空一大片白。
+        按用户反馈迭代的取舍：
+          · 一行两个 → 宽度用满，31 项三屏内看完；
+          · 说明文本**不进版面**：全部收进 tooltip（悬停任意处即见完整描述、
+            单位、默认值、典型范围），版面上只留「参数名 + 值 + ↺ + 一行元信息」；
+          · 单元高度 ~52px —— 不再把信息压成一行挤在一起；
+          · 工具条：搜索 / 层级过滤 / 仅看已覆写 / 计数 / 全部恢复默认。
+
+        交互契约不变：`_e_edits[name]` 仍是 QLineEdit（注册表绑定、校验、
+        回填、各处自检都靠它）；`_e_rows[name]` 改为名字 QLabel（用于高亮）。
+        """
+        from PyQt5.QtWidgets import QComboBox, QCheckBox, QGridLayout
+        from ..core import params as _P
+
+        def _tip(sp):
+            s = sp.desc
+            if sp.unit:
+                s += '\n单位：' + sp.unit
+            s += '\n默认 %s' % _fmt_num(sp.default)
+            if sp.lo is not None and sp.hi is not None:
+                s += '\n典型范围 %s ~ %s' % (_fmt_num(sp.lo), _fmt_num(sp.hi))
+            return s
+        w = QWidget()
+        outer = QVBoxLayout(w)
+        outer.setContentsMargins(10, 8, 10, 8)
+        outer.setSpacing(6)
+        info = QLabel(
+            '引擎参数（定义于 <b>params.py</b>）。<b>留空 = 用默认值</b>；'
+            '填了只对本次运行生效（会话覆写，不写回文件，可 undo）。'
+            '层级：【A】精度旋钮 · 【C】结构常量 · 【D】模型边界 · '
+            '【E】只影响速度。<b>悬停任意行</b>看完整说明与典型范围。')
+        info.setWordWrap(True)
+        outer.addWidget(info)
+
+        bar = QHBoxLayout()
+        bar.setSpacing(6)
+        self._e_search = QLineEdit()
+        self._e_search.setPlaceholderText('搜索参数名 / 含义…')
+        self._e_search.setFixedWidth(210)
+        self._e_search.setClearButtonEnabled(True)
+        self._e_search.textChanged.connect(lambda _t: self._apply_param_filter())
+        bar.addWidget(self._e_search)
+        self._e_tier = QComboBox()
+        self._e_tier.addItem('全部层级', '')
+        for tier, title in _P.TIERS:
+            if _P.specs(tier):
+                self._e_tier.addItem('【%s】%s' % (tier, title), tier)
+        self._e_tier.currentIndexChanged.connect(
+            lambda _i: self._apply_param_filter())
+        bar.addWidget(self._e_tier)
+        self._e_only = QCheckBox('仅显示已覆写')
+        self._e_only.setToolTip('只列出本页填过值的参数（排查"我改了哪些"）')
+        self._e_only.stateChanged.connect(lambda _s: self._apply_param_filter())
+        bar.addWidget(self._e_only)
+        bar.addStretch(1)
+        self._e_count = QLabel('')
+        self._e_count.setStyleSheet('color:%s;' % ui_theme.COL_TEXT_DIM)
+        bar.addWidget(self._e_count)
+        btn = QPushButton('全部恢复默认')
+        btn.setToolTip('清空本页所有覆写（不动其它页的旋钮）')
+        btn.clicked.connect(self.reset_param_overrides)
+        bar.addWidget(btn)
+        outer.addLayout(bar)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        inner = QWidget()
+        form = QVBoxLayout(inner)
+        form.setContentsMargins(0, 0, 8, 0)
+        form.setSpacing(10)
         self._e_edits = {}
-        for (kw, const, desc), accent in zip(
-                self._E_PARAMS, ('#378ADD', '#BA7517', '#1D9E75')):
-            card = QFrame()
-            card.setObjectName('ecard%s' % kw)
-            card.setStyleSheet(
-                'QFrame#ecard%s{background:#FFFFFF; border:1px solid %s; '
-                'border-radius:8px;}' % (kw, ui_theme.COL_BORDER))
-            cl = QHBoxLayout(card)
-            cl.setContentsMargins(10, 6, 12, 6)
-            cl.setSpacing(12)
-            bar = QFrame()
-            bar.setFixedWidth(6)
-            bar.setStyleSheet('background:%s; border:none; border-radius:3px;'
-                              % accent)
-            cl.addWidget(bar)
-            # 左栏：kwarg 名 + 默认值 + params.py 常量名
-            # 用布局直接挂在卡片里（不套 QWidget 包装）——套包装的话子控件
-            # 不继承卡片白底，会在卡里显示一块灰底，且竖向被拉散。
-            lbox = QVBoxLayout()
-            lbox.setSpacing(1)
-            lbox.addStretch(1)
-            name = QLabel('<b style="font-size:14px;">%s</b>' % kw)
-            name.setTextFormat(Qt.RichText)
-            name.setFixedWidth(150)
-            lbox.addWidget(name)
-            dflt = QLabel('默认 %g' % float(getattr(_params, const)))
-            dflt.setStyleSheet('color:%s; font-size:9pt;'
-                               % ui_theme.COL_TEXT_DIM)
-            dflt.setFixedWidth(150)
-            lbox.addWidget(dflt)
-            cst = QLabel('params.%s' % const)
-            cst.setStyleSheet('color:%s; font-size:8pt;'
-                              % ui_theme.COL_TEXT_DIM)
-            cst.setFixedWidth(150)
-            lbox.addWidget(cst)
-            lbox.addStretch(1)
-            cl.addLayout(lbox)
-            # 中栏：运行级覆写输入
-            e = QLineEdit('')
-            e.setFixedWidth(120)
-            e.setPlaceholderText('空 = 默认')
-            e.setToolTip('运行级覆写：仅本次运行生效，不写回 params.py')
-            self._e_edits[kw] = e
-            cl.addWidget(e, 0, Qt.AlignVCenter)
-            # 右栏：说明（占满剩余宽度）
-            d = QLabel(desc)
-            d.setWordWrap(True)
-            d.setStyleSheet('color:%s;' % ui_theme.COL_TEXT_DIM)
-            cl.addWidget(d, 1)
-            # 三张卡平分整页（试过"紧凑卡+页尾留白"和"卡片间大间距"，在
-            # 1080 高下都比平分更空、更散——保持平分）。
-            lay.addWidget(card, 1)
+        self._e_rows = {}
+        self._e_cells = {}
+        self._e_sections = {}
+        for tier, title in _P.TIERS:
+            specs = _P.specs(tier)
+            if not specs:
+                continue
+            sec = QWidget()
+            sv = QVBoxLayout(sec)
+            sv.setContentsMargins(0, 0, 0, 0)
+            sv.setSpacing(4)
+            head = QLabel('【%s】%s（%d 项）' % (tier, title, len(specs)))
+            head.setStyleSheet('font-weight:bold;')
+            sv.addWidget(head)
+            rule = QFrame()
+            rule.setFrameShape(QFrame.HLine)
+            rule.setStyleSheet('color:%s;' % ui_theme.COL_TEXT_DIM)
+            sv.addWidget(rule)
+            grid = QGridLayout()
+            grid.setHorizontalSpacing(10)
+            grid.setVerticalSpacing(6)
+            for _c in range(4):                 # 一行四个
+                grid.setColumnStretch(_c, 1)
+            for i, sp in enumerate(specs):
+                grid.addWidget(self._param_cell(sp, _tip(sp)), i // 4, i % 4)
+            sv.addLayout(grid)
+            form.addWidget(sec)
+            self._e_sections[tier] = (sec, [sp.name for sp in specs])
+        form.addStretch(1)
+        scroll.setWidget(inner)
+        outer.addWidget(scroll, 1)
+        self._bind_engine_registry()
+        self._bind_solver_knobs()
+        self._refresh_e_count()
         return w
+
+    def _param_cell(self, sp, tip):
+        """一个参数单元：`名称 …… [值] ↺` + 一行「含义 · 默认 · 单位」。
+
+        **说明文本不进版面**（只在 tooltip）——这是本页"看着挤"的根因：
+        旧版把整段 desc 铺在行里，行高被文字主导。
+        """
+        cell = QFrame()
+        cell.setObjectName('pcell')
+        cell.setToolTip(tip)
+        cell.setMinimumHeight(80)
+        # 悬停反馈：说明文本只在 tooltip 里，得让人**看得出**这里可悬停/可改。
+        # 用 background 而不是 border —— border 会挤占内部空间导致悬停时抖动。
+        cell.setStyleSheet(
+            'QFrame#pcell:hover { background-color: rgba(15,108,189,0.07); '
+            'border-radius: 4px; }')
+        v = QVBoxLayout(cell)
+        v.setContentsMargins(10, 7, 10, 8)
+        v.setSpacing(5)
+        # 竖排：名称一行、**输入框紧贴其下并撑满单元宽度**。
+        # 旧版横向排 + stretch 把输入框推到单元远端 → "名字和框隔太远"。
+        head = QHBoxLayout()
+        head.setSpacing(6)
+        nm = QLabel(sp.name)
+        nm.setToolTip(tip)
+        f = nm.font()
+        f.setBold(True)
+        nm.setFont(f)
+        head.addWidget(nm)
+        head.addStretch(1)
+        v.addLayout(head)
+        e = QLineEdit('')
+        e.setMinimumHeight(30)
+        e.setPlaceholderText(_fmt_num(sp.default))
+        # 「恢复默认」做成输入框自带的清除按钮：有内容才出现、不占宽度、
+        # 也不会像独立的"默认"小按钮那样在小字号下糊成一团（离屏字体无回退）。
+        e.setClearButtonEnabled(True)
+        e.setToolTip(tip + '\n\n留空 = 用默认值；右侧 × 清空本项覆写。')
+        e.textChanged.connect(lambda _t, n=sp.name: self._on_param_edit(n))
+        self._e_edits[sp.name] = e
+        v.addWidget(e)
+        unit = (' ' + sp.unit) if sp.unit else ''
+        meta = QLabel('%s · 默认 %s%s' % (sp.label, _fmt_num(sp.default), unit))
+        meta.setStyleSheet('color:%s; font-size:8pt;' % ui_theme.COL_TEXT_DIM)
+        meta.setToolTip(tip)
+        v.addWidget(meta)
+        self._e_rows[sp.name] = nm          # 高亮用（已覆写 → 强调色）
+        self._e_cells[sp.name] = cell
+        return cell
+
+    def _apply_param_filter(self):
+        """按 搜索词 / 层级 / 仅已覆写 过滤栅格（隐藏单元与空分组）。"""
+        from ..core import params as _P
+        sb = getattr(self, '_e_search', None)
+        txt = ((sb.text() if sb is not None else '') or '').strip().lower()
+        tier = self._e_tier.currentData() or ''
+        only = self._e_only.isChecked()
+        for t, (sec, names) in (getattr(self, '_e_sections', None) or {}).items():
+            shown = 0
+            for name in names:
+                sp = _P.SPEC_BY_NAME.get(name)
+                hay = (name + ' ' + (sp.label if sp else '') + ' '
+                       + (sp.desc if sp else '')).lower()
+                vis = (not txt) or (txt in hay)
+                if vis and tier:
+                    vis = (tier == t)
+                if vis and only:
+                    ed = self._e_edits.get(name)
+                    vis = bool(ed is not None and ed.text().strip())
+                self._e_cells[name].setHidden(not vis)
+                shown += int(vis)
+            sec.setHidden(shown == 0)
+
+    def _bind_engine_registry(self):
+        """把本页输入框绑到参数注册表的 `engine.*`（灯/校验/提交走框架）。
+
+        框架的 `_paint()` 在 `binding.widget is None` 时直接返回 ——
+        只 register 不绑控件就**永远没有指示灯**。这里补上绑定：
+        输入→黄灯、回车→提交→绿灯、AI set→同一 write_fn + 亮灯、
+        非法→框架红灯且不写 store。
+        """
+        win = getattr(self, 'win', None)
+        reg = getattr(win, 'param_reg', None)
+        if win is None or reg is None:
+            return 0
+        from .. import pm_setup as pm
+        try:
+            self._engine_bound = pm.bind_engine_widgets(
+                reg, win, self._e_edits, fmt=_fmt_num)
+        except Exception as e:                      # 绑定失败不影响页面可用
+            self._engine_bound = 0
+            if hasattr(win, 'log'):
+                win.log(f'引擎参数页绑定注册表失败：{e}')
+        return self._engine_bound
+
+
+    def _on_param_edit(self, name):
+        """即时校验 + 即时广播到会话真值（组件与后台参数一一绑定）。
+
+        非法输入的处置是**自愈**：立刻回退到上次有效值（= store 里的生效值），
+        并在计数行红字说明 + tooltip 给原因。不弹模态、不写 store、
+        不牵连其它项。（框架的 store→控件显示通道本来也会覆盖回去，但那个
+        时序不确定——实测会出现"提示没刷新"，故显式回退，行为确定。）
+        """
+        from ..core import params as _P
+        e = self._e_edits[name]
+        _val, err = _P.coerce(name, e.text())
+        if err:
+            win = getattr(self, 'win', None)
+            good = None
+            if win is not None:
+                from .. import pm_setup as pm
+                good = pm.god_read(win, 'engine.' + name)
+            e.blockSignals(True)
+            e.setText('' if good is None else _fmt_num(good))
+            e.blockSignals(False)
+            e.setToolTip('已忽略非法输入：' + err)
+            if getattr(self, '_e_count', None) is not None:
+                self._e_count.setTextFormat(Qt.RichText)
+                self._e_count.setText(
+                    '<b style="color:#A32D2D;">已忽略非法输入</b>（%s）' % err)
+            # 注意：**不再**调 _refresh_e_count()——回退后已经没有非法项，
+            # 刷新会把这条提示立刻抹掉。提示留到下一次有效改动。
+            return
+        e.setToolTip('')
+        self.param_edited.emit('engine.' + name, _val)
+        # 镜像框（求解页的 r_crit/tol）跟随同一份 store
+        self._sync_mirrors(getattr(getattr(self, 'win', None),
+                                   'engine_overrides', None) or {})
+        self._refresh_e_count()
+
+    def _sync_mirrors(self, store):
+        """镜像框（求解页 r_crit/tol）→ 会话真值（屏蔽信号，防回环）。
+
+        这两个旋钮在求解页也有框，但参数本体只注册一次（`engine.R_CRIT` /
+        `engine.DEFAULT_RTOL`，一个路径一个控件）；求解页那两个是**镜像**，
+        这里负责让它们跟着同一份真值走。
+        """
+        for path, w in getattr(self, '_mirrors', []):
+            short = path.split('.', 1)[1]
+            v = (store or {}).get(path, (store or {}).get(short))
+            txt = '' if v is None else _fmt_num(v)
+            if w.text() == txt:
+                continue
+            w.blockSignals(True)
+            w.setText(txt)
+            w.blockSignals(False)
+
+    def param_overrides_valid(self):
+        """合法项快照（跳过空串与解析失败项）——用于即时广播。"""
+        from ..core import params as _P
+        out = {}
+        for name, e in (self._e_edits or {}).items():
+            val, err = _P.coerce(name, e.text())
+            if err is None and val is not None:
+                out[name] = val
+        return out
+
+    def set_engine_overrides(self, values):
+        """会话真值 → 回填输入框（屏蔽信号，避免回环广播）。"""
+        d = dict(values or {})
+        reg = getattr(getattr(self, 'win', None), 'param_reg', None)
+        for name, e in (getattr(self, '_e_edits', None) or {}).items():
+            # store 键 = 全路径（god.*），兼容旧的裸参数名键
+            v = d.get('engine.' + name, d.get(name))
+            txt = '' if v is None else _fmt_num(v)
+            if e.text() == txt:
+                continue
+            e.blockSignals(True)
+            e.setText(txt)
+            e.blockSignals(False)
+            if reg is not None:          # 让框架的显示通道接管（清灯/清红）
+                b = getattr(reg, '_bindings', {}).get('engine.' + name)
+                if b is not None and b.display_fn is not None:
+                    try:
+                        b.display_fn(v)
+                    except Exception:
+                        pass
+        self._refresh_e_count()
+
+    def _refresh_e_count(self):
+        """状态行 + 行高亮：已覆写 / 非法（非模态，实时）。
+
+        行高亮（t84 新表）：填了值的参数名用强调色 —— "我改了哪些"一眼可辨，
+        配合工具条的「仅显示已覆写」一起用。
+        """
+        if getattr(self, '_e_count', None) is None:
+            return
+        from PyQt5.QtGui import QBrush, QColor
+        from ..core import params as _P
+        accent = getattr(ui_theme, 'COL_ACCENT', '#0F6CBD')
+        n = 0
+        bad = []
+        for name, e in (self._e_edits or {}).items():
+            txt = e.text().strip()
+            nm = (getattr(self, '_e_rows', None) or {}).get(name)
+            if nm is not None:                       # 已覆写 → 强调色
+                nm.setStyleSheet(
+                    'color:%s;%s' % (accent if txt else ui_theme.COL_TEXT,
+                                     'font-weight:bold;' if txt else ''))
+            if not txt:
+                continue
+            n += 1
+            _v, err = _P.coerce(name, txt)
+            if err:
+                bad.append(name)
+        total = len(getattr(self, '_e_edits', None) or {})
+        if bad:
+            self._e_count.setText(
+                '已覆写 %d 项 / 共 %d 项 · '
+                '<b style="color:#A32D2D;">非法 %d 项已忽略</b>（%s）'
+                % (n - len(bad), total, len(bad), '、'.join(bad[:3])))
+            self._e_count.setTextFormat(Qt.RichText)
+        else:
+            self._e_count.setText(
+                ('已覆写 %d 项 / 共 %d 项' % (n, total)) if n
+                else '当前无覆写（共 %d 项，全部用默认值）' % total)
+
+    def reset_param_overrides(self):
+        for e in (self._e_edits or {}).values():
+            e.setText('')
+        self._refresh_e_count()
+
+    def param_overrides(self):
+        """→ {参数名: 值}（**只含合法项**；空串跳过）。
+
+        非法项**不弹模态框、也不牵连其它项**：字段已被标红 + tooltip，
+        顶部计数会显示"n 项非法"，调用方另用 `param_errors()` 在状态栏提示。
+        （早期版本在这里 QMessageBox 并 return None，结果是"打错一个字 →
+        弹窗 + 本次其它覆写全丢"，改掉。）
+        """
+        from ..core import params as _P
+        out = {}
+        for name, e in (self._e_edits or {}).items():
+            val, err = _P.coerce(name, e.text())
+            if err is None and val is not None:
+                out[name] = val
+        return out
+
+    def param_errors(self):
+        """→ [(参数名, 错误说明)]——非法项（供状态栏等非模态通道提示）。"""
+        from ..core import params as _P
+        bad = []
+        for name, e in (self._e_edits or {}).items():
+            _val, err = _P.coerce(name, e.text())
+            if err:
+                bad.append((name, err))
+        return bad
 
     # ---------- 诊断导出 ----------
     def export_diag(self):

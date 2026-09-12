@@ -295,7 +295,7 @@ class _QuietModals:
         return False
 
 
-def _t_run_compute(jid):
+def _t_run_compute(jid, diag=True):
     """触发与"人点运行"完全同一条 _run 路径；立即返回 job_id。
 
     完成回收：_run 内部 `done.connect(self._on_evolve_done)` 在连接时解析
@@ -303,6 +303,12 @@ def _t_run_compute(jid):
     """
     w = _win()
     dyn = w.dynamic
+    # AI 发起的运行默认采诊断（AI 的用途就是要能解释"为什么"）；
+    # 人发起的运行仍跟界面模式（上帝模式才采），不让人无谓付成本。
+    dyn._ai_wants_diag = bool(diag)
+    # AI 发起的运行**不弹成本预检模态**（无人点会卡死主线程）：置旗标，
+    # ui_dynamic._preflight_cost 见到它就走「完整物理」路径并只写日志。
+    dyn._ai_initiated = True
     if getattr(dyn, '_run_active', False):
         _jobs.pop(jid, None)
         return {'ok': False, 'msg': '已有演化在运行（人或 AI 发起），先等待或取消'}
@@ -319,6 +325,7 @@ def _t_run_compute(jid):
 
     def _watch(orig):
         def _f(res, error):
+            dyn._ai_initiated = False          # 运行结束 → 清旗标（人随后手动跑会正常弹窗）
             job = _jobs.get(jid)
             if job is not None:
                 job['done'] = True
@@ -350,6 +357,187 @@ def _t_run_compute(jid):
     get_journal(_ROOT).record('ai', 'run_compute', {'job': jid}, '', None)
     return {'ok': True, 'job_id': jid,
             'msg': '已启动（GUI 同步显示进度）；用 job_status 轮询'}
+
+
+def _last_diag(job_id=''):
+    """→ (diag_dict 或 None, 来源描述)。
+
+    优先级：指定 job → 最近一个带 diag 的 job → GUI 检视器当前装载的。
+    """
+    if job_id:
+        job = _jobs.get(job_id) or {}
+        d = (job.get('res') or {}).get('diag')
+        return d, f'job {job_id}'
+    for jid in reversed(list(_jobs)):
+        d = (_jobs[jid].get('res') or {}).get('diag')
+        if d:
+            return d, f'最近运行 {jid}'
+    insp = getattr(getattr(_win(), 'dynamic', None), '_inspector', None)
+    d = getattr(insp, '_diag', None) if insp is not None else None
+    return d, 'GUI 检视器当前内容'
+
+
+def _arr(x, dtype=float):
+    """None 安全的数组化（`x or []` 对 numpy 数组会歧义，禁止这么写）。"""
+    import numpy as _np
+    return _np.asarray([] if x is None else x, dtype)
+
+
+def _np_stat(a):
+    """数组 → (min, median, max)（空数组 → None）。"""
+    import numpy as _np
+    if a is None:
+        return None
+    a = _np.asarray(a, float).ravel()
+    if a.size == 0:
+        return None
+    return [float(a.min()), float(_np.median(a)), float(a.max())]
+
+
+def _diag_summary(d):
+    """诊断摘要：全是标量/短列表，可直接进 context。"""
+    import numpy as _np
+    meta = d.get('meta') or {}
+    ac = d.get('acize') or {}
+    ph = d.get('photon') or {}
+    pr = d.get('pairs') or {}
+    sv = d.get('solver') or {}
+    out = {
+        'meta': {k: meta.get(k) for k in (
+            'method', 'backend', 'N', 'P', 'dim', 't_end', 'tol', 'max_step',
+            'r_crit', 'bw', 'mw_cap', 'mw_max', 'M', 'n_pairs')},
+        'labels': (meta.get('labels') or [])[:8],
+        'n_labels': len(meta.get('labels') or []),
+        'acize': {
+            'r_crit': ac.get('r_crit'),
+            'fields': ac.get('fields'),
+            'shift_range_mhz': _np_stat(ac.get('shift')),
+            'n_shifted': (int(_np.count_nonzero(
+                _np.asarray(ac.get('shift'), float)))
+                if ac.get('shift') is not None else 0),
+        },
+        'photon': {'Ms': ph.get('Ms'), 'P': ph.get('P'), 'dim': ph.get('dim'),
+                   'strides': ph.get('strides'),
+                   'nvecs': (list(_np.asarray(ph['nvecs']).ravel())
+                             if ph.get('nvecs') is not None else None)},
+        'solver': {
+            'nfev': sv.get('nfev'), 'n_acc': sv.get('n_acc'),
+            'n_rej': sv.get('n_rej'), 'norm_dev': sv.get('norm_dev'),
+            'n_steps': int(_arr(sv.get('dt')).size),
+            'dt_ns': _np_stat(sv.get('dt'))},
+    }
+    if pr:
+        is_mw = _arr(pr.get('is_mw'), int)
+        v = _np.abs(_arr(pr.get('v'), complex))
+        dD = _arr(pr.get('dD'), float)
+        out['pairs'] = {
+            'n': int(is_mw.size),
+            'n_microwave': int((is_mw == 1).sum()),
+            'n_optical_vdd': int((is_mw == 0).sum()),
+            'max_abs_v_mhz': float(v.max()) if v.size else 0.0,
+            'dD_mhz': _np_stat(dD),
+            'note': ('微波/光场保留判据：成本窗 mw_cap + 精度 Θ≥PHASE_TOL；'
+                     'V_dd 走 static_phase_keep（同判据族）'),
+        }
+    return out
+
+
+def _downsample(arr, limit):
+    import numpy as _np
+    a = _np.asarray(arr, float).ravel()
+    if a.size <= limit:
+        return a.tolist()
+    idx = _np.linspace(0, a.size - 1, limit).astype(int)
+    return a[idx].tolist()
+
+
+def _t_get_diag(scope='', job_id='', limit=200, save_npz=False):
+    """只读：运行诊断。scope='' → 摘要；其余给分项明细（截断/落盘）。
+
+    摘要默认、明细要显式要、大数组落盘给路径——与 job_result(save_npz) 同纪律。
+    """
+    import numpy as _np
+    d, src = _last_diag(job_id)
+    if not d:
+        return {'ok': False,
+                'msg': '没有诊断数据。诊断只在 mixed 引擎产出：AI 发起的 '
+                       'run_compute 现默认采诊断（diag=true）；人发起的运行'
+                       '需先切到上帝模式。'}
+    scope = (scope or '').strip().lower()
+    if scope in ('', 'summary', 'all'):
+        return {'ok': True, 'source': src, 'scope': 'summary',
+                'summary': _diag_summary(d)}
+    meta = d.get('meta') or {}
+    if scope == 'pairs':
+        pr = d.get('pairs') or {}
+        v = _np.abs(_arr(pr.get('v'), complex))
+        order = _np.argsort(-v)[:max(1, int(limit))]
+        lab = meta.get('labels') or []
+        rows = []
+        for i in order:
+            a = int(pr['a'][i])
+            b = int(pr['b'][i])
+            rows.append({'a': a, 'b': b,
+                         'label_a': lab[a] if a < len(lab) else '',
+                         'label_b': lab[b] if b < len(lab) else '',
+                         'abs_v_mhz': float(abs(pr['v'][i])),
+                         'dD_mhz': float(pr['dD'][i]),
+                         'is_mw': int(pr['is_mw'][i]),
+                         'w_mhz': float(pr['w'][i])})
+        return {'ok': True, 'source': src, 'scope': 'pairs',
+                'n_total': int(v.size), 'n_returned': len(rows),
+                'by_abs_v_desc': rows}
+    if scope in ('solver', 'steps'):
+        sv = d.get('solver') or {}
+        return {'ok': True, 'source': src, 'scope': 'steps',
+                'nfev': sv.get('nfev'), 'n_acc': sv.get('n_acc'),
+                'n_rej': sv.get('n_rej'), 'norm_dev': sv.get('norm_dev'),
+                'dt_ns_stats': _np_stat(sv.get('dt')),
+                't_ns': _downsample(sv.get('t_steps'), int(limit)),
+                'dt_ns': _downsample(sv.get('dt'), int(limit))}
+    if scope in ('sectors', 'photon'):
+        ph = d.get('photon') or {}
+        D = ph.get('D_full')
+        return {'ok': True, 'source': src, 'scope': 'sectors',
+                'Ms': ph.get('Ms'), 'P': ph.get('P'), 'dim': ph.get('dim'),
+                'strides': ph.get('strides'),
+                'nvecs': (list(_np.asarray(ph['nvecs']).ravel())
+                          if ph.get('nvecs') is not None else None),
+                'D_full_stats': _np_stat(D),
+                'D_full_head': (_downsample(D, min(int(limit), 64))
+                                if D is not None else None)}
+    if scope in ('traj', 'trajectory'):
+        tr = d.get('trajectory') or {}
+        amps = tr.get('sector_amps') or {}
+        out = {'ok': True, 'source': src, 'scope': 'trajectory',
+               't_ns': _downsample(tr.get('t'), int(limit)), 'sectors': {}}
+        for k, v in amps.items():
+            a = _np.abs(_np.asarray(v))
+            out['sectors'][str(k)] = {
+                'shape': list(a.shape),
+                'max_abs': float(a.max()) if a.size else 0.0,
+                'at_last': (_downsample(a[-1], min(int(limit), 32))
+                            if a.ndim > 1 else [])}
+        return out
+    if scope in ('h', 'h_snapshots', 'hamiltonian'):
+        snaps = d.get('H_snapshots') or {}
+        shp = {str(k): list(_np.asarray(v).shape) for k, v in snaps.items()}
+        if not save_npz:
+            return {'ok': True, 'source': src, 'scope': 'H',
+                    'times_ns': list(snaps), 'shapes': shp,
+                    'hint': 'save_npz=true 落盘全量矩阵并返回路径'}
+        import time as _time
+        outdir = os.path.join(_ROOT, 'ai_results')
+        os.makedirs(outdir, exist_ok=True)
+        path = os.path.join(
+            outdir, 'diag_H_%s.npz' % _time.strftime('%Y%m%d_%H%M%S'))
+        _np.savez_compressed(
+            path, **{('H_%.6g' % float(k)): _np.asarray(v)
+                     for k, v in snaps.items()})
+        return {'ok': True, 'source': src, 'scope': 'H', 'path': path,
+                'times_ns': list(snaps), 'shapes': shp}
+    return {'ok': False,
+            'msg': "scope 取值：''(摘要) / pairs / steps / sectors / traj / H"}
 
 
 def _t_job_status(job_id):
@@ -542,10 +730,21 @@ def _register_tools(mcp):
 
     @mcp.tool(description='启动演化计算（与 GUI 点"运行"同一路径）。立即返回 job_id，'
                          'GUI 进度照常显示；用 job_status/job_result 跟进')
-    async def run_compute() -> dict:
+    async def run_compute(diag: bool = True) -> dict:
         _job_seq[0] += 1
         jid = f'job{_job_seq[0]}'
-        return await asyncio.to_thread(d, lambda: _t_run_compute(jid), 300.0)
+        return await asyncio.to_thread(
+            d, lambda: _t_run_compute(jid, diag=diag), 300.0)
+
+    @mcp.tool(description='只读：运行诊断。scope 空=摘要（引擎/AC化/'
+                         '光子块/耦合对/求解器）；scope=pairs/steps/'
+                         'sectors/traj/H 给分项明细（截断；H 需 '
+                         'save_npz=true 落盘给路径）。job_id 空=最近'
+                         '一次或 GUI 当前。诊断是理解"为什么"的主通道')
+    async def get_diag(scope: str = '', job_id: str = '',
+                       limit: int = 200, save_npz: bool = False) -> dict:
+        return await asyncio.to_thread(
+            d, lambda: _t_get_diag(scope, job_id, limit, save_npz))
 
     @mcp.tool(description='查询计算进度')
     async def job_status(job_id: str) -> dict:
@@ -688,9 +887,22 @@ def _port_free(port):
             return False
 
 
-def _pick_port():
+def _pick_port(retry_s=10.0, poll_s=0.25):
+    """→ (port, fell_back)。
+
+    ⚠ 端口回退是**静默断链**的经典来源：DSH（以及任何 harness）的配置里
+    URL 是**写死**的 `http://127.0.0.1:8765/mcp`，一旦这里回退到随机端口，
+    harness 侧永远连不上、工具表里一个都不出现，而软件看起来"一切正常"。
+    故先把期望端口重试一段时间（覆盖"上一个实例还在退出/端口刚释放"这种
+    常见情形），确实占不到才回退，并让调用方把回退**吵出来**。
+    """
     want = _default_port()
-    if _port_free(want):
+    t0 = time.time()
+    while time.time() - t0 < max(0.0, float(retry_s)):
+        if _port_free(want):
+            return want, False
+        time.sleep(poll_s)
+    if _port_free(want):                 # 最后一次机会（退避后刚好释放）
         return want, False
     with socket.socket() as s:
         s.bind(('127.0.0.1', 0))
@@ -739,8 +951,15 @@ def start_server(win, port=None):
             want, _ = _pick_port()
             win.log(f'[AI] 指定端口 {port} 被占，改用 {want}')
     else:
-        want, _ = _pick_port()
+        want, _fell_back = _pick_port()
     port = want
+    if _fell_back:
+        # 吵出来：harness 的配置写死 8765，回退 = 那条 AI 通道静默失效
+        win.log(f'[AI] ⚠ 默认端口 {_default_port()} 被占用 → 已回退到 {port}。'
+                f'DSH/harness 配置里写死的 http://127.0.0.1:'
+                f'{_default_port()}/mcp **连不上**（工具会一个都不出现）。'
+                f'请关掉占用该端口的进程后重启软件，或把配置改成 127.0.0.1:'
+                f'{port}（也可设环境变量 EL_MCP_PORT={port} 固定下来）。', 30000)
     _server_state['port'] = port
     _server_thread = threading.Thread(target=_serve_loop, args=(port,),
                                       daemon=True, name='mcp-server')

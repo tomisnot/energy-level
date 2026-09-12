@@ -13,8 +13,8 @@
 时调用，用返回的 method 走现有引擎路径。
 """
 import numpy as np
+from . import params as _P
 
-from .params import MW_MAX_MHZ as _MW_MAX_MHZ   # t80：分界常量单源
 
 
 def _split_waves(waves):
@@ -24,7 +24,7 @@ def _split_waves(waves):
         kind = getattr(w, 'kind', None)
         if kind == 'arb':
             arb.append(w)
-        elif getattr(w, 'freq_mhz', 0.0) > _MW_MAX_MHZ:
+        elif getattr(w, 'freq_mhz', 0.0) > _P.get('MW_MAX_MHZ'):
             opt.append(w)
         else:
             mw.append(w)

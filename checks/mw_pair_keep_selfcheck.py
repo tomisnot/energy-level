@@ -8,7 +8,8 @@
 零变化、无任何报错。与 t78 给 V_dd 换判据（固定能隙窗 → 累积相位）同因。
 
 判据（t80 定稿，两个无量纲量、都随 T 自适应）：
-  成本 `coupling.mw_cap_mhz(T)`：窗宽 = PHASE_BUDGET/(C·T) ≥ Δ   ← 付得起吗
+  成本 `coupling.mw_cap_mhz(T, 预算)`：窗宽 = 预算/(C·T) ≥ Δ ← 付得起吗
+  （**默认预算为空 = 不限制**：成本只换速度，绝不默默改模型）
   精度 `coupling.mw_pair_keep`：Θ = C·T·Ω²/max(Δ,Ω) ≥ PHASE_TOL  ← 重要吗
 `MW_NRES_BW_MHZ` / `MW_M_BW_MHZ` / `_TF_MW_M_BW_MHZ` / `_M_ANALYTIC_BW_MHZ`
 **已删**（前三个合并为 M_EST_BW_MHZ 的 M 估计窗；保留窗改由相预算派生）。
@@ -47,7 +48,10 @@ from src.core.evolve_mixed import _MixedSetup                    # noqa: E402
 from src.core.coupling import (mw_pair_keep, mw_cap_mhz,        # noqa: E402
                               mw_candidate_mask)
 from src.core.evolve_util import _CONV                           # noqa: E402
-from src.core.params import (PHASE_TOL, PHASE_BUDGET,            # noqa: E402
+# 成本预算现在**默认不限制**（None）；要按成本剔除必须显式给值。
+# _BUD = 4e4 是 t79/t80 时代的默认档，保留下来当「显式成本档」的回归锚。
+_BUD = 4e4
+from src.core.params import (PHASE_TOL,            # noqa: E402
                              M_EST_BW_MHZ, MW_MAX_MHZ)
 
 C = Checker('mw_pair_keep')
@@ -207,21 +211,23 @@ C.check('B9 不传 t_end_ns → 退回绝对上界（梯子三级仍在上界内
 # ---------------------------------------------------------------
 # D. 相预算派生（t80）：mw_cap_mhz 的标定锚与单调性
 # ---------------------------------------------------------------
-C.check('D1 相预算窗 == PHASE_BUDGET/(C·T)',
-        abs(mw_cap_mhz(400.0) - PHASE_BUDGET / (Cv * 400.0)) < 1e-9)
+C.check('D1 默认（预算空）不删真实耦合：退回绝对上界',
+        abs(mw_cap_mhz(400.0) - 1e5) < 1e-9, f'{mw_cap_mhz(400.0, _BUD):.0f} MHz')
+C.check('D1b 显式给成本档 → 窗宽 == 预算/(C·T)',
+        abs(mw_cap_mhz(400.0, _BUD) - _BUD / (Cv * 400.0)) < 1e-9)
 C.check('D2 标定锚：T=620 ns 复现 t79 的 1e4 MHz 窗（±5%）',
-        abs(mw_cap_mhz(620.0) - 1e4) / 1e4 < 0.05,
-        f'{mw_cap_mhz(620.0):.0f} MHz')
-_caps = [mw_cap_mhz(t) for t in (10.0, 100.0, 400.0, 1000.0, 1e4)]
+        abs(mw_cap_mhz(620.0, _BUD) - 1e4) / 1e4 < 0.05,
+        f'{mw_cap_mhz(620.0, _BUD):.0f} MHz')
+_caps = [mw_cap_mhz(t, _BUD) for t in (10.0, 100.0, 400.0, 1000.0, 1e4)]
 C.check('D3 随 T 单调收窄（T 越长付不起越快项）',
         all(_caps[i] > _caps[i + 1] for i in range(len(_caps) - 1)),
         f'{["%.3g" % c for c in _caps]}')
 C.check('D4 步数上界与 T 无关（相预算的本质）',
-        all(abs(c * Cv * t / PHASE_BUDGET - 1.0) < 1e-9
+        all(abs(c * Cv * t / _BUD - 1.0) < 1e-9
             for c, t in zip(_caps, (10.0, 100.0, 400.0, 1000.0, 1e4))))
 # 相预算窗在 freeze 场景容得下第三级，但不至于放进 THz 跨尺度对
 C.check('D5 freeze T=400：窗宽 1e3…3e4 MHz 之间（够梯子、不够 THz）',
-        1e3 < mw_cap_mhz(400.0) < 3e4,
+        1e3 < mw_cap_mhz(400.0, _BUD) < 3e4,
         f'{mw_cap_mhz(400.0):.0f} MHz')
 # 候选掩码 == 逐对 mw_pair_keep（向量化实现与标量判据一致）
 _Om = np.array([[0.0, 1e3, 5e-4], [0.0, 0.0, 3e3], [0.0, 0.0, 0.0]])

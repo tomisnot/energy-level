@@ -32,6 +32,7 @@ from collections import OrderedDict
 from scipy.constants import physical_constants as pc
 import scipy.sparse as sp
 from . import static_atom as core
+from . import params as _P
 
 # ---------------- 单位换算 ----------------
 _HARTREE_HZ = pc['hartree-hertz relationship'][0]   # 6.5797e15 Hz
@@ -407,7 +408,7 @@ def coupling_strength_map(cache, groups, R_grid, theta_grid, phi_deg=0.0,
     R = np.asarray(R_grid, dtype=float)
     theta = np.asarray(theta_grid, dtype=float)
     # 交换对只发生在里德堡态之间：任一态 n < 阈值 → 全零（物理无意义）
-    if any(s['n'] < core.RYDBERG_N_MIN
+    if any(s['n'] < _P.get('RYDBERG_N_MIN')
            for s in (r1_src, r1_tgt, r2_src, r2_tgt)):
         return R, theta, np.zeros((len(R), len(theta)))
     Z = np.empty((len(R), len(theta)))

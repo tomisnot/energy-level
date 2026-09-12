@@ -24,6 +24,7 @@ from .field_build import _group_by_freq, _validate_fields
 from .tensor import (_pair_loss_vectors, _as_product_psi,
                      _reduce_A, _reduce_B)
 from .tensor_fields import _pair_groups
+from . import params as _P
 
 
 def _group_mats(g):
@@ -98,8 +99,9 @@ class SambeSetup:
             + Σ_o env_o(mid)·kron(I_P, Ko_o)
     """
 
-    def __init__(self, E, groups, M, dense_max=2200, static=None,
+    def __init__(self, E, groups, M, dense_max=None, static=None,
                  gamma=None, opt_terms=None):
+        dense_max = _P.get('_DENSE_MAX') if dense_max is None else int(dense_max)
         E = np.asarray(E, float)
         self.E = E
         self.n_phys = E.size
@@ -397,11 +399,6 @@ def sector_sum_pops(phi, P, n_phys):
 # ============================================================
 # 单体引擎
 # ============================================================
-from .params import (_M_START, _M_MAX, M_EST_BW_MHZ,
-                     _DENSE_MAX, _ENV_PROBE_N,
-                     _DT_MIN_FRAC, _SPARSE_SEG_MAX, _SPARSE_MAX_DEPTH,
-                     _NODE_LADDER, _VOLT_MAX_ITER, _VOLT_PICARD_FRAC,
-                     _VOLT_PRE_SWEEPS, R_CRIT, MW_MAX_MHZ)  # t74c 参数单源
 # t80：删死导入 `_DENSE_MAX_PAIR`（从未接线，稠密上限一律由 `_DENSE_MAX` 决定）；
 #      `MW_MAX_MHZ` 原有 6 处行内 `1e5` 副本，已改回引用本常量。
 # M 判定的近共振带宽（MHz）：离共振 Rydberg-Rydberg 巨矩阵元（如光学频下
@@ -433,7 +430,7 @@ class _SambeSetup(SambeSetup):
     """
 
     def __init__(self, E, groups, M):
-        super().__init__(E, groups, M, dense_max=_DENSE_MAX)
+        super().__init__(E, groups, M, dense_max=_P.get('_DENSE_MAX'))
 
 
 def _seg_decomp(setup, groups, ta, tb):
@@ -498,7 +495,7 @@ def _const_env(c):
 
 def _peak_const_groups(groups, T):
     """全部包络 → 峰值常数的镜像组（探针用）。"""
-    tg = np.linspace(0.0, T, _ENV_PROBE_N)
+    tg = np.linspace(0.0, T, _P.get('_ENV_PROBE_N'))
     out = []
     for g in groups:
         peaks = [float(np.max(np.abs(np.asarray(wf(tg), float))))
@@ -554,15 +551,15 @@ def _m_analytic(groups, tol, E_mhz=None):
     """
     Ms = []
     for g in groups:
-        vmax = _group_res_peak(g, E_mhz, M_EST_BW_MHZ)
+        vmax = _group_res_peak(g, E_mhz, _P.get('M_EST_BW_MHZ'))
         r = vmax / max(abs(g['omega_mhz']), 1e-9)
-        M = _M_START - 1                      # 从 M=1（3 块）起步
+        M = _P.get('_M_START') - 1                      # 从 M=1（3 块）起步
         if r > 0.0:
             # M=1 的截断误差 ~ (r/4)²（单光子阶，|k|≥2 谐波）；
             # 若已 ≤ tol 停留 M=1；否则按 (r/4)^{2(M−1)} 升阶。
             if (r / 4.0) ** 2 > tol:
                 M = 2
-                while (r / 4.0) ** (2 * (M - 1)) > tol and M < _M_MAX:
+                while (r / 4.0) ** (2 * (M - 1)) > tol and M < _P.get('_M_MAX'):
                     M += 1
         Ms.append(max(1, M))
     return Ms
@@ -659,7 +656,7 @@ def _propagate_adaptive(setup, groups, psi0, t_grid, tol, progress_arr, log,
                   max_norm_dev=0.0)
     if frozen_h_ns is not None and frozen_h_ns > 0:
         report['frozen_h_ns'] = float(frozen_h_ns)
-    h_floor = max(T / _DT_MIN_FRAC, 1e-9)
+    h_floor = max(T / _P.get('_DT_MIN_FRAC'), 1e-9)
 
     def _propagate_seg(ta, tb, X):
         """自适应传播 X(ta) → X(tb)（无输出；返回修正后链状态）。"""
@@ -848,12 +845,12 @@ def evolve_sambe(states, fields, psi0, t_grid, tol=1e-6, decays=None,
         stage_progress(progress_arr, 0, 0.2 + 0.6 * gi / max(G, 1))
         # 近共振峰 Ω（去离共振 Rydberg 巨矩阵元污染）；r 极小（光学量级
         # <1e-5）→ 解析界已证单光子阶收敛，探针验证纯属浪费——跳过。
-        vmax = _group_res_peak(groups[gi], E, M_EST_BW_MHZ)
+        vmax = _group_res_peak(groups[gi], E, _P.get('M_EST_BW_MHZ'))
         r_g = vmax / max(abs(groups[gi]['omega_mhz']), 1e-9)
         if r_g < 1e-5:
             continue
         # 微波类组：本组做 M vs M+1 验证（其余组固定）
-        while Ms[gi] < _M_MAX:
+        while Ms[gi] < _P.get('_M_MAX'):
             M_cur = list(Ms)
             M_nxt = list(Ms)
             M_nxt[gi] = M_cur[gi] + 1
@@ -867,9 +864,9 @@ def evolve_sambe(states, fields, psi0, t_grid, tol=1e-6, decays=None,
             Ms[gi] = M_nxt[gi]
             log(f'[exact] 光子块 M[{gi}]={M_cur[gi]}→{M_nxt[gi]}：'
                 f'探针截断差 {d:.2e}，递增')
-            if Ms[gi] >= _M_MAX:
+            if Ms[gi] >= _P.get('_M_MAX'):
                 log(f'[exact] 警告：载频 {groups[gi]["omega_mhz"]:.6g}MHz 光子块'
-                    f'达上限 M={_M_MAX}，截断误差可能 > tol')
+                    f'达上限 M={_P.get("_M_MAX")}，截断误差可能 > tol')
                 break
     log(f'[exact] 光子块（逐载频）M={Ms}'
         f'（扇区数 Π(2M_g+1)={setup_P(Ms)}）')
@@ -930,7 +927,7 @@ class _PairSambeSetup(SambeSetup):
     def __init__(self, E_pair, N, groups, M, vdd_sp, gamma_pair_mhz,
                  opt_terms=None, dense_max=None):
         super().__init__(E_pair, groups, M,
-                         dense_max=(_DENSE_MAX if dense_max is None
+                         dense_max=(_P.get('_DENSE_MAX') if dense_max is None
                                     else int(dense_max)),
                          static=vdd_sp, gamma=gamma_pair_mhz,
                          opt_terms=opt_terms)
@@ -1048,7 +1045,7 @@ def _subspace_segment(setup, Ksp, X, ta, tb, tol, groups, m_guess=None,
     prev_phi_tb = None
     est_eff = np.inf
     phi_tb_ip = None
-    for n_nodes in _NODE_LADDER:
+    for n_nodes in _P.get('_NODE_LADDER'):
         glx, glw, Wpart = _volterra_rule(n_nodes)
         nodes = ta + 0.5 * h * (glx + 1.0)
         ws = 0.5 * h * glw
@@ -1084,7 +1081,7 @@ def _subspace_segment(setup, Ksp, X, ta, tb, tol, groups, m_guess=None,
         def _pre(v):
             r = v.reshape(setup.dim, n_nodes)
             phi = np.zeros_like(r)
-            for _s in range(_VOLT_PRE_SWEEPS):
+            for _s in range(_P.get('_VOLT_PRE_SWEEPS')):
                 y = _volterra_rhs(setup, phi, c_nodes_wf, groups)
                 S = np.cumsum(Pinv * y * ws[None, :], axis=1)
                 phi = r + (-1j * C) * (Pi * S)
@@ -1093,11 +1090,11 @@ def _subspace_segment(setup, Ksp, X, ta, tb, tol, groups, m_guess=None,
         Mop = LinearOperator((dim_n, dim_n), matvec=_pre, dtype=complex)
         bvec = b_rhs.ravel()
         sol, info = gmres(Aop, bvec, M=Mop, rtol=0.0,
-                          atol=max(tol * _VOLT_PICARD_FRAC *
+                          atol=max(tol * _P.get('_VOLT_PICARD_FRAC') *
                                    max(float(np.linalg.norm(bvec)), 1.0),
                                    1e-15),
                           restart=min(40, dim_n),
-                          maxiter=_VOLT_MAX_ITER)
+                          maxiter=_P.get('_VOLT_MAX_ITER'))
         if info != 0:                       # 未收敛 → 交细分（不返回垃圾态）
             est_eff = np.inf
             break
@@ -1136,7 +1133,7 @@ def _pair_m_probe(E_pair, N, groups, M, vdd_sp, gamma_pair_mhz, psi0_2d,
         for g in groups:
             pk = 0.0
             for wf in g['envs_w']:
-                v = np.asarray(wf(np.linspace(0.0, T, _ENV_PROBE_N)), float)
+                v = np.asarray(wf(np.linspace(0.0, T, _P.get('_ENV_PROBE_N'))), float)
                 pk = max(pk, float(np.max(np.abs(v))))
             c_list.append(pk)
         K = stp.hamiltonian_seg(T / 2.0 if T > 0 else 1.0, groups)
@@ -1177,7 +1174,7 @@ def _pair_m_probe(E_pair, N, groups, M, vdd_sp, gamma_pair_mhz, psi0_2d,
                 return Mc - 1, d
         prev = cur
         ext_prev = ext
-        if Mc >= _M_MAX:
+        if Mc >= _P.get('_M_MAX'):
             return Mc, np.nan
         Mc += 1
 
@@ -1241,7 +1238,7 @@ def _pair_propagate(E_pair_rot, N, groups, opt_terms, V, gamma_pair,
 
     # ---- 自适应分段主循环（稠密：本征基缺陷；稀疏：IP Volterra）----
     pops_2d = np.zeros((len(t), N2))
-    h_floor = max(T / _DT_MIN_FRAC, 1e-9)
+    h_floor = max(T / _P.get('_DT_MIN_FRAC'), 1e-9)
 
     def seg_K(ta, tb):
         return setup.hamiltonian_seg(0.5 * (ta + tb), groups)
@@ -1281,7 +1278,7 @@ def _pair_propagate(E_pair_rot, N, groups, opt_terms, V, gamma_pair,
             est = 0.0
             psi_out = psi_frozen
             prev = None
-            for n_nodes in _NODE_LADDER:
+            for n_nodes in _P.get('_NODE_LADDER'):
                 glx, glw = _gl_nodes(n_nodes)
                 nodes = ta + 0.5 * (tb - ta) * (glx + 1.0)
                 ws = 0.5 * (tb - ta) * glw
@@ -1309,15 +1306,15 @@ def _pair_propagate(E_pair_rot, N, groups, opt_terms, V, gamma_pair,
             # （est 永不收敛 → 二分爆炸到 h_floor，静默卡死 >4min）明确报错。
             # 正常场景 est 在深度 1-3 收敛；深度 12 对应 h~5e-4ns（远细于
             # 任何物理需求）。报错建议 frozen_h_ns（THz 光子块正解，t48）。
-            if _seg_depth[0] >= _SPARSE_MAX_DEPTH:
+            if _seg_depth[0] >= _P.get('_SPARSE_MAX_DEPTH'):
                 raise RuntimeError(
                     f'[pair_sambe] 稀疏自适应细分过深（>'
-                    f'{_SPARSE_MAX_DEPTH} 层，est 不收敛）——THz 光子块 IP '
+                    f'{_P.get("_SPARSE_MAX_DEPTH")} 层，est 不收敛）——THz 光子块 IP '
                     f'Volterra 死局（t46/EP6）；请用 frozen_h_ns 冻结模式')
-            if report['n_segments'] > _SPARSE_SEG_MAX:
+            if report['n_segments'] > _P.get('_SPARSE_SEG_MAX'):
                 raise RuntimeError(
                     f'[pair_sambe] 稀疏自适应细分爆炸（est 不收敛，已超 '
-                    f'{_SPARSE_SEG_MAX} 段）——场景病态（t46/EP6）；'
+                    f'{_P.get("_SPARSE_SEG_MAX")} 段）——场景病态（t46/EP6）；'
                     f'请用 frozen_h_ns 冻结模式')
             _seg_depth[0] += 1
             try:
@@ -1385,13 +1382,13 @@ def evolve_sambe_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
     # ---- 目标 6：AC 化（远强对剔除 + far_sos 位移注入物理 E）----
     E_shift = np.zeros(N)
     if ac_ize:
-        from .evolve_mixed import ac_ize_physical_E, R_CRIT
+        from .evolve_mixed import ac_ize_physical_E
         E2a, A_newA = ac_ize_physical_E(E0,
                                          [f for f in fields_A
-                                          if f['omega_L_mhz'] > MW_MAX_MHZ])
+                                          if f['omega_L_mhz'] > _P.get('MW_MAX_MHZ')])
         E2b, A_newB = ac_ize_physical_E(E0,
                                          [f for f in fields_B
-                                          if f['omega_L_mhz'] > MW_MAX_MHZ])
+                                          if f['omega_L_mhz'] > _P.get('MW_MAX_MHZ')])
         # A/B 同构假设：E_shift 取 A 侧（B 侧位移并入 A 侧——同场时同 δ）
         E_shift = E2a - E0
         if np.max(np.abs((E2b - E0) - E_shift)) > 1.0:
@@ -1400,18 +1397,18 @@ def evolve_sambe_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
                 f'（E_pair 位移近似；异构场建议 per_freq_M 大 M 或手工 AC 化）')
         n_opt = 0
         fa2, fb2 = [], []
-        for f, Anew in zip([f for f in fields_A if f['omega_L_mhz'] > MW_MAX_MHZ],
+        for f, Anew in zip([f for f in fields_A if f['omega_L_mhz'] > _P.get('MW_MAX_MHZ')],
                            A_newA):
             fa2.append(dict(f, A=Anew)); n_opt += 1
-        for f, Anew in zip([f for f in fields_B if f['omega_L_mhz'] > MW_MAX_MHZ],
+        for f, Anew in zip([f for f in fields_B if f['omega_L_mhz'] > _P.get('MW_MAX_MHZ')],
                            A_newB):
             fb2.append(dict(f, A=Anew))
         # 重组 fields（光场剔除后 + 微波原样）
-        fields_A = [f for f in fields_A if f['omega_L_mhz'] <= MW_MAX_MHZ] + fa2
-        fields_B = [f for f in fields_B if f['omega_L_mhz'] <= MW_MAX_MHZ] + fb2
+        fields_A = [f for f in fields_A if f['omega_L_mhz'] <= _P.get('MW_MAX_MHZ')] + fa2
+        fields_B = [f for f in fields_B if f['omega_L_mhz'] <= _P.get('MW_MAX_MHZ')] + fb2
         log(f'[pair_exact] AC 化 {n_opt} 组光场：E_shift 范围 '
             f'{E_shift.min():+.2f}..{E_shift.max():+.2f} MHz'
-            f'（远强对剔除——t58 r 判据 r_crit={R_CRIT}）')
+            f'（远强对剔除——t58 r 判据 r_crit={_P.get("R_CRIT")}）')
 
     groups, _ = _pair_groups(fields_A, fields_B)
     # 维度校验：场耦合矩阵 = N² 两体基
@@ -1509,7 +1506,7 @@ def evolve_sambe_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
     else:
         pops_2d, X_final, report, setup = _pair_propagate(
             E_pair, N, groups, None, V, gamma_pair, psi0_2d, t, tol, M,
-            progress_arr, log, _DENSE_MAX, frozen_h_ns)
+            progress_arr, log, _P.get('_DENSE_MAX'), frozen_h_ns)
         stage_progress(progress_arr, 2, 0.3)  # 阶段 2：收尾（loss/约化）
 
     # ---- loss 曲线（NonHermitian 速率积分，同 pair_evolve 语义）----
@@ -1569,3 +1566,17 @@ def evolve_sambe_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
 # ---- t19 函数级改名兼容别名（旧名 = 新名，外部零改动）----
 evolve_exact_pair = evolve_sambe_pair
 _PairSambeSetup.K_seg = _PairSambeSetup.hamiltonian_seg
+
+
+def __getattr__(name):
+    """PEP 562 回落：把历史 re-export 的引擎参数转发到注册表。
+
+    这些模块过去用 `from .params import X` 顺带充当转发站（外部代码
+    `core.RYDBERG_N_MIN` / `from .evolve_rwa import RWA_TOL`）。参数读取点
+    已改为 `_P.get(...)`，转发站随之消失——这里补一层回落，
+    使旧式属性访问继续可用，并且同样响应 `params.override()`。
+    """
+    from . import params as _p
+    if name in _p.DEFAULTS or name in _p.ALIASES:
+        return _p.get(name)
+    raise AttributeError(f'module {__name__!r} has no attribute {name!r}')

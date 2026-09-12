@@ -42,7 +42,10 @@ lineedit = W.lineedit
 checkbox = W.checkbox
 __all__ = ['ParamRegistry', 'ParamSpec', 'RegistryStyle', 'spinbox',
            'combobox', 'lineedit', 'checkbox', 'new_registry',
-           'build_registry', 'register_panel_params']
+           'build_registry', 'register_panel_params',
+           'engine_spec', 'engine_read', 'engine_write',
+           'bind_engine_widgets', 'god_key', 'god_read', 'god_write',
+           'god_split', 'register_god_group']
 
 
 def new_registry(win):
@@ -258,8 +261,222 @@ def _set_decays(d, cfgs):
     d._update_decay_list()
 
 
+def _fmt_num(v):
+    """数值 → 紧凑显示（与 solver_inspector._fmt_num 同规则）。"""
+    if v is None:
+        return '不限制'          # 成本预算等"空 = 不限"的旋钮
+    if isinstance(v, (list, tuple)):
+        return '(' + ', '.join(_fmt_num(x) for x in v) + ')'
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return str(v)
+    if f == int(f) and abs(f) < 1e15:
+        return str(int(f))
+    return '%g' % f
+
+
+# ═══════════════════════════════════════════════════════════════
+#  上帝模式控制量（统一命名空间）
+# ═══════════════════════════════════════════════════════════════
+# 分组约定（新增控制参数照这个加，不许再开平行通道）：
+#   engine.*  数值精度/成本（src/core/params.py 的 SPECS，32 项）
+#   solve.*   求解器级 kwarg（不进 params 注册表，直接喂 evolve_* 签名）
+#   （规划）acize.*  AC 化逐对手动 keep/AC；inject.* 哈密顿注入项；
+#           pipe.*   手动管线分步 —— 都是"真正的控制参数"，按同一通道登记。
+_SOLVE_SPECS = (
+    # (名字, 框架 type, 说明, 单位, 下游 kwarg)
+    ('MAX_STEP', 'float', 'DOP853 最大步长（ns）；0 = 自适应不限',
+     'ns', 'max_step'),
+    ('PER_FREQ_M', 'list', '逐载频光子块阶数（int 或 [m1, m2…]）',
+     '', 'per_freq_M'),
+    ('FROZEN_H_NS', 'float', '纯冻结段长（两体 sambe；0=全自适应）',
+     'ns', 'frozen_h_ns'),
+    # 成本档：**运行级**（原 engine.PHASE_BUDGET 迁来）。默认空 = 不限制 →
+    # 不做任何成本剔除（真实耦合一律保留）。成本只该换速度、不该默默改模型：
+    # 运行前预检会报成本并让你选（见 ui_dynamic 的运行前对话框）。
+    ('COST_BUDGET', 'float', '微波候选窗成本上限（rad）；留空 = 不限制'
+     '（保留全部真实耦合）', 'rad', 'phase_budget'),
+)
+_SOLVE_KWARG = {n: kw for (n, _t, _d, _u, kw) in _SOLVE_SPECS}
+_SOLVE_BY_NAME = {n: (t_, d, u) for (n, t_, d, u, _kw) in _SOLVE_SPECS}
+
+
+def god_key(group, name):
+    """会话 store 的键（= 注册表全路径）。"""
+    return f'{group}.{name}'
+
+
+def god_read(win, key, default=None):
+    """读会话 store：**全路径优先**，兼容旧的裸参数名键。"""
+    store = win.engine_overrides or {}
+    if key in store:
+        return store[key]
+    short = key.split('.', 1)[1]
+    if short in store:
+        return store[short]
+    if default is not None:
+        return default
+    from .core import params as _P
+    return _P.DEFAULTS.get(short)
+
+
+def god_write(win, key, value, default=None):
+    """写会话 store（只存"真正偏离默认"的项；None/等于默认 = 清覆写）。
+
+    ⚠ 框架 `seed_baseline()`/`load()` 会对每个 binding 调一次
+    `write_fn(当前值)` 建基准 —— 不判等的话构造期就会把全部参数写进 store。
+    """
+    short = key.split('.', 1)[1]
+    if default is None:
+        from .core import params as _P
+        default = _P.DEFAULTS.get(short)
+
+    def _same(a, b):
+        if isinstance(a, (list, tuple)) or isinstance(b, (list, tuple)):
+            try:
+                return list(a) == list(b)
+            except TypeError:
+                return False
+        return a == b
+
+    d = dict(win.engine_overrides or {})
+    d.pop(short, None)                      # 统一成全路径键
+    if value is None or (default is not None and _same(value, default)):
+        d.pop(key, None)
+    else:
+        d[key] = value
+    win.set_engine_overrides(d)
+
+
+def god_split(store):
+    """会话 store → (param_overrides, engine_kwargs)。
+
+    单一映射点：新增分组只改这里 + `_SOLVE_SPECS`，不再散落各处。
+    """
+    from .core import params as _P
+    po, ek = {}, {}
+    for k, v in (store or {}).items():
+        if k.startswith('engine.'):
+            po[k.split('.', 1)[1]] = v
+        elif k.startswith('solve.'):
+            name = k.split('.', 1)[1]
+            if name in _SOLVE_KWARG:
+                ek[_SOLVE_KWARG[name]] = v
+        elif k in _P.SPEC_BY_NAME:           # 兼容：旧的裸参数名键
+            po[k] = v
+    return po, ek
+
+
+def register_god_group(reg, win, group, editors=None):
+    """登记一组上帝模式控制量（engine.* / solve.* 同一条通道）。
+
+    editors: {全路径或短名: 控件} —— 给了就顺手 `bind_widget` 绑上
+    （**必须有控件才有指示灯**：框架 `_paint()` 在 widget 为 None 时直接返回）。
+    """
+    from .core import params as _P
+    got = {}
+    # ⚠ 幂等：已登记过的路径**不再 register**——框架的 register 会新建 binding，
+    # 把已有的 widget（灯）绑定洗掉。二次调用（补绑求解页旋钮）只做绑定。
+    if group == 'engine':
+        for sp in _P.specs():
+            path = god_key('engine', sp.name)
+            if path not in reg._bindings:
+                reg.register(path, engine_spec(sp),
+                             read_fn=engine_read(win, sp.name),
+                             write_fn=engine_write(win, sp.name), painter='')
+            got[sp.name] = engine_spec(sp)
+    elif group == 'solve':
+        for name, (kind, desc, unit) in _SOLVE_BY_NAME.items():
+            path = god_key('solve', name)
+            spec = ParamSpec(kind, default=None, unit=unit, desc=desc,
+                             group='solve', commit='auto')
+            if path not in reg._bindings:
+                reg.register(path, spec,
+                             read_fn=(lambda n=name: god_read(
+                                 win, god_key('solve', n))),
+                             write_fn=(lambda v, n=name: god_write(
+                                 win, god_key('solve', n), v)),
+                             painter='')
+            got[name] = spec
+    if editors:
+        for name, w in editors.items():
+            path = name if '.' in name else god_key(group, name)
+            short = path.split('.', 1)[1]
+            if short not in got:
+                continue
+            reg.bind_widget(path, w, kind='lineedit', spec=got[short],
+                            read_fn=(lambda p=path: god_read(win, p)),
+                            write_fn=(lambda v, p=path: god_write(win, p, v)),
+                            display_fn=_god_disp(w))
+    return len(got)
+
+
+def _god_disp(w):
+    def _f(v):
+        w.blockSignals(True)
+        w.setText('' if v is None else _fmt_num(v))
+        w.blockSignals(False)
+    return _f
+
+
+def engine_param_kind(sp):
+    """ParamSpec.kind（params 注册表）→ 参数管理框架的 type。"""
+    return {'float': 'float', 'int': 'int', 'tuple': 'list'}[sp.kind]
+
+
+def engine_spec(sp):
+    """params 注册表的 ParamSpec → 框架 ParamSpec（desc 带典型范围提示）。
+
+    **不传 range**：框架把 range 当硬校验会拒绝越界值，而 params 里的 lo/hi
+    只是 UI 提示（探索性取值不该被拦），故并进 desc。
+    """
+    rng = ('' if sp.lo is None or sp.hi is None else
+           '（典型范围 %g~%g %s）' % (sp.lo, sp.hi, sp.unit))
+    return ParamSpec(engine_param_kind(sp), default=None, unit=sp.unit,
+                     desc=(sp.desc.splitlines()[0][:150] + rng),
+                     group='engine', commit='auto',
+                     aliases=list(sp.name.lstrip('_').lower().split('_')))
+
+
+def engine_read(win, name):
+    """`engine.<name>` 的读：会话覆写优先，否则 params 默认值。"""
+    return lambda: god_read(win, god_key('engine', name))
+
+
+def engine_write(win, name):
+    """`engine.<name>` 的写：进会话 store（只存偏离默认的项）。"""
+    return lambda v: god_write(win, god_key('engine', name), v)
+
+
+def bind_engine_widgets(reg, win, editors, fmt=None):
+    """把引擎参数页的输入框绑到 `engine.*`（灯 / 校验 / 提交都走框架）。
+
+    为什么必须绑：框架 `_paint()` 在 `binding.widget is None` 时直接返回——
+    只 register 不绑控件 = 永远没有指示灯（实测踩过）。
+    """
+    return register_god_group(reg, win, 'engine', editors=editors)
+
+
+def _reg_engine_params(reg, win):
+    """引擎参数（src/core/params.py 的 SPECS）→ `engine.*` 在册面。
+
+    真值 = `win.engine_overrides`（会话覆写）叠加 params 默认值：
+      · 人的路径：检视器「引擎参数」页的输入框（`bind_engine_widgets`
+        把它们绑到同一批 `engine.*` 上 → 灯/校验/提交走框架）；
+      · AI 路径：MCP `set_param('engine.PHASE_TOL', ...)` → 框架 set →
+        **同一个 write_fn** → 同一个 store（P2 人机同一状态）；
+      · **与模式无关**：极简模式下这些参数照样在册、照样生效
+        （议题 0 三轴分离：登记跟真值源走，不跟显隐走）。
+    控件绑定发生在检视器页构造时（此时才有控件），见 `bind_engine_widgets`。
+    """
+    register_god_group(reg, win, 'engine')
+
+
 _PANEL_REG = {
     'field': _reg_field_panel,
     'group': _reg_group_panel,
     'dynamic': _reg_dynamic_panel,
+    'engine': _reg_engine_params,
+    'solve': lambda reg, win: register_god_group(reg, win, 'solve'),
 }
