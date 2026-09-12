@@ -22,6 +22,8 @@
     ai_pair_superposition_selfcheck.py  两体纠缠初态（pair_sup spec + psi0_pair
                                     贯穿三引擎 + 真引擎暗态/交换 + GUI 往返，
                                     51 项，~40s；freeze 验证的前置接口）
+    port_file_ownership_selfcheck.py  .mcp-port 归属权（自检进程不得删活实例的
+                                    端口文件；6 项，秒级）
     gui_cost_dialog_test.py        运行前成本对话框（进度框遮挡回归，8 项）
     gui_ellip_row_test.py          椭圆偏参数行（平时隐藏/选后出现，10 项）
     ui_selftest.py                 UI 回归（主窗口/编辑器/TTL/动态页/存档恢复）
@@ -71,6 +73,7 @@ _SCRIPTS = ['checks_sentinel.py',        # 存活哨兵（秒级，最先跑：�
             'ai_codeact_tools_selfcheck.py',
     'ai_semantic_state_selfcheck.py',
     'ai_pair_superposition_selfcheck.py',
+    'port_file_ownership_selfcheck.py',
     'gui_ai_job_indicator_test.py',
     'ai_result_card_selfcheck.py',
     'gui_basis_presets_test.py',

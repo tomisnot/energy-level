@@ -1235,11 +1235,30 @@ def start_server(win, port=None):
 
 
 def stop_server():
+    """停 server，并且**只删本进程写的**端口文件（2026-09-12 修）。
+
+    为什么不能无条件删：`MainWindow.closeEvent` 对**任何**主窗口都调本函数，
+    而 GUI 自检（`checks/ui_selftest.py` 有 `win.close()`）构造的主窗口
+    **从没起过 server** —— 原来的无条件 `os.remove` 会把**另一个正在运行的
+    实例**的 `.mcp-port` 删掉。实测（2026-09-12）：AI 自检批次跑完，
+    主代理的活实例端口文件消失，客户端按文件发现端口直接失败。
+
+    现在的判据（两道，都便宜）：
+      ① 本进程真起过 server（`_server_state['srv']` 非空）才动文件；
+      ② 且文件内容 == 本进程端口 —— 防"重启竞态下旧实例删掉新实例刚写的"。
+    """
     srv = _server_state.get('srv')
     if srv is not None:
         srv.should_exit = True
-    if os.path.exists(_PORT_FILE):
-        try:
+    port = _server_state.get('port')
+    if srv is None or port is None:
+        return                      # 本进程没收养过 server → 不碰端口文件
+    try:
+        if not os.path.exists(_PORT_FILE):
+            return
+        with open(_PORT_FILE, encoding='utf-8') as f:
+            owner = f.read().strip()
+        if owner == str(port):
             os.remove(_PORT_FILE)
-        except OSError:
-            pass
+    except OSError:
+        pass

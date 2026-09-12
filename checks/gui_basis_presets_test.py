@@ -81,14 +81,24 @@ p = page._presets_path()
 C.check('9 预设文件在 save_state/ 且含内置项',
         p.endswith(os.path.join('save_state', 'basis_presets.json'))
         and os.path.exists(p), p)
-d = json.load(open(p, encoding='utf-8'))
+# 写入/读回测试**只碰临时副本**（2026-09-12 修）：save_state/ 是人的数据，
+# 自检往那里写会污染人的预设（实测：本项曾把人的 basis_presets.json 重写一遍）。
+import shutil                                                  # noqa: E402
+import tempfile                                                # noqa: E402
+_tmp_p = os.path.join(tempfile.gettempdir(), '_basis_presets_selfcheck.json')
+shutil.copyfile(p, _tmp_p)
+_mtime0 = os.path.getmtime(p)
+page._presets_path = lambda: _tmp_p        # 实例属性遮蔽 → 只写副本
+d = json.load(open(_tmp_p, encoding='utf-8'))
 d['_自检临时集'] = [[60, 0, 0.5]]
-json.dump(d, open(p, 'w', encoding='utf-8'), ensure_ascii=False)
+json.dump(d, open(_tmp_p, 'w', encoding='utf-8'), ensure_ascii=False)
 page._load_presets()
 C.check('10 新增预设可被读回（人与 AI 共用一份）',
         '_自检临时集' in page._presets)
 d.pop('_自检临时集', None)
-json.dump(d, open(p, 'w', encoding='utf-8'), ensure_ascii=False)
+json.dump(d, open(_tmp_p, 'w', encoding='utf-8'), ensure_ascii=False)
 page._load_presets()
+C.check('11 人的 basis_presets.json 未被自检改写（mtime 不变）',
+        os.path.getmtime(p) == _mtime0, f'{p}')
 
 C.summary()
