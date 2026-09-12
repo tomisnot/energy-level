@@ -96,6 +96,60 @@ class MainWindow(QMainWindow):
         self.engine_overrides = {}
         self._build_ui()
 
+    def _install_ai_job_indicator(self):
+        """B3（2026-09-12）：状态栏常驻「AI 作业中… [取消]」指示器（幂等）。
+
+        G3 的落地点：AI 提交的演化**人看得见、点得到取消**。
+        不用运行进度框——AI 运行期间 CodeAct 占主线程并泵事件，
+        WindowModal 会挡住人操作（本会话在成本框上踩过模态遮挡）；
+        取消走与 MCP `cancel_job` **同一条路径**（P2：双方共同语言）。
+        """
+        if getattr(self, '_ai_job_ind', None) is not None:
+            return
+        from PyQt5.QtWidgets import QLabel, QPushButton
+        from PyQt5.QtCore import QTimer
+        from src.ai import server as _ai_server
+        self._ai_job_ind = QLabel('')
+        self._ai_job_ind.setStyleSheet('color:#a855f7; padding:0 8px;')
+        self._ai_job_btn = QPushButton('取消AI作业')
+        self._ai_job_btn.setToolTip('取消 AI 当前正在跑的演化'
+                                    '（与 MCP 的 cancel_job 同一条路径）')
+        self._ai_job_btn.setStyleSheet('color:#a855f7;')
+        self._ai_job_ind.hide()
+        self._ai_job_btn.hide()
+        self.statusBar().addPermanentWidget(self._ai_job_ind)
+        self.statusBar().addPermanentWidget(self._ai_job_btn)
+
+        def _tick():
+            try:
+                j = _ai_server.ui_job_status()
+            except Exception:                      # noqa: BLE001
+                j = None
+            if j:
+                self._ai_job_ind.setText('⏳ AI 作业 %s：%.0f s'
+                                         % (j.get('job_id'),
+                                            float(j.get('elapsed_s') or 0)))
+                self._ai_job_ind.show()
+                self._ai_job_btn.show()
+            else:
+                self._ai_job_ind.hide()
+                self._ai_job_btn.hide()
+
+        def _cancel():
+            try:
+                r = _ai_server.ui_cancel_job()
+                self.log(r.get('msg') or '已请求取消', 5000)
+            except Exception as e:                 # noqa: BLE001
+                self.log('取消失败：%s' % e, 5000)
+            _tick()
+
+        self._ai_job_btn.clicked.connect(_cancel)
+        self._ai_job_timer = QTimer(self)
+        self._ai_job_timer.timeout.connect(_tick)
+        self._ai_job_timer.start(1000)
+        self._ai_job_tick = _tick                  # 供自检/程序化刷新
+        _tick()
+
     def log(self, msg, timeout=8000):
         """统一信息出口：状态栏显示。"""
         if hasattr(self, 'statusBar'):
@@ -137,6 +191,14 @@ class MainWindow(QMainWindow):
                     self.log(r.get('msg', ''), 5000)
                 undo_btn.clicked.connect(_ui_undo)
                 self.statusBar().addPermanentWidget(undo_btn)
+                # B3（2026-09-12）：AI 作业常驻指示器 + 取消（G3 可接管）
+                self._install_ai_job_indicator()
+
+                self._ai_job_btn.clicked.connect(_ai_job_cancel)
+                self._ai_job_timer = _QT(self)
+                self._ai_job_timer.timeout.connect(_ai_job_tick)
+                self._ai_job_timer.start(1000)
+                _ai_job_tick()
                 # P3 协同 UI：AI 来源的 op 滚动到状态栏（人自己的不刷屏）
                 j = get_journal(os.path.dirname(os.path.abspath(__file__)))
 

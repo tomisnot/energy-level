@@ -191,7 +191,7 @@ def _running_job():
     """
     best = None
     for _jid, _j in list(_jobs.items()):
-        if _j.get('done') or _j.get('error'):
+        if _j.get('done') or _j.get('error') or _j.get('cancelled'):
             continue
         _el = time.time() - float(_j.get('started') or time.time())
         if best is None or _jid > best['job_id']:
@@ -237,8 +237,9 @@ def _t_list_jobs(limit=20):
     rows = []
     for jid, j in list(_jobs.items()):
         el = (time.time() - float(j.get('started') or time.time()))
-        st = ('done' if j.get('done') else
-              ('error' if j.get('error') else 'running'))
+        st = ('cancelled' if j.get('cancelled') else
+              ('done' if j.get('done') else
+               ('error' if j.get('error') else 'running')))
         rows.append({'job_id': jid, 'owner': j.get('owner', 'ai'),
                      'kind': j.get('kind'), 'status': st,
                      'elapsed_s': round(el, 1),
@@ -898,7 +899,29 @@ def _t_result_states(job_id, states=None, series=True, t0=None, t1=None,
     return out
 
 
+def ui_job_status():
+    """GUI 用（B3）：当前 AI 作业（供状态栏常驻指示器）。无 → None。"""
+    return _running_job()
+
+
+def ui_cancel_job(job_id=''):
+    """GUI 用（B3）：取消 AI 作业——与 MCP 的 cancel_job **同一条路径**（P2）。"""
+    jid = job_id or (ui_job_status() or {}).get('job_id', '')
+    if not jid:
+        return {'ok': False, 'msg': '当前没有正在跑的 AI 作业'}
+    r = _t_cancel_job(jid)
+    if isinstance(r, dict):
+        r.setdefault('job_id', jid)
+    return r
+
+
 def _t_cancel_job(job_id):
+    # B3：取消意图**立刻**落到登记上——GUI 常驻指示器据此即时消失
+    #（真正的停算由引擎在下一个进度轮询点完成，二者不必同步）
+    try:
+        _jobs[job_id]['cancelled'] = True
+    except Exception:                              # noqa: BLE001
+        pass
     job = _jobs.get(job_id)
     if job is None or job['done']:
         return {'ok': False, 'msg': 'job 不存在或已结束'}

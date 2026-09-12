@@ -67,6 +67,7 @@ _SCRIPTS = ['checks_sentinel.py',        # 存活哨兵（秒级，最先跑：�
             'gui_mode_switch_test.py',
             'ai_codeact_tools_selfcheck.py',
     'ai_semantic_state_selfcheck.py',
+    'gui_ai_job_indicator_test.py',
             'gui_engine_lamps_test.py',
             'ai_diag_test.py',
             'gui_cost_dialog_test.py',
