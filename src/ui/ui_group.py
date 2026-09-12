@@ -3,7 +3,7 @@
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor, QIcon, QPixmap
-from PyQt5.QtWidgets import (
+from PyQt5.QtWidgets import (QComboBox,
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSpinBox, QDoubleSpinBox,
     QPushButton, QListWidget, QListWidgetItem, QTableWidget, QTableWidgetItem,
     QHeaderView, QAbstractItemView, QMessageBox,
@@ -71,7 +71,6 @@ class EnergyGroupPanel(QWidget):
         #   裁剪基组的真需求不是"删一个组"，而是**按任务一键切换方案**并
         #   **事先看见维数代价**（上限是两体 dim=N²，不是组数）。
         #   走面板已有的原子 set_groups → 同一状态对象/一次 undo/同一归因。
-        from PyQt5.QtWidgets import QComboBox, QPushButton
         prow = QHBoxLayout()
         prow.setSpacing(6)
         prow.addWidget(QLabel('基组预设'))
