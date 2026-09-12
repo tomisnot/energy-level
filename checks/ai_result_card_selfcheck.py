@@ -60,8 +60,8 @@ print('3) 模型卡字段与警告判定')
 mc = out2['model_card']
 chk(isinstance(mc, dict), 'model_card 是 dict')
 chk('warnings' in mc and isinstance(mc['warnings'], list), '含 warnings 列表')
-res3 = {'t': np.linspace(0, 1, 3), 'pops': np.zeros((3, 2)),
-        'states_2d': None,
+res3 = {'t': np.linspace(0, 1, 3), 'pops_2d': np.zeros((3, 2)),
+        'states_2d': np.asarray(s2, dtype=object),
         'diag': {'meta': {'dim': 2, 'n_pairs': 0, 'tol': 1e-8},
                  'pairs': {'n_microwave': 0, 'max_abs_v_mhz': 0.0}}}
 out3 = S._res_summary(res3, save_npz=False, tag='t3')
