@@ -1042,9 +1042,10 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
         sector_amps = {p: np.abs(y_out[idx][:, p * N2:(p + 1) * N2])
                        for p in range(P)}
         ts_snap = sorted(set(float(x) for x in np.linspace(0.0, T, 5)))
-        snaps = {t0: _assemble_H_snapshot(K0, pairs, t0, Cv, gamma=gamma,
-                                          tags=pair_tags)
-                 for t0 in ts_snap}
+        snaps = ({t0: _assemble_H_snapshot(K0, pairs, t0, Cv, gamma=gamma,
+                                           tags=pair_tags)
+                  for t0 in ts_snap}
+                 if _h_snap_ok(dim) else {'skipped': _h_snap_note(dim)})
         diag_dt = (dt_hist[:int(stat[4])] if dt_hist is not None
                    else np.zeros((0, 2)))
         out_diag = dict(

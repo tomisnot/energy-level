@@ -108,6 +108,24 @@ def _make_namespace(state_mod, root, jobs, t_run, t_status, t_result,
             res['npz'] = _sm['npz']
         return res
 
+    def submit_compute(diag=True):
+        """**提交**演化并立即返回 job_id（不阻塞）——重活的正确用法。
+
+        用户 2026-09-12 问"软件都算完了你还在等"：`run_compute_and_wait`
+        会在脚本里**阻塞**，把等待时间占满整个回合，且等多久只能瞎猜。
+        正确姿势：脚本里 `jid = submit_compute()` 后立即返回，下一次工具调用
+        用 `job_status(jid)` 看进度、`job_result(jid)` 取结果；作业的
+        owner/kind/elapsed 已由 `list_jobs` 与 GUI 状态栏指示器共享。
+        """
+        seq = jobs['seq']
+        seq[0] += 1
+        jid = f'job{seq[0]}'
+        r = t_run(jid)
+        if not isinstance(r, dict):
+            r = {'ok': True}
+        r.setdefault('job_id', jid)
+        return r
+
     ns = {
         'np': np, 'numpy': np,
         'json': json,
@@ -124,6 +142,7 @@ def _make_namespace(state_mod, root, jobs, t_run, t_status, t_result,
         'save_archive': t_save or (lambda path='save_state/ai_state.json':
                                    {'ok': False, 'msg': 'save_archive 不可用'}),
         'run_compute_and_wait': run_compute_and_wait,
+        'submit_compute': submit_compute,
         'activity': lambda since=0: get_journal(root).since(since),
         # 二期 A：语义状态操作（P1/P5）——存在才注入，兼容旧 state_mod
         **{k: getattr(state_mod, k) for k in

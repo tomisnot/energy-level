@@ -444,12 +444,27 @@ class SolverInspector(QDialog):
     def load_diag(self, diag):
         self._diag = diag
         m = diag.get('meta', {})
+        # P5：摘要与 MCP get_diag / 模型卡**共用一套**（core.diag.summarize）。
+        # 此前这里自己挑字段，和 get_diag、模型卡各写一份 → 数字会分叉
+        # （例：n_microwave 只在一处有值）。
+        try:
+            from ..core.diag import summarize as _sum
+            s = _sum(diag, {'basis_n': len(m.get('labels') or [])})
+        except Exception:                          # noqa: BLE001 - 摘要失败不挡渲染
+            s = {}
         M = m.get('M')
         mtxt = f'M={M} ' if M else ''
+        warn = (s.get('warnings') or [])
         self.meta_label.setText(
-            "method=%s  backend=%s   N=%s  P=%s  dim=%s  %st_end=%s ns"
+            "method=%s  backend=%s   N=%s  P=%s  dim=%s  %st_end=%s ns   "
+            "配对 %s（微波 %s）  AC 化 %s  maxΩ/ω %s%s"
             % (m.get('method', '?'), m.get('backend', '?'), m.get('N', '?'),
-               m.get('P', '?'), m.get('dim', '?'), mtxt, m.get('t_end', '?')))
+               m.get('P', '?'), m.get('dim', '?'), mtxt, m.get('t_end', '?'),
+               s.get('n_pairs', '?'), s.get('n_microwave', '?'),
+               s.get('acized_states', '?'), s.get('max_omega_over_omega', '—'),
+               ('   ⚠ ' + warn[0][:44]) if warn else ''))
+        self.meta_label.setToolTip('\n'.join(warn) if warn
+                                   else '诊断摘要（core.diag.summarize，与 AI 同源）')
         # viewer 取数据
         if hasattr(self, 'h_viewer'):
             self.h_viewer.set_data(diag.get('H_snapshots') or {},
