@@ -657,9 +657,15 @@ class DynamicPanel(QWidget):
         specs = []
         for gi, g in enumerate(groups):
             n, l, j = g['n'], g['l'], g['j']
+            # 逐子能级裁剪（2026-09-12）：组条目可带 ms / Fs（None = 全展开，
+            # 默认路径与改前逐位一致）。判据与 static_atom 共用一处（P5）。
+            _ms, _Fs = core.trim_of(g)
+            _keep = core.sublevel_trim(_ms, _Fs)
             hf = core.get_hyperfine_levels(self.cache, n, l, j, B)
             if hf is None:
                 for m in np.arange(-j, j + 1e-9, 1.0):
+                    if _keep is not None and not _keep(dict(kind='mJ', mj=float(m))):
+                        continue
                     E = core._sublevel_energy(self.cache, n, l, j, m, B)
                     if abs(E_vpcm) > 1e-9:
                         E += core.dc_stark_shift_mhz(
@@ -668,6 +674,9 @@ class DynamicPanel(QWidget):
                                       E_mhz=float(E)))
             else:
                 for F, mF, e_hf, _w, amps in hf:
+                    if _keep is not None and not _keep(
+                            dict(kind='F', F=float(F), mF=float(mF))):
+                        continue
                     E0 = self.cache.E_mhz(n, l, j)
                     if abs(E_vpcm) > 1e-9:
                         E0 += core.dc_stark_shift_mhz(

@@ -226,6 +226,65 @@ def build_pair_sup_spec(components):
                                                for p in pops]}
 
 
+def _canon_groups(groups):
+    """`set_groups` 入参 → [(n,l,j,ms,Fs), …]；非法项 → (None, 错误消息)。
+
+    接受三种写法（2026-09-12 逐子能级裁剪）：
+      `(n,l,j)` / `(n,l,j,ms)` / `{'n':…,'l':…,'j':…,'ms':[…]|'Fs':[[F,mF],…]}`
+    ms 与 Fs 互斥；**都不给 = 全展开（None）**。
+    """
+    out = []
+    for item in (groups or []):
+        try:
+            if isinstance(item, dict):
+                n, l, j = int(item['n']), int(item['l']), float(item['j'])
+                ms, Fs = item.get('ms'), item.get('Fs')
+            else:
+                seq = list(item)
+                n, l, j = int(seq[0]), int(seq[1]), float(seq[2])
+                ms = seq[3] if len(seq) > 3 else None
+                Fs = seq[4] if len(seq) > 4 else None
+        except Exception as e:                     # noqa: BLE001
+            return None, '组写法不合法：%r（%s）' % (item, e)
+        if ms is not None and Fs is not None:
+            return None, ('组 (%d,%d,%g)：ms 与 Fs 互斥，只能给一个' % (n, l, j))
+        if ms is not None and not isinstance(ms, (list, tuple)):
+            return None, '组 (%d,%d,%g)：ms 必须是列表' % (n, l, j)
+        if Fs is not None and not isinstance(Fs, (list, tuple)):
+            return None, '组 (%d,%d,%g)：Fs 必须是列表' % (n, l, j)
+        out.append((n, l, round(j, 2),
+                    None if ms is None else [float(x) for x in ms],
+                    None if Fs is None else [[float(a), float(b)]
+                                             for a, b in Fs]))
+    return out, None
+
+
+def _trim_same(g, ms, Fs):
+    """组条目的裁剪是否与目标一致（用于 set_groups 幂等）。"""
+    cur_ms, cur_Fs = (g.get('ms'), g.get('Fs'))
+    if cur_ms is None and ms is None and cur_Fs is None and Fs is None:
+        return True
+    if (cur_ms is None) != (ms is None) or (cur_Fs is None) != (Fs is None):
+        return False
+    if ms is not None:
+        return ([round(float(x), 6) for x in cur_ms]
+                == [round(float(x), 6) for x in ms])
+    if Fs is not None:
+        f = lambda L: sorted((round(float(a), 6), round(float(b), 6)) for a, b in L)
+        return f(cur_Fs) == f(Fs)
+    return True
+
+
+def _bfield(win):
+    """当前磁场（Gauss）：优先场面板，回落到 0（与 ui_dynamic 同一取值链）。"""
+    try:
+        fld = getattr(win, 'field', None)
+        return float(fld.b_gauss()) if fld is not None \
+            else float(getattr(win, 'field_B', 0.0))
+    except Exception:                              # noqa: BLE001
+        return 0.0
+
+
 def _code_status():
     """代码新鲜度（T3/A12）：失败绝不影响 summary（旁路信息）。"""
     try:
@@ -301,15 +360,42 @@ class SimState:
         return out
 
     def set_groups(self, groups, reason=''):
-        """**声明式**设定能级组：让基组恰好包含给定 (n,l,j) 集合。
+        """**声明式**设定能级组：让基组恰好包含给定 (n,l,j) 集合（可带裁剪）。
 
         原子 + 幂等 + 回增量（P1/P5：语义操作，不是按索引点删）。
         本会话两次翻车都源于"按标签前缀判重"（删错组 / 漏加组）。
+
+        三种写法都吃（2026-09-12 逐子能级裁剪）：
+          · `(n, l, j)`                —— 全展开（默认，与改前逐位一致）
+          · `(n, l, j, ms)`            —— 只留这些 mJ（如 `[-0.5, 1.5]`）
+          · `{'n':…, 'l':…, 'j':…, 'ms':[…] | 'Fs':[[F,mF],…]}`
+        **组的身份仍是 (n,l,j)**（配色/身份键/配对几何不变）；裁剪只是"组内留哪些子能级"。
+        返回里额外给 `resolved`：每组**实际展开**的子能级数与身份键列表
+        （落实"写入侧通了 ≠ 引擎侧通了"：AI 必须能自检裁剪真的生效）。
         """
+        want, bad = _canon_groups(groups)
+        if bad:
+            return {'ok': False, 'msg': bad}
+        # ⚠ 必须在**动手之前**抓初态快照：`dynamic.psi_*` 的读回值是 combo 当前项，
+        # 一旦裁剪让被引用的子能级消失，combo 会静默回落到别的项 → 事后读到的
+        # 已是"另一个合法键"，A8 那套"基组变了初态失效"的告警就永远看不到它
+        # （2026-09-12 自检 E1 实测踩到）。所以告警一律基于**变更前**的值。
+        psi_before = {}
+        for _atom, _path in (('single', 'dynamic.psi_single'),
+                             ('A', 'dynamic.psi_A'), ('B', 'dynamic.psi_B')):
+            try:
+                psi_before[_atom] = self.reg.read(_path)
+            except Exception:                      # noqa: BLE001
+                psi_before[_atom] = None
+        try:
+            pair_before = self.reg.read('dynamic.psi_pair')
+        except Exception:                          # noqa: BLE001
+            pair_before = None
         cur = [(g['n'], g['l'], g['j'])
                for g in (self.reg.read('groups.list') or [])]
-        to_add, to_remove = groups_delta(cur, groups)
-        removed, added = [], []
+        to_add, to_remove = groups_delta(cur, [(n, l, j) for (n, l, j, _m, _F)
+                                              in want])
+        removed, added, retrimmed = [], [], []
         for (n, l, j) in to_remove:                # 从后往前删，避免索引漂移
             lst = self.reg.read('groups.list') or []
             for k in range(len(lst) - 1, -1, -1):
@@ -326,9 +412,28 @@ class SimState:
                         % (n, l, j, r.get('msg')), 'added': added,
                         'removed': removed}
             added.append([n, l, j])
+        # 裁剪变更：对**已存在**且 (n,l,j) 相同的组，若 ms/Fs 与现值不同 → 改写。
+        # （幂等：与现值相同则不动，也不进 retrimmed。）
+        for (n, l, j, ms, Fs) in want:
+            lst = self.reg.read('groups.list') or []
+            for k, g in enumerate(lst):
+                if (int(g['n']), int(g['l']), round(float(g['j']), 2)) != \
+                        (n, l, round(float(j), 2)):
+                    continue
+                if _trim_same(g, ms, Fs):
+                    break
+                r = self._set_group_trim(k, ms, Fs,
+                                         reason=reason or 'set_groups 裁剪')
+                if r.get('ok') is False:
+                    return {'ok': False, 'msg': r.get('msg'),
+                            'added': added, 'removed': removed}
+                retrimmed.append([n, l, j])
+                break
         kept = [[n, l, j] for (n, l, j) in cur
                 if (n, l, round(float(j), 2)) not in
                 {(a, b, round(float(c), 2)) for (a, b, c) in to_remove}]
+        resolved = self._resolve_groups()
+        field_warns = self._trim_field_warnings()
         # A8：组变了，初态可能失效——显式报告，不许静默
         warn = []
 
@@ -347,12 +452,8 @@ class SimState:
 
         lv_now = {(int(s['n']), int(s['l']), round(float(s['j']), 2),
                    round(float(s['m']), 2)) for s in self._states_now()}
-        for atom, path in (('single', 'dynamic.psi_single'),
-                           ('A', 'dynamic.psi_A'), ('B', 'dynamic.psi_B')):
-            try:
-                v = self.reg.read(path)
-            except Exception:                      # noqa: BLE001
-                continue
+        for atom in ('single', 'A', 'B'):
+            v = psi_before.get(atom)              # ← **变更前**的值（见上面的说明）
             if isinstance(v, (list, tuple)) and len(v) == 2 and v[0] == 'sup':
                 # 叠加态真值（#3/#5 裁决 A）：分量行 = [n,l,j,m,re,im]
                 gone = _missing_rows(v[1], (0,), lv_now)
@@ -367,17 +468,107 @@ class SimState:
             if key not in lv_now:
                 warn.append('%s 的初态 %s 已不在新基组内' % (atom, list(v)[:5]))
         # 两体纠缠初态同样要查（A8 的教训：基组变了初态失效必须出声）
-        try:
-            ps = self.reg.read('dynamic.psi_pair')
-        except Exception:                          # noqa: BLE001
-            ps = None
+        ps = pair_before
         if isinstance(ps, (list, tuple)) and len(ps) == 2 and ps[0] == 'pair_sup':
             gone = _missing_rows(ps[1], (0, 4), lv_now)
             if gone:
                 warn.append('两体纠缠初态 psi_pair 的分量已不在新基组内：%s'
                             % (gone,))
         return {'ok': True, 'added': added, 'removed': removed, 'kept': kept,
-                'psi_warnings': warn}
+                'retrimmed': retrimmed, 'resolved': resolved,
+                'psi_warnings': warn,
+                'field_warnings': field_warns}
+
+    # ---------- 逐子能级裁剪（2026-09-12） ----------
+    def _set_group_trim(self, idx, ms, Fs, reason=''):
+        """改写第 idx 组的 ms/Fs（走人用路径 + mutate 归因；P2 单一写通道）。"""
+        p = self.win.group_panel
+        snap = self.to_dict()
+        try:
+            with self.reg.mutate('groups.list', source='ai', reason=reason,
+                                 op_extra={'snapshot': snap}):
+                g = p.owner.groups_store.groups[idx]
+                if ms is None:
+                    g.pop('ms', None)
+                else:
+                    g['ms'] = [float(x) for x in ms]
+                    g.pop('Fs', None)
+                if Fs is not None:
+                    g['Fs'] = [[float(a), float(b)] for a, b in Fs]
+                    g.pop('ms', None)
+                p.owner.groups_store.changed.emit()
+        except Exception as e:                     # noqa: BLE001
+            return {'ok': False, 'msg': '裁剪写入失败: %s' % e}
+        return {'ok': True}
+
+    def _resolve_groups(self):
+        """每组**实际展开**的子能级数 + 身份键（裁剪是否生效的自检回执）。"""
+        out = []
+        try:
+            lv = self.list_levels().get('levels') or []
+        except Exception:                          # noqa: BLE001
+            lv = []
+        for g in (self.reg.read('groups.list') or []):
+            n, l, j = int(g['n']), int(g['l']), float(g['j'])
+            got = [x for x in lv if (x['n'], x['l'], round(x['j'], 2))
+                   == (n, l, round(j, 2))]
+            out.append({'n': n, 'l': l, 'j': j,
+                        'label': g.get('label'),
+                        'ms': g.get('ms'), 'Fs': g.get('Fs'),
+                        'n_sublevels': len(got),
+                        'keys': [x['key'] for x in got]})
+        return out
+
+    def _trim_field_warnings(self):
+        """被裁掉的子能级若是**已配置场需要的耦合伙伴** → 点名告警（不许静默丢物理）。
+
+        判据（保守、便宜）：对被排除的子能级，找它与**基组内任一保留态**之间
+        |Δl|=1 且 |Δm|≤1 的偶极对；若该跃迁频率落在任一已配置波形的
+        `freq ± BW_OPT` 内 → 视为"场需要它"。
+        """
+        try:
+            from ..core import static_atom as _sa
+            waves = []
+            for a in ('single', 'A', 'B'):
+                waves += list(self.reg.read('dynamic.waves_%s' % a) or [])
+            if not waves:
+                return []
+            bw = float(self.reg.read('engine.BW_OPT') or 20000.0)
+            states = self._states_now()
+            B = _bfield(self.win)
+            cache = self.win.dynamic.cache
+            warns = []
+            for g in (self.reg.read('groups.list') or []):
+                ms, Fs = _sa.trim_of(g)
+                if ms is None and Fs is None:
+                    continue
+                n, l, j = int(g['n']), int(g['l']), float(g['j'])
+                full = _sa._group_sublevel_rows(cache, n, l, j, B)
+                kept = _sa._group_sublevel_rows(cache, n, l, j, B, ms, Fs)
+                kept_q = {r['qstr'] for r in kept}
+                dropped = [r for r in full if r['qstr'] not in kept_q]
+                for r in dropped:
+                    m_r = float(r.get('mF') if r.get('mF') is not None
+                                else (r.get('mj') or 0.0))
+                    for w in waves:
+                        f_hz = float(w.get('freq_mhz') or 0.0) * 1e6
+                        if f_hz <= 0:
+                            continue
+                        for s in states:
+                            if abs(int(s['l']) - l) != 1:
+                                continue
+                            if abs(float(s['m']) - m_r) > 1.0 + 1e-9:
+                                continue
+                            d_hz = abs(float(s['E_mhz']) - r['E_mhz']) * 1e6
+                            if abs(d_hz - f_hz) <= bw * 1e6:
+                                item = ('%s 的 %s ↔ %s 落在「%s」的耦合窗内'
+                                        % (g.get('label'), r['qstr'],
+                                           s['label'], w.get('name')))
+                                if item not in warns:
+                                    warns.append(item)
+            return warns
+        except Exception as e:                     # noqa: BLE001
+            return ['裁剪-场伙伴检查未能完成：%s' % e]
 
     def set_pair_superposition(self, components, reason=''):
         """设**两体纠缠初态**（"交换后的结果"；AI 优先，GUI 后议）。

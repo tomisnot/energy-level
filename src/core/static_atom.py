@@ -603,14 +603,17 @@ def _direct_basis(cache, groups, B_gauss, window):
     states = []
     seen = set()
 
-    def add(n, l, j):
-        if (n, l, j) in seen:
+    def add(n, l, j, ms=None, Fs=None):
+        key = (n, l, j, None if ms is None else tuple(ms),
+               None if Fs is None else tuple(tuple(x) for x in Fs))
+        if key in seen:
             return
-        seen.add((n, l, j))
-        states.extend(_group_sublevel_rows(cache, n, l, j, B_gauss))
+        seen.add(key)
+        states.extend(_group_sublevel_rows(cache, n, l, j, B_gauss, ms, Fs))
 
     for g in groups:
-        add(g['n'], g['l'], g['j'])
+        _ms, _Fs = trim_of(g)
+        add(g['n'], g['l'], g['j'], _ms, _Fs)
     for g in groups:
         n, l, j = g['n'], g['l'], g['j']
         n_min = max(1, n - window)
@@ -900,8 +903,54 @@ def build_level_rows_direct(cache, field_B, groups, address_cfg, visible):
 # 跃迁与频谱
 # ============================================================
 
-def _group_sublevel_rows(cache, n, l, j, B_gauss=0.0):
-    """构造单个能级组的子能级行（含超精细/Zeeman 能量），供最近跃迁对查找。"""
+def sublevel_trim(ms=None, Fs=None):
+    """组内**逐子能级裁剪**判据（2026-09-12 加）→ 谓词 或 None。
+
+    · `ms`  = mJ 列表（里德堡态，kind='mJ'），如 `[-0.5, 1.5]`
+    · `Fs`  = [[F, m_F], …]（低激发超精细态，kind='F'）
+    · **都为空 = 全展开（返回 None）** ⇒ 调用方必须走原路径、**逐位不变**。
+    两者同时给 → 报错（互斥，避免语义含糊）。
+    """
+    if ms is not None and Fs is not None:
+        raise ValueError('逐子能级裁剪：ms 与 Fs 互斥，只能给一个')
+    if ms is not None:
+        want = {round(float(m), 6) for m in ms}
+        def _ok(row):
+            return (row.get('kind') == 'mJ'
+                    and round(float(row.get('mj', row.get('m', 0.0))), 6) in want)
+        return _ok
+    if Fs is not None:
+        want = {(round(float(a), 6), round(float(b), 6)) for a, b in Fs}
+        def _ok(row):
+            if row.get('kind') != 'F':
+                return False
+            return (round(float(row.get('F', 0.0)), 6),
+                    round(float(row.get('mF', 0.0)), 6)) in want
+        return _ok
+    return None
+
+
+def trim_of(g):
+    """组条目 → (ms, Fs)（缺省 (None, None) = 全展开）。"""
+    if not isinstance(g, dict):
+        return None, None
+    return g.get('ms'), g.get('Fs')
+
+
+def apply_trim(rows, ms=None, Fs=None):
+    """按裁剪判据过滤 rows；`None/None` → **原样返回**（保证默认路径逐位一致）。"""
+    pred = sublevel_trim(ms, Fs)
+    if pred is None:
+        return rows
+    return [r for r in rows if pred(r)]
+
+
+def _group_sublevel_rows(cache, n, l, j, B_gauss=0.0, ms=None, Fs=None):
+    """构造单个能级组的子能级行（含超精细/Zeeman 能量），供最近跃迁对查找。
+
+    ms / Fs：**逐子能级裁剪**（2026-09-12 加）——见 `sublevel_trim`。
+    两者都为 None（默认）时与改前**逐位一致**。
+    """
     rows = []
     hf = get_hyperfine_levels(cache, n, l, j, B_gauss)
     if hf is None:
@@ -915,7 +964,7 @@ def _group_sublevel_rows(cache, n, l, j, B_gauss=0.0):
             e = cache.E_mhz(n, l, j) + e_hf
             rows.append(dict(n=n, l=l, j=j, kind='F', mj=None, mF=mF, amps=amps,
                              E_mhz=float(e), qstr=f'F={F:.1f}, m_F={mF:+.1f}'))
-    return rows
+    return apply_trim(rows, ms, Fs)
 
 
 def _closest_sublevel_pair(cache, gi, gk, q, E0, B_gauss, freq_hz):
