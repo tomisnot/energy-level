@@ -6,7 +6,11 @@
 逐项核对（而不是造一个假 dict）。
 
 覆盖：
-  1. 摘要：meta/acize/photon/pairs/solver 五段齐全，且数值与运行事实一致；
+  1. 摘要：**扁平规范化摘要**（t83/t84 P5 收敛后的形态：method/N/P/dim/n_pairs/
+     n_microwave/n_optical_vdd/keep/drop_cap/drop_phase/acized_states/max_abs_v_mhz/
+     max_omega_over_omega/tol/max_step/t_end_ns/r_crit/mw_cap_mhz/n_steps/nfev/
+     norm_dev/warnings）且数值与运行事实一致（**不再是 meta/acize/photon/pairs/solver
+     五段嵌套**——那段是旧形态，2026-09-14 本自检按下述实测对齐）；
   2. pairs 明细：按 |v| 降序、上限生效、态标签正确；
   3. steps 明细：dt 统计与降采样；
   4. sectors / H 明细：形状与时间点；
@@ -68,25 +72,35 @@ r = S._t_get_diag('')
 C.check('1 摘要可取且来源正确', r.get('ok') and r.get('source') == '最近运行 jT',
         str(r)[:90])
 sm = r.get('summary') or {}
-C.check('2 五段齐全（meta/acize/photon/pairs/solver）',
-        all(k in sm for k in ('meta', 'acize', 'photon', 'pairs', 'solver')),
-        str(list(sm)))
-C.check('3 meta 与运行事实一致（N/P/dim/t_end）',
-        sm['meta']['N'] == len(states) and sm['meta']['P'] == 1
-        and sm['meta']['dim'] == len(states)
-        and abs(sm['meta']['t_end'] - 400.0) < 1e-9,
-        str(sm['meta']))
-C.check('4 pairs 统计 == 打包出的对数',
-        sm['pairs']['n'] == len(diag['pairs']['a'])
-        and sm['pairs']['n_microwave'] + sm['pairs']['n_optical_vdd']
-        == sm['pairs']['n'],
-        str(sm['pairs']))
+# t83/t84（P5）把摘要收敛为**扁平规范化形态**（GUI 摘要头 / get_diag / 模型卡共用
+# 一处真值：`src/core/diag.py::summarize`）。旧自检期望的 meta/acize/photon/pairs/
+# solver 五段嵌套**已不存在**——本段 2026-09-14 按实测形态对齐，并保留原来的**实质**：
+# 关键量必须与运行事实一致、明细通道仍可用。
+_REQ = ('method', 'N', 'P', 'dim', 'n_pairs', 'n_microwave', 'n_optical_vdd',
+        'keep', 'drop_cap', 'drop_phase', 'acized_states', 'max_abs_v_mhz',
+        'tol', 'max_step', 't_end_ns', 'r_crit', 'mw_cap_mhz', 'n_steps',
+        'nfev', 'norm_dev', 'warnings')
+C.check('2 扁平摘要键齐（P5 单一真值源形态）',
+        all(k in sm for k in _REQ)
+        and isinstance(sm.get('warnings'), list),
+        '缺 %s' % [k for k in _REQ if k not in sm])
+C.check('3 摘要与运行事实一致（N/P/dim/t_end）',
+        sm['N'] == len(states) and sm['P'] == 1
+        and sm['dim'] == len(states)
+        and abs(sm['t_end_ns'] - 400.0) < 1e-9,
+        str({k: sm[k] for k in ('N', 'P', 'dim', 't_end_ns')}))
+C.check('4 对数统计 == 打包出的对数（且微波+光V_dd 分解自洽）',
+        sm['n_pairs'] == len(diag['pairs']['a'])
+        and (sm['n_microwave'] or 0) + (sm['n_optical_vdd'] or 0)
+        == sm['n_pairs'],
+        str({k: sm[k] for k in ('n_pairs', 'n_microwave', 'n_optical_vdd')}))
 C.check('5 solver 段有步长统计与归一偏差',
-        sm['solver']['n_steps'] > 0 and sm['solver']['dt_ns'] is not None
-        and sm['solver']['norm_dev'] is not None, str(sm['solver']))
-C.check('6 标签只给前 8 个 + 总数',
-        len(sm['labels']) == 8 and sm['n_labels'] == len(states),
-        f"{len(sm['labels'])}/{sm['n_labels']}")
+        sm['n_steps'] is not None and sm['n_steps'] > 0
+        and sm['nfev'] is not None and sm['norm_dev'] is not None,
+        str({k: sm[k] for k in ('n_steps', 'nfev', 'norm_dev')}))
+C.check('6 明细通道仍给标签（摘要只给前 8 个 + 总数：见 pairs 明细）',
+        S._t_get_diag('pairs', limit=8).get('ok')
+        and len(S._t_get_diag('pairs', limit=8)['by_abs_v_desc']) <= 8)
 
 # ---------------- 2. pairs 明细 ----------------
 rp = S._t_get_diag('pairs', limit=5)

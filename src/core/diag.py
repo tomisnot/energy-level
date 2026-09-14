@@ -23,6 +23,42 @@ def _g(d, *path, default=None):
     return cur
 
 
+def _pair_split(prs):
+    """pairs 段 → (n_microwave, n_optical_vdd)。
+
+    ⚠ 2026-09-14 修（自检实测暴露）：`summarize/warnings` 原来读
+    `prs['n_microwave']`，但**契约里根本没有这个键**（见 `solver_inspector`
+    顶部的 diag 结构契约：`pairs: {a, b, v, dD, is_mw, w}`）⇒ 它**永远是 None**，
+    于是"微波候选对为 0"的告警**从不触发**（不是误报，是哑掉）。
+    现在按契约键 `is_mw` 现算（**新增非契约键时优先用它**，保持向后兼容）。
+    """
+    if prs.get('n_microwave') is not None:
+        return prs.get('n_microwave'), prs.get('n_optical_vdd')
+    is_mw = prs.get('is_mw')
+    if is_mw is None:
+        return None, None
+    try:
+        arr = np.asarray(is_mw).ravel()
+        n_mw = int((arr == 1).sum())
+        return n_mw, int(arr.size - n_mw)
+    except Exception:                              # noqa: BLE001
+        return None, None
+
+
+def _solver_steps(solv):
+    """solver 段 → 步数（契约键 `t_steps`/`dt` 优先；`n_steps` 仅为兼容）。"""
+    if solv.get('n_steps') is not None:
+        return solv.get('n_steps')
+    for k in ('t_steps', 'dt'):
+        arr = solv.get(k)
+        if arr is not None:
+            try:
+                return int(np.asarray(arr).ravel().size)
+            except Exception:                      # noqa: BLE001
+                continue
+    return None
+
+
 def summarize(diag, cfg=None):
     """diag 快照 → 规范化摘要（GUI 摘要头 / get_diag / 模型卡共用）。
 
@@ -51,8 +87,8 @@ def summarize(diag, cfg=None):
         'method': meta.get('method'), 'dim': dim, 'N': meta.get('N'),
         'P': pho.get('P', meta.get('P')), 'M': pho.get('Ms', meta.get('M')),
         'n_pairs': prs.get('n', meta.get('n_pairs')),
-        'n_microwave': prs.get('n_microwave'),
-        'n_optical_vdd': prs.get('n_optical_vdd'),
+        'n_microwave': _pair_split(prs)[0],
+        'n_optical_vdd': _pair_split(prs)[1],
         'keep': meta.get('keep'), 'drop_cap': meta.get('n_drop_cap'),
         'drop_phase': meta.get('n_drop_phase'),
         'acized_states': acz.get('n_shifted'),
@@ -61,7 +97,7 @@ def summarize(diag, cfg=None):
         'tol': meta.get('tol'), 'max_step': meta.get('max_step'),
         't_end_ns': meta.get('t_end'), 'r_crit': meta.get('r_crit'),
         'mw_cap_mhz': meta.get('mw_cap'),
-        'n_steps': solv.get('n_steps'), 'nfev': solv.get('nfev'),
+        'n_steps': _solver_steps(solv), 'nfev': solv.get('nfev'),
         'norm_dev': solv.get('norm_dev'),
         'basis_n': cfg.get('basis_n'),
     }
@@ -85,7 +121,7 @@ def warnings(diag, cfg=None):
     prs = diag.get('pairs') or {}
     meta = diag.get('meta') or {}
     pho = diag.get('photon') or {}
-    n_mw = prs.get('n_microwave')
+    n_mw = _pair_split(prs)[0]
     # 语义：cfg 明确说"没有微波波形"时不报（修 E2 误报）；
     # cfg 未提供（未知）时保守报警——宁可多提示，不可漏掉真问题
     if n_mw is not None and int(n_mw) == 0 and cfg.get('has_mw', True):

@@ -44,13 +44,9 @@ class EnergyGroupPanel(QWidget):
         self.add_button = QPushButton('添加')
         self.add_button.clicked.connect(self.add_group)
         row_add.addWidget(self.add_button)
-        # 逐子能级裁剪入口（2026-09-12）：作用于**选中的那一行**；
-        # 右键菜单里也有同名入口（每行都够得着）。默认全选 = 不裁剪。
-        self.trim_button = QPushButton('子能级…')
-        self.trim_button.setToolTip('裁剪选中能级组的子能级（默认全选；'
-                                    '裁剪只为省算力/做收敛检验，判据是"观测量不变"）')
-        self.trim_button.clicked.connect(self.edit_selected_trim)
-        row_add.addWidget(self.trim_button)
+        # ⚠ 逐子能级裁剪**没有**工具条按钮（2026-09-14 用户裁决：与右键入口重复、
+        #   且这一行控件太挤）。唯一入口 = **能级组列表的右键菜单**「子能级…」
+        #   （见 show_context_menu：右键哪一行就改哪一行，每行都够得着）。
         lay.addLayout(row_add)
 
         self.group_list = QListWidget()
@@ -302,6 +298,11 @@ class EnergyGroupPanel(QWidget):
     def edit_selected_trim(self, row=None):
         """打开"子能级"勾选框（默认全选）；改完走 registry 同一条通道（P2）。
 
+        ⚠ **"选中"指左侧那张「能级组管理」列表**（`self.group_list`，彩色条目那张）
+        ——**不是**右侧 `level_table`（逐子能级列 mJ / E 的那张）。`row=None` 时取
+        `self.group_list.currentRow()`；右键菜单传**显式 row**（右键哪行改哪行，
+        每行都够得着）。**该语义刻意保持不变。**
+
         ⚠ 用户口径：**裁剪是为省算力/做收敛检验，不是把观测量调好看**；
         裁掉之后必须**观测量不变**，变了就老实报告（说明它承载物理或基组未收敛）。
         """
@@ -375,17 +376,30 @@ class EnergyGroupPanel(QWidget):
         self.owner.groups_store.changed.emit()      # → registry 归因 + 维数提示
 
     def show_context_menu(self, pos):
+        """能级组列表（`self.group_list`）右键菜单 —— **逐子能级裁剪的唯一入口**。
+
+        2026-09-14 用户裁决：工具条上的「子能级…」按钮已删（与这里重复 + 那一行太挤），
+        故**口径指引搬到本 action**（原按钮 tooltip 的两句话不能丢）：
+        "裁剪选中能级组的子能级（默认全选；裁剪只为省算力/做收敛检验，
+        判据是'观测量不变'）"。
+        菜单作用在**右键命中的那一行**（`row = self.group_list.row(item)`，显式传参），
+        所以每行都够得着；若未命中行则直接返回。
+        """
         item = self.group_list.itemAt(pos)
         if item is None:
             return
         from PyQt5.QtWidgets import QMenu
         menu = QMenu(self)
         trim_action = menu.addAction('子能级…')
+        trim_action.setToolTip('裁剪选中能级组的子能级（默认全选；裁剪只为省算力/'
+                               '做收敛检验，判据是"观测量不变"）')
+        trim_action.setStatusTip('裁剪能级组的子能级：默认全选；只为省算力/做收敛检验，'
+                                 '判据是裁掉后观测量不变（变了要老实报告）')
         delete_action = menu.addAction('删除此能级组')
         action = menu.exec_(self.group_list.mapToGlobal(pos))
         row = self.group_list.row(item)
         if action == trim_action and row >= 0:
-            self.edit_selected_trim(row)
+            self.edit_selected_trim(row)           # ← 显式 row：右键哪行改哪行
         elif action == delete_action and row >= 0:
             self.group_list.takeItem(row)
             self.owner.groups_store.remove_at(row)
