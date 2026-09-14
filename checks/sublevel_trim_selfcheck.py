@@ -210,7 +210,10 @@ from src.core.field_build import build_fields_exact               # noqa: E402
 from src.core.waveforms import Wave, GaussianEnv                  # noqa: E402
 
 # 用**含梯子**的 10 组基（有 59D_5/2、58F_5/2、58G_7/2、58G_9/2 ⇒ kick 真起作用，
-# C 是 O(0.05–0.5)，不是数值噪声）；N=64，4 次演化约 20 s。
+# C 是 O(0.05–0.5)，不是数值噪声）。
+# 2026-09-14 使用者侧瘦身：I=5 → 1.0、窗 150→130 ns、网格 201→161。
+#   理由：本段的判据是**"合法裁剪 ⇒ C 不变"（不变量）**，与光强无关；而强场
+#   Ω≈5.5 GHz 让积分极硬，是本套件最大的单项耗时。F2 只要求 C>0.01（非噪声）。
 BASE10 = [(60, 0, 0.5), (60, 1, 1.5), (6, 1, 1.5), (59, 2, 2.5),
           (58, 3, 2.5), (58, 4, 3.5), (58, 4, 4.5),
           (60, 1, 0.5), (59, 2, 1.5), (60, 2, 2.5)]
@@ -219,10 +222,10 @@ TOL_BIT = 1e-6                       # "逐位不变"的工程口径（N 变了 
 
 def _freeze_C(states):
     wv = Wave('freeze', 7380.0, GaussianEnv(50.9597, 16.9866),
-              pol='椭圆偏', intensity_mwcm2=5.0,
+              pol='椭圆偏', intensity_mwcm2=1.0,
               elliptical=dict(alpha_deg=0.0, theta_deg=0.0, eps_deg=0.0))
     f = build_fields_exact(cache, states, [wv])
-    t = np.linspace(0.0, 150.0, 201)
+    t = np.linspace(0.0, 130.0, 161)
     iS = next(i for i, s in enumerate(states)
               if (int(s['n']), int(s['l'])) == (60, 0)
               and abs(float(s['m']) - 0.5) < 1e-9)
