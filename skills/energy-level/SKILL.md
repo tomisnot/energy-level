@@ -474,8 +474,9 @@ env 采样   = √[ (1 + δ(t)) / (1 + b) ]    # 峰值恰为 1
     · 护栏：被裁掉的子能级若正被 `dynamic.psi_*` 引用（按**变更前**取值判！）
       → `psi_warnings` 点名；若它是已配置场需要的耦合伙伴
       （|Δl|=1、|Δm|≤1、跃迁落在波形 `freq ± engine.BW_OPT` 内）→ `field_warnings` 点名。
-    · 自检 `checks/sublevel_trim_selfcheck.py`（**33 项**：向后兼容/过滤/存档往返/
-      三写法幂等+resolved/护栏/合法裁剪⇒观测量不变/**存档 round-trip 逐项还原裁剪+配色**）。
+    · 自检 `checks/sublevel_trim_selfcheck.py`（**7 个不变式包 / 35 子条件**：向后兼容/
+      过滤(含静态·几何侧 `apply_trim` 那条路)/存档往返/三写法幂等+resolved/护栏/
+      合法裁剪⇒观测量不变/**存档 round-trip 逐项还原裁剪+配色**）。
     - **你现在就该做的**：① 大两体作业先读 `estimate_cost()` 的
       `est_peak_gb / avail_ram_gb / mem_advice`（锚点 dim=4624→1.36 GB，dim² 外推，
       **偏保守上界**；软建议峰值 ≤ 可用内存 40%）；
@@ -493,6 +494,13 @@ env 采样   = √[ (1 + δ(t)) / (1 + b) ]    # 峰值恰为 1
     · 想核对"是不是同一次变更"，比 `detail_slim.sha1`（原始内容的 sha1 前 16 位）。
     历史流水已用 `scripts/slim_journal.py` 按同一把闸迁移（39.8 MB → 0.83 MB）；
     回归闸 = `checks/journal_size_cap_selfcheck.py`（21 项）。
+26. **自检的计数口径：不变式包（2026-09-14 用户裁决"一个测出好几项"）**：
+    `checks/selftest_all.py` 的默认摘要是 `item=不变式包数`、`subs=包内子条件数`——
+    **看 `subs` 才知道覆盖面**（包是"一件物理"，子条件才是断言）。
+    用法：`--jobs 4`（默认档约 2 分钟）/ `--tier fast`（提交前快筛）/ `--tier all`
+    （连"重对拍"档）/ `--verbose`（展开子条件）。Qt/线程时序类脚本固定**先串行**跑。
+    你若要跑检查，先 `python checks/selftest_all.py --tier fast`；报"全绿"时请带上
+    `##SELFTEST_SUMMARY` 那一行（含 items/subs/fail），别只说"通过了"。
 
 ## 人机协同约定
 

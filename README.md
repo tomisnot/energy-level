@@ -37,19 +37,36 @@ python 能级.py                        # 日常开发（等价：python app_ent
 ## 2. 跑自检（改代码后必做）
 
 ```bash
-python checks/selftest_all.py --tier fast   # 快筛档：28 个脚本 / 532 项，约 4.5 分钟
-python checks/selftest_all.py               # 全量：35 个脚本 / 677 项，约 10.5 分钟
-python checks/selftest_all.py --jobs 2      # 并行 2 档（快筛档实测 271s → 140s，1.94×）
-python checks/checks_sentinel.py            # 只看存活哨兵（秒级）
+python checks/selftest_all.py --jobs 4        # 默认档（full）+ 并行 4 ⇒ 约 2 分钟
+python checks/selftest_all.py --tier fast     # 提交前快筛（更小子集）
+python checks/selftest_all.py --tier all      # 连"重对拍"档一起跑（发版/动过引擎时）
+python checks/selftest_all.py --verbose       # 展开每个不变式包的子条件
+python checks/checks_sentinel.py              # 只看存活哨兵（秒级）
 ```
 
+- **三个档**：`full`（默认——哨兵/纯函数/单体静态/轻 GUI/引擎端到端不变式）、
+  `fast`（快筛）、`deep`（五个"引擎算得对"的**权威对拍/长演化**体检，约 4 分钟，
+  **按需**：它与默认档的 `engine_e2e_selfcheck.py` 覆盖同一批物理不变式，但保留了
+  各引擎的解析解/外部权威包交叉验证）；`--tier all` = 全部。
+- **计数口径 = 不变式包**：`Checker.group()` 把同一不变式的十几条碎片断言合成 **1 项**，
+  包内**子条件**（`SUB`）单独累计 ⇒ 摘要给的是"有多少件物理"，而不是"有多少行断言"；
+  包失败时子条件自动展开（`--verbose` 全展开）。
+- **并行**：脚本之间无共享状态，`--jobs 4` 实测默认档 **128–135 s**、含 deep 档
+  **165 s**（串行分别 358 s / ~520 s）；**Qt/QThread 时序类**
+  （`gui_worker_lifetime_test.py`，0xc0000409 事故的唯一守卫）被标为 `_SERIAL_ONLY`
+  ——**先串行跑完**再并行其余，保证确定性（2026-09-14 使用者抓到它在 `--jobs 2` 下
+  偶发假红 ⇒ 已从"靠 sleep 猜时序"改成**事件驱动**：worker 阻塞到测试放行，
+  结束时刻由测试决定；并补了反向守卫"仍在跑的 worker 绝不能被 sweep 丢掉"）。
+- **实测基准**（本机，2026-09-14）：默认档 `full --jobs 4` = 31 脚本 / **183 项** /
+  **661 子条件** / 0 FAIL / **128–135 s**（连跑 3 次）；`--tier all --jobs 4` =
+  36 脚本 / 238 项 / 716 子条件 / 165 s；串行 `--jobs 1` = 358 s。
 - 自检**自动带** `EL_NO_AI_SERVER=1` + `QT_QPA_PLATFORM=offscreen`：不抢活实例的 8765
-  端口、不弹窗、不覆盖 `.mcp-port`（2026-09-12 事故后立的规矩）。
-- 跑完给一张按档分组的**汇总表**（每脚本耗时/PASS/FAIL/SKIP）+ 一行机器可读的
-  `##SELFTEST_SUMMARY …`（实测：fast 档 28 脚本 / 532 项 / 271 s；全量 35 脚本 /
-  677 项 / 633 s，`--jobs 2` 时 fast 档 140 s）。
+  端口、不弹窗、不覆盖 `.mcp-port`（2026-09-12 事故后立的规矩）；另有**单脚本看门狗**
+  （默认 600 s，超时杀进程并记 FAIL，防挂死拖住并行档）。
+- 跑完给一张按档分组的**汇总表**（每脚本：耗时 / 项数 / 子条件 / FAIL / SKIP）+ 一行
+  机器可读的 `##SELFTEST_SUMMARY scripts=… items=… subs=… fail=… seconds=…`。
 - **权威清单**（脚本 → 覆盖点 → 项数）在 `checks/selftest_all.py` 的模块 docstring，
-  与 `_PLAN` 表同文件维护；按需单跑与 `checks/_archive/` 的说明也在那里。
+  与 `_PLAN`/`_DEEP`/`_SERIAL_ONLY` 同文件维护；按需单跑与 `checks/_archive/` 的说明也在那里。
 - **哨兵**（`checks/checks_sentinel.py`）最先跑：语法 + `src.*` 导入可解析 + 兼容导出
   未遮蔽子包 + 同目录隐式依赖登记（连"文件带 UTF-8 BOM"这类文本卫生也会被它抓出来）。
 
@@ -134,17 +151,25 @@ res = evolve_engine('hard', states, fields=fields, psi0=0,
 | **受限沙箱里删文件会失败** | 安全删除策略 fail-closed：临时文件一律写系统临时目录 + 删除套 `try/except OSError` |
 | **AI 端点未启用** | 缺 `mcp`/`uvicorn`，或 `EL_NO_AI_SERVER=1`（自检模式），或端口被活实例占用（此时**拒绝抢端口**并提示）|
 
-## 8. 本次瘦身（2026-09-14，只动文档/草稿区/自检，不动物理）
+## 8. 本次瘦身与自检重设计（2026-09-14，只动文档/草稿区/自检，不动物理）
 
 | 对象 | 前 | 后 |
 |---|---|---|
 | `README.md` | 90.8 KB / 1445 行（使用+原理+开发三部分） | 本文件（入口），正文逐字迁入 `docs/手册-界面·原理·开发.md` |
 | `docs/` | 45 篇 / 449 KB | **15 篇**；32 份历史报告 → `历史-任务报告汇编.md`（33 条 × 4 行，`git show` 可取原文） |
-| `checks/` | 聚合 32 脚本 / 513 s / 445 项 | 聚合 **35 脚本 / 633 s / 677 项**（+journal 体积闸、作业落盘、作业登记表；并补回 3 个被上一轮清单漏掉的脚本）；新增 `--tier fast`（28 脚本 / 271 s，`--jobs 2` 实测 140 s）与 `--jobs N`；单体结果摘要从"永远 SKIP"改为真断言 |
+| `checks/` 计数口径 | 677 项（= 断言条数，碎片化） | **183 项**（不变式包）+ **661 子条件**（覆盖面）；`--tier all` = 238 项 / 716 子条件 |
+| `checks/` 耗时（默认档） | 串行 635 s | **串行 358 s**；`--jobs 4` **128–135 s**（连跑 3 次 0 FAIL）；含 deep 档 165 s |
+| `checks/` 结构 | 32 脚本一档 | 31 脚本 + **三档**（`fast`/`full`/`deep`）+ `--jobs N` + 单脚本看门狗；新增 `engine_e2e_selfcheck.py`（7 包 / 25 子条件 / ~30 s）收敛五个重对拍（deep 档保留、不删） |
 | `_journal/` | 39.8 MB（单条 detail 曾达 748 KB） | **0.83 MB**；写入侧加 detail 体积闸（超限只存形状/长度/sha1）+ `checks/journal_size_cap_selfcheck.py` 21 项 |
 | `scripts/` | 11 个（含 3 个改动前就已腐坏、3 个一次性产物） | 6 个（删腐坏/产物，加 `slim_journal.py`） |
 | `tempsimu/` `ai_results/` `ui_design/screenshots/` | 1301 / 126 / 71 个文件 | 34 / 0 / 6（由使用者侧清理，仓库外留有打包件） |
 
-> 物理与引擎代码在本轮**未做任何改动**（唯一的 `src/` 改动是 `src/ai/journal.py` 的
-> detail 体积闸）。历史结论里**已被推翻**的三条（"6P 只留两三个"、"放弃混合引擎"、
-> "cos⁴ 直系固有差异"）在汇编的"现状"行里逐条点名——照旧文档施工前先看那里。
+> 物理与引擎代码在这两轮**未做任何改动**（`src/` 的改动只有 `src/ai/journal.py` 的
+> detail 体积闸 + 几处指向已删文档的注释）。历史结论里**已被推翻**的三条
+> （"6P 只留两三个"、"放弃混合引擎"、"cos⁴ 直积固有差异"）在汇编的"现状"行里
+> 逐条点名——照旧文档施工前先看那里。
+>
+> 自检这一轮的**红线自查**：没有为压时间删掉任何一条断言（退掉的只有随功能消失的
+> `gui_basis_presets_test.py`）；五个重体检**移到按需档而非删除**；30 个脚本的
+> 子条件数与原断言数**逐节相等**；并发档 flaky 是改**测试的时序假设**（事件驱动），
+> 不是放宽断言。六条"故意弄坏 → 必须红"的致死性证明见提交 `checks: 自检重设计…`。
