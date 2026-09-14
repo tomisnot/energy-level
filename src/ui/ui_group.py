@@ -3,7 +3,7 @@
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor, QIcon, QPixmap
-from PyQt5.QtWidgets import (QComboBox,
+from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSpinBox, QDoubleSpinBox,
     QPushButton, QListWidget, QListWidgetItem, QTableWidget, QTableWidgetItem,
     QHeaderView, QAbstractItemView, QMessageBox,
@@ -70,38 +70,15 @@ class EnergyGroupPanel(QWidget):
         row.addWidget(self.group_list, 1)
         row.addWidget(self.level_table, 1)
         lay.addLayout(row)
-        # B4（2026-09-12）：基组预设 + 维数提示
-        #   裁剪基组的真需求不是"删一个组"，而是**按任务一键切换方案**并
-        #   **事先看见维数代价**（上限是两体 dim=N²，不是组数）。
-        #   走面板已有的原子 set_groups → 同一状态对象/一次 undo/同一归因。
-        prow = QHBoxLayout()
-        prow.setSpacing(6)
-        prow.addWidget(QLabel('基组预设'))
-        self.preset_combo = QComboBox()
-        self.preset_combo.setToolTip('按任务把基组设为**恰好**这些能级组'
-                                    '（原子操作：一次点击、一次撤销）')
-        prow.addWidget(self.preset_combo, 1)
-        self.preset_apply = QPushButton('应用')
-        self.preset_apply.setToolTip('应用所选预设（声明式整表设置）')
-        self.preset_apply.clicked.connect(self.apply_preset)
-        prow.addWidget(self.preset_apply)
-        self.preset_save = QPushButton('存为…')
-        self.preset_save.setToolTip('把当前能级组存成预设（写 '
-                                    'save_state/basis_presets.json）')
-        self.preset_save.clicked.connect(self.save_preset)
-        prow.addWidget(self.preset_save)
-        self.dim_hint = QLabel('')
-        self.dim_hint.setStyleSheet('color:#888; padding:0 8px;')
-        prow.addWidget(self.dim_hint)
-        lay.addLayout(prow)
-        self._presets = {}
-        self._load_presets()
-        self._refresh_preset_combo()
-        try:
-            self.owner.groups_store.changed.connect(self._refresh_dim_hint)
-        except Exception:                          # noqa: BLE001
-            pass
-        self._refresh_dim_hint()
+        # 2026-09-14 用户裁决：**删掉「基组预设 + 维数提示」整行**。
+        #   理由（用户原话）："这个功能完全可以被别的更正规的功能替代……逐组增删、
+        #   状态保存，不是可以完美覆盖基组预设吗？" ⇒ 入口收敛到
+        #   ① 逐组增删（n/l/j + 添加 / 右键删除 / 右键「子能级…」裁剪）
+        #   ② 正规的状态保存/恢复（存档 round-trip，含裁剪与配色）
+        #   代价信息（原来的 dim 提示）由 **t84 运行前成本报告** 与 `estimate_cost()` 覆盖：
+        #   前者在点「运行」时给出保留对数/最远失谐/预计步数并让你选"完整物理/剔远对",
+        #   后者（AI 面）给 `basis_n/dim/est_seconds/est_peak_gb/mem_advice`。
+        #   用户数据文件 `save_state/basis_presets.json` **保留在盘上**（变惰性，不删）。
 
     def on_nlj_changed(self, *_):
         n = int(self.n_spin.value())
@@ -111,151 +88,14 @@ class EnergyGroupPanel(QWidget):
         if ok:
             self.label_preview.setText(core.auto_label(n, l, j))
 
-    # ---------- B4：基组预设 + 维数提示 ----------
-    def _presets_path(self):
-        import os
-        root = os.path.dirname(os.path.dirname(os.path.dirname(
-            os.path.abspath(__file__))))
-        return os.path.join(root, 'save_state', 'basis_presets.json')
-
-    def _load_presets(self):
-        """读预设（内置三套在文件缺失时兜底）。"""
-        import json
-        import os
-        self._presets = {
-            '单体扫描集(12)': [[60, 0, 0.5], [60, 1, 1.5], [60, 1, 0.5],
-                           [58, 4, 3.5], [58, 4, 4.5], [59, 2, 2.5],
-                           [58, 3, 2.5], [58, 3, 3.5], [59, 2, 1.5],
-                           [60, 2, 2.5], [61, 1, 1.5], [57, 4, 3.5]],
-            '两体交换集(4)': [[60, 0, 0.5], [60, 1, 1.5], [6, 1, 1.5],
-                           [58, 4, 3.5]],
-            '两体+freeze(7)': [[60, 0, 0.5], [60, 1, 1.5], [6, 1, 1.5],
-                            [59, 2, 2.5], [58, 3, 2.5], [58, 4, 3.5],
-                            [58, 4, 4.5]],
-        }
-        try:
-            p = self._presets_path()
-            if os.path.exists(p):
-                with open(p, encoding='utf-8') as f:
-                    self._presets.update(json.load(f))
-        except Exception:                          # noqa: BLE001
-            pass
-
-    def _refresh_preset_combo(self):
-        cur = self.preset_combo.currentText()
-        self.preset_combo.clear()
-        for name in self._presets:
-            self.preset_combo.addItem(name)
-        if cur:
-            i = self.preset_combo.findText(cur)
-            if i >= 0:
-                self.preset_combo.setCurrentIndex(i)
-
-    def apply_preset(self):
-        """应用所选预设：**声明式**把基组设为恰好这些组（一次 undo）。
-
-        预设条目兼容两种写法（2026-09-12 逐子能级裁剪）：
-          `[n,l,j]`（旧）或 `{'n':…,'l':…,'j':…,'ms'/'Fs':…}`（带裁剪）。
-        """
-        name = self.preset_combo.currentText()
-        gs = self._presets.get(name)
-        if not gs:
-            return
-        store = self.owner.groups_store
-        want = []
-        for item in gs:
-            if isinstance(item, dict):
-                want.append((int(item['n']), int(item['l']), float(item['j']),
-                             item.get('ms'), item.get('Fs')))
-            else:
-                want.append((int(item[0]), int(item[1]), float(item[2]),
-                             None, None))
-        keep = {}
-        for g in list(store.groups):
-            keep[(int(g['n']), int(g['l']), float(g['j']))] = g
-        out = []
-        for (n, l, j, ms, Fs) in want:              # 保持预设顺序
-            if (n, l, j) in keep:
-                g = dict(keep[(n, l, j)])           # 保留原配色
-            else:
-                ok, g = store.add(n, l, j)          # 新增（自动配色）
-                if not ok:
-                    continue
-                g = dict(g)
-            g.pop('ms', None); g.pop('Fs', None)
-            if ms is not None:
-                g['ms'] = [float(x) for x in ms]
-            if Fs is not None:
-                g['Fs'] = [[float(a), float(b)] for a, b in Fs]
-            out.append(g)
-        self.set_groups(out)                       # 面板已有：原子整表设置 + 广播
-        self.log_apply(name, len(out)) if hasattr(self, 'log_apply') else None
-        self._refresh_dim_hint()
-
-    def save_preset(self):
-        """把当前能级组存为预设（人与 AI 共用同一份 json）。
-
-        带裁剪的组存成 dict（`ms`/`Fs` 一并入档）；**没有裁剪的组仍存旧三元组**
-        ⇒ 旧读方/旧档完全兼容。
-        """
-        from PyQt5.QtWidgets import QInputDialog
-        import json
-        name, ok = QInputDialog.getText(self, '存为预设', '预设名：')
-        if not ok or not name.strip():
-            return
-        out = []
-        for g in self.owner.groups_store.groups:
-            ms, Fs = core.trim_of(g)
-            if ms is None and Fs is None:
-                out.append([int(g['n']), int(g['l']), float(g['j'])])
-            else:
-                d = {'n': int(g['n']), 'l': int(g['l']), 'j': float(g['j'])}
-                if ms is not None:
-                    d['ms'] = [float(x) for x in ms]
-                if Fs is not None:
-                    d['Fs'] = [[float(a), float(b)] for a, b in Fs]
-                out.append(d)
-        self._presets[name.strip()] = out
-        try:
-            with open(self._presets_path(), 'w', encoding='utf-8') as f:
-                json.dump(self._presets, f, ensure_ascii=False, indent=1)
-        except Exception:                          # noqa: BLE001
-            pass
-        self._refresh_preset_combo()
-        self.preset_combo.setCurrentText(name.strip())
-
-    def _refresh_dim_hint(self):
-        """实时维数提示：上限是**两体 dim = N²**，不是组数；裁剪立即体现收益。"""
-        try:
-            gs = self.owner.groups_store.groups
-        except Exception:                          # noqa: BLE001
-            return
-        n_est = 0
-        n_full = 0
-        for g in gs:
-            try:
-                full = int(round(2 * float(g['j']) + 1))
-            except Exception:                      # noqa: BLE001
-                continue
-            n_full += full
-            ms, Fs = core.trim_of(g)
-            if ms is not None:
-                n_est += len(ms)
-            elif Fs is not None:
-                n_est += len(Fs)
-            else:
-                n_est += full
-        two = n_est * n_est
-        cut = ('（已裁剪 %d/%d 态）' % (n_est, n_full)) if n_est != n_full else ''
-        color = '#c62828' if two > 2000 else ('#ef6c00' if two > 900
-                                             else '#888')
-        self.dim_hint.setStyleSheet('color:%s; padding:0 8px;' % color)
-        self.dim_hint.setText('%d 组 ≈%d 态 · 单体 dim=%d · 两体 dim=%d%s%s'
-                              % (len(gs), n_est, n_est, two, cut,
-                                 '（两体很慢，建议裁剪）' if two > 2000 else ''))
-        self.dim_hint.setToolTip('态数为估算（n=6P 等含超精细子能级时会更多）；'
-                                 '两体维数 = 单体态数的平方。裁剪只为省算力/'
-                                 '做收敛检验——判据是"裁掉后观测量不变"。')
+    # ---------- （2026-09-14 已删）基组预设 + 维数提示 ----------
+    # 用户裁决："这个功能完全可以被别的更正规的功能替代，把它完完全全删干净……"
+    # 原来这里有 _presets_path / _load_presets / _refresh_preset_combo /
+    # apply_preset / save_preset / _refresh_dim_hint 六个方法与一整行 UI。
+    # 正规替代：① 逐组增删 + 右键「子能级…」裁剪；② 状态保存/恢复（存档 round-trip，
+    # 含裁剪与配色）；③ 代价信息 → t84 运行前成本报告 + `estimate_cost()`。
+    # 用户数据 `save_state/basis_presets.json` 不删（惰性）；内置三套预设的原始内容
+    # 在 git 历史里可追（commit e0c11fb 之前）。
 
     def add_group(self):
         n = int(self.n_spin.value())
@@ -367,13 +207,12 @@ class EnergyGroupPanel(QWidget):
             g['ms'] = [float(r['mj']) for r in keep if r.get('kind') == 'mJ']
             g.pop('Fs', None)
         self._refresh_rows()
-        self._refresh_dim_hint()
         try:
             self.log_apply('子能级裁剪 %s' % g.get('label'),
                            len(keep)) if hasattr(self, 'log_apply') else None
         except Exception:                          # noqa: BLE001
             pass
-        self.owner.groups_store.changed.emit()      # → registry 归因 + 维数提示
+        self.owner.groups_store.changed.emit()      # → registry 归因 + 重绘/成本重算
 
     def show_context_menu(self, pos):
         """能级组列表（`self.group_list`）右键菜单 —— **逐子能级裁剪的唯一入口**。
@@ -407,8 +246,8 @@ class EnergyGroupPanel(QWidget):
     def set_groups(self, groups):
         """整表设置能级组（参数管理 write 通道；存档恢复/AI 载入同路）。
 
-        **原样保留** `ms`/`Fs` 等附加字段（逐子能级裁剪）——这是存档/预设
-        往返不丢字段的前提。
+        **原样保留** `ms`/`Fs` 等附加字段（逐子能级裁剪）——这是**状态存档
+        round-trip** 不丢字段的前提（原「基组预设」也走这条路，该功能已删）。
         """
         self.owner.groups_store.groups = [dict(g) for g in (groups or [])]
         self.owner.groups = self.owner.groups_store.groups

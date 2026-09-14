@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """自检：检视器摘要头与 AI（core.diag.summarize）同源（P2/P5）+ viewer 守卫。
 
 1) 同一 diag 快照下，检视器 meta_label 的数字必须等于 core.diag.summarize()

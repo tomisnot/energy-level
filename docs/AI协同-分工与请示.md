@@ -176,6 +176,10 @@
       | 建议：自检一律走临时副本
 - [x] #7 处置：**修（2026-09-12 第二次提交）**——该项 9/10 改到临时副本上做，
       并加断言 11「人的 `basis_presets.json` mtime 不变」（实测 md5 与 mtime 均未变）。
+      **后续（2026-09-14 用户裁决）**：整个「基组预设」功能已删（入口收敛到
+      逐组增删 + 状态保存），`checks/gui_basis_presets_test.py` **随之退掉**
+      ⇒ 本问题的载体已不存在；用户数据文件 `save_state/basis_presets.json`
+      **按用户要求留在盘上**（变惰性，不删）。
 
 - [ ] #8 类型：可疑（**灾难级**） 场景：**基组裁剪 → 观测量完全不收敛**（比 E1 更严重）
       | 证据（使用者 2026-09-12 实测，同一 freeze 脉冲 7380 MHz / I=5 / 高斯 FWHM 40 ns
@@ -298,6 +302,18 @@
       内存粗估保留（`estimate_cost().est_peak_gb/mem_advice`，dim² 外推，**偏保守上界**），
       "峰值 ≤ 可用内存 40%"作为**软建议**（不再建议据此拒绝运行）。
       实测锚点：dim=4624 → 1358 MB（平直）。**是否需要硬阈值，等你定**。
+
+- [ ] #13 类型：可疑（**覆盖缺口**，开发者自查，2026-09-14） 场景：**单体结果摘要
+      （`_res_summary` 的 pops 路径）在聚合回归里从来没被真跑过**
+      | 证据：`checks/ai_result_card_selfcheck.py` 第 1 段在无窗口时靠
+      `except AttributeError: SKIP`（`_win()` 返回 None → `None.dynamic`）⇒
+      每次 headless 聚合都打印 `SKIP 单体路径需要 GUI 窗口` 并 exit 0；
+      于是"模型卡挂在 summary 建好之前"那类 UnboundLocalError 只对**两体**路径有闸
+      | 影响：单体摘要（`final_pop` / `top_states_avg_pop`）零覆盖，回归全绿是假象
+      | 建议（开发者可自行做，低优先）：照 `checks/sublevel_trim_selfcheck.py` 的做法
+      在脚本内 `QT_QPA_PLATFORM=offscreen` 建一次 `MainWindow`，把该段从 SKIP
+      变成真断言；顺带把 BOM（U+FEFF）这类"脚本文本卫生"纳入哨兵（BOM 已由
+      `checks_sentinel.py` 抓到并修，2026-09-14）
 
 
 ## 七.0 事故现场保全守则（2026-09-12，用一次真实损失换来）

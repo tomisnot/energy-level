@@ -20,6 +20,10 @@
     若是已配置场需要的耦合伙伴 → `field_warnings` 点名
   F 观测量（使用者夹具）：60P_{3/2} 裁到 {−0.5,+1.5} 时，freeze 的
     `C(−0.5)/C(+1.5)` 与**未裁逐位相同**（"合法裁剪"的现场样板）
+  G **状态保存/恢复 round-trip（走 `app_entry._save_state/_load_state` 真实按钮路径）**：
+    裁剪态的基组 + **配色**在"存档 → 破坏现场 → 恢复"后**逐项**还原
+    （组条目含 color/ms、`list_levels` 清单、resolved 子能级数、左栏图标像素色、
+    行文本 `(2/4)`、二次存档无漂移）——这是「基组预设」被删后**正规替代**的实测证据
 
 用法：python checks/sublevel_trim_selfcheck.py（offscreen；构窗失败 → SKIP）
 """
@@ -222,6 +226,102 @@ C.check('F2 观测量量级可信（C 不是数值噪声，>0.01）',
         'C_full=%s' % C_full)
 C.check('F3 两体 dim 因此变小（收益可见）',
         len(s_full) > len(s_trim), '%d → %d' % (len(s_full), len(s_trim)))
+
+print('\nG) 状态保存/恢复 round-trip（app_entry 真实按钮路径）：**裁剪 + 配色逐项还原**')
+import json as _json                                              # noqa: E402
+import tempfile as _tempfile                                      # noqa: E402
+import app_entry as _ae                                           # noqa: E402
+from PyQt5.QtWidgets import QFileDialog                           # noqa: E402
+
+GTARGET = [(60, 0, 0.5), (60, 1, 1.5, [-0.5, 1.5]), (6, 1, 1.5)]
+
+
+def _group_rows():
+    """(n,l,j,label,color,ms,Fs) 逐项快照——比整 dict 相等更早定位差异。"""
+    return [(int(g['n']), int(g['l']), round(float(g['j']), 2),
+             g.get('label'), g.get('color'), g.get('ms'), g.get('Fs'))
+            for g in win.groups_store.groups]
+
+
+def _gui_colors():
+    """左栏列表每行的图标像素色（= 人眼看到的那一列彩色条目）。"""
+    out = []
+    for i in range(win.group_panel.group_list.count()):
+        pm = win.group_panel.group_list.item(i).icon().pixmap(12, 12)
+        out.append(pm.toImage().pixelColor(6, 6).name())
+    return out
+
+
+def _gui_texts():
+    return [win.group_panel.group_list.item(i).text()
+            for i in range(win.group_panel.group_list.count())]
+
+
+# ⚠ 配色由 LevelGroupStore 按**分配计数**给（不是按 (n,l,j) 算）⇒ 恢复必须真的
+#   从存档把 color 带回来，不能靠"重新分配"。所以先推一次计数器，再用目标基。
+st.set_groups([(70, 0, 0.5), (71, 1, 0.5)])
+st.set_groups(GTARGET)
+rows_before = _group_rows()
+keys_before = _keys_now()
+colors_before = _gui_colors()
+res_before = {r['label']: r['n_sublevels'] for r in st._resolve_groups()}
+
+out = os.path.join(_tempfile.gettempdir(), '_sublevel_trim_roundtrip.json')
+msgs = []
+_info, _warn = _ae.QMessageBox.information, _ae.QMessageBox.warning
+_ae.QMessageBox.information = staticmethod(lambda *a, **k: None)
+_ae.QMessageBox.warning = staticmethod(
+    lambda *a, **k: msgs.append(str(a[2]) if len(a) > 2 else ''))
+_orig_save = QFileDialog.getSaveFileName
+_orig_open = QFileDialog.getOpenFileName
+snap, broke = {}, []
+try:
+    QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (out, ''))
+    win._save_state()                       # = 菜单「保存状态」
+    if os.path.isfile(out):
+        with open(out, encoding='utf-8') as f:
+            snap = _json.load(f)
+    QFileDialog.getOpenFileName = staticmethod(lambda *a, **k: (out, ''))
+    st.set_groups([(70, 0, 0.5), (71, 1, 0.5), (72, 2, 1.5)])   # 破坏现场
+    broke = _group_rows()
+    win._load_state()                       # = 菜单「恢复状态」
+finally:
+    QFileDialog.getSaveFileName = _orig_save
+    QFileDialog.getOpenFileName = _orig_open
+    _ae.QMessageBox.information = _info
+    _ae.QMessageBox.warning = _warn
+    try:
+        if os.path.isfile(out):
+            os.remove(out)
+    except OSError:
+        pass
+
+rows_after = _group_rows()
+arch = list((snap.get('params') or {}).get('groups.list') or [])
+C.check('G1 「保存状态」写出的存档含裁剪 ms 与配色（逐项）',
+        [(g['n'], g.get('ms'), g.get('color')) for g in arch]
+        == [(r[0], r[5], r[4]) for r in rows_before], str(arch)[:180])
+C.check('G2 恢复前现场确实被破坏（基组/裁剪/配色都不同）',
+        broke != rows_before and len(broke) == 3, str(broke)[:120])
+C.check('G3 「恢复状态」后能级组**逐项**还原（n,l,j,label,color,ms,Fs）',
+        rows_after == rows_before,
+        'before=%s\nafter =%s' % (rows_before, rows_after))
+C.check('G4 restore 后子能级清单逐位还原（60P 恰好 {−0.5,+1.5}）',
+        _keys_now() == keys_before
+        and sorted(x[3] for x in _keys_now()
+                   if (x[0], x[1], x[2]) == (60, 1, 1.5)) == [-0.5, 1.5],
+        str([(x[0], x[1], x[3]) for x in _keys_now() if x[1] == 1])[:140])
+C.check('G5 restore 后 resolved：每组实际子能级数一致（60P=2）',
+        {r['label']: r['n_sublevels'] for r in st._resolve_groups()} == res_before
+        and res_before.get('60P₃/₂', res_before.get('60P_{3/2}')) == 2,
+        str(res_before))
+C.check('G6 左栏列表**图标配色**逐项还原（人眼所见那一列）',
+        _gui_colors() == colors_before,
+        '%s vs %s' % (colors_before, _gui_colors()))
+C.check('G7 裁剪态在 GUI 上看得见：行文本恢复 `… (2/4)`',
+        any('(2/4)' in t for t in _gui_texts()), str(_gui_texts())[:180])
+C.check('G8 恢复后再次存档 groups.list 与首次存档逐位相同（无漂移）',
+        (win.param_reg.collect().get('groups.list') or []) == arch)
 
 ok = C.summary()
 if not ok:

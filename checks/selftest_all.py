@@ -39,7 +39,8 @@
                                    断言无 "Destroyed while thread is still running"，8 项）
     sublevel_trim_selfcheck.py     逐子能级裁剪（A 向后兼容 / B 过滤 / C 往返 /
                                    D 三写法+resolved 回执 / E psi+场护栏 /
-                                   F 合法裁剪⇒观测量不变（使用者夹具），25 项，~40s）
+                                   F 合法裁剪⇒观测量不变（使用者夹具）/
+                                   G 存档 round-trip 逐项还原裁剪+配色，33 项，~45s）
     gui_cost_dialog_test.py        运行前成本对话框（进度框遮挡回归，8 项）
     gui_ellip_row_test.py          椭圆偏参数行（平时隐藏/选后出现，10 项）
     ui_selftest.py                 UI 回归（主窗口/编辑器/TTL/动态页/存档恢复）
@@ -103,7 +104,6 @@ _SCRIPTS = ['checks_sentinel.py',        # 存活哨兵（秒级，最先跑：�
     'port_file_ownership_selfcheck.py',
     'gui_ai_job_indicator_test.py',
     'ai_result_card_selfcheck.py',
-    'gui_basis_presets_test.py',
     'gui_diag_summary_test.py',
     'ai_h_snapshot_guard_selfcheck.py',
             'gui_engine_lamps_test.py',
