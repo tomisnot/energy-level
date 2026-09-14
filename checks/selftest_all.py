@@ -1,78 +1,61 @@
 # -*- coding: utf-8 -*-
-"""精简回归入口（分档 + 可选并行）：日常自检。
+"""精简回归入口：**全量（含 deep）≤3 分钟**（不变式包计数，子条件可展开）。
 
-    python checks\\selftest_all.py                # 全量（tier=full，默认串行，35 脚本 ~10.5 min）
-    python checks\\selftest_all.py --tier fast    # 快筛档（28 脚本 ~4.5 min；--jobs 2 实测 140 s）
-    python checks\\selftest_all.py --jobs 2       # 并行 2 档（见下方内存警告）
+    python checks\\selftest_all.py --jobs 4         # 默认档 + 并行 4 ⇒ 实测 128-135 s
+    python checks\\selftest_all.py                 # 默认档，串行（实测 358 s）
+    python checks\\selftest_all.py --tier fast      # 提交前快筛（更少的脚本）
+    python checks\\selftest_all.py --tier deep      # 只跑 deep 档（重对拍/长演化）
+    python checks\\selftest_all.py --tier all --jobs 4   # 全量含 deep ⇒ 实测 165 s
+    python checks\\selftest_all.py --verbose        # 展开每个不变式包的子条件
+    python checks\\selftest_all.py --only ai_       # 只跑名字含该子串的
 
-## 分档（2026-09-14 瘦身时按**实测耗时**分）
+## 实测基准（本机，2026-09-14；`##SELFTEST_SUMMARY` 原样抄录）
 
-**fast 档（28 个脚本，约 4.5 分钟 / 532 项）**——哨兵/纯函数/单原子静态/轻 GUI：
-    checks_sentinel.py            存活哨兵（语法 + src.* 导入 + 兼容导出 + BOM 类文本卫生）
-    journal_size_cap_selfcheck.py journal 的 detail 体积闸（巨型 detail → 摘要，21 项）
-    core_selfcheck.py             单原子静态（能级/偶极/AC 位移，22 项）
-    params_registry_selfcheck.py  引擎参数注册表（默认/覆写/线程隔离/端到端，39 项）
-    pair_mem_estimate_selfcheck.py 两体峰值内存粗估（13 项）
-    ai_code_freshness_selfcheck.py 代码新鲜度（28 项）
-    solve_max_step_hard_selfcheck.py 步长硬上限（13 项）
-    port_file_ownership_selfcheck.py .mcp-port 归属权（6 项）
-    ai_h_snapshot_guard_selfcheck.py H(t) 快照尺寸闸（9 项）
-    ai_job_artifacts_selfcheck.py  作业成果自动落盘（json 摘要 + npz，10 项）
-    run_store_selfcheck.py         作业登记表（38 项）
-    ai_result_card_selfcheck.py    结果摘要 + 模型卡（含单体路径真断言，14 项）
-    mw_pair_keep_selfcheck.py      微波对累积相位判据 + 三光子梯子（24 项）
-    ai_codeact_tools_selfcheck.py  CodeAct 工具面（命名空间/参数/错误路径，10 项）
-    ai_semantic_state_selfcheck.py 语义状态面（set_groups/list_levels/初态，28 项）
-    ai_superposition_selfcheck.py  逐原子叠加态持久真值（22 项）
-    ai_pair_superposition_selfcheck.py 两体纠缠初态 spec + 三引擎贯穿（51 项）
-    gui_diag_summary_test.py       检视器摘要头与 core.diag 同源（6 项）
-    gui_ai_job_indicator_test.py   AI 作业指示灯（7 项）
-    gui_engine_lamps_test.py       engine.* 指示灯 + 双向绑定（14 项）
-    gui_ellip_row_test.py          椭圆偏参数行（11 项）
-    gui_cost_dialog_test.py        运行前成本对话框（8 项）
-    gui_worker_lifetime_test.py    QThread 生命周期（10 项）
-    gui_params_page_test.py        引擎参数页接线（13 项）
-    gui_mode_switch_test.py        模式切换 + 检视器常驻 + 双向绑定（16 项）
-    ai_diag_test.py                只读观测通道 get_diag（16 项）
-    evolve_dissipative_selfcheck.py Lindblad 耗散引擎（18 项）
-    mixed_arb_mw_selfcheck.py      mixed 任意波形微波（12 项）
+| 档 | jobs | 脚本 | 项数(包) | 子条件 | 耗时 | 结果 |
+|---|---|---|---|---|---|---|
+| full（默认） | 4 | 31 | 183 | 661 | **128 / 135 / 134 s**（连跑 3 次） | 0 FAIL |
+| full（默认） | 1 | 31 | 183 | 661 | **358 s** | 0 FAIL |
+| all（含 deep） | 4 | 36 | 238 | 716 | **165 s** | 0 FAIL（1 SKIP） |
 
-**slow 档（7 个脚本）**——重演化 / 全窗口 / 长梯子（实测 2026-09-14，串行）：
-    evolve_exact_selfcheck.py      单原子 Sambe（光子块 + 包络自适应，11 项，~93s）
-    sublevel_trim_selfcheck.py     逐子能级裁剪（A–G 七段，33 项，~83s）
-    mixed_nolight_selfcheck.py     mixed 无光场退化契约（10 项，~73s）
-    ui_selftest.py                 主窗口/编辑器/TTL/动态页/存档恢复（57 项，~66s）
-    two_field_pair_selfcheck.py    两场两体引擎（11 项，~39s）
-    evolve_exact_pair_selfcheck.py 两体第一性引擎（11 项，~33s）
-    pair_evolve_selfcheck.py       两体动态（pairinteraction 权威参考；未装则 SKIP）
+## 三个档（2026-09-14 用户裁决："动动脑子，哪些不用测…给我把全量测试时间压到 3 分钟"）
 
-## 并行（--jobs N）
+- **full（默认）**：日常必须绿的一切——哨兵/纯函数/单体静态/轻 GUI + 两个大守卫
+  （`ui_selftest` 用户裁决项、`sublevel_trim` 裁剪不动物理）。目标 ≤180 s（`--jobs 4`）。
+- **fast**：更小的子集（提交前快筛）。
+- **deep**：**按需**——五个"引擎算得对"的**权威对拍/长演化**体检
+  （`evolve_exact` / `mixed_nolight` / `two_field_pair` / `evolve_exact_pair` /
+  `pair_evolve`，共约 260 s）。它们与 `engine_e2e_selfcheck.py`（默认档，~20 s）
+  覆盖**同一批物理不变式**，但保留了各自引擎的**解析解/外部权威包**交叉验证——
+  所以**不删，降为按需**：动过引擎、或发版前跑一次 `--tier all`。
 
-脚本之间**无共享状态**（各自起进程、各自建窗口/引擎），故可并行；但每个重脚本
-峰值内存可达 1 GB 量级（两体 dim 数千），**N 只在你确认机器空闲内存 ≥ 2 GB×N 时用**。
-默认 N=1（串行）：长脚本的输出要实时可读，且**人的软件可能正在跑实验**。
+## 计数模型：不变式包（"一个测出好几项"）
 
-    ⚠ 自检一律带 `EL_NO_AI_SERVER=1`（2026-09-12 事故后加，见 docs/AI协同-分工与请示.md
-    §六 #6）：**绝不抢活实例的 8765 端口 / 覆盖 .mcp-port**。需要真 MCP 端点的
-    `ai_selftest / ai_compute_test / ai_codeact_test / ai_chain_selftest /
-    ai_params_slim_test / ai_runstore_mcp_test` 因此**不在本聚合里**，
-    要跑它们请在**没有活实例**时手动单跑（脚本自己会 SKIP 或起独立端口）。
+每个脚本打印 `[name] PASS=<项数> FAIL=… SKIP=… SUB=<子条件数>`：
+**项数 = 不变式包数**（`Checker.group` 把同一不变式的十几条碎片合成 1 项），
+`SUB` 是包内子条件总数（**覆盖面指标**——项数少了但 SUB 不能少）。
+`--verbose` 或 `SELFTEST_VERBOSE=1` 展开子条件；包失败时**自动展开**。
 
-不在聚合里、按需单跑的独立自检：
-    hard_vdd_pack_selfcheck.py     hard 的 V_dd 打包 + Θ 判据语义（9 项）
-    route_auto_selfcheck.py        route_auto 判据（6 项）
-    basis_convergence_selfcheck.py **T2(E1) 验收工具：观测量收敛**（慢 + 修好前预期
-                                   FAIL）→ 刻意不进聚合
-    gui_arb_mixed_wiring_test.py   GUI 接线（任意波形 × 三引擎，~140s；动
-                                   ui_dynamic / evolve_worker 后请跑）
-    e1_pair_forensics.py           E1（光学对丢失）取证/回归锚（7 项）
-    ai_*（上列 6 个 MCP 端点自检）
-    lindblad/其它 → `checks/_archive/`（需要时单跑）
+## 并行与串行（`--jobs N`）
 
-## 结果表
+- 脚本间无共享状态，可并行；但重脚本峰值内存可达 1 GB ⇒ **确认空闲内存 ≥ 2GB×N 再用**。
+- `_SERIAL_ONLY`（Qt/QThread 时序类）**先串行跑完**再并行其余：2026-09-14 使用者
+  独立验收时抓到 `gui_worker_lifetime_test.py` 在 `--jobs 2` 下偶发假红
+  （隔离复跑全绿）——它是 0xc0000409 事故的唯一守卫，**必须确定性**。
+- 子进程一律带 `EL_NO_AI_SERVER=1` + `QT_QPA_PLATFORM=offscreen`：
+  **绝不抢活实例的 8765 端口 / 覆盖 `.mcp-port`**（2026-09-12 事故，见
+  `docs/AI协同-分工与请示.md` §六 #6）。需要真 MCP 端点的 6 个 `ai_*` 自检因此
+  **不在聚合里**，要跑请在**没有活实例**时手动单跑（脚本自己会 SKIP）。
 
-每个脚本跑完打印一行 `—— <脚本> 完成，<秒>s（PASS/FAIL/SKIP）`，最后给一张
-按档分组的汇总表 + 一行机器可读的 `##SELFTEST_SUMMARY ...`（供脚本/日志解析）。
+## 不在聚合里、按需单跑
+
+    hard_vdd_pack_selfcheck.py     hard 的 V_dd 打包 + Θ 判据语义
+    route_auto_selfcheck.py        route_auto 判据
+    basis_convergence_selfcheck.py T2(E1) 验收工具（慢 + 修好前预期 FAIL）
+    e1_pair_forensics.py           E1 取证/回归锚（7 项）
+    gui_arb_mixed_wiring_test.py   GUI 接线（任意波形 × 三引擎，~140s）
+    ai_selftest / ai_compute_test / ai_codeact_test / ai_chain_selftest /
+    ai_params_slim_test / ai_runstore_mcp_test（MCP 端点契约；无活实例时单跑）
+    checks/_archive/*              已封存，不进日常回归
 """
 import argparse
 import os
@@ -86,10 +69,11 @@ sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
-# (脚本, 档) —— 顺序 = 时间序（快→慢），串行时可尽早看到红的
+# (脚本, 档) —— 顺序 = 时间序（快→慢）
 _PLAN = [
     ('checks_sentinel.py', 'fast'),
     ('journal_size_cap_selfcheck.py', 'fast'),
+    ('engine_e2e_selfcheck.py', 'fast'),
     ('core_selfcheck.py', 'fast'),
     ('params_registry_selfcheck.py', 'fast'),
     ('pair_mem_estimate_selfcheck.py', 'fast'),
@@ -107,25 +91,35 @@ _PLAN = [
     ('ai_pair_superposition_selfcheck.py', 'fast'),
     ('gui_diag_summary_test.py', 'fast'),
     ('gui_ai_job_indicator_test.py', 'fast'),
-    ('gui_engine_lamps_test.py', 'fast'),
-    ('gui_ellip_row_test.py', 'fast'),
-    ('gui_cost_dialog_test.py', 'fast'),
     ('gui_worker_lifetime_test.py', 'fast'),
-    ('gui_params_page_test.py', 'fast'),
-    ('gui_mode_switch_test.py', 'fast'),
     ('ai_diag_test.py', 'fast'),
     ('evolve_dissipative_selfcheck.py', 'fast'),
     ('mixed_arb_mw_selfcheck.py', 'fast'),
-    ('evolve_exact_selfcheck.py', 'slow'),
+    ('gui_params_page_test.py', 'slow'),
+    ('gui_mode_switch_test.py', 'slow'),
+    ('gui_engine_lamps_test.py', 'slow'),
+    ('gui_ellip_row_test.py', 'slow'),
+    ('gui_cost_dialog_test.py', 'slow'),
     ('sublevel_trim_selfcheck.py', 'slow'),
     ('ui_selftest.py', 'slow'),
-    ('two_field_pair_selfcheck.py', 'slow'),
-    ('mixed_nolight_selfcheck.py', 'slow'),
-    ('evolve_exact_pair_selfcheck.py', 'slow'),
-    ('pair_evolve_selfcheck.py', 'slow'),
 ]
 
-_RE_SUM = re.compile(r'\[(\w+)\]\s+PASS=(\d+)\s+FAIL=(\d+)\s+SKIP=(\d+)')
+# **按需深挖档**（不进默认 full）：五个"引擎算得对"的权威对拍/长演化体检。
+# 与 engine_e2e_selfcheck.py 覆盖同一批物理不变式，但那边的"解析解/外部权威包"
+# 交叉验证不可替代 ⇒ 不删，降为按需（动过引擎或发版前跑 --tier all）。
+_DEEP = {
+    'evolve_exact_selfcheck.py',
+    'mixed_nolight_selfcheck.py',
+    'two_field_pair_selfcheck.py',
+    'evolve_exact_pair_selfcheck.py',
+    'pair_evolve_selfcheck.py',
+}
+
+# 只能串行的脚本（Qt/QThread 时序敏感）：jobs>1 时先串行跑完它们。
+_SERIAL_ONLY = {'gui_worker_lifetime_test.py'}
+
+_RE_SUM = re.compile(r'\[(\w+)\]\s+PASS=(\d+)\s+FAIL=(\d+)\s+SKIP=(\d+)'
+                     r'(?:\s+SUB=(\d+))?')
 _RE_NN = re.compile(r'(\d+)/(\d+)\s+PASS')
 _RE_OK = re.compile(r'\[PASS\]|\[ ok \]|^\s*OK\b|结果：全部通过', re.M)
 _RE_BAD = re.compile(r'\[FAIL\]|^\s*FAIL\b|结果：\d+ 项失败', re.M)
@@ -133,86 +127,145 @@ _LOCK = threading.Lock()
 
 
 def _counts(text):
-    """脚本输出 → (pass, fail, skip)；认不出来就给 (-1, -1, -1)。
+    """脚本输出 → (项数, FAIL, SKIP, 子条件数)；认不出来给 (-1,-1,-1,-1)。
 
-    三级认法：① 脚本自报的 `[name] PASS=x FAIL=y SKIP=z`；② `N/M PASS`；
-    ③ 逐条标记（`[PASS]` / `[ ok ]` / `OK` / `结果：全部通过`）——第三条是为了
-    让"只打 OK/FAIL 不报总数"的老脚本（如 ai_h_snapshot_guard）也进汇总表，
-    不然汇总会**系统性少算**断言数。
+    三级认法：① 脚本自报 `[name] PASS=x FAIL=y SKIP=z [SUB=s]`；② `N/M PASS`；
+    ③ 逐条标记（`[PASS]`/`[ ok ]`/`OK`）——第三条让"只打 OK 不报总数"的老脚本
+    也进汇总，不然会**系统性少算**。
     """
     m = _RE_SUM.search(text)
     if m:
-        return int(m.group(2)), int(m.group(3)), int(m.group(4))
+        sub = int(m.group(5)) if m.group(5) else int(m.group(2))
+        return int(m.group(2)), int(m.group(3)), int(m.group(4)), sub
     nn = _RE_NN.findall(text)
     if nn:
         p, t = max(((int(a), int(b)) for a, b in nn), key=lambda x: x[1])
-        return p, max(0, t - p), 0
+        return p, max(0, t - p), 0, t
     n_ok = len(_RE_OK.findall(text))
     n_bad = len(_RE_BAD.findall(text))
     if n_ok or n_bad:
-        return n_ok, n_bad, 0
-    return -1, -1, -1
+        return n_ok, n_bad, 0, n_ok
+    return -1, -1, -1, -1
 
 
-def _run_one(script, env, quiet):
-    """跑一个脚本：实时回显（串行）或整段回显（并行）；→ (rc, sec, counts, tail)."""
+def _run_one(script, env, quiet, timeout_s=600.0):
+    """跑一个脚本：实时回显（串行）或整段回显（并行）；→ (rc, sec, counts, lines).
+
+    `timeout_s` 是**看门狗**：脚本挂死时杀掉它并记 FAIL_T（否则并行档会被一个
+    挂死的脚本永久拖住——"≤3 分钟"的承诺也就没了）。
+    """
     path = os.path.join(_HERE, script)
     t0 = time.perf_counter()
     p = subprocess.Popen([sys.executable, '-u', path], env=env,
                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                          text=True, encoding='utf-8', errors='replace',
                          bufsize=1)
+    killed = {'v': False}
+
+    def _kill():
+        killed['v'] = True
+        try:
+            p.kill()
+        except Exception:                                      # noqa: BLE001
+            pass
+
+    wd = threading.Timer(float(timeout_s), _kill)
+    wd.daemon = True
+    wd.start()
     lines = []
-    for ln in p.stdout:
-        lines.append(ln)
-        if not quiet:
-            with _LOCK:
-                sys.stdout.write(ln)
-                sys.stdout.flush()
-    rc = p.wait()
-    sec = time.perf_counter() - t0
-    return rc, sec, _counts(''.join(lines)), lines
+    try:
+        for ln in p.stdout:
+            lines.append(ln)
+            if not quiet:
+                with _LOCK:
+                    sys.stdout.write(ln)
+                    sys.stdout.flush()
+        rc = p.wait()
+    finally:
+        wd.cancel()
+    if killed['v']:
+        lines.append('\n[看门狗] 超过 %.0f s 未结束 → 已杀（记为 FAIL）\n'
+                     % float(timeout_s))
+        rc = -9
+    return rc, time.perf_counter() - t0, _counts(''.join(lines)), lines
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--tier', choices=['fast', 'full'], default='full')
+    ap.add_argument('--tier', choices=['fast', 'full', 'deep', 'all'],
+                    default='full')
     ap.add_argument('--jobs', type=int, default=1,
-                    help='并行档数（默认 1=串行；见模块 docstring 的内存警告）')
+                    help='并行档数（默认 1=串行；见 docstring 的内存警告）')
     ap.add_argument('--only', default='', help='只跑名字含该子串的脚本')
+    ap.add_argument('--verbose', action='store_true',
+                    help='展开不变式包的子条件（等价 SELFTEST_VERBOSE=1）')
+    ap.add_argument('--timeout', type=float, default=600.0,
+                    help='单脚本看门狗（秒，默认 600）：超时杀进程并记 FAIL')
     a = ap.parse_args()
-    plan = [(s, t) for s, t in _PLAN
-            if (a.tier == 'full' or t == 'fast') and (not a.only or a.only in s)]
+
+    def _in_tier(s, t):
+        if a.tier == 'all':
+            return True
+        if a.tier == 'deep':
+            return s in _DEEP
+        if s in _DEEP:
+            return False                      # deep 脚本只在 all/deep 档跑
+        if a.tier == 'fast':
+            return t == 'fast'
+        return True                           # full = 除 deep 外全部
+
+    plan = [(s, t) for s, t in _PLAN + [(s, 'deep') for s in sorted(_DEEP)]
+            if _in_tier(s, t) and (not a.only or a.only in s)]
+    missing = [s for s, _t in plan if not os.path.isfile(os.path.join(_HERE, s))]
+    if missing:
+        print('!! 清单里的脚本不存在（清单该更新了）：%s' % missing)
+        return 2
     if not plan:
-        print('没有匹配的脚本'); return 2
+        print('没有匹配的脚本')
+        return 2
     jobs = max(1, min(a.jobs, len(plan)))
     env = dict(os.environ)
     env.setdefault('EL_NO_AI_SERVER', '1')
     env.setdefault('QT_QPA_PLATFORM', 'offscreen')
-    print('跑 %d 个脚本（tier=%s, jobs=%d）' % (len(plan), a.tier, jobs))
+    if a.verbose:
+        env['SELFTEST_VERBOSE'] = '1'
+    print('跑 %d 个脚本（tier=%s, jobs=%d, verbose=%s）'
+          % (len(plan), a.tier, jobs, a.verbose))
 
     results = [None] * len(plan)
     t_all = time.perf_counter()
 
-    def _work(i):
+    def _work(i, force_serial=False):
         script = plan[i][0]
-        if jobs == 1:
+        single = (jobs == 1 or force_serial)
+        if single:
             print(f'\n===== {script} =====')
         t0 = time.perf_counter()
-        rc, sec, cnt, lines = _run_one(script, env, quiet=(jobs > 1))
-        if jobs > 1:
+        rc, sec, cnt, lines = _run_one(script, env, quiet=not single,
+                                       timeout_s=a.timeout)
+        if not single:
             with _LOCK:
                 print(f'\n===== {script} =====（{sec:.0f}s, rc={rc}）')
                 sys.stdout.write(''.join(lines))
                 sys.stdout.flush()
-        p_, f_, s_ = cnt
+        p_, f_, s_, sub = cnt
         print(f'—— {script} 完成，{sec:.0f}s'
-              + (f'（PASS={p_} FAIL={f_} SKIP={s_}）' if p_ >= 0 else '（无计数行）'))
+              + (f'（项={p_} 子条件={sub} FAIL={f_} SKIP={s_}）' if p_ >= 0
+                 else '（无计数行）'))
         results[i] = (script, plan[i][1], rc, sec, cnt)
 
+    serial_only = [i for i, (s, _t) in enumerate(plan) if s in _SERIAL_ONLY]
     if jobs == 1:
         for i in range(len(plan)):
             _work(i)
+    elif serial_only:
+        print('串行优先（不并行）：%s' % ', '.join(plan[i][0] for i in serial_only))
+        for i in serial_only:
+            _work(i, force_serial=True)
+        rest = [i for i in range(len(plan)) if i not in serial_only]
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=jobs) as ex:
+            list(ex.map(lambda i: _work(i, force_serial=True), rest))
     else:
         from concurrent.futures import ThreadPoolExecutor
         with ThreadPoolExecutor(max_workers=jobs) as ex:
@@ -220,22 +273,23 @@ def main():
 
     tot = time.perf_counter() - t_all
     print('\n==== 汇总（tier=%s, jobs=%d）====' % (a.tier, jobs))
-    print('%-38s %-6s %7s %6s %6s %6s' % ('script', 'tier', 'sec', 'pass',
-                                          'fail', 'skip'))
-    tp = tf = ts = 0
+    print('%-38s %-5s %6s %5s %6s %5s %5s'
+          % ('script', 'tier', 'sec', '项', '子条件', 'FAIL', 'SKIP'))
+    tp = tf = ts = tsub = 0
     rc_all = 0
-    for script, tier, rc, sec, (p_, f_, s_) in results:
+    for script, tier, rc, sec, (p_, f_, s_, sub) in results:
         rc_all |= rc
         tp += max(0, p_)
         tf += max(0, f_)
         ts += max(0, s_)
-        print('%-38s %-6s %7.0f %6s %6s %6s'
+        tsub += max(0, sub)
+        print('%-38s %-5s %6.0f %5s %6s %5s %5s'
               % (script, tier, sec,
-                 p_ if p_ >= 0 else '-', f_ if f_ >= 0 else '-',
-                 s_ if s_ >= 0 else '-'))
-    print('##SELFTEST_SUMMARY scripts=%d pass=%d fail=%d skip=%d seconds=%.0f '
-          'tier=%s jobs=%d rc=%d'
-          % (len(results), tp, tf, ts, tot, a.tier, jobs, rc_all))
+                 p_ if p_ >= 0 else '-', sub if sub >= 0 else '-',
+                 f_ if f_ >= 0 else '-', s_ if s_ >= 0 else '-'))
+    print('##SELFTEST_SUMMARY scripts=%d items=%d subs=%d fail=%d skip=%d '
+          'seconds=%.0f tier=%s jobs=%d rc=%d'
+          % (len(results), tp, tsub, tf, ts, tot, a.tier, jobs, rc_all))
     print('==== 回归完成，%.0fs，%s ===='
           % (tot, '全部通过 ✅' if rc_all == 0 else '有失败 ❌'))
     return rc_all

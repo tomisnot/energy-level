@@ -23,20 +23,62 @@ sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 os.environ.setdefault('EL_NO_AI_SERVER', '1')
 
-FAIL = []
+from checks.checklib import Checker                          # noqa: E402
+
+C = Checker('ai_result_card')
+# ------------------- 计数模型：不变式包（见 checks/checklib.py）-------------------
+# group(...) 开一个包，其后相邻的 check(...) 全部变成该包的**子条件**：整包只计 1
+# 项，子条件逐个进 SUB=（覆盖面不缩水：SUB == 改前逐条计数的项数）。原断言名与判据
+# 表达式一律原样保留——只是不再各自计 1 项；不过时整包自动展开子条件。
+_PKG = None
+
+
+class _Pkg:
+    """一个不变式包（先缓冲子条件，关闭时一次性交给 C.group 登记）。"""
+
+    def __init__(self, name, detail=''):
+        self.name, self.detail, self.subs = name, detail, []
+
+    def flush(self):
+        C.group(self.name, self.subs, self.detail)
+
+
+def group(name, detail=''):
+    """开新的不变式包：此后 check() 的断言都记入它（直到下一个 group）。"""
+    global _PKG
+    if _PKG is not None:
+        _PKG.flush()
+    _PKG = _Pkg(name, detail)
+
+
+def flush():
+    """关闭最后一个包（本文件收尾）。"""
+    global _PKG
+    if _PKG is not None:
+        _PKG.flush()
+        _PKG = None
+
+
+def check(name, cond, detail=''):
+    """薄包装：判据表达式原样，只登记为**当前包的子条件**（detail 作现场值）。"""
+    if _PKG is None:
+        raise RuntimeError(f'check() 出现在任何 group() 之前：{name}')
+    _PKG.subs.append((name + (('  | ' + str(detail)) if detail else ''),
+                      bool(cond)))
+    return bool(cond)
 
 
 def chk(cond, msg):
-    print(('  OK   ' if cond else '  FAIL ') + msg)
-    if not cond:
-        FAIL.append(msg)
+    """薄包装（沿用本文件原签名）：登记为**当前包的子条件**，不再各自计 1 项。"""
+    return check(str(msg), bool(cond))
 
 
 try:
     from src.ai import server as S
 except Exception as e:                              # noqa: BLE001
     print('  SKIP 无法 headless 导入 src.ai.server：%s' % e)
-    sys.exit(0)
+    C.skip('导入 src.ai.server', str(e))
+    sys.exit(0 if C.summary() else 1)
 
 import numpy as np                                   # noqa: E402
 
@@ -62,6 +104,7 @@ if win is not None:
         win.dynamic._run_states = win.dynamic._current_states()
         labels = [s.get('label', '?') for s in win.dynamic._run_states]
     n = len(labels)
+    group('A 单体结果摘要（pops 路径：model_card / 终态键 = GUI 真标签）')
     chk(S._win() is win, '_win() 认出了本脚本的可见 MainWindow（真跑，不是 SKIP）')
     chk(n >= 4, 'GUI 侧态表非空（建组 %s → %d 个态）' % (grp.get('ok'), n))
     res1 = {'t': np.linspace(0, 10, 11),
@@ -70,15 +113,18 @@ if win is not None:
     out1 = S._res_summary(res1, save_npz=False, tag='t1')
     chk(isinstance(out1, dict), '返回 dict（未抛 UnboundLocalError）')
     chk('model_card' in out1, '单体摘要带 model_card')
-    chk('final_pop' in out1 and 'top_states_avg_pop' in out1,
-        '单体摘要含 top/final')
+    chk('final_pop' in out1, '单体摘要含 final_pop')
+    chk('top_states_avg_pop' in out1, '单体摘要含 top_states_avg_pop')
     keys = list(out1.get('final_pop') or {})
     chk(bool(keys) and all(k in labels for k in keys),
         'final_pop 的键 = GUI 真实态标签（不是退化的 "#0"）：%s' % keys[:2])
     chk(len(out1.get('states') or []) >= min(n, 8),
         'states 清单取自 GUI（%d 条）' % len(out1.get('states') or []))
+else:
+    C.skip('A 单体结果摘要（pops 路径）', '构窗不可用（无 GUI 环境）')
 
 print('2) 两体结果摘要（pops_2d 路径，标签取自 states_2d）')
+group('B 两体结果摘要（pops_2d 路径，成对标签）')
 s2 = [{'label': '(60P_{3/2} m_J=-0.5)×(60S_{1/2} m_J=+0.5)'},
       {'label': '(60S_{1/2} m_J=+0.5)×(60P_{3/2} m_J=-0.5)'}]
 res2 = {'t': np.linspace(0, 10, 11),
@@ -92,6 +138,7 @@ chk(any('60P_{3/2}' in x for x in labs), '两体 final_pop 用成对标签：%s'
 
 print('3) 模型卡字段与警告判定')
 mc = out2['model_card']
+group('C 模型卡字段与警告判定')
 chk(isinstance(mc, dict), 'model_card 是 dict')
 chk('warnings' in mc and isinstance(mc['warnings'], list), '含 warnings 列表')
 res3 = {'t': np.linspace(0, 1, 3), 'pops_2d': np.zeros((3, 2)),
@@ -103,5 +150,5 @@ w = (out3.get('model_card') or {}).get('warnings') or []
 chk(any('中间态' in x for x in w),
     '微波候选对为 0 → 点名"疑缺中间态"：%s' % (w[:1],))
 
-print('\n结果：%s' % ('全部通过' if not FAIL else '%d 项失败' % len(FAIL)))
-sys.exit(1 if FAIL else 0)
+flush()
+sys.exit(0 if C.summary() else 1)

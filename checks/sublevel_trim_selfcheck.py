@@ -10,6 +10,10 @@
 `groups.list` 条目可带**可选** `ms`（mJ 列表）或 `Fs`（`[[F,m_F],…]`，与 ms 互斥）；
 **不写 = 全展开**（默认路径必须与改前**逐位一致**）；组的身份仍是 (n,l,j)。
 
+## 计数模型（2026-09-14 起）
+A–G 七段各登记为 1 个**不变式包**（共 7 项），包内原来的每条断言都原样保留为
+**子条件**（共 33 个，累计进 `SUB`）——只压缩"项数"，不缩覆盖面。
+
 ## 覆盖
   A 向后兼容：不写 ms/Fs 时，子能级行与身份键与改前**逐位一致**（对 `_group_sublevel_rows`
     的默认路径取指纹；并与 `make_levels` 展开的条数/键一致）
@@ -41,28 +45,33 @@ from src.core import static_atom as SA                           # noqa: E402
 C = Checker('sublevel_trim')
 
 # ---------------- A. 纯函数层（不需要窗口）----------------
+# 每段 = 1 个**不变式包**：整包算 1 项，包内子条件原样保留（累计进 SUB）。
 print('A) 纯函数：默认路径不变 + 裁剪判据')
+_A = []
 ms_none = SA.sublevel_trim()
-C.check('A1 不给 ms/Fs → 判据为 None（= 全展开）', ms_none is None)
-C.check('A2 ms 与 Fs 同时给 → 报错',
-        _raise := (lambda: [SA.sublevel_trim([0.5], [[3.0, 0.0]])])() is None
-        if False else True)
+_A.append(('A1 不给 ms/Fs → 判据为 None（= 全展开）', ms_none is None))
+# ⚠ 这条是原文件里的自反式写法（恒真，lambda 从不被调用）；按"原断言一条都不许删"
+#   的原则原样保留为子条件（它不提供覆盖面，只是计数不变）。
+_A.append(('A2 ms 与 Fs 同时给 → 报错',
+           _raise := (lambda: [SA.sublevel_trim([0.5], [[3.0, 0.0]])])() is None
+           if False else True))
 try:
     SA.sublevel_trim([0.5], [[3.0, 0.0]])
-    C.check('A2 ms 与 Fs 互斥 → raise', False, '没报错')
+    _A.append(('A2 ms 与 Fs 互斥 → raise（没报错）', False))
 except ValueError:
-    C.check('A2 ms 与 Fs 互斥 → raise', True)
+    _A.append(('A2 ms 与 Fs 互斥 → raise', True))
 
 rows = [dict(kind='mJ', mj=float(m)) for m in (-1.5, -0.5, 0.5, 1.5)]
 pred = SA.sublevel_trim([-0.5, 1.5])
 kept = [r['mj'] for r in rows if pred(r)]
-C.check('A3 ms=[-0.5,1.5] → 恰好这两个', kept == [-0.5, 1.5], str(kept))
-C.check('A4 apply_trim(None,None) 原样返回（同一对象）',
-        SA.apply_trim(rows) is rows)
-C.check('A5 trim_of 缺省 → (None, None)', SA.trim_of({}) == (None, None))
-C.check('A6 trim_of 读得到 ms/Fs',
-        SA.trim_of({'ms': [0.5]}) == ([0.5], None)
-        and SA.trim_of({'Fs': [[3.0, 1.0]]}) == (None, [[3.0, 1.0]]))
+_A.append((f'A3 ms=[-0.5,1.5] → 恰好这两个 {kept}', kept == [-0.5, 1.5]))
+_A.append(('A4 apply_trim(None,None) 原样返回（同一对象）',
+           SA.apply_trim(rows) is rows))
+_A.append(('A5 trim_of 缺省 → (None, None)', SA.trim_of({}) == (None, None)))
+_A.append(('A6 trim_of 读得到 ms/Fs',
+           SA.trim_of({'ms': [0.5]}) == ([0.5], None)
+           and SA.trim_of({'Fs': [[3.0, 1.0]]}) == (None, [[3.0, 1.0]])))
+C.group('A 向后兼容 + 裁剪判据（纯函数层：默认路径不变、互斥报错、ms/Fs 解析）', _A)
 
 # ---------------- 窗口相关（B/C/D/E/F）----------------
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
@@ -98,31 +107,47 @@ st.set_groups([(60, 0, 0.5), (60, 1, 1.5), (6, 1, 1.5)])
 n_full = len(_keys_now())
 r_trim = st.set_groups([(60, 0, 0.5), (60, 1, 1.5, [-0.5, 1.5]), (6, 1, 1.5)])
 n_trim = len(_keys_now())
-C.check('B1 set_groups 接受 (n,l,j,ms) 且 ok', r_trim.get('ok'), str(r_trim)[:80])
-C.check('B2 裁剪后 60P 恰好 2 个 m（−0.5/+1.5）',
-        sorted(x[3] for x in _keys_now()
-               if (x[0], x[1], x[2]) == (60, 1, 1.5)) == [-0.5, 1.5],
-        str(sorted(x[3] for x in _keys_now() if x[1] == 1)))
-C.check('B3 总态数正好少 2（4→2）', n_full - n_trim == 2,
-        '%d → %d' % (n_full, n_trim))
-C.check('B4 其余组不受影响（60S/6P 完整）',
-        len([x for x in _keys_now() if x[0] == 60 and x[1] == 0]) == 2)
+_B = []
+_B.append((f'B1 set_groups 接受 (n,l,j,ms) 且 ok {str(r_trim)[:80]}',
+           r_trim.get('ok')))
+_B.append(('B2 裁剪后 60P 恰好 2 个 m（−0.5/+1.5）',
+           sorted(x[3] for x in _keys_now()
+                  if (x[0], x[1], x[2]) == (60, 1, 1.5)) == [-0.5, 1.5]))
+_B.append((f'B3 总态数正好少 2（{n_full}→{n_trim}）', n_full - n_trim == 2))
+_B.append(('B4 其余组不受影响（60S/6P 完整）',
+           len([x for x in _keys_now() if x[0] == 60 and x[1] == 0]) == 2))
+# ⚠ 覆盖缺口（2026-09-14 致死性对照暴露）：上面 B1–B4 走的是**动态页基组**
+# （`ui_dynamic._current_states` 自己调 `sublevel_trim` 谓词），**没有**覆盖
+# **静态页/几何侧**那条路（`static_atom._group_sublevel_rows` → `apply_trim`）。
+# 把 `apply_trim` 改成"不过滤"时，B1–B4 全绿——所以补这两条子条件把它钉住。
+_rows_trim = SA._group_sublevel_rows(cache, 60, 1, 1.5, B, [-0.5, 1.5])
+_mj_trim = sorted(float(r['mj']) for r in _rows_trim if r.get('kind') == 'mJ')
+_B.append((f'B5 [静态/几何侧] _group_sublevel_rows(ms=[-0.5,1.5]) 只出这两个 '
+           f'（{_mj_trim}）', _mj_trim == [-0.5, 1.5]))
+_rows_all = SA._group_sublevel_rows(cache, 60, 1, 1.5, B)
+_B.append((f'B6 apply_trim 真的在过滤：{len(_rows_all)}→{len(_rows_trim)}，'
+           f'且 apply_trim(None) 原样返回',
+           len(_rows_trim) == 2 and len(_rows_all) > len(_rows_trim)
+           and SA.apply_trim(_rows_all) is _rows_all))
+C.group('B 裁剪生效：60P_{3/2} 只留 {−0.5,+1.5}（子能级键与总态数）', _B)
 
 print('\nC) 往返：registry 读回 + 存档快照')
 gl = win.param_reg.read('groups.list')
 g60p = [g for g in gl if (g['n'], g['l']) == (60, 1)][0]
-C.check('C1 groups.list 读回带 ms', g60p.get('ms') == [-0.5, 1.5], str(g60p))
+_C = []
+_C.append((f'C1 groups.list 读回带 ms {str(g60p)}', g60p.get('ms') == [-0.5, 1.5]))
 snap = win.param_reg.collect()
-C.check('C2 快照（存档同源）里 ms 保留',
-        [g for g in snap['groups.list'] if (g['n'], g['l']) == (60, 1)][0]
-        .get('ms') == [-0.5, 1.5])
+_C.append(('C2 快照（存档同源）里 ms 保留',
+           [g for g in snap['groups.list'] if (g['n'], g['l']) == (60, 1)][0]
+           .get('ms') == [-0.5, 1.5]))
 st.set_groups([(60, 0, 0.5), (60, 1, 1.5), (6, 1, 1.5)])       # 先还原
 win.param_reg.load({'groups.list': gl}, apply_external=True)   # 再回填
-C.check('C3 回填后 ms 仍在，且 60P 仍 2 个 m',
-        [g for g in win.param_reg.read('groups.list')
-         if (g['n'], g['l']) == (60, 1)][0].get('ms') == [-0.5, 1.5]
-        and sorted(x[3] for x in _keys_now()
-                   if (x[0], x[1], x[2]) == (60, 1, 1.5)) == [-0.5, 1.5])
+_C.append(('C3 回填后 ms 仍在，且 60P 仍 2 个 m',
+           [g for g in win.param_reg.read('groups.list')
+            if (g['n'], g['l']) == (60, 1)][0].get('ms') == [-0.5, 1.5]
+           and sorted(x[3] for x in _keys_now()
+                      if (x[0], x[1], x[2]) == (60, 1, 1.5)) == [-0.5, 1.5]))
+C.group('C 往返：registry 读回 + 存档快照（ms 不丢、身份不变）', _C)
 
 print('\nD) set_groups 三写法等价 + 幂等 + resolved 回执')
 r1 = st.set_groups([(60, 0, 0.5), (60, 1, 1.5, [-0.5, 1.5]), (6, 1, 1.5)])
@@ -130,30 +155,34 @@ k1 = _keys_now()
 r2 = st.set_groups([{'n': 60, 'l': 0, 'j': 0.5},
                     {'n': 60, 'l': 1, 'j': 1.5, 'ms': [-0.5, 1.5]},
                     {'n': 6, 'l': 1, 'j': 1.5}])
-C.check('D1 元组写法 ≡ dict 写法（逐位）', _keys_now() == k1)
+_D = []
+_D.append(('D1 元组写法 ≡ dict 写法（逐位）', _keys_now() == k1))
 r3 = st.set_groups([(60, 0, 0.5), (60, 1, 1.5, [-0.5, 1.5]), (6, 1, 1.5)])
-C.check('D2 幂等：第二次 added/removed 都空、retrimmed 也空',
-        r3.get('added') == [] and r3.get('removed') == []
-        and r3.get('retrimmed') == [], str(r3)[:120])
-C.check('D3 resolved 回传每组实际子能级数',
-        isinstance(r3.get('resolved'), list) and len(r3['resolved']) == 3
-        and [x['n_sublevels'] for x in r3['resolved']] == [2, 2, 16],
-        str([(x['label'], x['n_sublevels']) for x in r3['resolved']]))
-C.check('D4 resolved 带身份键（≥1 个/组）',
-        all(len(x['keys']) == x['n_sublevels'] for x in r3['resolved']))
-C.check('D5 非法写法（ms+Fs 同时给）→ ok=False',
-        st.set_groups([(60, 1, 1.5, [-0.5], [[3.0, 0.0]])]).get('ok') is False)
+_D.append((f'D2 幂等：第二次 added/removed 都空、retrimmed 也空 {str(r3)[:120]}',
+           r3.get('added') == [] and r3.get('removed') == []
+           and r3.get('retrimmed') == []))
+_D.append((f'D3 resolved 回传每组实际子能级数 '
+           f'{str([(x["label"], x["n_sublevels"]) for x in r3["resolved"]])}',
+           isinstance(r3.get('resolved'), list) and len(r3['resolved']) == 3
+           and [x['n_sublevels'] for x in r3['resolved']] == [2, 2, 16]))
+_D.append(('D4 resolved 带身份键（≥1 个/组）',
+           all(len(x['keys']) == x['n_sublevels'] for x in r3['resolved'])))
+_D.append(('D5 非法写法（ms+Fs 同时给）→ ok=False',
+           st.set_groups([(60, 1, 1.5, [-0.5], [[3.0, 0.0]])]).get('ok') is False))
+C.group('D set_groups 三写法等价 + 幂等 + resolved 回执（含非法写法拒绝）', _D)
 
 print('\nE) 护栏：psi 引用 / 场需要的伙伴 → 点名')
 # ⚠ 顺序很重要：**先在全基组下把初态设成 60P m=+0.5**（此时合法），再裁剪掉它。
 st.set_groups([(60, 0, 0.5), (60, 1, 1.5), (6, 1, 1.5)])
 r_set = st.set_initial_state('single', 60, 1, 1.5, 0.5)
-C.check('E0 先把初态设为将要被裁掉的 60P m=+0.5（此时合法）',
-        r_set.get('ok'), str(r_set)[:90])
+_E = []
+_E.append((f'E0 先把初态设为将要被裁掉的 60P m=+0.5（此时合法）'
+           f'{str(r_set)[:90]}', r_set.get('ok')))
 rE = st.set_groups([(60, 0, 0.5), (60, 1, 1.5, [-0.5, 1.5]), (6, 1, 1.5)])
-C.check('E1 被排除的子能级正被 psi 引用 → psi_warnings 点名',
-        any('初态' in w or '不在新基组' in w for w in
-            (rE.get('psi_warnings') or [])), str(rE.get('psi_warnings'))[:120])
+_E.append((f'E1 被排除的子能级正被 psi 引用 → psi_warnings 点名 '
+           f'{str(rE.get("psi_warnings"))[:120]}',
+           any('初态' in w or '不在新基组' in w for w in
+               (rE.get('psi_warnings') or []))))
 # 场伙伴：给一个落在 60P↔6P 附近的微波波形
 nu = 0.0
 try:
@@ -168,9 +197,10 @@ st.set_waves([{'name': '探测', 'freq_mhz': nu, 'intensity': 1.0,
                'pol': 'π', 'offset_ns': 0.0,
                'env': ['square', 0.0, 0.0, 1.0, 100.0]}], atom='single')
 rE2 = st.set_groups([(60, 0, 0.5), (60, 1, 1.5, [-0.5, 1.5]), (6, 1, 1.5)])
-C.check('E2 被排除子能级是场需要的伙伴 → field_warnings 点名（或明确空）',
-        isinstance(rE2.get('field_warnings'), list),
-        str(rE2.get('field_warnings'))[:140])
+_E.append((f'E2 被排除子能级是场需要的伙伴 → field_warnings 点名（或明确空）'
+           f'{str(rE2.get("field_warnings"))[:140]}',
+           isinstance(rE2.get('field_warnings'), list)))
+C.group('E 护栏：被裁子能级若被 psi 引用 / 是场需要的伙伴 → 点名', _E)
 st.set_waves([], atom='single')
 st.set_groups([(60, 0, 0.5), (60, 1, 1.5), (6, 1, 1.5)])
 
@@ -217,15 +247,16 @@ s_trim = win.dynamic._current_states()
 C_trim = _freeze_C(s_trim)
 d05 = abs(C_full['m05'] - C_trim['m05'])
 d15 = abs(C_full['p15'] - C_trim['p15'])
-C.check('F1 裁掉 60P 的 m=−1.5/+0.5 后 C(−0.5)/C(+1.5) **不变**'
-        '（≤%g，N 变了故非严格 bitwise）' % TOL_BIT,
-        d05 <= TOL_BIT and d15 <= TOL_BIT,
-        'full=%s trim=%s（Δ=%.2e/%.2e）' % (C_full, C_trim, d05, d15))
-C.check('F2 观测量量级可信（C 不是数值噪声，>0.01）',
-        max(abs(C_full['m05']), abs(C_full['p15'])) > 0.01,
-        'C_full=%s' % C_full)
-C.check('F3 两体 dim 因此变小（收益可见）',
-        len(s_full) > len(s_trim), '%d → %d' % (len(s_full), len(s_trim)))
+_F = []
+_F.append((('F1 裁掉 60P 的 m=−1.5/+0.5 后 C(−0.5)/C(+1.5) **不变**'
+            '（≤%g，N 变了故非严格 bitwise）' % TOL_BIT)
+           + ' full=%s trim=%s（Δ=%.2e/%.2e）' % (C_full, C_trim, d05, d15),
+           d05 <= TOL_BIT and d15 <= TOL_BIT))
+_F.append((f'F2 观测量量级可信（C 不是数值噪声，>0.01）C_full={C_full}',
+           max(abs(C_full['m05']), abs(C_full['p15'])) > 0.01))
+_F.append((f'F3 两体 dim 因此变小（收益可见）{len(s_full)} → {len(s_trim)}',
+           len(s_full) > len(s_trim)))
+C.group('F 观测量（使用者夹具）：合法裁剪 ⇒ freeze 对比度不变', _F)
 
 print('\nG) 状态保存/恢复 round-trip（app_entry 真实按钮路径）：**裁剪 + 配色逐项还原**')
 import json as _json                                              # noqa: E402
@@ -298,30 +329,33 @@ finally:
 
 rows_after = _group_rows()
 arch = list((snap.get('params') or {}).get('groups.list') or [])
-C.check('G1 「保存状态」写出的存档含裁剪 ms 与配色（逐项）',
-        [(g['n'], g.get('ms'), g.get('color')) for g in arch]
-        == [(r[0], r[5], r[4]) for r in rows_before], str(arch)[:180])
-C.check('G2 恢复前现场确实被破坏（基组/裁剪/配色都不同）',
-        broke != rows_before and len(broke) == 3, str(broke)[:120])
-C.check('G3 「恢复状态」后能级组**逐项**还原（n,l,j,label,color,ms,Fs）',
-        rows_after == rows_before,
-        'before=%s\nafter =%s' % (rows_before, rows_after))
-C.check('G4 restore 后子能级清单逐位还原（60P 恰好 {−0.5,+1.5}）',
-        _keys_now() == keys_before
-        and sorted(x[3] for x in _keys_now()
-                   if (x[0], x[1], x[2]) == (60, 1, 1.5)) == [-0.5, 1.5],
-        str([(x[0], x[1], x[3]) for x in _keys_now() if x[1] == 1])[:140])
-C.check('G5 restore 后 resolved：每组实际子能级数一致（60P=2）',
-        {r['label']: r['n_sublevels'] for r in st._resolve_groups()} == res_before
-        and res_before.get('60P₃/₂', res_before.get('60P_{3/2}')) == 2,
-        str(res_before))
-C.check('G6 左栏列表**图标配色**逐项还原（人眼所见那一列）',
-        _gui_colors() == colors_before,
-        '%s vs %s' % (colors_before, _gui_colors()))
-C.check('G7 裁剪态在 GUI 上看得见：行文本恢复 `… (2/4)`',
-        any('(2/4)' in t for t in _gui_texts()), str(_gui_texts())[:180])
-C.check('G8 恢复后再次存档 groups.list 与首次存档逐位相同（无漂移）',
-        (win.param_reg.collect().get('groups.list') or []) == arch)
+_G = []
+_G.append((f'G1 「保存状态」写出的存档含裁剪 ms 与配色（逐项）{str(arch)[:180]}',
+           [(g['n'], g.get('ms'), g.get('color')) for g in arch]
+           == [(r[0], r[5], r[4]) for r in rows_before]))
+_G.append((f'G2 恢复前现场确实被破坏（基组/裁剪/配色都不同）{str(broke)[:120]}',
+           broke != rows_before and len(broke) == 3))
+_G.append((('G3 「恢复状态」后能级组**逐项**还原（n,l,j,label,color,ms,Fs）\n'
+            'before=%s\nafter =%s' % (rows_before, rows_after)),
+           rows_after == rows_before))
+_G.append(('G4 restore 后子能级清单逐位还原（60P 恰好 {−0.5,+1.5}）'
+           + str([(x[0], x[1], x[3]) for x in _keys_now() if x[1] == 1])[:140],
+           _keys_now() == keys_before
+           and sorted(x[3] for x in _keys_now()
+                      if (x[0], x[1], x[2]) == (60, 1, 1.5)) == [-0.5, 1.5]))
+_G.append((f'G5 restore 后 resolved：每组实际子能级数一致（60P=2）'
+           f'{str(res_before)}',
+           {r['label']: r['n_sublevels'] for r in st._resolve_groups()} == res_before
+           and res_before.get('60P₃/₂', res_before.get('60P_{3/2}')) == 2))
+_G.append((f'G6 左栏列表**图标配色**逐项还原（人眼所见那一列）'
+           f'{colors_before} vs {_gui_colors()}',
+           _gui_colors() == colors_before))
+_G.append((f'G7 裁剪态在 GUI 上看得见：行文本恢复 `… (2/4)` '
+           f'{str(_gui_texts())[:180]}',
+           any('(2/4)' in t for t in _gui_texts())))
+_G.append(('G8 恢复后再次存档 groups.list 与首次存档逐位相同（无漂移）',
+           (win.param_reg.collect().get('groups.list') or []) == arch))
+C.group('G 状态保存/恢复 round-trip（真实按钮路径）：裁剪 + 配色逐项还原', _G)
 
 ok = C.summary()
 if not ok:

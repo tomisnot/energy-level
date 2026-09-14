@@ -14,6 +14,9 @@
 `MW_NRES_BW_MHZ` / `MW_M_BW_MHZ` / `_TF_MW_M_BW_MHZ` / `_M_ANALYTIC_BW_MHZ`
 **已删**（前三个合并为 M_EST_BW_MHZ 的 M 估计窗；保留窗改由相预算派生）。
 
+计数模型（2026-09-14 起）：A–D 四段各 = 1 个**不变式包**（整包 1 项 = 4 项），
+包内子条件原样保留、单独累计进 `SUB`（共 31 个子条件）。原断言不许删/放宽。
+
 覆盖：
   A. 判据语义（纯函数）：零/负 Ω、成本上限、相位阈值、Ω 单调性、
      T 线性、与手算公式全等（网格）；
@@ -63,17 +66,18 @@ Cv = _CONV
 T0 = 400.0
 CAP = 1e4
 
-C.check('A1 负/零 Ω → 丢', (not mw_pair_keep(0.0, 100.0, T0)
-                            and not mw_pair_keep(-5.0, 100.0, T0)))
-C.check('A2 兜底上限：Δ 越限 → 丢（即使 Ω=1e6）',
-        not mw_pair_keep(1e6, CAP * 1.5, T0, cap_mhz=CAP))
-C.check('A3 兜底上限：Δ 在限内 → 不因上限丢',
-        mw_pair_keep(1e6, CAP * 0.5, T0, cap_mhz=CAP))
-C.check('A4 相位阈下 → 丢（Ω 极弱，Δ 远小于上限）',
-        not mw_pair_keep(1e-3, 1e3, T0),
-        f'Θ={Cv * T0 * 1e-6 / 1e3:.3g}')
-C.check('A5 相位阈上 → 留（共振强对）',
-        mw_pair_keep(1e3, 0.0, T0))
+# 每段 = 1 个**不变式包**（整包 1 项）；包内子条件原样保留、累计进 SUB。
+_A = []
+_A.append(('A1 负/零 Ω → 丢', (not mw_pair_keep(0.0, 100.0, T0)
+                               and not mw_pair_keep(-5.0, 100.0, T0))))
+_A.append(('A2 兜底上限：Δ 越限 → 丢（即使 Ω=1e6）',
+           not mw_pair_keep(1e6, CAP * 1.5, T0, cap_mhz=CAP)))
+_A.append(('A3 兜底上限：Δ 在限内 → 不因上限丢',
+           mw_pair_keep(1e6, CAP * 0.5, T0, cap_mhz=CAP)))
+_A.append((f'A4 相位阈下 → 丢（Ω 极弱，Δ 远小于上限）'
+           f'Θ={Cv * T0 * 1e-6 / 1e3:.3g}',
+           not mw_pair_keep(1e-3, 1e3, T0)))
+_A.append(('A5 相位阈上 → 留（共振强对）', mw_pair_keep(1e3, 0.0, T0)))
 
 # Ω 单调性：固定 Δ，扫 Ω，应存在唯一的"由丢转留"穿越点且之后恒留
 _oms = np.logspace(-4, 4, 81)
@@ -81,20 +85,19 @@ _ks = np.array([mw_pair_keep(o, 1e3, T0) for o in _oms])
 # 单调不减 ⇔ 不存在 i<j 使 keep[i] 真而 keep[j] 假（真值集必为后缀）
 _mono = all(not (_ks[i] and not _ks[j])
             for i in range(len(_ks)) for j in range(i + 1, len(_ks)))
-C.check('A6 Ω 单调性：保留集随 Ω 单调不减', _mono)
+_A.append(('A6 Ω 单调性：保留集随 Ω 单调不减', _mono))
 _i = int(np.argmax(_ks))
-C.check('A6b 穿越点在手算阈值处',
-        abs(_oms[_i]
-            - np.sqrt(PHASE_TOL * max(1e3, 1.0) / (Cv * T0))) < 0.1
-        * _oms[_i], f'Ω*={_oms[_i]:.4g}')
+_A.append((f'A6b 穿越点在手算阈值处 Ω*={_oms[_i]:.4g}',
+           abs(_oms[_i]
+               - np.sqrt(PHASE_TOL * max(1e3, 1.0) / (Cv * T0))) < 0.1
+           * _oms[_i]))
 
 # T 线性：同一 (Ω,Δ)，T 减半则 Θ 减半 → 找到 T 由留转丢的用例
 _om, _det = 1.0, 1e3
 _t_ok = PHASE_TOL * max(_det, _om) / (Cv * _om ** 2)
-C.check('A7 T 线性：T>2·T* 留、T<T*/2 丢',
-        mw_pair_keep(_om, _det, 2.1 * _t_ok)
-        and not mw_pair_keep(_om, _det, 0.5 * _t_ok),
-        f'T*={_t_ok:.4g} ns')
+_A.append((f'A7 T 线性：T>2·T* 留、T<T*/2 丢 T*={_t_ok:.4g} ns',
+           mw_pair_keep(_om, _det, 2.1 * _t_ok)
+           and not mw_pair_keep(_om, _det, 0.5 * _t_ok)))
 
 # 与手算公式全等（网格，含共振/色散两极限与上限）
 _bad = 0
@@ -106,10 +109,11 @@ for om in (1e-3, 1.0, 1e3, 1e6):
                 ref = False
             if mw_pair_keep(om, det, Tn, cap_mhz=CAP) != ref:
                 _bad += 1
-C.check('A8 与手算公式全等（4×4×2 网格，含上限）', _bad == 0,
-        f'{_bad} 处不符')
-C.check('A9 默认 cap=None 不做上限截断',
-        mw_pair_keep(1e6, 1e9, T0) and not mw_pair_keep(1e-6, 1e9, T0))
+_A.append((f'A8 与手算公式全等（4×4×2 网格，含上限）：{_bad} 处不符', _bad == 0))
+_A.append(('A9 默认 cap=None 不做上限截断',
+           mw_pair_keep(1e6, 1e9, T0) and not mw_pair_keep(1e-6, 1e9, T0)))
+C.group('A 判据语义（纯函数）：零/负 Ω、成本上限、相位阈值、Ω 单调性、'
+        'T 线性、与手算公式全等', _A)
 
 # ---------------------------------------------------------------
 # B. 真实梯子（真实 Rabi）
@@ -176,59 +180,63 @@ for _k in _rung_keys:
     if _k[0] > _k[1]:
         _k = (_k[1], _k[0])
 
-C.check('B1 三级梯子都在偶极允许对里（真实 Rabi 非零）',
-        all(k in _p or (k[1], k[0]) in _p for k in _rung_keys),
-        f'缺失 {[k for k in _rung_keys if k not in _p]}')
+_B = []
+_B.append(('B1 三级梯子都在偶极允许对里（真实 Rabi 非零）',
+           all(k in _p or (k[1], k[0]) in _p for k in _rung_keys)))
 _d3 = _p[_rung_keys[2]][0]
-C.check('B2 第三级失谐 > 旧固定窗 5 GHz（回归动因锚）',
-        _d3 > OLD_WIN, f'Δ={_d3:.3f} MHz')
-C.check('B3 旧固定窗会删第三级 → 三光子路径消失',
-        not _p[_rung_keys[2]][3],
-        f'旧窗保留={_p[_rung_keys[2]][3]}')
-C.check('B4 新判据保留第三级（1 mW/cm²）',
-        _p[_rung_keys[2]][2],
-        f'Ω={_p[_rung_keys[2]][1]:.1f} Θ='
-        f'{Cv * T_FREEZE * _p[_rung_keys[2]][1] ** 2 / _d3:.3g}')
-C.check('B5 相预算窗容得下第三级（mw_cap_mhz(400) > Δ）',
-        mw_cap_mhz(T_FREEZE) > _d3,
-        f'{mw_cap_mhz(T_FREEZE):.0f} vs {_d3:.1f} MHz')
-C.check('B6 三级梯级在 1e-3…1e3 mW/cm² 全保留',
-        all(_pairs(i, t_end=T_FREEZE)[_rung_keys[2]][2]
-            for i in (1e-3, 1.0, 1e2, 1e3)))
-C.check('B7 跨尺度 THz 对越绝对上界 → 丢',
-        _far_key not in _p,
-        f'ΔE={abs(E[_far_key[0]] - E[_far_key[1]]):.3g} MHz '
-        f'> 上界={MW_MAX_MHZ:g}')
-C.check('B8 M 估计窗不充当保留界：Δ=1.5·M_EST_BW 的强对在短 T 下仍保留',
-        mw_pair_keep(1e3, 1.5 * M_EST_BW_MHZ, 100.0,
-                     cap_mhz=min(mw_cap_mhz(100.0), MW_MAX_MHZ))
-        and 1.5 * M_EST_BW_MHZ > M_EST_BW_MHZ,
-        f'窗={M_EST_BW_MHZ:g} Δ={1.5 * M_EST_BW_MHZ:g} '
-        f'cap={mw_cap_mhz(100.0):.0f}')
-C.check('B9 不传 t_end_ns → 退回绝对上界（梯子三级仍在上界内）',
-        _rung_keys[2] in _pairs(1.0, t_end=None))
+_B.append((f'B2 第三级失谐 > 旧固定窗 5 GHz（回归动因锚）Δ={_d3:.3f} MHz',
+           _d3 > OLD_WIN))
+_B.append((f'B3 旧固定窗会删第三级 → 三光子路径消失'
+           f'（旧窗保留={_p[_rung_keys[2]][3]}）',
+           not _p[_rung_keys[2]][3]))
+_B.append((f'B4 新判据保留第三级（1 mW/cm²）Ω='
+           f'{_p[_rung_keys[2]][1]:.1f} Θ='
+           f'{Cv * T_FREEZE * _p[_rung_keys[2]][1] ** 2 / _d3:.3g}',
+           _p[_rung_keys[2]][2]))
+_B.append((f'B5 相预算窗容得下第三级（mw_cap_mhz(400)='
+           f'{mw_cap_mhz(T_FREEZE):.0f} vs Δ={_d3:.1f} MHz）',
+           mw_cap_mhz(T_FREEZE) > _d3))
+_B.append(('B6 三级梯级在 1e-3…1e3 mW/cm² 全保留',
+           all(_pairs(i, t_end=T_FREEZE)[_rung_keys[2]][2]
+               for i in (1e-3, 1.0, 1e2, 1e3))))
+_B.append((f'B7 跨尺度 THz 对越绝对上界 → 丢（ΔE='
+           f'{abs(E[_far_key[0]] - E[_far_key[1]]):.3g} MHz '
+           f'> 上界={MW_MAX_MHZ:g}）',
+           _far_key not in _p))
+_B.append((f'B8 M 估计窗不充当保留界：Δ=1.5·M_EST_BW 的强对在短 T 下仍保留'
+           f'（窗={M_EST_BW_MHZ:g} Δ={1.5 * M_EST_BW_MHZ:g} '
+           f'cap={mw_cap_mhz(100.0):.0f}）',
+           mw_pair_keep(1e3, 1.5 * M_EST_BW_MHZ, 100.0,
+                        cap_mhz=min(mw_cap_mhz(100.0), MW_MAX_MHZ))
+           and 1.5 * M_EST_BW_MHZ > M_EST_BW_MHZ))
+_B.append(('B9 不传 t_end_ns → 退回绝对上界（梯子三级仍在上界内）',
+           _rung_keys[2] in _pairs(1.0, t_end=None)))
+C.group('B 真实梯子（真实 Rabi）：三级梯级全功率保留、旧 5e3 窗会删第三级、'
+        'THz 跨尺度对被绝对上界丢弃', _B)
 
 # ---------------------------------------------------------------
 # D. 相预算派生（t80）：mw_cap_mhz 的标定锚与单调性
 # ---------------------------------------------------------------
-C.check('D1 默认（预算空）不删真实耦合：退回绝对上界',
-        abs(mw_cap_mhz(400.0) - 1e5) < 1e-9, f'{mw_cap_mhz(400.0, _BUD):.0f} MHz')
-C.check('D1b 显式给成本档 → 窗宽 == 预算/(C·T)',
-        abs(mw_cap_mhz(400.0, _BUD) - _BUD / (Cv * 400.0)) < 1e-9)
-C.check('D2 标定锚：T=620 ns 复现 t79 的 1e4 MHz 窗（±5%）',
-        abs(mw_cap_mhz(620.0, _BUD) - 1e4) / 1e4 < 0.05,
-        f'{mw_cap_mhz(620.0, _BUD):.0f} MHz')
+_D = []
+_D.append((f'D1 默认（预算空）不删真实耦合：退回绝对上界'
+           f'（显式档 {mw_cap_mhz(400.0, _BUD):.0f} MHz）',
+           abs(mw_cap_mhz(400.0) - 1e5) < 1e-9))
+_D.append(('D1b 显式给成本档 → 窗宽 == 预算/(C·T)',
+           abs(mw_cap_mhz(400.0, _BUD) - _BUD / (Cv * 400.0)) < 1e-9))
+_D.append((f'D2 标定锚：T=620 ns 复现 t79 的 1e4 MHz 窗（±5%）'
+           f'{mw_cap_mhz(620.0, _BUD):.0f} MHz',
+           abs(mw_cap_mhz(620.0, _BUD) - 1e4) / 1e4 < 0.05))
 _caps = [mw_cap_mhz(t, _BUD) for t in (10.0, 100.0, 400.0, 1000.0, 1e4)]
-C.check('D3 随 T 单调收窄（T 越长付不起越快项）',
-        all(_caps[i] > _caps[i + 1] for i in range(len(_caps) - 1)),
-        f'{["%.3g" % c for c in _caps]}')
-C.check('D4 步数上界与 T 无关（相预算的本质）',
-        all(abs(c * Cv * t / _BUD - 1.0) < 1e-9
-            for c, t in zip(_caps, (10.0, 100.0, 400.0, 1000.0, 1e4))))
+_D.append((f'D3 随 T 单调收窄（T 越长付不起越快项）'
+           f'{["%.3g" % c for c in _caps]}',
+           all(_caps[i] > _caps[i + 1] for i in range(len(_caps) - 1))))
+_D.append(('D4 步数上界与 T 无关（相预算的本质）',
+           all(abs(c * Cv * t / _BUD - 1.0) < 1e-9
+               for c, t in zip(_caps, (10.0, 100.0, 400.0, 1000.0, 1e4)))))
 # 相预算窗在 freeze 场景容得下第三级，但不至于放进 THz 跨尺度对
-C.check('D5 freeze T=400：窗宽 1e3…3e4 MHz 之间（够梯子、不够 THz）',
-        1e3 < mw_cap_mhz(400.0, _BUD) < 3e4,
-        f'{mw_cap_mhz(400.0):.0f} MHz')
+_D.append((f'D5 freeze T=400：窗宽 1e3…3e4 MHz 之间（够梯子、不够 THz）'
+           f'{mw_cap_mhz(400.0):.0f} MHz',
+           1e3 < mw_cap_mhz(400.0, _BUD) < 3e4))
 # 候选掩码 == 逐对 mw_pair_keep（向量化实现与标量判据一致）
 _Om = np.array([[0.0, 1e3, 5e-4], [0.0, 0.0, 3e3], [0.0, 0.0, 0.0]])
 _dE = np.array([[0.0, 1e3, 2.9e8], [0.0, 0.0, 1e4], [0.0, 0.0, 0.0]])
@@ -243,8 +251,8 @@ for _i in range(3):
                                                MW_MAX_MHZ))
         if bool(_m[_i, _j]) != _ref:
             _ok = False
-C.check('D6 向量化 mw_candidate_mask ≡ 标量 mw_pair_keep（含成本+精度）',
-        _ok)
+_D.append(('D6 向量化 mw_candidate_mask ≡ 标量 mw_pair_keep（含成本+精度）',
+           _ok))
 
 # ---------------------------------------------------------------
 # C. 引擎级：mixed 单体 `_MixedSetup`（冻结场景路径）
@@ -268,22 +276,22 @@ def _mixed_pairs(t_end, cap=None):
 
 
 _s, _keys = _mixed_pairs(T_FREEZE)
-C.check('C1 mixed 单体：T=400 ns 保留梯子三级',
-        all(k in _keys or (k[1], k[0]) in _keys for k in _rung_keys),
-        f'stats={_s.mw_pair_stats} 缺 '
-        f'{[k for k in _rung_keys if k not in _keys]}')
-C.check('C2 mixed 单体：统计与 pairs 自洽（keep=微波对数）',
-        _s.mw_pair_stats['keep'] == len(_keys),
-        f'keep={_s.mw_pair_stats["keep"]} 实际={len(_keys)}')
+_C = []
+_C.append((f'C1 mixed 单体：T=400 ns 保留梯子三级'
+           f'（缺 {[k for k in _rung_keys if k not in _keys]}）',
+           all(k in _keys or (k[1], k[0]) in _keys for k in _rung_keys)))
+_C.append((f'C2 mixed 单体：统计与 pairs 自洽（keep=微波对数）'
+           f'keep={_s.mw_pair_stats["keep"]} 实际={len(_keys)}',
+           _s.mw_pair_stats['keep'] == len(_keys)))
 _s0, _keys0 = _mixed_pairs(1e-9)
-C.check('C3 T 自适应：T=1 fs 时全丢（无对能在 1 fs 内累积相位）',
-        len(_keys0) == 0 and _s0.mw_pair_stats['drop_phase'] > 0,
-        f'stats={_s0.mw_pair_stats}')
+_C.append((f'C3 T 自适应：T=1 fs 时全丢（无对能在 1 fs 内累积相位）'
+           f'{_s0.mw_pair_stats}',
+           len(_keys0) == 0 and _s0.mw_pair_stats['drop_phase'] > 0))
 _scap, _keyscap = _mixed_pairs(T_FREEZE, cap=1e3)
-C.check('C4 成本上限生效：cap=1e3 → 第三级被 drop_cap 剔除',
-        _rung_keys[2] not in _keyscap
-        and _scap.mw_pair_stats['drop_cap'] > 0,
-        f'stats={_scap.mw_pair_stats}')
+_C.append((f'C4 成本上限生效：cap=1e3 → 第三级被 drop_cap 剔除'
+           f'{_scap.mw_pair_stats}',
+           _rung_keys[2] not in _keyscap
+           and _scap.mw_pair_stats['drop_cap'] > 0))
 
 # build_two_field(t_end_ns=…) 与 mixed 判据同源 → 同一保留集（≤cap 内）
 _btf = set()
@@ -295,8 +303,15 @@ for g in build_two_field(cache, states, [w1], t_end_ns=T_FREEZE)['mw_groups']:
             for j in range(i + 1, N):
                 if abs(A[i, j]) > 1e-12:
                     _btf.add((i, j))
-C.check('C5 build_two_field(t_end) 与 mixed 微波保留集一致',
-        _btf == _keys, f'两场独有 {sorted(_btf - _keys)}，'
-        f'mixed 独有 {sorted(_keys - _btf)}')
+_C.append((f'C5 build_two_field(t_end) 与 mixed 微波保留集一致'
+           f'（两场独有 {sorted(_btf - _keys)}，'
+           f'mixed 独有 {sorted(_keys - _btf)}）',
+           _btf == _keys))
+
+# 包按 A–D 顺序登记（C 段的子条件在 D 段之后才算完，故这里统一登记）
+C.group('C 引擎级：mixed 单体 `_MixedSetup`（T 自适应、成本上限、'
+        '与 build_two_field 同源）', _C)
+C.group('D 相预算派生（t80）：标定锚、随 T 单调收窄、步数上界、'
+        '向量化 ≡ 标量', _D)
 
 sys.exit(0 if C.summary() else 1)

@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 """Lindblad 耗散引擎自检（evolve.py 算法 4：自发辐射等马尔可夫耗散）。
 
+计数模型（2026-09-14 起）：按 D 场景打包成**不变式包**（整包 1 项，包内子条件
+累计进 `SUB`）。每个原断言都原样保留为某个包的子条件，不许删/放宽。
+
 场景（D 系列，全部第一性原理独立参考）：
   D1 解析衰变 e^{−Γt}（两能级，无场；eig / rk4 / auto 三路）
   D2 CW 驱动 + 衰变 vs 独立 Liouvillian 本征参考（本文件内实现，同 tempsimu）
@@ -73,7 +76,8 @@ def solve_me(H_mhz, Llist, rho0, t_ns):
     return (W[diag_idx, :] @ E).real.T          # (n_t, d) 布居（含 sink）
 
 
-# ---------------- D1 解析衰变 ----------------
+# ---------------- 包 1：D1 解析衰变 ----------------
+p1 = []                                    # D1（3 子条件）
 states = states_sp(cache, B)
 t1 = np.linspace(0, 400.0, 401)
 G1 = 10.0
@@ -83,10 +87,15 @@ for mth in ('auto', 'lindblad', 'lindblad_eig'):
                       decays=[decay(1, G1)])
     err = float(np.max(np.abs(r['pops'][:, 1] - exp1)))
     cons = float(np.max(np.abs(r['pops'].sum(axis=1) + r['loss'] - 1.0)))
-    ck.check(f'D1 解析衰变 e^{{-Γt}} [{mth}/{r["method"]}] err={err:.1e}',
-             err < 1e-6 and cons < 1e-9, f'err={err} cons={cons}')
+    p1.append((f'D1 解析衰变 e^{{-Γt}} [{mth}/{r["method"]}] err={err:.1e} '
+               f'cons={cons:.1e}', err < 1e-6 and cons < 1e-9))
+ck.group('D1 解析衰变 e^{−Γt}（auto / lindblad / lindblad_eig 三路 + 布居守恒）',
+         p1)
 
-# ---------------- D2 CW 驱动 + 衰变 vs 独立 Liouvillian 参考 ----------------
+# ---------------- 包 2：D2/D3/D4 vs 独立参考 ----------------
+p2 = []                                    # D2（2）+ D3（1）+ D4（2）= 5
+
+# D2 CW 驱动 + 衰变 vs 独立 Liouvillian 参考
 G2 = 4.0
 fld2 = field(0, 1, omega0_mhz=0.5, waveform=square(0, 1e9))
 decs2 = [decay(1, G2)]                     # 60P → loss
@@ -103,9 +112,9 @@ p_ref2 = solve_me(H2, [L2], rho02, t2)[:, :2]
 for mth in ('lindblad_eig', 'lindblad'):
     r = evolve(states, [fld2], 1, t2, method=mth, decays=decs2)
     err = float(np.max(np.abs(r['pops'] - p_ref2)))
-    ck.check(f'D2 CW+衰变 [{mth}] err={err:.1e}', err < 1e-8, f'err={err}')
+    p2.append((f'D2 CW+衰变 [{mth}] err={err:.1e}', err < 1e-8))
 
-# ---------------- D3 时变高斯 + 衰变 vs solve_ivp 向量化主方程 ----------------
+# D3 时变高斯 + 衰变 vs solve_ivp 向量化主方程
 G3 = 15.0
 fld3 = field(0, 1, omega0_mhz=0.5,
                     waveform=gaussian(500.0, 150.0))
@@ -141,10 +150,10 @@ p_ref3 = np.array([np.real(np.diag(sol3.y[:, m].reshape((N3, N3), order='F')))
 r3 = evolve(states, [fld3], 1, t3, method='lindblad', decays=decs3)
 err3 = float(np.max(np.abs(r3['pops'] - p_ref3)))
 cons3 = float(np.max(np.abs(r3['pops'].sum(axis=1) - 1.0)))
-ck.check(f'D3 时变高斯+衰变 err={err3:.1e} 守恒={cons3:.1e}',
-         err3 < 1e-6 and cons3 < 1e-9, f'err={err3} cons={cons3}')
+p2.append((f'D3 时变高斯+衰变 err={err3:.1e} 守恒={cons3:.1e}',
+           err3 < 1e-6 and cons3 < 1e-9))
 
-# ---------------- D4 真实交换耦合 + 衰变 vs solve_me ----------------
+# D4 真实交换耦合 + 衰变 vs solve_me
 groups4 = [dict(n=60, l=0, j=0.5), dict(n=60, l=1, j=0.5)]
 V_ex = pc.exchange_coupling(cache, groups4, R_um=30.0)
 states4 = make_levels(cache, [
@@ -166,10 +175,14 @@ p_ref4 = solve_me(H4, [L4], rho04, t4)[:, :2]
 for mth in ('lindblad_eig', 'lindblad'):
     r = evolve(states4, [fld4], 1, t4, method=mth, decays=decs4)
     err = float(np.max(np.abs(r['pops'] - p_ref4)))
-    ck.check(f'D4 交换V={V_ex:.3f}MHz+衰变 [{mth}] err={err:.1e}',
-             err < 1e-8, f'err={err}')
+    p2.append((f'D4 交换V={V_ex:.3f}MHz+衰变 [{mth}] err={err:.1e}', err < 1e-8))
+ck.group('D2–D4 vs 独立第一性原理参考（Liouvillian 本征解 / solve_ivp '
+         '向量化主方程 / 真实交换耦合）', p2)
 
-# ---------------- D5 multi 场 ac 约定回归（第一性原理，全额 env·ac） ----------------
+# ---------------- 包 3：D5/D6 第一性原理口径 ----------------
+p3 = []                                    # D5（2）+ D6（1）= 3
+
+# D5 multi 场 ac 约定回归（第一性原理，全额 env·ac）
 specs5 = []
 for (n, l, j) in [(60, 0, 0.5), (60, 1, 1.5)]:
     for m in (-0.5, 0.5):
@@ -221,31 +234,32 @@ sol5 = solve_ivp(rhs5, (t5[0], t5[-1]), v05, t_eval=t5, rtol=1e-8, atol=1e-11)
 p_ref5 = np.abs(sol5.y).T ** 2
 r5a = evolve(states5, fields5, 0, t5, method='ip4')
 err5a = float(np.max(np.abs(r5a['pops'] - p_ref5)))
-ck.check(f'D5 ac 约定回归 ip4 err={err5a:.1e}（<1e-3；曾因 ac 减半达 0.96）',
-         err5a < 1e-3, f'err={err5a}')
+p3.append((f'D5 ac 约定回归 ip4 err={err5a:.1e}（<1e-3；曾因 ac 减半达 0.96）',
+           err5a < 1e-3))
 r5b = evolve(states5, fields5, 0, t5, method='lindblad', decays=[])
 err5b = float(np.max(np.abs(r5b['pops'] - p_ref5)))
-ck.check(f'D5 ac 约定回归 lindblad err={err5b:.1e}', err5b < 1e-6,
-         f'err={err5b}')
+p3.append((f'D5 ac 约定回归 lindblad err={err5b:.1e}', err5b < 1e-6))
 
-# ---------------- D6 显式落点布居守恒 ----------------
+# D6 显式落点布居守恒
 r6 = evolve(states, [fld3], 1, t3, method='lindblad',
                    decays=[decay(1, 15.0, 0)])
 cons6 = float(np.max(np.abs(r6['pops'].sum(axis=1) - 1.0)))
-ck.check(f'D6 显式落点布居守恒 Σpops−1={cons6:.1e}', cons6 < 1e-9,
-         f'cons={cons6}')
+p3.append((f'D6 显式落点布居守恒 Σpops−1={cons6:.1e}', cons6 < 1e-9))
+ck.group('D5–D6 第一性原理口径（multi 场全额 env·ac 约定、显式落点守恒）', p3)
 
-# ---------------- D7 取消 ----------------
+# ---------------- 包 4：D7/D8/D9 取消·纯退相·无耗散一致性 ----------------
+p4 = []                                    # D7（1）+ D8（1）+ D9（1）= 3
+
+# D7 取消
 pa = np.zeros(2); pa[1] = 1.0
 try:
     evolve(states, [fld3], 1, t3, method='lindblad',
                   decays=decs3, progress_arr=pa)
-    ck.check('D7 取消（progress_arr 置位 → RuntimeError）', False, '未抛错')
+    p4.append(('D7 取消（progress_arr 置位 → RuntimeError）：未抛错', False))
 except RuntimeError as e:
-    ck.check('D7 取消（progress_arr 置位 → RuntimeError）', '取消' in str(e),
-             f'{type(e).__name__}: {e}')
+    p4.append(('D7 取消（progress_arr 置位 → RuntimeError）', '取消' in str(e)))
 
-# ---------------- D8 纯退相（from==to → 相干 e^{−Γt/2}） ----------------
+# D8 纯退相（from==to → 相干 e^{−Γt/2}）
 G8 = 8.0
 t8 = np.linspace(0, 500.0, 51)
 r8 = evolve(states, [], [1 / np.sqrt(2), 1 / np.sqrt(2)], t8,
@@ -254,19 +268,20 @@ r8 = evolve(states, [], [1 / np.sqrt(2), 1 / np.sqrt(2)], t8,
 coh8 = abs(r8['rho'][0, 1])
 coh_exp = 0.5 * np.exp(-G8 * 1e-3 * t8[-1] / 2.0)
 pops_ok = float(np.max(np.abs(r8['pops'] - 0.5)))
-ck.check(f'D8 纯退相 相干 |ρ01|={coh8:.4f} vs e^{{-Γt/2}}={coh_exp:.4f}'
-         f'（布居漂移 {pops_ok:.1e}）',
-         abs(coh8 - coh_exp) < 1e-3 and pops_ok < 1e-9,
-         f'coh={coh8} exp={coh_exp}')
+p4.append((f'D8 纯退相 相干 |ρ01|={coh8:.4f} vs e^{{-Γt/2}}={coh_exp:.4f}'
+           f'（布居漂移 {pops_ok:.1e}）',
+           abs(coh8 - coh_exp) < 1e-3 and pops_ok < 1e-9))
 
-# ---------------- D9 无耗散一致性：lindblad ≡ ip4 ----------------
+# D9 无耗散一致性：lindblad ≡ ip4
 r9a = evolve(states, [fld3], 1, t3, method='lindblad', decays=[])
 r9b = evolve(states, [fld3], 1, t3, method='ip4')
 err9 = float(np.max(np.abs(r9a['pops'] - r9b['pops'])))
-ck.check(f'D9 无耗散 lindblad ≡ ip4 err={err9:.1e}', err9 < 1e-5,
-         f'err={err9}')
+p4.append((f'D9 无耗散 lindblad ≡ ip4 err={err9:.1e}', err9 < 1e-5))
+ck.group('D7–D9 稳健性与一致性（progress_arr 取消、纯退相解析、'
+         '无耗散 lindblad ≡ ip4）', p4)
 
-# ---------------- D10 自动档：ARC 权威寿命自动配置 ----------------
+# ---------------- 包 5：D10 自动档 ----------------
+p5 = []                                    # D10（2）
 # 基组：6P3/2 四个 mJ + 60S（里德堡，τ~230 µs 应被排除）
 states10 = make_levels(cache, [
     dict(n=6, l=1, j=1.5, m=float(m),
@@ -283,25 +298,27 @@ ok10 = (len(auto) == len(i6p)
         and all(a['from'] in i6p for a in auto)
         and all(abs(a['gamma_mhz'] - gam_6p) < 1e-9 * gam_6p
                 for a in auto))
-ck.check(f'D10 自动档 ARC 寿命：6P3/2 ×{len(i6p)} 通道 Γ={gam_6p:.4f} MHz，'
-         f'60S 排除', ok10,
-         f'channels={len(auto)} tau_6p={tau_6p}')
+p5.append((f'D10 自动档 ARC 寿命：6P3/2 ×{len(i6p)} 通道 Γ={gam_6p:.4f} MHz，'
+           f'60S 排除', ok10))
 # τ 阈值过滤：τ_max=10 ns < 6P(118 ns) → 空
 auto0 = auto_decays(cache, states10, tau_max_s=1e-8)
-ck.check('D10 自动档 τ 阈值过滤（τ_max=10ns → 0 通道）',
-         len(auto0) == 0, f'channels={len(auto0)}')
+p5.append((f'D10 自动档 τ 阈值过滤（τ_max=10ns → 0 通道）'
+           f'channels={len(auto0)}', len(auto0) == 0))
+ck.group('D10 自动档：ARC 权威寿命自动配置（里德堡排除 + τ 阈值过滤）', p5)
 
-# ---------------- D11 无耗散一致性补充：lindblad ≡ ip4（RWA 场景，另一包络） ----------------
+# ---------------- 包 6：D11/D12 补充一致性与后端 ----------------
+p6 = []                                    # D11（1）+ D12（1）= 2
+
+# D11 无耗散一致性补充：lindblad ≡ ip4（RWA 场景，另一包络）
 fld11 = field(0, 1, omega0_mhz=0.3,
                      waveform=gaussian(400.0, 120.0))
 t11 = np.linspace(0, 800.0, 401)
 r11a = evolve(states, [fld11], 1, t11, method='lindblad', decays=[])
 r11b = evolve(states, [fld11], 1, t11, method='ip4')
 err11 = float(np.max(np.abs(r11a['pops'] - r11b['pops'])))
-ck.check(f'D11 无耗散 lindblad ≡ ip4（另一包络）err={err11:.1e}',
-         err11 < 1e-5, f'err={err11}')
+p6.append((f'D11 无耗散 lindblad ≡ ip4（另一包络）err={err11:.1e}', err11 < 1e-5))
 
-# ---------------- D12 numba 内核 ≡ numpy 回退（非对齐输出→部分步插值） ----------------
+# D12 numba 内核 ≡ numpy 回退（非对齐输出→部分步插值）
 t12 = np.linspace(0, 100.0, 100)          # 输出网格与积分步长不对齐 → 部分步走插值
 fld12 = field(0, 1, omega0_mhz=0.4,
                      waveform=gaussian(45.0, 13.0))
@@ -312,8 +329,9 @@ r12b = evolve(states, [fld12], 1, t12, method='lindblad',
                      backend='cpu', decays=decs12)         # numpy 回退
 err12 = float(np.max(np.abs(r12a['pops'] - r12b['pops'])))
 cons12 = float(np.max(np.abs(r12a['pops'].sum(axis=1) - 1.0)))
-ck.check(f'D12 numba ≡ numpy（非对齐输出）err={err12:.1e} 守恒={cons12:.1e}',
-         err12 < 1e-4 and cons12 < 1e-9, f'err={err12} cons={cons12}')
+p6.append((f'D12 numba ≡ numpy（非对齐输出）err={err12:.1e} 守恒={cons12:.1e}',
+           err12 < 1e-4 and cons12 < 1e-9))
+ck.group('D11–D12 无耗散一致性补充（另一包络）+ numba ≡ numpy 后端一致', p6)
 
 ok = ck.summary()
 sys.exit(0 if ok else 1)

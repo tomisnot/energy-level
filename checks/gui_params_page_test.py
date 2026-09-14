@@ -28,61 +28,106 @@ from src.core import params as P                             # noqa: E402
 from src.ui.solver_inspector import SolverInspector          # noqa: E402
 
 C = Checker('gui_params_page')
+# ------------------- 计数模型：不变式包（见 checks/checklib.py）-------------------
+# group(...) 开一个包，其后相邻的 check(...) 全部变成该包的**子条件**：整包只计 1
+# 项，子条件逐个进 SUB=（覆盖面不缩水：SUB == 改前逐条计数的项数）。原断言名与判据
+# 表达式一律原样保留——只是不再各自计 1 项；不过时整包自动展开子条件。
+_PKG = None
+
+
+class _Pkg:
+    """一个不变式包（先缓冲子条件，关闭时一次性交给 C.group 登记）。"""
+
+    def __init__(self, name, detail=''):
+        self.name, self.detail, self.subs = name, detail, []
+
+    def flush(self):
+        C.group(self.name, self.subs, self.detail)
+
+
+def group(name, detail=''):
+    """开新的不变式包：此后 check() 的断言都记入它（直到下一个 group）。"""
+    global _PKG
+    if _PKG is not None:
+        _PKG.flush()
+    _PKG = _Pkg(name, detail)
+
+
+def flush():
+    """关闭最后一个包（本文件收尾）。"""
+    global _PKG
+    if _PKG is not None:
+        _PKG.flush()
+        _PKG = None
+
+
+def check(name, cond, detail=''):
+    """薄包装：判据表达式原样，只登记为**当前包的子条件**（detail 作现场值）。"""
+    if _PKG is None:
+        raise RuntimeError(f'check() 出现在任何 group() 之前：{name}')
+    _PKG.subs.append((name + (('  | ' + str(detail)) if detail else ''),
+                      bool(cond)))
+    return bool(cond)
 
 _app = QApplication.instance() or QApplication(sys.argv)
 insp = SolverInspector()
 
-C.check('1 页面已建', insp._tab_e is not None)
-C.check('2 每个可调参数一行（由 SPECS 生成）',
+group('A 页面由 params.SPECS 生成（每参数一行 / 分层组数 / 初始无覆写）')
+check('1 页面已建', insp._tab_e is not None)
+check('2 每个可调参数一行（由 SPECS 生成）',
         len(insp._e_edits) == len(P.specs()),
         f'{len(insp._e_edits)} vs {len(P.specs())}')
-C.check('3 分层组数 == 非空层数',
+check('3 分层组数 == 非空层数',
         sum(1 for t, _ in P.TIERS if P.specs(t)) == 4)
-C.check('4 初始无覆写',
+check('4 初始无覆写',
         insp.param_overrides() == {} and '无覆写' in insp._e_count.text())
 
 insp._e_edits['PHASE_TOL'].setText('1e-3')
 insp._e_edits['_M_MAX'].setText('5')
-C.check('5 填值 → 类型化快照',
+group('B 填值 → 类型化快照 + 计数刷新')
+check('5 填值 → 类型化快照',
         insp.param_overrides() == {'PHASE_TOL': 1e-3, '_M_MAX': 5},
         str(insp.param_overrides()))
-C.check('6 计数刷新', '2 项' in insp._e_count.text(),
+check('6 计数刷新', '2 项' in insp._e_count.text(),
         insp._e_count.text())
 
 insp._e_edits['_M_MAX'].setText('abc')
-C.check('7 非法输入：自愈回退该项、不弹模态、不牵连其它覆写',
+group('C 非法输入只忽略该项（自愈 + 可见原因 + 可恢复）')
+check('7 非法输入：自愈回退该项、不弹模态、不牵连其它覆写',
         insp.param_overrides() == {'PHASE_TOL': 1e-3}
         and insp.param_errors() == []
         and '非法' in insp._e_count.text()
         and insp._e_edits['_M_MAX'].toolTip() != '',
         f"{insp.param_overrides()} / {insp._e_edits['_M_MAX'].text()!r}")
-C.check('7b 非法原因可见（tooltip 含类型与"留空"提示，非模态）',
+check('7b 非法原因可见（tooltip 含类型与"留空"提示，非模态）',
         '应为 int' in insp._e_edits['_M_MAX'].toolTip()
         and '留空' in insp._e_edits['_M_MAX'].toolTip(),
         insp._e_edits['_M_MAX'].toolTip())
 insp._e_edits['_M_MAX'].setText('5')
-C.check('7c 改回合法后提示消失、值进快照',
+check('7c 改回合法后提示消失、值进快照',
         insp._e_edits['_M_MAX'].toolTip() == ''
         and insp.param_overrides().get('_M_MAX') == 5,
         f"{insp._e_edits['_M_MAX'].toolTip()!r} / {insp.param_overrides()}")
 
 _ek = insp.god_values()
-C.check('8 god_values 不再自带引擎覆写（唯一来源=会话真值）',
+group('D god_values 契约 + 重置 + 存档回填（新旧格式）')
+check('8 god_values 不再自带引擎覆写（唯一来源=会话真值）',
         'param_overrides' not in _ek and _ek.get('diag') is True,
         str(_ek.keys()))
 
 insp.reset_param_overrides()
-C.check('9 重置清空', insp.param_overrides() == {})
+check('9 重置清空', insp.param_overrides() == {})
 
 insp.set_god_params({'param_overrides': {'PHASE_TOL': 1e-5}})
-C.check('10 回填：新格式（引擎参数全路径）',
+check('10 回填：新格式（引擎参数全路径）',
         insp.param_overrides() == {'PHASE_TOL': 1e-5},
         str(insp.param_overrides()))
 insp.reset_param_overrides()
 insp.set_god_params({'bw_opt': 1234.0})
-C.check('11 回填：旧格式兼容（bw_opt → BW_OPT）',
+check('11 回填：旧格式兼容（bw_opt → BW_OPT）',
         insp.param_overrides() == {'BW_OPT': 1234.0},
         str(insp.param_overrides()))
 insp.reset_param_overrides()
 
+flush()
 sys.exit(0 if C.summary() else 1)

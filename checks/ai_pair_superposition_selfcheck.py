@@ -97,74 +97,76 @@ print('A) build_pair_sup_spec（纯函数：归一前范数 / 占据谱 / 非法
 spec, info = build_pair_sup_spec([
     {'pair': [quad(4), quad(0)], 'amp': [1.0, 0.0]},
     {'pair': [quad(0), quad(4)], 'amp': [0.0, 1.0]}])
-C.check('A1 spec 形态 = [pair_sup, [10 元行…]]',
-        spec[0] == 'pair_sup' and len(spec[1]) == 2
-        and all(len(r) == 10 for r in spec[1]), str(spec)[:80])
-C.check('A2 归一前范数 = √2（不在此归一，归一交给引擎）',
-        abs(info['norm_before'] - 2 ** 0.5) < 1e-12,
-        str(info['norm_before']))
-C.check('A3 占据谱 50/50',
-        all(abs(p[8] - 0.5) < 1e-9 for p in info['populations']),
-        str([p[8] for p in info['populations']]))
-C.check('A4 分量顺序 = 输入的 A/B 语义（P_A,S_B 与 S_A,P_B 各一行）',
-        spec[1][0][:8] == quad(4) + quad(0)
-        and spec[1][1][:8] == quad(0) + quad(4),
-        str(spec[1]))
-# mag/phase 形态 ≡ amp 形态
+# 不变式包：build_pair_sup_spec 的"形态 + 归一前范数 + 占据谱 + 分量顺序 +
+# mag/phase 等价 + 默认幅度 + 四类非法输入"同属一个不变式（spec 构造契约）。
 s2, i2 = build_pair_sup_spec([{'pair': [quad(0), quad(4)], 'mag': 1.0,
                                'phase_deg': 90.0}])
-C.check('A5 mag+phase_deg 与 amp 等价（90° → 0+1i）',
-        abs(s2[1][0][8]) < 1e-12 and abs(s2[1][0][9] - 1.0) < 1e-12)
 s3, i3 = build_pair_sup_spec([{'pair': [quad(0), quad(4)]}])
-C.check('A6 缺 amp → 默认 1（同单体 build_sup_spec 语义）',
-        abs(s3[1][0][8] - 1.0) < 1e-12 and abs(i3['norm_before'] - 1.0) < 1e-12)
-C.check('A7 空分量 → 报错', _raises(build_pair_sup_spec, []) is not None)
-C.check('A8 pair 不是 [[…],[…]] → 报错',
-        _raises(build_pair_sup_spec,
-                [{'pair': [quad(0)], 'amp': [1, 0]}]) is not None)
-C.check('A9 pair 项不是 [n,l,j,m] → 报错',
-        _raises(build_pair_sup_spec,
-                [{'pair': [[60, 0, 0.5], quad(4)], 'amp': [1, 0]}]) is not None)
-C.check('A10 幅度全零 → 报错',
-        _raises(build_pair_sup_spec,
-                [{'pair': [quad(0), quad(4)], 'amp': [0.0, 0.0]}])
-        is not None)
+C.group('A build_pair_sup_spec 纯函数（形态/范数/占据谱/顺序/等价/非法输入）', [
+    ('A1 spec 形态 = [pair_sup, [10 元行…]]  %s' % (str(spec)[:80],),
+     spec[0] == 'pair_sup' and len(spec[1]) == 2
+     and all(len(r) == 10 for r in spec[1])),
+    ('A2 归一前范数 = √2（不在此归一，归一交给引擎）  %s'
+     % info['norm_before'],
+     abs(info['norm_before'] - 2 ** 0.5) < 1e-12),
+    ('A3 占据谱 50/50  %s' % ([p[8] for p in info['populations']],),
+     all(abs(p[8] - 0.5) < 1e-9 for p in info['populations'])),
+    ('A4 分量顺序 = 输入的 A/B 语义（P_A,S_B 与 S_A,P_B 各一行）  %s'
+     % (str(spec[1]),),
+     spec[1][0][:8] == quad(4) + quad(0)
+     and spec[1][1][:8] == quad(0) + quad(4)),
+    ('A5 mag+phase_deg 与 amp 等价（90° → 0+1i）',
+     abs(s2[1][0][8]) < 1e-12 and abs(s2[1][0][9] - 1.0) < 1e-12),
+    ('A6 缺 amp → 默认 1（同单体 build_sup_spec 语义）',
+     abs(s3[1][0][8] - 1.0) < 1e-12 and abs(i3['norm_before'] - 1.0) < 1e-12),
+    ('A7 空分量 → 报错', _raises(build_pair_sup_spec, []) is not None),
+    ('A8 pair 不是 [[…],[…]] → 报错',
+     _raises(build_pair_sup_spec,
+             [{'pair': [quad(0)], 'amp': [1, 0]}]) is not None),
+    ('A9 pair 项不是 [n,l,j,m] → 报错',
+     _raises(build_pair_sup_spec,
+             [{'pair': [[60, 0, 0.5], quad(4)], 'amp': [1, 0]}]) is not None),
+    ('A10 幅度全零 → 报错',
+     _raises(build_pair_sup_spec,
+             [{'pair': [quad(0), quad(4)], 'amp': [0.0, 0.0]}]) is not None),
+])
 
 # ---------------------------------------------------------------
 # B. _as_pair_vector：索引映射 / 归一 / 相位 / 缺项
 # ---------------------------------------------------------------
 print('B) _as_pair_vector：索引映射 k=iA*N+iB、归一、相位、报错')
 v = _as_pair_vector(S, ['pair_sup', [quad(4) + quad(0) + [1.0, 0.0]]])
-C.check('B1 单分量 → k=iA*N+iB 处为 1（k=%d）' % K1,
-        abs(v[K1] - 1.0) < 1e-15 and abs(np.linalg.norm(v) - 1.0) < 1e-15
-        and abs(np.abs(v).sum() - 1.0) < 1e-15,
-        'argmax=%d' % int(np.argmax(np.abs(v))))
 v2 = _as_pair_vector(S, ['pair_sup', [quad(4) + quad(0) + [1.0, 0.0],
                                       quad(0) + quad(4) + [0.0, 1.0]]])
-C.check('B2 纠缠叠加：两分量各 1/√2 且**相对相位 = i**',
-        abs(abs(v2[K1]) - 2 ** -0.5) < 1e-15
-        and abs(v2[K1] - 2 ** -0.5) < 1e-12
-        and abs(v2[K2] - 1j * 2 ** -0.5) < 1e-12,
-        'v[k1]=%s v[k2]=%s' % (v2[K1], v2[K2]))
-C.check('B3 Σ|ψ|² = 1（自动归一）',
-        abs(np.linalg.norm(v2) - 1.0) < 1e-15)
 v3 = _as_pair_vector(S, ['pair_sup', [quad(4) + quad(0) + [3.0, 0.0],
                                       quad(0) + quad(4) + [4.0, 0.0]]])
-C.check('B4 未归一幅度 (3,4) → 3/5、4/5',
-        abs(abs(v3[K1]) - 0.6) < 1e-12 and abs(abs(v3[K2]) - 0.8) < 1e-12,
-        '%.6f / %.6f' % (abs(v3[K1]), abs(v3[K2])))
 msg = _raises(_as_pair_vector, S, ['pair_sup', [[60, 0, 0.5, 9.5]
                                                + quad(0) + [1.0, 0.0]]])
-C.check('B5 分量不在基组 → 报错并点名缺失项',
-        msg is not None and '9.5' in msg, str(msg))
-C.check('B6 非 pair_sup 形态 → 报错',
-        _raises(_as_pair_vector, S, ['sup', []]) is not None)
-C.check('B7 空分量 → 报错（不是静默全零）',
-        _raises(_as_pair_vector, S, ['pair_sup', []]) is not None)
-C.check('B8 幅度全零 → 报错',
-        _raises(_as_pair_vector, S, ['pair_sup',
-                                     [quad(0) + quad(4) + [0.0, 0.0]]])
-        is not None)
+C.group('B _as_pair_vector：索引映射 k=iA*N+iB、归一、相位、报错', [
+    ('B1 单分量 → k=iA*N+iB 处为 1（k=%d）  argmax=%d'
+     % (K1, int(np.argmax(np.abs(v)))),
+     abs(v[K1] - 1.0) < 1e-15 and abs(np.linalg.norm(v) - 1.0) < 1e-15
+     and abs(np.abs(v).sum() - 1.0) < 1e-15),
+    ('B2 纠缠叠加：两分量各 1/√2 且**相对相位 = i**  v[k1]=%s v[k2]=%s'
+     % (v2[K1], v2[K2]),
+     abs(abs(v2[K1]) - 2 ** -0.5) < 1e-15
+     and abs(v2[K1] - 2 ** -0.5) < 1e-12
+     and abs(v2[K2] - 1j * 2 ** -0.5) < 1e-12),
+    ('B3 Σ|ψ|² = 1（自动归一）', abs(np.linalg.norm(v2) - 1.0) < 1e-15),
+    ('B4 未归一幅度 (3,4) → 3/5、4/5  %.6f / %.6f'
+     % (abs(v3[K1]), abs(v3[K2])),
+     abs(abs(v3[K1]) - 0.6) < 1e-12 and abs(abs(v3[K2]) - 0.8) < 1e-12),
+    ('B5 分量不在基组 → 报错并点名缺失项  %s' % (msg,),
+     msg is not None and '9.5' in msg),
+    ('B6 非 pair_sup 形态 → 报错',
+     _raises(_as_pair_vector, S, ['sup', []]) is not None),
+    ('B7 空分量 → 报错（不是静默全零）',
+     _raises(_as_pair_vector, S, ['pair_sup', []]) is not None),
+    ('B8 幅度全零 → 报错',
+     _raises(_as_pair_vector, S, ['pair_sup',
+                                  [quad(0) + quad(4) + [0.0, 0.0]]])
+     is not None),
+])
 
 # ---------------------------------------------------------------
 # C. pair_psi0_vector：与逐原子直积的等价性 / 优先级
@@ -172,21 +174,22 @@ C.check('B8 幅度全零 → 报错',
 print('C) pair_psi0_vector ≡ 逐原子直积（单分量时逐位）')
 prod = pair_psi0_vector(S, 4, 0)
 one = _as_pair_vector(S, ['pair_sup', [quad(4) + quad(0) + [1.0, 0.0]]])
-C.check('C1 单分量 pair spec ≡ |4⟩⊗|0⟩（逐位）',
-        float(np.max(np.abs(prod - one))) == 0.0,
-        'max|Δ|=%.3g' % float(np.max(np.abs(prod - one))))
 a = pair_psi0_vector(S, 0, 4)
 b = pair_psi0_vector(S, 4, 0)
-C.check('C2 直积对换 ≠ 同一向量（确认 k 索引方向没搞反）',
-        K1 != K2 and int(np.argmax(np.abs(a))) != int(np.argmax(np.abs(b)))
-        and float(np.linalg.norm(a - b)) > 1.0,
-        'argmax %d vs %d' % (int(np.argmax(np.abs(a))),
-                             int(np.argmax(np.abs(b)))))
 pri = pair_psi0_vector(S, 0, 0, ['pair_sup', [quad(4) + quad(0) + [1.0, 0.0]]])
-C.check('C3 psi0_pair 优先于 psi0_A/B（逐位 = 单分量 spec）',
-        float(np.max(np.abs(pri - one))) == 0.0)
-C.check('C4 两体初态缺参 → 报错（不静默取 0 号态）',
-        _raises(pair_psi0_vector, S, 0, None) is not None)
+C.group('C pair_psi0_vector ≡ 逐原子直积（单分量逐位）/ psi0_pair 优先 / 缺参报错', [
+    ('C1 单分量 pair spec ≡ |4⟩⊗|0⟩（逐位）  max|Δ|=%.3g'
+     % float(np.max(np.abs(prod - one))),
+     float(np.max(np.abs(prod - one))) == 0.0),
+    ('C2 直积对换 ≠ 同一向量（确认 k 索引方向没搞反）  argmax %d vs %d'
+     % (int(np.argmax(np.abs(a))), int(np.argmax(np.abs(b)))),
+     K1 != K2 and int(np.argmax(np.abs(a))) != int(np.argmax(np.abs(b)))
+     and float(np.linalg.norm(a - b)) > 1.0),
+    ('C3 psi0_pair 优先于 psi0_A/B（逐位 = 单分量 spec）',
+     float(np.max(np.abs(pri - one))) == 0.0),
+    ('C4 两体初态缺参 → 报错（不静默取 0 号态）',
+     _raises(pair_psi0_vector, S, 0, None) is not None),
+])
 
 # ---------------------------------------------------------------
 # D. 引擎签名接线
@@ -197,28 +200,32 @@ from src.core.evolve_mixed import evolve_mixed_pair              # noqa: E402
 from src.core.hard import evolve_hard_pair                       # noqa: E402
 from src.core.sambe import evolve_sambe_pair                     # noqa: E402
 
-for fn, nm in ((evolve_engine, 'evolve_engine'),
-               (evolve_mixed_pair, 'evolve_mixed_pair'),
-               (evolve_hard_pair, 'evolve_hard_pair'),
-               (evolve_sambe_pair, 'evolve_sambe_pair')):
-    C.check('D1 %s 有 psi0_pair 入参' % nm,
-            'psi0_pair' in inspect.signature(fn).parameters)
+subs_d = [('D1 %s 有 psi0_pair 入参' % nm,
+           'psi0_pair' in inspect.signature(fn).parameters)
+          for fn, nm in ((evolve_engine, 'evolve_engine'),
+                         (evolve_mixed_pair, 'evolve_mixed_pair'),
+                         (evolve_hard_pair, 'evolve_hard_pair'),
+                         (evolve_sambe_pair, 'evolve_sambe_pair'))]
 msg = _raises(evolve_engine, 'mixed', S, psi0_pair=one, t_grid=np.linspace(0, 1, 2),
               n_body=1)
-C.check('D2 n_body=1 + psi0_pair → 明确报错（不许静默忽略）',
-        msg is not None and 'n_body' in msg, str(msg))
+subs_d.append(('D2 n_body=1 + psi0_pair → 明确报错（不许静默忽略）  %s' % (msg,),
+               msg is not None and 'n_body' in msg))
 # GUI 接线（源码级哨兵：worker/面板确实把 spec 传下去）
 _ui = open(os.path.join(ROOT, 'src', 'ui', 'evolve_worker.py'),
            encoding='utf-8').read()
 _dy = open(os.path.join(ROOT, 'src', 'ui', 'ui_dynamic.py'),
            encoding='utf-8').read()
 _pm = open(os.path.join(ROOT, 'src', 'pm_setup.py'), encoding='utf-8').read()
-C.check('D3 worker 三引擎分支都带 psi0_pair',
-        _ui.count('psi0_pair') >= 4, '出现 %d 次' % _ui.count('psi0_pair'))
-C.check('D4 两体运行路径把 spec 交给 worker',
-        'psi0_pair=psi0_pair' in _dy and '_pair_psi0_spec' in _dy)
-C.check('D5 dynamic.psi_pair 在册（pm_setup）',
-        "'dynamic.psi_pair'" in _pm)
+subs_d += [
+    ('D3 worker 三引擎分支都带 psi0_pair（出现 %d 次）'
+     % _ui.count('psi0_pair'),
+     _ui.count('psi0_pair') >= 4),
+    ('D4 两体运行路径把 spec 交给 worker',
+     'psi0_pair=psi0_pair' in _dy and '_pair_psi0_spec' in _dy),
+    ('D5 dynamic.psi_pair 在册（pm_setup）',
+     "'dynamic.psi_pair'" in _pm),
+]
+C.group('D 引擎签名接线：psi0_pair 贯穿三引擎 + 统一入口 + GUI/登记册', subs_d)
 
 # ---------------------------------------------------------------
 # E. 真引擎：解析 V_dd 的 20 ns 交换窗（合成基组，不需要 ARC）
@@ -245,37 +252,39 @@ r_prod = evolve_engine('mixed', S, psi0_A=4, psi0_B=0, **kw)
 r_one = evolve_engine('mixed', S, psi0_A=1, psi0_B=2, psi0_pair=spec_one, **kw)
 ps = r_sym['pops_2d']
 pp = r_ph['pops_2d']
-C.check('E1 纠缠初态：两个分量都是 0.5（逐位）',
-        abs(ps[0, K1] - 0.5) < 1e-12 and abs(ps[0, K2] - 0.5) < 1e-12,
-        'P=%.12f/%.12f' % (ps[0, K1], ps[0, K2]))
-C.check('E2 布居守恒（norm_dev < 1e-6）',
-        max(r_sym['error_report']['max_norm_dev'],
-            r_ph['error_report']['max_norm_dev']) < 1e-6,
-        '%.2e / %.2e' % (r_sym['error_report']['max_norm_dev'],
-                         r_ph['error_report']['max_norm_dev']))
-C.check('E3 两体子空间封闭：P(k1)+P(k2) ≡ 1（对称与相位两例）',
-        float(np.max(np.abs(ps[:, K1] + ps[:, K2] - 1.0))) < 1e-6
-        and float(np.max(np.abs(pp[:, K1] + pp[:, K2] - 1.0))) < 1e-6)
-# 对称组合 (|k1⟩+|k2⟩)/√2 是交换哈密顿量的**本征态（暗态）**：只吃全局相位、
-# 布居不动 —— 这一条同时证明"相对相位真的进了引擎"（若 spec 被当纯态处理，
-# 下一条的摆动就不可能同时成立）。
-C.check('E4 对称态 = 交换暗态：P(k1) 恒 0.5（摆幅 < 1e-6 数值泄漏）',
-        float(np.ptp(ps[:, K1])) < 1e-6,
-        'ptp=%.2e' % float(np.ptp(ps[:, K1])))
-C.check('E5 相对相位 π/2 → 确有交换（P(k1) 摆幅 > 0.1）',
-        float(np.ptp(pp[:, K1])) > 0.1,
-        'ptp=%.4f' % float(np.ptp(pp[:, K1])))
-C.check('E6 纠缠初态轨迹 ≠ 直积初态轨迹（coherence 真的进了引擎）',
-        float(np.max(np.abs(pp - r_prod['pops_2d']))) > 0.1,
-        'max|Δ|=%.4f' % float(np.max(np.abs(pp - r_prod['pops_2d']))))
-C.check('E7 单分量 spec ≡ 逐原子直积（逐位一致，且 psi0_pair 优先于 A/B=1,2）',
-        float(np.max(np.abs(r_one['pops_2d'] - r_prod['pops_2d']))) == 0.0,
-        'max|Δ|=%.3g' % float(np.max(np.abs(r_one['pops_2d']
-                                            - r_prod['pops_2d']))))
-C.check('E8 直积路径的初态是纯态（P(k1)=1）且它会交换',
-        abs(r_prod['pops_2d'][0, K1] - 1.0) < 1e-12
-        and float(np.ptp(r_prod['pops_2d'][:, K1])) > 0.1,
-        'ptp=%.4f' % float(np.ptp(r_prod['pops_2d'][:, K1])))
+C.group('E 真引擎（mixed/解析 V_dd）：纠缠进引擎 + 暗态 + 相对相位 + 与直积一致', [
+    ('E1 纠缠初态：两个分量都是 0.5（逐位）  P=%.12f/%.12f'
+     % (ps[0, K1], ps[0, K2]),
+     abs(ps[0, K1] - 0.5) < 1e-12 and abs(ps[0, K2] - 0.5) < 1e-12),
+    ('E2 布居守恒（norm_dev < 1e-6）  %.2e / %.2e'
+     % (r_sym['error_report']['max_norm_dev'],
+        r_ph['error_report']['max_norm_dev']),
+     max(r_sym['error_report']['max_norm_dev'],
+         r_ph['error_report']['max_norm_dev']) < 1e-6),
+    ('E3 两体子空间封闭：P(k1)+P(k2) ≡ 1（对称与相位两例）',
+     float(np.max(np.abs(ps[:, K1] + ps[:, K2] - 1.0))) < 1e-6
+     and float(np.max(np.abs(pp[:, K1] + pp[:, K2] - 1.0))) < 1e-6),
+    # 对称组合 (|k1⟩+|k2⟩)/√2 是交换哈密顿量的**本征态（暗态）**：只吃全局相位、
+    # 布居不动 —— 这一条同时证明"相对相位真的进了引擎"（若 spec 被当纯态处理，
+    # 下一条的摆动就不可能同时成立）。
+    ('E4 对称态 = 交换暗态：P(k1) 恒 0.5（摆幅 < 1e-6 数值泄漏）  ptp=%.2e'
+     % float(np.ptp(ps[:, K1])),
+     float(np.ptp(ps[:, K1])) < 1e-6),
+    ('E5 相对相位 π/2 → 确有交换（P(k1) 摆幅 > 0.1）  ptp=%.4f'
+     % float(np.ptp(pp[:, K1])),
+     float(np.ptp(pp[:, K1])) > 0.1),
+    ('E6 纠缠初态轨迹 ≠ 直积初态轨迹（coherence 真的进了引擎）  max|Δ|=%.4f'
+     % float(np.max(np.abs(pp - r_prod['pops_2d']))),
+     float(np.max(np.abs(pp - r_prod['pops_2d']))) > 0.1),
+    ('E7 单分量 spec ≡ 逐原子直积（逐位一致，且 psi0_pair 优先于 A/B=1,2）  '
+     'max|Δ|=%.3g' % float(np.max(np.abs(r_one['pops_2d']
+                                         - r_prod['pops_2d']))),
+     float(np.max(np.abs(r_one['pops_2d'] - r_prod['pops_2d']))) == 0.0),
+    ('E8 直积路径的初态是纯态（P(k1)=1）且它会交换  ptp=%.4f'
+     % float(np.ptp(r_prod['pops_2d'][:, K1])),
+     abs(r_prod['pops_2d'][0, K1] - 1.0) < 1e-12
+     and float(np.ptp(r_prod['pops_2d'][:, K1])) > 0.1),
+])
 
 # ---------------------------------------------------------------
 # F. AI/GUI 面（offscreen 构窗；内存不足 → SKIP 不是 FAIL）
@@ -298,8 +307,8 @@ except Exception as e:                                           # noqa: BLE001
 if _gui:
     from src.ai.sim_state import SimState                        # noqa: E402
     st = SimState(win)
-    C.check('F1 dynamic.psi_pair 在册（本进程已加载新代码）',
-            'dynamic.psi_pair' in win.param_reg._bindings)
+    subs_f = [('F1 dynamic.psi_pair 在册（本进程已加载新代码）',
+               'dynamic.psi_pair' in win.param_reg._bindings)]
     st.set_groups([(60, 0, 0.5), (60, 1, 1.5), (6, 1, 1.5)])
     lv = st.list_levels()['levels']
     have = {(x['n'], x['l'], x['j'], x['m']) for x in lv}
@@ -308,52 +317,58 @@ if _gui:
         return [n, l, j, m] if (n, l, j, m) in have else None
 
     pa, pb = lvl(60, 1, 1.5, -0.5), lvl(60, 0, 0.5, +0.5)
-    C.check('F2 基组含 60P_3/2 m=-0.5 与 60S_1/2 m=+0.5（交换对）',
-            pa is not None and pb is not None)
+    subs_f.append(('F2 基组含 60P_3/2 m=-0.5 与 60S_1/2 m=+0.5（交换对）',
+                   pa is not None and pb is not None))
     if pa and pb:
         st.set_param('dynamic.mode', 0)
         r = st.set_pair_superposition([
             {'pair': [pa, pb], 'amp': [1.0, 0.0]},
             {'pair': [pb, pa], 'amp': [0.0, 1.0]}])
-        C.check('F3 set_pair_superposition ok（含 mode=0 提示）',
-                r.get('ok') and r.get('mode_warning'), str(r)[:120])
+        subs_f.append(('F3 set_pair_superposition ok（含 mode=0 提示）  %s'
+                       % (str(r)[:120],),
+                       bool(r.get('ok') and r.get('mode_warning'))))
         spec_now = win.param_reg.read('dynamic.psi_pair')
-        C.check('F4 写进 dynamic.psi_pair 且形态完整',
-                isinstance(spec_now, list) and spec_now[0] == 'pair_sup'
-                and len(spec_now[1]) == 2, str(spec_now)[:100])
-        C.check('F5 面板 _pair_psi0_spec() 取到同一 spec（运行期通道）',
-                win.dynamic._pair_psi0_spec() == spec_now)
-        C.check('F6 get_config 暴露 psi_pair',
-                st.get_config()['config'].get('psi_pair') == spec_now)
+        subs_f.append(('F4 写进 dynamic.psi_pair 且形态完整  %s'
+                       % (str(spec_now)[:100],),
+                       isinstance(spec_now, list) and spec_now[0] == 'pair_sup'
+                       and len(spec_now[1]) == 2))
+        subs_f.append(('F5 面板 _pair_psi0_spec() 取到同一 spec（运行期通道）',
+                       win.dynamic._pair_psi0_spec() == spec_now))
+        subs_f.append(('F6 get_config 暴露 psi_pair',
+                       st.get_config()['config'].get('psi_pair') == spec_now))
         # 逐原子初态要把两体 spec 清掉（防静默覆盖）
         r2 = st.set_initial_state('A', 60, 0, 0.5, 0.5)
-        C.check('F7 set_initial_state 清除两体 spec（pair_spec_cleared）',
-                r2.get('ok') and r2.get('pair_spec_cleared')
-                and not win.param_reg.read('dynamic.psi_pair'), str(r2)[:120])
+        subs_f.append(('F7 set_initial_state 清除两体 spec（pair_spec_cleared）  %s'
+                       % (str(r2)[:120],),
+                       bool(r2.get('ok') and r2.get('pair_spec_cleared')
+                            and not win.param_reg.read('dynamic.psi_pair'))))
         # 快照 / 回填（v3：登记册即存档）
         win.param_reg.set('dynamic.psi_pair', spec_now, source='ai')
         snap = win.param_reg.collect()
-        C.check('F8 快照含 dynamic.psi_pair',
-                snap.get('dynamic.psi_pair') == spec_now)
+        subs_f.append(('F8 快照含 dynamic.psi_pair',
+                       snap.get('dynamic.psi_pair') == spec_now))
         st.set_pair_superposition([])                    # 清空
-        C.check('F9 传空列表 = 清除（回逐原子直积）',
-                win.param_reg.read('dynamic.psi_pair') is None)
+        subs_f.append(('F9 传空列表 = 清除（回逐原子直积）',
+                       win.param_reg.read('dynamic.psi_pair') is None))
         win.param_reg.load({'dynamic.psi_pair': spec_now},
                            apply_external=True)
-        C.check('F10 快照回填可恢复 spec（存档/undo 同路）',
-                win.param_reg.read('dynamic.psi_pair') == spec_now)
+        subs_f.append(('F10 快照回填可恢复 spec（存档/undo 同路）',
+                       win.param_reg.read('dynamic.psi_pair') == spec_now))
         # 非法分量：报错 + 列出缺失项
         bad = st.set_pair_superposition([{'pair': [pa, [60, 0, 0.5, 9.5]],
                                           'amp': [1.0, 0.0]}])
-        C.check('F11 分量不在基组 → ok=False 且列出缺失项',
-                bad.get('ok') is False and bad.get('missing')
-                and bad['missing'][0][3] == 9.5, str(bad)[:120])
+        subs_f.append(('F11 分量不在基组 → ok=False 且列出缺失项  %s'
+                       % (str(bad)[:120],),
+                       bad.get('ok') is False and bool(bad.get('missing'))
+                       and bad['missing'][0][3] == 9.5))
         # 基组变更使 spec 失效 → psi_warnings 点名（A8 的教训）
         win.param_reg.set('dynamic.psi_pair', spec_now, source='ai')
         g = st.set_groups([(60, 0, 0.5), (60, 1, 1.5)])   # 去掉 6P（无关项）
-        C.check('F12 组变更时 psi_warnings 汇报两体 spec 状态',
-                isinstance(g.get('psi_warnings'), list))
+        subs_f.append(('F12 组变更时 psi_warnings 汇报两体 spec 状态',
+                       isinstance(g.get('psi_warnings'), list)))
         win.param_reg.set('dynamic.psi_pair', None, source='ai')
+    C.group('F AI/GUI 面：dynamic.psi_pair 登记 + set_pair_superposition 往返 + '
+            '失效告警', subs_f)
 
 # ---------------------------------------------------------------
 # G. CodeAct 命名空间
@@ -391,8 +406,10 @@ from src.ai import codeact                                       # noqa: E402
 
 ns = codeact._make_namespace(_S(), '.', {'seq': [0]}, lambda j: {},
                              lambda j: {}, lambda j, s=False: {})
-C.check('G1 命名空间含 set_pair_superposition',
-        'set_pair_superposition' in ns and ns['set_pair_superposition']()['ok'])
+C.group('G CodeAct 命名空间注入 set_pair_superposition', [
+    ('G1 命名空间含 set_pair_superposition',
+     'set_pair_superposition' in ns and ns['set_pair_superposition']()['ok']),
+])
 
 ok = C.summary()
 sys.exit(0 if ok else 1)

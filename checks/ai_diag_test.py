@@ -39,6 +39,46 @@ from src.core.evolve_mixed import evolve_mixed                   # noqa: E402
 from src.ai import server as S                                   # noqa: E402
 
 C = Checker('ai_diag')
+# ------------------- 计数模型：不变式包（见 checks/checklib.py）-------------------
+# group(...) 开一个包，其后相邻的 check(...) 全部变成该包的**子条件**：整包只计 1
+# 项，子条件逐个进 SUB=（覆盖面不缩水：SUB == 改前逐条计数的项数）。原断言名与判据
+# 表达式一律原样保留——只是不再各自计 1 项；不过时整包自动展开子条件。
+_PKG = None
+
+
+class _Pkg:
+    """一个不变式包（先缓冲子条件，关闭时一次性交给 C.group 登记）。"""
+
+    def __init__(self, name, detail=''):
+        self.name, self.detail, self.subs = name, detail, []
+
+    def flush(self):
+        C.group(self.name, self.subs, self.detail)
+
+
+def group(name, detail=''):
+    """开新的不变式包：此后 check() 的断言都记入它（直到下一个 group）。"""
+    global _PKG
+    if _PKG is not None:
+        _PKG.flush()
+    _PKG = _Pkg(name, detail)
+
+
+def flush():
+    """关闭最后一个包（本文件收尾）。"""
+    global _PKG
+    if _PKG is not None:
+        _PKG.flush()
+        _PKG = None
+
+
+def check(name, cond, detail=''):
+    """薄包装：判据表达式原样，只登记为**当前包的子条件**（detail 作现场值）。"""
+    if _PKG is None:
+        raise RuntimeError(f'check() 出现在任何 group() 之前：{name}')
+    _PKG.subs.append((name + (('  | ' + str(detail)) if detail else ''),
+                      bool(cond)))
+    return bool(cond)
 
 # ---- freeze 场景（含三光子梯子三级）----
 cache = core.ArcCache(Rubidium87())
@@ -68,8 +108,9 @@ S._jobs.clear()
 S._jobs['jT'] = {'started': 0.0, 'done': True, 'error': None, 'res': res}
 
 # ---------------- 1. 摘要 ----------------
+group('A get_diag 摘要自洽（扁平单一真值源：键齐 + 与运行事实一致）')
 r = S._t_get_diag('')
-C.check('1 摘要可取且来源正确', r.get('ok') and r.get('source') == '最近运行 jT',
+check('1 摘要可取且来源正确', r.get('ok') and r.get('source') == '最近运行 jT',
         str(r)[:90])
 sm = r.get('summary') or {}
 # t83/t84（P5）把摘要收敛为**扁平规范化形态**（GUI 摘要头 / get_diag / 模型卡共用
@@ -80,82 +121,86 @@ _REQ = ('method', 'N', 'P', 'dim', 'n_pairs', 'n_microwave', 'n_optical_vdd',
         'keep', 'drop_cap', 'drop_phase', 'acized_states', 'max_abs_v_mhz',
         'tol', 'max_step', 't_end_ns', 'r_crit', 'mw_cap_mhz', 'n_steps',
         'nfev', 'norm_dev', 'warnings')
-C.check('2 扁平摘要键齐（P5 单一真值源形态）',
+check('2 扁平摘要键齐（P5 单一真值源形态）',
         all(k in sm for k in _REQ)
         and isinstance(sm.get('warnings'), list),
         '缺 %s' % [k for k in _REQ if k not in sm])
-C.check('3 摘要与运行事实一致（N/P/dim/t_end）',
+check('3 摘要与运行事实一致（N/P/dim/t_end）',
         sm['N'] == len(states) and sm['P'] == 1
         and sm['dim'] == len(states)
         and abs(sm['t_end_ns'] - 400.0) < 1e-9,
         str({k: sm[k] for k in ('N', 'P', 'dim', 't_end_ns')}))
-C.check('4 对数统计 == 打包出的对数（且微波+光V_dd 分解自洽）',
+check('4 对数统计 == 打包出的对数（且微波+光V_dd 分解自洽）',
         sm['n_pairs'] == len(diag['pairs']['a'])
         and (sm['n_microwave'] or 0) + (sm['n_optical_vdd'] or 0)
         == sm['n_pairs'],
         str({k: sm[k] for k in ('n_pairs', 'n_microwave', 'n_optical_vdd')}))
-C.check('5 solver 段有步长统计与归一偏差',
+check('5 solver 段有步长统计与归一偏差',
         sm['n_steps'] is not None and sm['n_steps'] > 0
         and sm['nfev'] is not None and sm['norm_dev'] is not None,
         str({k: sm[k] for k in ('n_steps', 'nfev', 'norm_dev')}))
-C.check('6 明细通道仍给标签（摘要只给前 8 个 + 总数：见 pairs 明细）',
+check('6 明细通道仍给标签（摘要只给前 8 个 + 总数：见 pairs 明细）',
         S._t_get_diag('pairs', limit=8).get('ok')
         and len(S._t_get_diag('pairs', limit=8)['by_abs_v_desc']) <= 8)
 
 # ---------------- 2. pairs 明细 ----------------
+group('B 明细通道仍可用（pairs / steps / sectors / H）')
 rp = S._t_get_diag('pairs', limit=5)
-C.check('7 pairs 明细：上限生效、按 |v| 降序',
+check('7 pairs 明细：上限生效、按 |v| 降序',
         rp.get('ok') and rp['n_returned'] <= 5
         and all(rp['by_abs_v_desc'][i]['abs_v_mhz']
                 >= rp['by_abs_v_desc'][i + 1]['abs_v_mhz']
                 for i in range(len(rp['by_abs_v_desc']) - 1)),
         f"n_returned={rp.get('n_returned')}")
-C.check('8 pairs 明细带态标签（不是裸索引）',
+check('8 pairs 明细带态标签（不是裸索引）',
         rp['by_abs_v_desc'] and rp['by_abs_v_desc'][0]['label_a'] != '')
 
 # ---------------- 3/4. steps / sectors / H ----------------
 rs = S._t_get_diag('steps', limit=10)
-C.check('9 steps 明细：dt 统计 + 降采样时间点',
+check('9 steps 明细：dt 统计 + 降采样时间点',
         rs.get('ok') and rs['dt_ns_stats'] and len(rs['t_ns']) <= 10
         and rs['nfev'] > 0, str({k: rs.get(k) for k in ('nfev', 'n_acc')}))
 rc = S._t_get_diag('sectors', limit=8)
-C.check('10 sectors 明细：P/dim/D_full 统计',
+check('10 sectors 明细：P/dim/D_full 统计',
         rc.get('ok') and rc['P'] == 1 and rc['D_full_stats'] is not None,
         str({k: rc.get(k) for k in ('P', 'dim')}))
 rh = S._t_get_diag('H')
-C.check('11 H 明细（不落盘时只给形状 + 提示）',
+check('11 H 明细（不落盘时只给形状 + 提示）',
         rh.get('ok') and rh['shapes'] and 'save_npz' in rh.get('hint', ''),
         str(rh.get('shapes'))[:80])
 
 # ---------------- 5/6. 错误路径 ----------------
-C.check('12 未知 scope → ok=False（不静默给错东西）',
+group('C 错误路径不静默（未知 scope / 无诊断时可操作提示）')
+check('12 未知 scope → ok=False（不静默给错东西）',
         S._t_get_diag('nonsense').get('ok') is False)
 S._jobs.clear()
 r0 = S._t_get_diag('')
-C.check('13 无诊断时给出可操作的提示（提到上帝模式/diag=true）',
+check('13 无诊断时给出可操作的提示（提到上帝模式/diag=true）',
         r0.get('ok') is False and '上帝模式' in r0.get('msg', '')
         and 'diag' in r0.get('msg', ''), r0.get('msg', '')[:80])
 
 # ---------------- 7. freeze 实证：诊断能解释"路径" ----------------
 S._jobs['jT'] = {'started': 0.0, 'done': True, 'error': None, 'res': res}
+group('D freeze 场景实证 + AI 运行默认采诊断接线')
 rq = S._t_get_diag('pairs', limit=100)
 _probe = {(int(x['a']), int(x['b'])): x for x in rq['by_abs_v_desc']}
 # 三级梯子（态序：0/1=60S，2/3=60P，4/5=59D，6=58F，7=58G）
 _ladder = [(3, 5), (5, 6), (6, 7)]
-C.check('14 三光子梯子三级都在诊断里（能解释路径是否被删）',
+check('14 三光子梯子三级都在诊断里（能解释路径是否被删）',
         all(k in _probe for k in _ladder),
         f'缺 {[k for k in _ladder if k not in _probe]} / 有 {sorted(_probe)}')
-C.check('14b 第三级 58F→58G 的耦合与失谐可见（|v|>1 GHz、Δ≈7.08 GHz）',
+check('14b 第三级 58F→58G 的耦合与失谐可见（|v|>1 GHz、Δ≈7.08 GHz）',
         (6, 7) in _probe and _probe[(6, 7)]['abs_v_mhz'] > 1000
         and abs(abs(_probe[(6, 7)]['dD_mhz']) - 420.68) < 1.0,
         str(_probe.get((6, 7))))
 
 # ---------------- 8. AI 运行默认采诊断 ----------------
-C.check('15 server 侧有 _ai_wants_diag 开关（人机成本分离）',
+check('15 server 侧有 _ai_wants_diag 开关（人机成本分离）',
         '_ai_wants_diag' in open(
             os.path.join('src', 'ai', 'server.py'), encoding='utf-8').read()
         and '_ai_wants_diag' in open(
             os.path.join('src', 'ui', 'ui_dynamic.py'),
             encoding='utf-8').read())
 
+flush()
 sys.exit(0 if C.summary() else 1)

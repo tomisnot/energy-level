@@ -16,7 +16,15 @@
   3. **同目录隐式依赖**：脚本若裸导入 checks/ 里的同级模块名（`import mw_bench_
      firstprinciples` 这种），登记出来——归档/改名这些模块前必须查这份清单。
 
-退出码 = 不可解析导入的脚本数（0 = 通过）。用法：python checks\\checks_sentinel.py
+计数模型（2026-09-14 改为**不变式包**，见 checklib）：默认摘要只数包（项数），
+包内子条件单独累计为 `SUB`。
+  · 包 1「checks/ 全部脚本可解析」—— 子条件 = 每个被扫脚本 1 条
+    （原先是"每个脚本打印一行 [ ok ]/[FAIL]"；逐脚本判定一条不少，
+    只是不再各算一项）；
+  · 包 2「src 兼容导出未遮蔽子包」—— 1 条子条件。
+故 `SUB` = 被扫脚本数 + 1。
+退出码：0 = 全过；1 = 有坏脚本（失败项非 0）。
+用法：python checks\\checks_sentinel.py
 """
 import ast
 import os
@@ -24,6 +32,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+
+from checks.checklib import Checker                               # noqa: E402
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(_HERE)
@@ -96,37 +106,44 @@ def _shadowed_subpackages():
 
 
 def main():
-    bad_shadow = _shadowed_subpackages()
-    if bad_shadow:
-        print(f'[checks_sentinel]  [FAIL] src 的兼容导出遮蔽了子包：{bad_shadow}'
-              f'  ← 会让 import src.<子包>.<模块> as <别名> 报错')
-    else:
-        print('[checks_sentinel]  [ ok ] 兼容导出未遮蔽子包（src.core / src.ui）')
+    C = Checker('checks_sentinel')
+
+    # ---- 包 1：全部脚本可解析（子条件 = 每个被扫脚本 1 条）----
     files = sorted(f for f in os.listdir(_HERE)
                    if f.endswith('.py') and os.path.isfile(
                        os.path.join(_HERE, f)))
-    n_bad = len(bad_shadow)
     print(f'[checks_sentinel] 扫描 {len(files)} 个脚本（checks/_archive/ 除外）')
+    _parse_subs = []
     for f in files:
         err, bad, sib = _scan(os.path.join(_HERE, f))
         if err:
-            n_bad += 1
-            print(f'  [FAIL] {f}  语法/解析错误：{err}')
-            continue
-        if bad:
-            n_bad += 1
-            print(f'  [FAIL] {f}  不可解析导入：{bad}')
-            continue
-        if sib:
+            _parse_subs.append((f'{f}  语法/解析错误：{err}', False))
+        elif bad:
+            _parse_subs.append((f'{f}  不可解析导入：{bad}', False))
+        elif sib:
+            # 同目录隐式依赖不是错误，但必须登记（归档/改名这些模块前先查这里）
             print(f'  [note] {f}  同目录隐式依赖：{sib}'
                   f'  ← 归档/改名这些模块前先查这里')
+            _parse_subs.append((f'{f}（同目录隐式依赖 {sib}）', True))
         else:
-            print(f'  [ ok ] {f}')
-    if n_bad:
-        print(f'[checks_sentinel]  FAIL={n_bad} —— 有脚本已腐烂，需要修或归档')
-        return n_bad
-    print('[checks_sentinel]  全部可解析 ✅（同目录隐式依赖已列出，非错误）')
-    return 0
+            _parse_subs.append((f, True))
+    C.group('checks/ 全部脚本可解析（语法 compile + src.* 导入可解析）',
+            _parse_subs,
+            '子条件 = 每个被扫脚本 1 条；同目录隐式依赖仅登记、不算错误')
+
+    # ---- 包 2：兼容导出未遮蔽子包（t78 教训，1 条子条件）----
+    bad_shadow = _shadowed_subpackages()
+    C.group('src 兼容导出未遮蔽子包（src.core / src.ui）',
+            [(f'src.<子包> 属性 ≡ sys.modules["src.<子包>"]'
+              f'（{bad_shadow or "core / ui 均未遮蔽"}）', not bad_shadow)],
+            '遮蔽会让 import src.<子包>.<模块> as <别名> 报错')
+
+    ok = C.summary()
+    if ok:
+        print('[checks_sentinel]  全部可解析 ✅（同目录隐式依赖已列出，非错误）')
+    else:
+        print('[checks_sentinel]  有脚本已腐烂（见上未过的子条件），需要修或归档')
+    return 0 if ok else 1
 
 
 if __name__ == '__main__':

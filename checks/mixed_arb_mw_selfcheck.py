@@ -40,6 +40,52 @@ from src.core.waveforms import ArbitraryWave                   # noqa: E402
 
 B = 21.7
 C = Checker('mixed_arb_mw')
+# ------------------- 计数模型：不变式包（见 checks/checklib.py）-------------------
+# group(...) 开一个包，其后相邻的 check(...) 全部变成该包的**子条件**：整包只计 1
+# 项，子条件逐个进 SUB=（覆盖面不缩水：SUB == 改前逐条计数的项数）。原断言名与判据
+# 表达式一律原样保留——只是不再各自计 1 项；不过时整包自动展开子条件。
+_PKG = None
+
+
+class _Pkg:
+    """一个不变式包（先缓冲子条件，关闭时一次性交给 C.group 登记）。"""
+
+    def __init__(self, name, detail=''):
+        self.name, self.detail, self.subs = name, detail, []
+
+    def flush(self):
+        C.group(self.name, self.subs, self.detail)
+
+
+def group(name, detail=''):
+    """开新的不变式包：此后 check() 的断言都记入它（直到下一个 group）。"""
+    global _PKG
+    if _PKG is not None:
+        _PKG.flush()
+    _PKG = _Pkg(name, detail)
+
+
+def flush():
+    """关闭最后一个包（本文件收尾）。"""
+    global _PKG
+    if _PKG is not None:
+        _PKG.flush()
+        _PKG = None
+
+
+def check(name, cond, detail=''):
+    """薄包装：判据表达式原样，只登记为**当前包的子条件**（detail 作现场值）。"""
+    if _PKG is None:
+        raise RuntimeError(f'check() 出现在任何 group() 之前：{name}')
+    _PKG.subs.append((name + (('  | ' + str(detail)) if detail else ''),
+                      bool(cond)))
+    return bool(cond)
+
+
+def close(name, ours, ref, rtol=1e-6, atol=0.0):
+    """薄包装：原 C.close 的签名不变，登记为当前包的子条件。"""
+    return check(name, abs(ours - ref) <= atol + rtol * abs(ref),
+                 f'ours={ours:.8g} ref={ref:.8g}')
 cache = core.ArcCache(Rubidium87())
 
 # ---- 二级：60S(mJ=+0.5) → 60P(mJ=-0.5)（Δl=1、Δm=-1，σ- 电偶极允许）----
@@ -52,7 +98,8 @@ s2 = make_levels(cache, [
     dict(n=60, l=0, j=0.5, kind='mJ', m=+0.5, E_mhz=ES),
     dict(n=60, l=1, j=1.5, kind='mJ', m=-0.5, E_mhz=ES + NU_SET)])
 NU = float(s2[1]['E_mhz'] - s2[0]['E_mhz'])
-C.check('二级跃迁落在微波段（便于采样）', 5.0 < NU < 200.0, f'{NU:.3f} MHz')
+group('A 二级系统与常数频率下 RHS 逐位等价（解析载波 ≡ 查表相位）')
+check('二级跃迁落在微波段（便于采样）', 5.0 < NU < 200.0, f'{NU:.3f} MHz')
 POL = 'σ-'
 
 
@@ -87,15 +134,16 @@ def _rhs_probe(use_table):
 
 
 d_rhs = float(np.abs(_rhs_probe(False) - _rhs_probe(True)).max())
-C.check('① 解析载波 ≡ 查表相位（RHS 逐位）', d_rhs < 1e-12, f'Δ={d_rhs:.3e}')
+check('① 解析载波 ≡ 查表相位（RHS 逐位）', d_rhs < 1e-12, f'Δ={d_rhs:.3e}')
 
 # ---- ② 任意（啁啾）相位：mixed ≡ hard ----
 T = 600.0
 tg = np.linspace(0.0, T, 301)
+group('B 任意（啁啾）相位：mixed ≡ hard（两组各 4 子条件）')
 for tag, chirp in (('常数载频', 0.0), ('啁啾 0.01 MHz/ns', 0.01)):
     w = _arb(tag, chirp_mhz_per_ns=chirp, T=T)
     grp = arbitrary_mw_group(cache, s2, w)
-    C.check(f'{tag}：带宽与载频自洽',
+    check(f'{tag}：带宽与载频自洽',
             grp['band_mhz'][0] <= NU <= grp['band_mhz'][1] + 1e-9,
             f"band={grp['band_mhz']}, NU={NU:.3f}")
 
@@ -109,11 +157,11 @@ for tag, chirp in (('常数载频', 0.0), ('啁啾 0.01 MHz/ns', 0.01)):
                         n_body=1, mw_arb=[grp], tol=1e-10)
 
     amp_m = float(np.ptp(r_m['pops'][:, 1]))
-    C.check(f'{tag}：确有动力学', amp_m > 0.05, f'60P 摆幅 {amp_m:.3f}')
-    C.check(f'{tag}：mixed P=1（无光场退化）',
+    check(f'{tag}：确有动力学', amp_m > 0.05, f'60P 摆幅 {amp_m:.3f}')
+    check(f'{tag}：mixed P=1（无光场退化）',
             r_m['error_report']['P'] == 1,
             f"P={r_m['error_report']['P']}")
-    C.close(f'② {tag}：mixed ≡ hard',
+    close(f'② {tag}：mixed ≡ hard',
             float(np.abs(r_m['pops'] - r_h['pops']).max()), 0.0,
             rtol=0.0, atol=1e-6)
 
@@ -125,11 +173,13 @@ r_om = evolve_engine('mixed', s2, fields=build_fields_exact(cache, s2, wv),
                      psi0=0, t_grid=tg, n_body=1, tol=1e-10)
 r_oh = evolve_engine('hard', s2, fields=build_two_field(cache, s2, wv),
                      psi0=0, t_grid=tg, n_body=1, rtol=1e-10, atol=1e-12)
-C.check('③ 回归组确有动力学（防空洞对照）',
+group('C 回归：普通（单一载频）微波仍 mixed ≡ hard')
+check('③ 回归组确有动力学（防空洞对照）',
         float(np.ptp(r_om['pops'][:, 1])) > 0.05,
         f"60P 摆幅 {float(np.ptp(r_om['pops'][:, 1])):.3f}")
-C.close('③ 回归：普通微波 mixed ≡ hard',
+close('③ 回归：普通微波 mixed ≡ hard',
         float(np.abs(r_om['pops'] - r_oh['pops']).max()), 0.0,
         rtol=0.0, atol=1e-6)
 
+flush()
 sys.exit(0 if C.summary() else 1)

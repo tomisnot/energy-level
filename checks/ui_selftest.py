@@ -1,12 +1,16 @@
 # -*- coding: utf-8 -*-
 """UI 自检（离屏运行，无显示依赖）：主窗口/布局/波形面板/动态页/进度。
 
-覆盖：
-  1. 主窗口冒烟：两页（静态/动态）切换、能级组添加
+覆盖（每一条是一个**不变式包**，包内子条件累计进 `SUB=`）：
+  1. 主窗口冒烟：两页（静态/动态）切换、能级组添加、QSS 下拉三角
   2. 波形面板：波形增删、参数编辑、序列化/恢复
-  3. 动态页：初态/态选择、波形光强预览、自发辐射三档、端到端演化
-  4. 进度数组 + 取消
-  5. 存档恢复：STIRAP/拉曼（恢复 → 建场管线可用）
+  3. 动态页：初态/态选择、波形光强预览、荧光读出、自发辐射三档、端到端演化
+  4. 进度数组
+  5. 存档恢复：登记册 v3 / 旧档兼容 / GUI 两个按钮真实入口（往返一致）
+
+**计数模型**（2026-09-14 重设计，见 checks/checklib.py）：默认摘要只数**包**
+（`PASS=` 项数），包内子条件累计进 `SUB=`。同一个不变式的多条碎片断言算 1 项，
+但覆盖面不缩水（`SUB` == 改前逐条计数的项数）；`SELFTEST_VERBOSE=1` 展开子条件。
 
 运行：D:\\python310\\python.exe -u checks\\ui_selftest.py
 （selftest_all.py 也调用本文件，作为 UI 回归。）
@@ -22,6 +26,8 @@ import json
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from checks.checklib import Checker                              # noqa: E402
 
 import numpy as np
 from PyQt5.QtWidgets import (QApplication, QMessageBox, QComboBox,
@@ -40,17 +46,57 @@ from src.core.atomic_levels import make_levels, gaussian, square
 from src.core.evolve_rwa import evolve
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_RESULTS = []
+
+# ------------------- 计数模型：不变式包（见 checks/checklib.py）-------------------
+# 每个 group(...) 开一个包，其后相邻的 check(...) 全部变成该包的**子条件**：
+# 整包只计 1 项，子条件逐个进 SUB=（覆盖面不缩水；不过时自动展开子条件）。
+# check(...) 的名称与判据表达式一律原样保留——只是不再各自计 1 项。
+C = Checker('ui_selftest')
+_N_CHECK = 0             # check() 调用计数：与 C.n_sub 对账，防打包漏项
+_PKG = None
+
+
+class _Pkg:
+    """一个不变式包（先缓冲子条件，关闭时一次性交给 C.group 登记）。"""
+
+    def __init__(self, name, detail=''):
+        self.name, self.detail, self.subs = name, detail, []
+
+    def flush(self):
+        C.group(self.name, self.subs, self.detail)
+
+
+def group(name, detail=''):
+    """开新的不变式包：此后 check() 的断言都记入它（直到下一个 group）。"""
+    global _PKG
+    if _PKG is not None:
+        _PKG.flush()
+    _PKG = _Pkg(name, detail)
+
+
+def flush():
+    """关闭最后一个包（main 收尾）。"""
+    global _PKG
+    if _PKG is not None:
+        _PKG.flush()
+        _PKG = None
 
 
 def check(name, cond):
-    _RESULTS.append(bool(cond))
-    print(f'  [{"PASS" if cond else "FAIL"}] {name}')
+    """薄包装：判据表达式不变，只登记为**当前包的子条件**。"""
+    global _N_CHECK
+    if _PKG is None:
+        raise RuntimeError(f'check() 出现在任何 group() 之前：{name}')
+    _N_CHECK += 1
+    _PKG.subs.append((name, bool(cond)))
     return bool(cond)
 
 
 # ================= 1. 主窗口冒烟 =================
 def test_main(app):
+    group('主窗口冒烟（构造/主题/QSS 三角/页面栈/能级组/状态栏）',
+          '主窗口能构造且全局主题生效；QSS 含 QComboBox::down-arrow 且资产在位；'
+          '两页切换、能级组可加、状态栏日志可见')
     win = main_mod.MainWindow()
     win.show(); app.processEvents()
     check('主窗口构造 + 全局主题', bool(app.styleSheet()))
@@ -70,6 +116,27 @@ def test_main(app):
         win.group_panel.add_group()
     app.processEvents()
     check('添加能级组', len(win.groups) == 2)
+    # ---- 用户裁决（2026-09-14）：逐子能级裁剪的**唯一入口 = 左栏右键菜单** ----
+    # 这一条此前**没有任何自检**（裁决只写在注释/手册里）——现在补上，防回归：
+    # ① 工具条上不得再出现「子能级…」按钮（那一行已删干净）
+    btns = [b.text() for b in win.group_panel.findChildren(QPushButton)]
+    check('能级组工具条上没有「子能级…」按钮（裁决：入口收敛到右键菜单）',
+          not any('子能级' in t for t in btns))
+    # ② 左栏能级组列表的右键菜单必须有「子能级…」（右键命中哪行改哪行）
+    from PyQt5.QtWidgets import QMenu
+    _seen = {}
+    _orig_exec = QMenu.exec_
+    QMenu.exec_ = lambda self, *a, **k: (_seen.setdefault(
+        'acts', [x.text() for x in self.actions()]) and None)   # noqa: E731
+    try:
+        _it = win.group_panel.group_list.item(0)
+        _pos = win.group_panel.group_list.visualItemRect(_it).center()
+        win.group_panel.show_context_menu(_pos)
+    finally:
+        QMenu.exec_ = _orig_exec
+    _acts = _seen.get('acts') or []
+    check('左栏右键菜单含「子能级…」（逐子能级裁剪的唯一入口）',
+          any('子能级' in t for t in _acts))
     win.log('测试日志消息')
     check('状态栏日志', '测试日志消息' in win.statusBar().currentMessage())
     return win
@@ -77,6 +144,9 @@ def test_main(app):
 
 # ================= 2. 波形面板（无通道、无独立窗口） =================
 def test_wave_panel(app):
+    group('波形面板：增删 / 参数编辑 / 序列化往返',
+          '初始为空（仅 stretch）、增删折叠组、默认展开且参数控件齐、频率改动生效 + '
+          'changed 信号、✕ 删除、serialize→restore 保型')
     wp = __import__('src.ui.ui_waves', fromlist=['WavePanel']).WavePanel()
     wp.show(); app.processEvents()
     check('波形面板初始为空（仅 stretch）', len(wp.waves) == 0)
@@ -110,6 +180,9 @@ def test_wave_panel(app):
 
 # ================= 3. 动态页：初态/波形预览/自发辐射 =================
 def test_dynamic(app, win):
+    group('动态页初态 / 场面板 / 波形光强预览',
+          '初态索引保留、布居显示态数默认 8、B/E 行随页面切换、波形→多通道 y 轴、'
+          '包络采样对齐输出网格含频率光强、内部按平均布居选态')
     dyn = win.dynamic
     for n, l, j in ((60, 1, 1.5), (6, 1, 1.5)):
         win.group_panel.n_spin.setValue(n); win.group_panel.l_spin.setValue(l)
@@ -151,6 +224,8 @@ def test_dynamic(app, win):
     dyn._draw_bot(states, res); app.processEvents()
 
     # ---- t71：方法选项收敛（默认 mixed、无 ip4/auto、无 near_cutoff 控件）----
+    group('方法选项收敛（t71）',
+          '默认 mixed、下拉恰为 sambe/hard/mixed、无 near_cutoff 控件')
     check('方法默认 mixed', dyn.method_cb.currentText() == 'mixed')
     check('方法选项 sambe/hard/mixed',
           [dyn.method_cb.itemText(i) for i in range(dyn.method_cb.count())]
@@ -158,6 +233,9 @@ def test_dynamic(app, win):
     check('无 near_cutoff 控件', not hasattr(dyn, 'near_cutoff_sb'))
 
     # ---- t25/t27/t30：显示选项 + 荧光读出（单原子绘制 + 双原子约化）----
+    group('荧光读出绘制（t25/t27/t30）',
+          '读出态下拉含全部能级 + 复杂配置哨兵、不占满宽度、荧光读出时 topn 隐藏、'
+          '单原子单线绘制、复杂配置 Σwᵢ·Pᵢ 加权绘制')
     dyn.display_mode_cb.setCurrentIndex(1); app.processEvents()
     check('荧光读出态下拉出现（含全部能级 + 复杂配置）',
           dyn.readout_cb.isVisible() and dyn.readout_cb.count() == N + 1
@@ -180,6 +258,9 @@ def test_dynamic(app, win):
           and '权重全 0' not in dyn.ax_bot.lines[0].get_label())
     # t30：复杂配置弹窗（非模态常驻）——t32 无确定/取消，spinbox 实时写回；
     # 关窗清引用
+    group('复杂配置弹窗（t30/t32）',
+          '非模态常驻显示、无确定/取消按钮（仅 spinbox）、spinbox 实时写回权重且'
+          '窗口保持、关窗清引用')
     dyn._readout_weights = np.zeros(N)
     dyn._open_readout_config()
     app.processEvents()
@@ -202,6 +283,9 @@ def test_dynamic(app, win):
     from PyQt5.QtCore import QEvent
     app.sendPostedEvents(None, QEvent.DeferredDelete)   # WA_DeleteOnClose 延迟删除
     check('关窗清引用', getattr(dyn, '_readout_dlg', None) is None)
+    group('读出/显示切换重绘、互斥与基组重建回退',
+          '双原子复杂配置 A/B 双线、改读出态/显示态数触发重绘、模式切换后 topn 互斥'
+          '恢复、基组重建重置读出权重、复杂配置不作默认（回退真实能级）')
     res3 = {'t': t, 'pops_2d': np.zeros((len(t), N * N))}
     res3['pops_2d'][:, 3] = 0.4
     dyn._is_two_body = True
@@ -229,6 +313,10 @@ def test_dynamic(app, win):
           dyn.readout_cb.currentData() != -1)
 
     # ---- 自发辐射三档：自动（ARC 寿命）/ 禁用 / 自定义 ----
+    group('自发辐射三档 + 通道增删 + 自定义/自动端到端',
+          '默认自动档且配置区隐藏、自定义档显示、禁用档隐藏、衰变通道增删、'
+          '自定义纯衰变 loss 曲线 + Σpops+loss=1、ARC 寿命只出 6P 通道、'
+          '自动档端到端 6P 按寿命衰减')
     check('自发辐射默认自动档 + 配置区隐藏',
           dyn.decay_mode_cb.currentIndex() == 0
           and not dyn.decay_custom_box.isVisible())
@@ -304,6 +392,8 @@ def test_dynamic(app, win):
 
 # ================= 4. 波形序列化/恢复 =================
 def test_wave_serde(app):
+    group('波形序列化往返（包络 + 频率 + 光强 + 偏移）',
+          '2 条波形往返后名称/频率/包络类型/起始时刻/光强逐项一致')
     waves = [
         waveforms.Wave('w1', 16826.7, waveforms.GaussianEnv(200.0, 40.0),
                        pol='π', offset_ns=10.0, intensity_mwcm2=1e5),
@@ -330,6 +420,10 @@ def test_wave_serde(app):
 def test_state_save(app):
     """archive.snapshot/restore：不存显示参数（topn/readout/psi 索引）；
     双原子科学参数（mode/pair 几何/A·B 波形/A·B 初态身份键）完整；旧档兼容。"""
+    group('存档/恢复往返（登记册 v3 + 旧档兼容）',
+          '存档不含显示参数（topn/readout/psi 索引）、双原子科学参数完整（v3 三面板'
+          '独立）、恢复后模式与科学参数一致且显示参数保持当前值、v1 旧档兼容、'
+          'v2 双原子档 A 数据自 waves 回填')
     win = main_mod.MainWindow()
     reg = win.param_reg
     for n, l, j in ((60, 0, 0.5), (60, 1, 0.5)):
@@ -406,6 +500,7 @@ def test_progress(app):
     随函数一并删除。取消路径的覆盖仍在引擎级——见
     checks/evolve_dissipative_selfcheck.py D7（progress_arr 置位 → RuntimeError）。
     """
+    group('进度数组协议', '正常完成 → prog[0]==1.0 且布居归一（<1e-6）')
     cache = core.ArcCache(__import__('arc').Rubidium87())
 
     # ---- 正常完成：进度到 1.0 + 归一 ----
@@ -432,6 +527,9 @@ def test_archive_roundtrip(app, win):
     **覆盖不到这条路径**——所以 57/57 全绿时按钮仍不可用。此处 monkeypatch 掉
     文件对话框，直接跑真实方法，并覆盖 v3 自身与 v1 legacy 的迁移路径。
     """
+    group('存档两个按钮的真实入口（app_entry._save_state / _load_state）',
+          '_save_state 写出 v3（meta.version==3 + params）、_load_state 恢复 v3 自身'
+          '与 v1 legacy 均无异常无警告')
     import app_entry as _ae
     import tempfile
     from PyQt5.QtWidgets import QFileDialog
@@ -493,11 +591,13 @@ def main():
     test_archive_roundtrip(app, win)
     test_progress(app)
     win.close(); app.processEvents()
-    failed = sum(1 for ok in _RESULTS if not ok)
-    print(f'\n===== ui_selftest: '
-          f'{len(_RESULTS) - failed}/{len(_RESULTS)} PASS '
-          f'{"✅" if failed == 0 else "❌"} =====')
-    sys.exit(1 if failed else 0)
+    flush()                          # 关闭最后一个不变式包
+    ok = C.summary()
+    if C.n_sub != _N_CHECK:          # 打包漏项 → 必须响亮失败（不靠人眼盯数字）
+        print(f'[ui_selftest] 内部错误：check() 调用 {_N_CHECK} 次，'
+              f'只登记了 {C.n_sub} 条子条件（有断言没进包）', file=sys.stderr)
+        ok = False
+    sys.exit(0 if ok else 1)
 
 
 if __name__ == '__main__':
