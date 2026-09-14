@@ -74,7 +74,12 @@
 2. `docs/AI协同-项目目标与原则.md`（G1–G4 / P1–P6）
 3. `docs/引擎调用与多原子扩展-待办.md`（引擎侧 S1–S7 / MCP 侧 A1–A12 / E1–E2）
 4. `docs/叠加态初态-接口设计.md`（叠加态接口 + 用它验证 freeze 的判据）
-5. `docs/AI协同-二期升级方案.md`（四个一等对象：语义状态/作业/结果/模型卡）
+5. `docs/历史-任务报告汇编.md`（**历史只作历史**：原「AI协同-二期升级方案」等 32 份
+   已完成文档已并入这里，每条 4 行 + `git show` 定位原文）
+
+> 2026-09-14 项目瘦身：上面提到的 `tempsimu/` 脚本/日志已随草稿区清理移出仓库
+> （打包在仓库外 `_archive_EnergyLevel_scratch_20260914.zip`），文中路径仅作历史记录；
+> 原文可用 `git show <commit>:<路径>` 取回。
 
 ## 五、意见与请示的格式（写进 §六 的登记区，一行一条）
 
@@ -169,6 +174,7 @@
       **需重启软件**才在 GUI 里生效；重启时机由使用者定。
 
 - [ ] #7 类型：不便/可疑 场景：**自检会写人的数据文件** `save_state/basis_presets.json`
+      （历史问题陈述；该文件与整个「基组预设」功能已于 2026-09-14 删除，见下方处置）
       | 证据：`checks/gui_basis_presets_test.py:84-91` 直接对真文件 `json.load→dump`
       （加 `_自检临时集` 再删再写）。实测本会话 19:50:05 该文件被我的自检批次重写
       （内容未丢：dump 往返保留全部键，当前 = 3 个内置集；但 mtime/格式被改）
@@ -177,9 +183,10 @@
 - [x] #7 处置：**修（2026-09-12 第二次提交）**——该项 9/10 改到临时副本上做，
       并加断言 11「人的 `basis_presets.json` mtime 不变」（实测 md5 与 mtime 均未变）。
       **后续（2026-09-14 用户裁决）**：整个「基组预设」功能已删（入口收敛到
-      逐组增删 + 状态保存），`checks/gui_basis_presets_test.py` **随之退掉**
-      ⇒ 本问题的载体已不存在；用户数据文件 `save_state/basis_presets.json`
-      **按用户要求留在盘上**（变惰性，不删）。
+      逐组增删 + 状态保存），`checks/gui_basis_presets_test.py` **随之删除**
+      ⇒ 本问题的载体已不存在。
+      **同日项目瘦身（用户批准）**：惰性数据文件 `save_state/basis_presets.json`
+      **也已一并删除**（该目录本来就不入版本控制），本节仅作历史记录。
 
 - [ ] #8 类型：可疑（**灾难级**） 场景：**基组裁剪 → 观测量完全不收敛**（比 E1 更严重）
       | 证据（使用者 2026-09-12 实测，同一 freeze 脉冲 7380 MHz / I=5 / 高斯 FWHM 40 ns
@@ -237,7 +244,8 @@
       与新增 §10。判据/容差**不动**（原本就没为它放宽）。
 
 - [ ] #9 类型：可疑 场景：**离线批量通道与登记册的基组构造规则不同** → 未来结论会静默分叉
-      | 证据：`tempsimu/contrast_scan.py` / `dual_scan.py` 用 `make_levels(..., kind='mJ')`
+      | 证据：`tempsimu/contrast_scan.py` / `dual_scan.py`（已随 2026-09-14 草稿区
+      清理移出仓库，原文见 git 历史）用 `make_levels(..., kind='mJ')`
       对**所有**组展开（6P 当 4 个 mJ 态，68 态）；软件登记册把 6P_3/2 展开成 16 个
       (F,m_F) 态（N=84）。本次两条通道 **4 位小数吻合**（C=0.9982、60S 保留=0.9994），
       但那是碰巧（6P 在 296 THz 外，纯 AC Stark 贡献可忽略）
@@ -273,7 +281,8 @@
       与探针结论一致：销毁在 C++ 侧）；② **WER 全 dump 使用者已配好**
       （`DumpFolder=<项目>\tempsimu\crashdumps`、`DumpType=2`、`DumpCount=3`）⇒
       下次崩溃自动落 dump，用 cdb 看 `~QThread` 调用栈即可钉死销毁者。
-      ⚠ **原件已被覆盖**（重启沿用了同一 `_app_err.log` 路径）→ 已立"事故现场保全守则"见 §七.0。
+      ⚠ **原件已被覆盖**（重启沿用了同一 `_app_err.log` 路径，该日志已随草稿区清理
+      归档）→ 已立"事故现场保全守则"见 §七.0。
 - [x] #11 处置：**防御性修复 + 加固；销毁者仍待 dump 定性（2026-09-12）**：
       **假说 B（内存）已被使用者实测排除**：同类型两体作业（job3，dim=4624）全程
       **私有内存逐位不动 1358 MB**（WS 407–431 MB），系统可用始终 ≥5.2 GB ⇒
@@ -314,14 +323,24 @@
       在脚本内 `QT_QPA_PLATFORM=offscreen` 建一次 `MainWindow`，把该段从 SKIP
       变成真断言；顺带把 BOM（U+FEFF）这类"脚本文本卫生"纳入哨兵（BOM 已由
       `checks_sentinel.py` 抓到并修，2026-09-14）
+- [x] #13 处置：**已修（2026-09-14，随项目瘦身轮）**——`ai_result_card_selfcheck.py`
+      在自己进程内建 **offscreen `MainWindow` 并 `show()`**（`server._win()` 只认可见的
+      MainWindow），第 1 段从 SKIP 变成**真断言**：断言 `_win()` 认出本窗口、GUI 侧态表非空、
+      `final_pop` 的键 = **GUI 真实态标签**（不是退化的 `#0`）⇒ 该脚本 10 → **14 项**，
+      单体摘要不再是零覆盖。同轮复核发现并补回**被漏掉的 3 个聚合脚本**
+      （`ai_superposition` / `ai_pair_superposition` / `mixed_arb_mw`），
+      聚合 32 → **35 脚本**（详见本轮报告的前后对比表）。
 
 
 ## 七.0 事故现场保全守则（2026-09-12，用一次真实损失换来）
 
+> 本节与 §六 #11 提到的 `tempsimu/` 日志/探针已随 **2026-09-14 草稿区清理**移出仓库
+> （打包件在仓库外），路径仅作历史记录；守则本身与是否留着老日志无关，照旧执行。
+
 1. **每个实例用带标识的日志名**，**绝不复用同一路径**：
    `python main.py *> tempsimu/_app_out_<pid>_<HHMMSS>.log 2> tempsimu/_app_err_<pid>.log`。
    教训：崩溃实例（PID 27228）的 stderr 尾 12 行虽被抓到，但 20:36 的重启沿用了
-   `tempsimu/_app_err.log` 同一路径 → **文件被截断覆盖**，当场丢失上下文。
+   `tempsimu/_app_err.log` 同一路径（该文件已归档）→ **文件被截断覆盖**，当场丢失上下文。
 2. **崩溃后第一件事：保全现场**（`Copy-Item` 到 `tempsimu/crashdumps/` 再重启）。
 3. **WER 全 dump 已配**（`HKCU\...\LocalDumps\python.exe` → `tempsimu/crashdumps`、
    `DumpType=2`、`DumpCount=3`）⇒ 下次崩溃自动落全 dump；
@@ -355,7 +374,8 @@ job_* / web_* …`）**加上技能文档本身**，没有任何 `mcp__energy-le
    聚合入口 `selftest_all` 给子进程带 `EL_NO_AI_SERVER=1`。
 
 **同事的接入方案（它自己的第一项工程任务）**：
-1. 写 `tempsimu/mcp_call.py`：最简 MCP over streamable-HTTP 客户端（`initialize` →
+1. 写一个临时客户端脚本（建议仍放 `tempsimu/`，**用完即弃、不进版本控制**）：
+   最简 MCP over streamable-HTTP 客户端（`initialize` →
    记 session id → `tools/call`），端点取 `.mcp-port`；用 `pwsh` 运行即可。
    优先用现成库（`mcp` 或 `httpx/requests`），失败再手写 HTTP。
 2. 用本地批量通道做**扫描/回归**（快 3–5×、不进 journal）；需要"人在 GUI 看得见"

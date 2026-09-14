@@ -309,7 +309,7 @@ env 采样   = √[ (1 + δ(t)) / (1 + b) ]    # 峰值恰为 1
 10. **两体作业的 npz 现在**自动**落盘（2026-09-12 起，原坑已修）**：AI 作业一完成，
     `_jobs` 里就存了 `ai_results/job_<jid>.json`（摘要）**与全量 npz**
     （`tempsimu/ai_job<jid>_*.npz`）；`job_result(jid)` **即使不给 `save_npz`**
-    也会回传该 npz 路径（`summary.npz` / 顶层 `npz`，带 `npz_auto=True`）。
+    也会回传该 npz 路径（`summary['npz']`，带 `npz_auto=True`）。
     仍建议：**跑完立刻** `job_result(jid, save_npz=True)` 再存一份并记下路径
     （npz 只保留最近 100 份）。
 11. **基组编辑会静默重置初态**（2026-09-12）：改完组后 `psi_A` 曾从 60P_3/2 变回 60S（无提示）；
@@ -467,10 +467,10 @@ env 采样   = √[ (1 + δ(t)) / (1 + b) ]    # 峰值恰为 1
       （`field_build.build_fields_exact` docstring：全部偶极允许对都进耦合矩阵、
       无近/远分流、不注入静态能移；`evolve_mixed` 不调 `real_field`）
       ⇒ **基组里没有 6P，6P 对频移光的贡献就是缺失的（漏算），ARC 不会补上**。
-      归档里 `docs/_archive/论文级方案调研-交换全过程场景.md:279` 的实测是
-      **F=1+F=2 合计占光移 60.7%**（与 F=3 同量级，"没有天然弱耦合子集"）
-      ⇒ `docs/_archive/Julia引擎交接文档.md:705` 那条"6P 只留两三个"的旧建议
-      **已被推翻，勿照做**。
+      实测锚（原文已并入 `docs/历史-任务报告汇编.md` §四，可用 `git show` 取全文）：
+      **F=1+F=2 合计占光移 60.7%**（F=0 2.7% / F=1 27.9% / F=2 32.8% / F=3 36.6%，
+      与 F=3 同量级，"没有天然弱耦合子集"）⇒ Julia 交接 §16.3 那条
+      "6P 只留两三个（保留 F=3 子集）"的旧建议 **已被推翻，勿照做**。
     · 护栏：被裁掉的子能级若正被 `dynamic.psi_*` 引用（按**变更前**取值判！）
       → `psi_warnings` 点名；若它是已配置场需要的耦合伙伴
       （|Δl|=1、|Δm|≤1、跃迁落在波形 `freq ± engine.BW_OPT` 内）→ `field_warnings` 点名。
@@ -482,6 +482,17 @@ env 采样   = √[ (1 + δ(t)) / (1 + b) ]    # 峰值恰为 1
       ② 作业一完成**摘要 + 全量 npz 已自动落盘**（`ai_results/job_<jid>.json`、
       `tempsimu/ai_job<jid>_*.npz`），进程随后死掉也拿得到；
       ③ 仍建议跑完立刻 `job_result(jid, save_npz=True)` 再存一份并记路径。
+25. **`get_activity` 的 `detail` 可能是"摘要"（2026-09-14 加的体积闸）**：写入侧对
+    `detail` 有 **4 KB 上限**——超限的值只留**形状/长度/前 8 项**，并附
+    `detail_slim{orig_bytes, slim_bytes, sha1, keys}`。触发它最多的是
+    `set_param('dynamic.waves_*')`（old/new 曾带整条波形包络，**单条实测 748 KB**，
+    一天写掉 37 MB）。所以：
+    · **别指望从 `detail.old/new` 里读回完整波形**——要看现状用 `get_state('dynamic')`，
+      要曲线用 `get_envelope(path, index)`；
+    · `detail.path` / `detail.job` 这类**顶层标量键一定保留**（归因不受影响）；
+    · 想核对"是不是同一次变更"，比 `detail_slim.sha1`（原始内容的 sha1 前 16 位）。
+    历史流水已用 `scripts/slim_journal.py` 按同一把闸迁移（39.8 MB → 0.83 MB）；
+    回归闸 = `checks/journal_size_cap_selfcheck.py`（21 项）。
 
 ## 人机协同约定
 

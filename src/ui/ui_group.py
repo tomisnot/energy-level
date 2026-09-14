@@ -78,7 +78,8 @@ class EnergyGroupPanel(QWidget):
         #   代价信息（原来的 dim 提示）由 **t84 运行前成本报告** 与 `estimate_cost()` 覆盖：
         #   前者在点「运行」时给出保留对数/最远失谐/预计步数并让你选"完整物理/剔远对",
         #   后者（AI 面）给 `basis_n/dim/est_seconds/est_peak_gb/mem_advice`。
-        #   用户数据文件 `save_state/basis_presets.json` **保留在盘上**（变惰性，不删）。
+        #   用户数据文件 `save_state/basis_presets.json` 当时保留在盘上（变惰性）；
+        #   2026-09-14 项目瘦身时该文件已按用户批准一并删除。
 
     def on_nlj_changed(self, *_):
         n = int(self.n_spin.value())
@@ -94,8 +95,8 @@ class EnergyGroupPanel(QWidget):
     # apply_preset / save_preset / _refresh_dim_hint 六个方法与一整行 UI。
     # 正规替代：① 逐组增删 + 右键「子能级…」裁剪；② 状态保存/恢复（存档 round-trip，
     # 含裁剪与配色）；③ 代价信息 → t84 运行前成本报告 + `estimate_cost()`。
-    # 用户数据 `save_state/basis_presets.json` 不删（惰性）；内置三套预设的原始内容
-    # 在 git 历史里可追（commit e0c11fb 之前）。
+    # 用户数据 `save_state/basis_presets.json` 已于 2026-09-14 随瘦身删除；
+    # 内置三套预设的原始内容在 git 历史里可追（commit e0c11fb 之前）。
 
     def add_group(self):
         n = int(self.n_spin.value())
