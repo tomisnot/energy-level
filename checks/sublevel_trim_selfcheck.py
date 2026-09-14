@@ -129,6 +129,30 @@ _B.append((f'B6 apply_trim 真的在过滤：{len(_rows_all)}→{len(_rows_trim)
            f'且 apply_trim(None) 原样返回',
            len(_rows_trim) == 2 and len(_rows_all) > len(_rows_trim)
            and SA.apply_trim(_rows_all) is _rows_all))
+# ⚠ 2026-09-14 使用者侧发现并修的**两个洞**（本次补的回归项——原来无牙）：
+#   ① 静态页行构造 `_base_level_rows` **不看 ms/Fs** ⇒ 被裁掉的子能级照样出图，
+#      且因查不到位移而拿 `ac=0.0 / affected=False`（"看起来不受光影响"，误导）；
+#   ② `_group_sublevel_rows` 的超精细行**没有 F 字段**，而 Fs 判据读 `row['F']`
+#      ⇒ **Fs 裁剪静默出 0 态**（整组凭空消失）。
+def _vis(**kw):
+    g = dict(n=60, l=1, j=1.5, label='60P_{3/2}', color='#1f77b4')
+    g.update(kw)
+    return [g]
+
+
+_r_full2 = SA.build_level_rows(cache, B, _vis(), {'enabled': False}, _vis())
+_r_trim2 = SA.build_level_rows(cache, B, _vis(ms=[-0.5, 1.5]),
+                               {'enabled': False}, _vis(ms=[-0.5, 1.5]))
+_B.append((f'B7 [静态页] build_level_rows 尊重裁剪：{len(_r_full2)}→'
+           f'{len(_r_trim2)} 行且 mJ 对得上',
+           len(_r_full2) == 4 and len(_r_trim2) == 2
+           and sorted(float(x['mj']) for x in _r_trim2) == [-0.5, 1.5]))
+_fs_rows = SA._group_sublevel_rows(cache, 6, 1, 1.5, B, None,
+                                   [[3.0, 1.0], [3.0, 0.0]])
+_B.append((f'B8 [Fs 真路径] 超精细裁剪必须出 2 态且每行带 F 字段（曾静默出 0 态）：'
+           f'{len(_fs_rows)} 态', len(_fs_rows) == 2
+           and {(float(x['F']), float(x['mF'])) for x in _fs_rows}
+           == {(3.0, 1.0), (3.0, 0.0)}))
 C.group('B 裁剪生效：60P_{3/2} 只留 {−0.5,+1.5}（子能级键与总态数）', _B)
 
 print('\nC) 往返：registry 读回 + 存档快照')

@@ -847,12 +847,19 @@ def build_level_rows(cache, field_B, groups, address_cfg, visible):
 
 
 def _base_level_rows(cache, field_B, visible):
-    """构造可见能级组的全部子能级行（ac=0，E=E0，affected=False）。
+    """构造可见能级组的**保留**子能级行（ac=0，E=E0，affected=False）。
 
     里德堡态忽略核自旋（只画 fine-structure 的 m_J 子能级）；低激发态
     画出所有超精细子能级 (F, m_F)。AC 位移由 direct 一次对角化填入
     （build_level_rows_direct）。
     行字段：x/E0/E/ac/affected/label/qstr/color/n/l/j/kind/mj 或 mF/amps。
+
+    ⚠ 2026-09-14 修（使用者裁决"裁剪后应影响静态页；能级组是两页共同区域，
+    必须一致"）：本函数原来**不看 `ms`/`Fs`**，把整组子能级全画出来；而
+    `direct_ac_stark_shifts` 的基组**是裁剪过的** ⇒ 被裁掉的子能级在这里
+    仍出图、且按 `shifts.get(key, 0.0)` 拿到 **ac=0.0 + affected=False**，
+    看起来像"不受光影响"——**误导性显示**。现在逐组过 `apply_trim`
+    （`None/None` 原样返回 ⇒ 默认全展开路径逐位不变）。
     """
     rows = []
     for group in visible:
@@ -860,11 +867,12 @@ def _base_level_rows(cache, field_B, visible):
         color = group.get('color', '#1f77b4')
         E0_mhz = cache.E_mhz(n, l, j)
         hf = get_hyperfine_levels(cache, n, l, j, field_B)
+        g_rows = []                      # 本组行先入局部表，裁剪后再并入
         if hf is None:
             gJ = cache.gJ(l, j)
             for m in np.arange(-j, j + 1, 1.0):
                 E_level = E0_mhz + gJ * MU_B_MHZ_PER_G * m * field_B
-                rows.append(dict(
+                g_rows.append(dict(
                     x=float(m), E0=E_level, E=E_level, ac=0.0, color=color,
                     label=group['label'], affected=False,
                     qstr=f'm_J={m:+.1f}',
@@ -872,11 +880,14 @@ def _base_level_rows(cache, field_B, visible):
         else:
             for F, mF, e_hf, _w, mJ_amps in hf:
                 E_level = E0_mhz + e_hf
-                rows.append(dict(
+                g_rows.append(dict(
                     x=float(mF), E0=E_level, E=E_level, ac=0.0, color=color,
                     label=group['label'], affected=False,
                     qstr=f'F={F:.1f}, m_F={mF:+.1f}',
-                    n=n, l=l, j=j, kind='F', mj=None, mF=mF, amps=mJ_amps))
+                    n=n, l=l, j=j, kind='F', F=float(F), mj=None, mF=mF,
+                    amps=mJ_amps))
+        _ms, _Fs = trim_of(group)
+        rows.extend(apply_trim(g_rows, _ms, _Fs))
     return rows
 
 
@@ -962,7 +973,10 @@ def _group_sublevel_rows(cache, n, l, j, B_gauss=0.0, ms=None, Fs=None):
     else:
         for F, mF, e_hf, w, amps in hf:
             e = cache.E_mhz(n, l, j) + e_hf
-            rows.append(dict(n=n, l=l, j=j, kind='F', mj=None, mF=mF, amps=amps,
+            # ⚠ 2026-09-14 修：行里必须有 **F**——`sublevel_trim` 的 Fs 判据读
+            #   row['F']，此前只写进 qstr ⇒ Fs 裁剪**永远匹配不到**（静默出 0 态）。
+            rows.append(dict(n=n, l=l, j=j, kind='F', F=float(F), mj=None,
+                             mF=mF, amps=amps,
                              E_mhz=float(e), qstr=f'F={F:.1f}, m_F={mF:+.1f}'))
     return apply_trim(rows, ms, Fs)
 

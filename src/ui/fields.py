@@ -207,8 +207,15 @@ class FieldPanel(QWidget):
         lay.addWidget(self.lights_box)
 
     def set_lights_visible(self, show):
-        """控制光场表格/关注跃迁/初态区显隐（B/E 行恒显，三页共用）。"""
+        """控制光场表格/关注跃迁/初态区显隐（B/E 行恒显，三页共用）。
+
+        ⚠ 2026-09-14（使用者裁决）：B/E 行里的「＋添加光」按钮**随光场区一起
+        显隐**——动态页有自己的波形面板，那里再摆一个"添加光"按钮属于误导。
+        此前一直漏改：光场行藏起来了，按钮还留在那行。
+        """
         self.lights_box.setVisible(show)
+        if getattr(self, 'add_btn', None) is not None:
+            self.add_btn.setVisible(show)
 
     # ---------------- 值接口 ----------------
     def _selection_changed(self, *_):

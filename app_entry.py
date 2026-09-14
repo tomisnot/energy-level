@@ -297,6 +297,24 @@ class MainWindow(QMainWindow):
         self.field = fields.FieldPanel(self)
         self.field.data_changed.connect(self._on_light_changed)
 
+        # 常驻计算进度（2026-09-14 使用者裁决）：固定在最底下一栏，文本在旁；
+        # 人为与 AI 发起的运行**共用**这两个控件（同一条 _run / _poll_progress
+        # / _cancel_run 路径），故人机行为完全一致。
+        from PyQt5.QtWidgets import QLabel as _QL, QProgressBar as _QPB
+        _rl = _QL('空闲')
+        _rl.setStyleSheet('color:#666; padding:0 8px;')
+        _rp = _QPB()
+        _rp.setRange(0, 1000)
+        _rp.setFixedWidth(180)
+        _rp.setValue(0)
+        _rp.setToolTip('演化进度（人与 AI 同源）；运行中"运行演化"按钮变为'
+                       '"取消计算"，点它即取消')
+        self.statusBar().addPermanentWidget(_rl)
+        self.statusBar().addPermanentWidget(_rp)
+        self._run_label, self._run_pbar = _rl, _rp
+        self.dynamic._stage_label = _rl       # 动态页直接写这两个控件
+        self.dynamic._pbar = _rp
+
         from src.ui.app_state import LevelGroupStore, FieldState
         self.groups_store = LevelGroupStore(self.cache, self)
         self.field_state = FieldState(self.field, self)

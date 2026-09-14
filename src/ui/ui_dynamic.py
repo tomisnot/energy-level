@@ -377,7 +377,18 @@ class DynamicPanel(QWidget):
         self.readout_cb.setVisible(False)        # 初始态布居 → topn 显示
         row_disp.addStretch(1)
         self.run_btn = QPushButton('运行演化')
-        self.run_btn.clicked.connect(self._run)
+        # 2026-09-14 用户裁决：运行按钮**同时是取消按钮**（运行中文本变
+        # "取消计算"），取代进度弹窗；AI 发起的运行走同一个 `_run()`，
+        # 所以人机看到/能控制的完全是同一套组件（同一 `_run_active` 驱动）。
+        # 常驻进度控件：窗口底栏由 app_entry 接管（挂到 QStatusBar 并覆盖这两个
+        # 属性）；**独立构造**（自检/无主窗口）时用本地兜底，保证 _poll_progress
+        # 永不遇到 None（见 _run 的崩溃说明）。
+        if getattr(self, '_pbar', None) is None:
+            self._pbar = QProgressBar(self)
+            self._pbar.setRange(0, 1000)
+        if getattr(self, '_stage_label', None) is None:
+            self._stage_label = QLabel('空闲', self)
+        self.run_btn.clicked.connect(self._on_run_clicked)
         row_disp.addWidget(self.run_btn)
         p.addLayout(row_disp)
         # 直接作为主程序右侧面板的普通区块（无独立滚动区，融入同一层级）
@@ -823,13 +834,13 @@ class DynamicPanel(QWidget):
         self._run_active = True
         self._prep_label = '准备'
         self._run_t0 = time.perf_counter()
-        # 对话框控件先置 None——轮询定时器（100ms）先于对话框定时器
-        # （400ms）触发，_poll_progress 需要这些属性已存在（缺失会变成
-        # Qt 槽内 AttributeError → PyQt qFatal → 原生崩溃，无 Python 回溯）
+        # 常驻进度控件（底栏）**不置 None**——轮询定时器（100ms）先于一切触发，
+        # _poll_progress 直接写它们；缺失会变成 Qt 槽内 AttributeError →
+        # PyQt qFatal → 原生崩溃（无 Python 回溯）。这里只清零 + 复位按钮。
         self._dlg = None
-        self._pbar = None
-        self._stage_label = None
-        self.run_btn.setEnabled(False)
+        self._reset_progress_ui()
+        self.run_btn.setText('取消计算')      # 运行中：同一按钮即"取消计算"
+        self.run_btn.setEnabled(True)
         self._dlg_timer = QTimer(self)
         self._dlg_timer.setSingleShot(True)
         self._dlg_timer.timeout.connect(self._show_progress)
@@ -943,6 +954,8 @@ class DynamicPanel(QWidget):
                 pass
         self._worker = None
         self.run_btn.setEnabled(True)
+        self.run_btn.setText('运行演化')          # 收尾：按钮复位为"运行"
+        self._reset_progress_ui(idle=True)
 
     def _sweep_retired_workers(self):
         """丢掉**已经退出**的 worker 引用（防 `_retired_workers` 无界增长）。
@@ -1398,39 +1411,40 @@ class DynamicPanel(QWidget):
         self._worker.log_msg.connect(self.main.log)
         self._worker.start()
 
-    def _show_progress(self):
-        """延迟显示进度对话框（仅当本轮运行仍在进行时——含主线程预处理）。
+    def _on_run_clicked(self):
+        """运行/取消同一个按钮（2026-09-14 使用者裁决，取代进度弹窗）。
 
-        **幂等**：已存在进度框就直接返回。否则成本预检恢复过一次之后，
-        400ms 定时器到点还会再造一个（旧框没人更新 → 屏幕上出现两个进度框，
-        一个动一个不动 —— 实测 bug）。
+        运行中（`_run_active`）→ 取消；空闲 → 启动。与 AI 同源：AI 也调
+        `self._run()`，故按钮文本与可取消性对两侧一致。
         """
-        if not getattr(self, '_run_active', False):
-            return
-        if getattr(self, '_dlg', None) is not None:
-            return
-        dlg = QDialog(self)
-        dlg.setWindowTitle('演化')
-        lay = QVBoxLayout(dlg)
-        lay.setContentsMargins(14, 12, 14, 12)
-        self._stage_label = QLabel('正在准备…')      # t28：阶段文本（_poll 更新）
-        lay.addWidget(self._stage_label)
-        self._pbar = QProgressBar(dlg)
-        self._pbar.setRange(0, 1000)
-        lay.addWidget(self._pbar)
-        btn = QPushButton('取消', dlg)
-        btn.clicked.connect(self._cancel_run)
-        lay.addWidget(btn)
-        dlg.setWindowModality(Qt.WindowModal)
-        dlg.setFixedWidth(320)
-        self._dlg = dlg
-        dlg.show()
+        if getattr(self, '_run_active', False):
+            self._cancel_run()
+        else:
+            self._run()
+
+    def _reset_progress_ui(self, idle=False):
+        """进度控件复位。常驻控件可能由主窗口底栏提供（见 app_entry），
+        独立构造时是本地兜底，故一律判空后写。"""
+        if getattr(self, '_pbar', None) is not None:
+            self._pbar.setValue(0)
+        if getattr(self, '_stage_label', None) is not None:
+            self._stage_label.setText('空闲' if idle else '准备…')
+
+    def _show_progress(self):
+        """**已废除**（2026-09-14 使用者裁决）：进度改由窗口底栏常驻控件显示，
+        不再弹对话框。保留此空方法只为兼容既有接线（`_dlg_timer`、
+        `ai/server.py` 的 patch/restore）——调它不做任何事。
+        """
+        return
 
     def _cancel_run(self):
         """用户点取消：置取消标志，等待计算线程退出。"""
         self.progress_arr[1] = 1.0
         if self._dlg is not None:
             self._dlg.setWindowTitle('正在取消…')
+        # 常驻底栏（取代弹窗）：取消也要有可见反馈
+        if getattr(self, '_stage_label', None) is not None:
+            self._stage_label.setText('正在取消…')
 
     def _poll_progress(self):
         """轮询进度数组（t72 阶段协议：prog[2]=0 准备/1 积分/2 收尾，
