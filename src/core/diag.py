@@ -59,6 +59,38 @@ def _solver_steps(solv):
     return None
 
 
+def _omega_ratio(prs, cfg=None):
+    """逐对 Ω/ω 的**最大值**（RWA 适用性判据）——唯一实现。
+
+    2026-09-15 修（核查报告 B5）：原来 `summarize` 与 `warnings` 各算一遍，
+    且分母取 `cfg['max_freq_mhz']`（配置里**最大**载频）。光+微波混合场景下
+    分母被光频（≈2.96e8 MHz）主导 ⇒ 比值恒 ≪1 ⇒ "已出 RWA 适用区"这条
+    **几乎永不触发**——而它恰恰是为强驱动越界准备的。
+    现在按**逐对**算（契约里 `pairs` 自带 `w`，用它当分母），取最大；
+    无逐对数据时回退旧口径（保守但不再主导）。
+    """
+    try:
+        import numpy as _np
+        ws = prs.get('w')
+        vs = prs.get('v')
+        if ws is not None and vs is not None:
+            num = _np.abs(_np.asarray(vs, dtype=float)).ravel()
+            den = _np.abs(_np.asarray(ws, dtype=float)).ravel()
+            rr = [float(a) / float(b) for a, b in zip(num, den) if float(b) > 0]
+            if rr:
+                return max(rr)
+    except Exception:                              # noqa: BLE001
+        pass
+    cfg = dict(cfg or {})
+    vmax, om = prs.get('max_abs_v_mhz'), cfg.get('max_freq_mhz')
+    if vmax and om:
+        try:
+            return float(vmax) / float(om)
+        except ZeroDivisionError:
+            return None
+    return None
+
+
 def summarize(diag, cfg=None):
     """diag 快照 → 规范化摘要（GUI 摘要头 / get_diag / 模型卡共用）。
 
@@ -75,14 +107,9 @@ def summarize(diag, cfg=None):
     pho = diag.get('photon') or {}
     dim = meta.get('dim')
     vmax = prs.get('max_abs_v_mhz')
-    # 载波频率：取配置里最大波频（用于 maxΩ/ω 判定；无配置则跳过）
-    om = cfg.get('max_freq_mhz')
-    ratio = None
-    if vmax and om:
-        try:
-            ratio = round(float(vmax) / float(om), 4)
-        except ZeroDivisionError:
-            ratio = None
+    # 载波频率判据：**逐对** Ω/ω（见 _omega_ratio；不再用"最大载频"当分母）
+    ratio = _omega_ratio(prs, cfg)
+    ratio = None if ratio is None else round(float(ratio), 4)
     out = {
         'method': meta.get('method'), 'dim': dim, 'N': meta.get('N'),
         'P': pho.get('P', meta.get('P')), 'M': pho.get('Ms', meta.get('M')),
@@ -127,14 +154,10 @@ def warnings(diag, cfg=None):
     if n_mw is not None and int(n_mw) == 0 and cfg.get('has_mw', True):
         w.append('微波候选对为 0：基组可能缺中间态（多光子通道需要真实中间态）'
                  '或频率与能级间隔不匹配 —— 该波不会产生任何转移')
-    ratio = None
-    vmax = prs.get('max_abs_v_mhz')
-    om = cfg.get('max_freq_mhz')
-    if vmax and om:
-        ratio = float(vmax) / float(om)
-        if ratio > 1.0:
-            w.append('maxΩ/ω=%.2f > 1：已出 RWA 适用区（物理存疑，数值未必错）'
-                     % ratio)
+    ratio = _omega_ratio(prs, cfg)
+    if ratio is not None and ratio > 1.0:
+        w.append('maxΩ/ω=%.2f > 1：已出 RWA 适用区（逐对取最大；物理存疑，'
+                 '数值未必错）' % ratio)
     Ms = pho.get('Ms') or meta.get('M') or []
     try:
         from . import params as _P
