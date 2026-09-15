@@ -613,7 +613,7 @@ from .evolve_twofield import (build_two_field, arbitrary_mw_group,  # noqa: E402
 
 def evolve_hard(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
                 progress_arr=None, log=None, record_amp=False, numba=False,
-                decays=None):
+                decays=None, max_step_hard=None):
     """微波硬算 + 光场旋转系（第一性原理，**零微波近似**）——method='hard'。
 
     numba=True 时委托 hard_numba.evolve_hard_fast（同数学、同 DOP853、
@@ -641,7 +641,8 @@ def evolve_hard(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
         return evolve_hard_fast(states, fields_meta, psi0, t_grid,
                                 rtol=rtol, atol=atol,
                                 progress_arr=progress_arr, log=log,
-                                record_amp=record_amp, decays=decays)
+                                record_amp=record_amp, decays=decays,
+                                max_step_hard=max_step_hard)
     from scipy.integrate import solve_ivp
     log = log or (lambda *a: None)
     t = np.asarray(t_grid, float)

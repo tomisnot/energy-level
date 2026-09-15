@@ -52,7 +52,18 @@ def arbitrary_mw_group(cache, states, wave):
                       mw_groups=[arbitrary_mw_group(cache, states, wave)])。
     """
     from scipy.signal import hilbert
-    q = {'σ+': +1, 'π': 0, 'σ-': -1}.get(wave.pol, 0)
+    # 2026-09-15 修（核查报告 D2）：这里原本**又手写了一份** q 映射——全仓库
+    # 第三份（另两份：`evolve_util._POL_Q`、`static_atom` 的球基系数）。而且未知/
+    # "椭圆偏"会**静默落到 q=0（= π）**：GUI 里同一项"偏振=椭圆偏"在 hard 档
+    # 悄悄退化成单 q，而 mixed/sambe 才是真椭偏相干叠加——用户会以为三档只是
+    # 速度不同。现统一走 `_POL_Q`，并对不支持的情形**明确告警**（改物理必须交代）。
+    import warnings as _warn
+    from .evolve_util import _POL_Q as _POLMAP
+    if wave.pol == '椭圆偏':
+        _warn.warn('hard/两场引擎不支持"椭圆偏"（只吃单 q 偏振）：本场已按 '
+                   'π(Δm=0) 处理。需要真椭偏请改用 mixed 或 sambe 档。',
+                   RuntimeWarning, stacklevel=2)
+    q = _POLMAP.get(wave.pol, 0)
     E0_sq = core.field_e0_sq(float(wave.intensity_mwcm2))
     N = len(states)
     A = np.zeros((N, N))

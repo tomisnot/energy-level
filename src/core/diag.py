@@ -169,6 +169,14 @@ def warnings(diag, cfg=None):
     if int(meta.get('n_drop_cap') or 0) > 0:
         w.append('有 %s 对因成本窗被剔除（等于改了模型，结论需交代）'
                  % meta.get('n_drop_cap'))
+    # D1（2026-09-15）：光场对因 BW_OPT 被丢弃——原来完全静默（同族机制却有 loud
+    # 统计）。BW_OPT 名义上是"双峰分离器"（共振对 ~0 vs 反旋 ~2ω），但它同时会
+    # 删掉任何落在 20 GHz~2ω 之间的光场对，必须交代。
+    if int(meta.get('n_drop_bw') or 0) > 0:
+        w.append('有 %s 对光场耦合因 BW_OPT(%.0f MHz) 被剔除'
+                 '（最大 |v|=%.3g MHz；等于改了模型，结论需交代）'
+                 % (meta.get('n_drop_bw'), float(meta.get('bw') or 0.0),
+                    float(meta.get('max_drop_bw_abs_v_mhz') or 0.0)))
     return w
 
 
