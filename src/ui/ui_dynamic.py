@@ -659,45 +659,20 @@ class DynamicPanel(QWidget):
         能量 = 组中心 + Zeeman(B) + DC-Stark(E)，与静态页/两体页同基准。
         label 含完整量子数，布居图/g/e 下拉共用。
         pump：可选 callable(frac)——每个能级组完成后上报（组内 DC-Stark
-        的 dme/Numerov 首算可能很慢，给 GUI 预处理泵逐组反馈，t72）。"""
+        的 dme/Numerov 首算可能很慢，给 GUI 预处理泵逐组反馈，t72）。
+
+        **2026-09-15（P4 同源收敛）**：实现搬到 `src.core.runspec.build_states`
+        （无 Qt）。并行扫描的 runner 调**同一个函数**，所以"扫描"在构造上就是
+        "把人点运行的那份配置跑 N 次"——不会再有第二套基组装配各自漂移
+        （SKILL 坑 18：离线脚本与登记册的 6P 展开规则曾不同）。
+        """
+        from ..core import runspec as _rs
         fld = getattr(self.main, 'field', None)
         B = (fld.b_gauss() if fld is not None
              else getattr(self.main, 'field_B', 0.0))
         E_vpcm = (fld.e_vpcm() if fld is not None else 0.0)
-        groups = list(self.main_groups)
-        specs = []
-        for gi, g in enumerate(groups):
-            n, l, j = g['n'], g['l'], g['j']
-            # 逐子能级裁剪（2026-09-12）：组条目可带 ms / Fs（None = 全展开，
-            # 默认路径与改前逐位一致）。判据与 static_atom 共用一处（P5）。
-            _ms, _Fs = core.trim_of(g)
-            _keep = core.sublevel_trim(_ms, _Fs)
-            hf = core.get_hyperfine_levels(self.cache, n, l, j, B)
-            if hf is None:
-                for m in np.arange(-j, j + 1e-9, 1.0):
-                    if _keep is not None and not _keep(dict(kind='mJ', mj=float(m))):
-                        continue
-                    E = core._sublevel_energy(self.cache, n, l, j, m, B)
-                    if abs(E_vpcm) > 1e-9:
-                        E += core.dc_stark_shift_mhz(
-                            self.cache, n, l, j, m, groups, E_vpcm, B)
-                    specs.append(dict(n=n, l=l, j=j, kind='mJ', m=float(m),
-                                      E_mhz=float(E)))
-            else:
-                for F, mF, e_hf, _w, amps in hf:
-                    if _keep is not None and not _keep(
-                            dict(kind='F', F=float(F), mF=float(mF))):
-                        continue
-                    E0 = self.cache.E_mhz(n, l, j)
-                    if abs(E_vpcm) > 1e-9:
-                        E0 += core.dc_stark_shift_mhz(
-                            self.cache, n, l, j, mF, groups, E_vpcm, B)
-                    specs.append(dict(n=n, l=l, j=j, kind='F', F=F, mF=mF,
-                                      E_hf=float(e_hf), E_mhz=float(E0),
-                                      amps=amps))
-            if pump is not None:
-                pump((gi + 1) / max(len(groups), 1))
-        return make_levels(self.cache, specs)
+        return _rs.build_states(self.cache, list(self.main_groups), B, E_vpcm,
+                                pump=pump)
 
     # ---------- 波形数据 ----------
     def _has_waves(self):
@@ -1149,7 +1124,13 @@ class DynamicPanel(QWidget):
                 self.main.log(f'⚠ 任意波形「{w.name}」：{msg}')
 
     def _run_single_body(self, states, t, decays):
-        """单原子演化路径（定时器/对话框已在 _run 启动）。"""
+        """单原子演化路径（定时器/对话框已在 _run 启动）。
+
+        **2026-09-15（P4 同源收敛）**：场构造/改道判据/初态解析改调
+        `src.core.runspec`（无 Qt）——并行扫描的 runner 走**同一段代码**，
+        所以"扫描"与"人点运行"在构造上不可能分叉。
+        """
+        from ..core import runspec as _rs
         waves = list(self.wave_panel.waves)
         method = self.method_cb.currentText()
         # t79：**mixed 已支持任意波形微波**（微波项 env·cos(ωt) →
@@ -1157,55 +1138,18 @@ class DynamicPanel(QWidget):
         # 一起从 Sambe 光子块（无 RWA）降级到旋转系 RWA，等于作废用户选
         # mixed 的意图。sambe 仍不支持（光子块扩展空间需单一载频）→ 只有它
         # 改道 hard。光强包络（FileEnv）是普通 Wave，三者都不受影响。
-        has_arb = any(isinstance(w, waveforms.ArbitraryWave) for w in waves)
-        if method == 'sambe' and has_arb:
-            self.main.log('sambe 不支持任意波形（完整驱动无载频）→ 自动改用 '
-                          'hard；若文件只是光强形状，请按「＋任意 → 作为光强包络」导入')
-            method = 'hard'
+        method, _note = _rs.effective_method(method, [waves])
+        if _note:
+            self.main.log(_note)
         engine_kwargs = {}          # t79：mw_arb 与上帝模式覆写都挂这里
         self._sync_t_end(t)
         self._check_arb_applicability(waves, states, t)
         self._prep('构造驱动场', 0.85)
-        if method == 'sambe':
-            # 第一性原理场（Sambe 光子块）：全部偶极对耦合，无近/远分流与
-            # 静态 AC 注入（引擎 sambe.evolve_sambe）
-            fields = waveforms.build_fields_exact(self.cache, states, waves)
-        elif method == 'mixed':
-            # t62 混合引擎（光 Sambe 光子块 + 微波当场）——fields 同构
-            # build_fields_exact（evolve_mixed 正式版内部做 far_sos AC 化）
-            # t79：任意波形（无载频）**不进** build_fields_exact（它按单一
-            # 载频建 kind='exact' 场，遇 arb 直接抛错）；改经
-            # arbitrary_mw_group 转成 mw_arb，由引擎的 cos(φ(t)) 通道积分。
-            from ..core.evolve_twofield import arbitrary_mw_group
-            _reg = [w for w in waves
-                    if not isinstance(w, waveforms.ArbitraryWave)]
-            _arb = [w for w in waves
-                    if isinstance(w, waveforms.ArbitraryWave)]
-            fields = waveforms.build_fields_exact(self.cache, states, _reg)
-            if _arb:
-                engine_kwargs['mw_arb'] = [
-                    arbitrary_mw_group(self.cache, states, w) for w in _arb]
-                self.main.log(
-                    f'mixed：任意波形微波 {len(_arb)} 条 → arbitrary_mw_group '
-                    '（Hilbert 分解 env/φ）→ 微波项 cos(φ(t)) 当场积分')
-            self.main.log('mixed：光场 Sambe 光子块 + 微波当场'
-                          '（φ-帧，t62 验证 ≡frozen 1e-5~1e-8 级）')
-        else:
-            # hard：两场引擎 meta（光旋转 + 微波硬积分）——普通波走
-            # build_two_field；ArbitraryWave 走 arbitrary_mw_group 并入
-            # mw_groups（cos(φ_f(t)) 任意相位路径，t18）。
-            from ..core.evolve_twofield import (build_two_field,
-                                                arbitrary_mw_group)
-            regular = [w for w in waves
-                       if not isinstance(w, waveforms.ArbitraryWave)]
-            arb = [w for w in waves
-                   if isinstance(w, waveforms.ArbitraryWave)]
-            meta = build_two_field(self.cache, states, regular,
-                                   t_end_ns=float(t[-1]))
-            for w in arb:
-                meta['mw_groups'].append(
-                    arbitrary_mw_group(self.cache, states, w))
-            fields = meta
+        fields, _ek, _notes = _rs.build_fields_single(
+            self.cache, method, states, waves, float(t[-1]))
+        engine_kwargs.update(_ek)
+        for _m in _notes:
+            self.main.log(_m)
         self.wave_data = waveforms.waveforms_to_env(waves, t)
         # 初态：spec 优先（叠加态持久真值）；没选到能级 → 报错，不静默回落
         psi0 = self._psi0_for('single')
@@ -1248,85 +1192,31 @@ class DynamicPanel(QWidget):
         self._worker.start()
 
     def _run_two_body(self, states, t):
-        """双原子演化路径（后台线程；定时器/对话框已在 _run 启动）。"""
+        """双原子演化路径（后台线程；定时器/对话框已在 _run 启动）。
+
+        **2026-09-15（P4 同源收敛）**：场构造/改道判据改调
+        `src.core.runspec.build_fields_pair`（无 Qt）——两体并行扫描走同一段。
+        """
+        from ..core import runspec as _rs
         waves_A = list(self.wave_panel_A.waves)
         waves_B = list(self.wave_panel_B.waves)
         method = self.method_cb.currentText()
         # t79：mixed 已支持任意波形微波（微波项 cos(φ(t))）——不再改道；
         # 只有 sambe（光子块需单一载频）保留改道。光强包络（FileEnv）是
         # 普通 Wave，三者都不受影响。
-        has_arb = any(isinstance(w, waveforms.ArbitraryWave)
-                      for w in waves_A + waves_B)
-        if method == 'sambe' and has_arb:
-            self.main.log('sambe 不支持任意波形（完整驱动无载频）→ 自动改用 '
-                          'hard；若文件只是光强形状，请按「＋任意 → 作为光强包络」导入')
-            method = 'hard'
+        method, _note = _rs.effective_method(method, [waves_A, waves_B])
+        if _note:
+            self.main.log(_note)
         engine_kwargs = {}          # t79：mw_arb_A/B 与上帝模式覆写都挂这里
         self._sync_t_end(t)
         self._check_arb_applicability(waves_A + waves_B, states, t)
-        if method == 'mixed':
-            # t62 两体混合引擎（正式版 evolve_mixed_pair——光场光子块 +
-            # 微波/V_dd 当场，φ-帧；dim 1452 = 5 倍降维 vs 全 Sambe）
-            self.main.log('mixed 两体：光场 Sambe 光子块 + 微波/V_dd 当场'
-                          '（φ-帧，dim 5 倍降维）')
-            # 第一性两体（mixed 吃 kind='exact' fields——build_fields_exact；
-            # mixed 内部 AC 化远强对 + 当场微波）
-            # t79：任意波形不进 build_fields_exact（它按单一载频建场，遇 arb
-            # 直接抛错），分侧转成 mw_arb_A/B 交给引擎的 cos(φ(t)) 通道。
-            from ..core.evolve_twofield import arbitrary_mw_group
-            self._prep('构造驱动场 A', 0.82)
-            regA = [w for w in waves_A
-                    if not isinstance(w, waveforms.ArbitraryWave)]
-            arbA = [w for w in waves_A
-                    if isinstance(w, waveforms.ArbitraryWave)]
-            fields_A = waveforms.build_fields_exact(self.cache, states, regA)
-            self._prep('构造驱动场 B', 0.87)
-            regB = [w for w in waves_B
-                    if not isinstance(w, waveforms.ArbitraryWave)]
-            arbB = [w for w in waves_B
-                    if isinstance(w, waveforms.ArbitraryWave)]
-            fields_B = waveforms.build_fields_exact(self.cache, states, regB)
-            if arbA:
-                engine_kwargs['mw_arb_A'] = [
-                    arbitrary_mw_group(self.cache, states, w) for w in arbA]
-            if arbB:
-                engine_kwargs['mw_arb_B'] = [
-                    arbitrary_mw_group(self.cache, states, w) for w in arbB]
-            if arbA or arbB:
-                self.main.log(
-                    f'mixed 两体：任意波形微波 A={len(arbA)} B={len(arbB)} 条 '
-                    '→ arbitrary_mw_group（Hilbert 分解 env/φ）→ '
-                    '微波项 cos(φ(t)) 当场积分')
-        elif method == 'sambe':
-            # 第一性两体（Sambe 吃 kind='exact' fields）
-            self._prep('构造驱动场 A', 0.82)
-            fields_A = waveforms.build_fields_exact(self.cache, states,
-                                                    waves_A)
-            self._prep('构造驱动场 B', 0.87)
-            fields_B = waveforms.build_fields_exact(self.cache, states,
-                                                    waves_B)
-        else:
-            # hard：pair hard——各原子两场 meta（普通波 build_two_field +
-            # ArbitraryWave→arbitrary_mw_group）；V_dd 在主线程预计算
-            from ..core.evolve_twofield import (build_two_field,
-                                                arbitrary_mw_group)
-            self._prep('构造驱动场 A', 0.82)
-
-            def _meta(wvs):
-                reg = [w for w in wvs
-                       if not isinstance(w, waveforms.ArbitraryWave)]
-                arb = [w for w in wvs
-                       if isinstance(w, waveforms.ArbitraryWave)]
-                m = build_two_field(self.cache, states, reg,
-                                    t_end_ns=float(t[-1]))
-                for w in arb:
-                    m['mw_groups'].append(
-                        arbitrary_mw_group(self.cache, states, w))
-                return m
-
-            fields_A = _meta(waves_A)
-            self._prep('构造驱动场 B', 0.87)
-            fields_B = _meta(waves_B)
+        self._prep('构造驱动场 A', 0.82)
+        fields_A, fields_B, _ek, _notes = _rs.build_fields_pair(
+            self.cache, method, states, waves_A, waves_B, float(t[-1]))
+        self._prep('构造驱动场 B', 0.87)
+        engine_kwargs.update(_ek)
+        for _m in _notes:
+            self.main.log(_m)
         # 波形预览：合并 A+B
         env_A = waveforms.waveforms_to_env(waves_A, t)
         env_B = waveforms.waveforms_to_env(waves_B, t)

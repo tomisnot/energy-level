@@ -20,9 +20,16 @@ dist/
 # UI 设计检查的临时产物（可随时由 ui_design/*.py 重生成，不入库）
 ui_design/screenshots/
 
-# DSH 本机接线（.dsh/skills 下是指向 skills/ 的 junction；技能内容本身在
-# skills/ 内正常入库，这里只是每台机器的挂载点，不入库）
+# DSH 本机接线（实测是 **hardlink**：.dsh/skills/energy-level/SKILL.md ↔
+# skills/energy-level/SKILL.md，改一处两处都变；技能内容本身在 skills/ 内
+# 正常入库，.dsh/ 只是每台机器的挂载点，不入库）
+# ⚠ 复制仓库时 robocopy 会**把 hardlink 实体化**（两边变普通文件、不再联动），
+#   副本里需手工重建：cmd /c mklink /H <副本>\.dsh\skills\energy-level\SKILL.md
+#   <副本>\skills\energy-level\SKILL.md
 .dsh/
 
 # CodeAct（run_python）运行记录：result/stdout/代码，本机产物，不入库
 runtime/ai_results/
+
+# 并行扫描的作业目录（spec/status/points/npz/log）：本机产物，不入库
+runtime/sweeps/

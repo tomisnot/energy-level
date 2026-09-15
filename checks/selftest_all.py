@@ -16,6 +16,18 @@
 | full（默认） | 4 | 31 | 183 | 661 | **128 / 135 / 134 s**（连跑 3 次） | 0 FAIL |
 | full（默认） | 1 | 31 | 183 | 661 | **358 s** | 0 FAIL |
 | all（含 deep） | 4 | 36 | 238 | 716 | **165 s** | 0 FAIL（1 SKIP） |
+| **full（2026-09-15 加并行扫描 4 个脚本后）** | 3 | **35** | **195** | **792** | **160 / 162 s**（连跑 2 次） | 0 FAIL |
+
+## 2026-09-15 新增：并行扫描（`src/sweep`）的 4 个自检
+
+| 脚本 | 档 | 项(包) | 子条件 | 覆盖 |
+|---|---|---|---|---|
+| `sweep_spec_selfcheck.py` | fast | 9 | 50 | 轴寻址/展开/网格顺序/深拷贝/并行度定档/runspec 纯函数/**core 导入的 Qt 洁净度**/SOLVE_KWARG 镜像/**status.json 并发读写 race** |
+| `sweep_ai_wiring_selfcheck.py` | fast | 4 | 19 | 5 个 MCP 工具注册+描述、CodeAct 白名单注入、`run_code` 真透传、归因且不污染 undo 栈 |
+| `sweep_gui_selfcheck.py` | slow | 5 | 19 | 逐点进度行/折叠、画布那行字、取消不阻塞主线程、MainWindow 接线、与 AI 同一份数据 |
+| `sweep_e2e_selfcheck.py` | slow | 7 | 33 | 扫描≡单点（npz 逐位）、串行≡并行（逐位）、轴真生效、取消+无孤儿、落盘、record 档位、runspec⇄GUI 同源 |
+
+设计取舍、实测踩坑与验收锚点见 `docs/并行扫描-设计与验收.md`。
 
 ## 三个档（2026-09-14 用户裁决："动动脑子，哪些不用测…给我把全量测试时间压到 3 分钟"）
 
@@ -87,6 +99,8 @@ _PLAN = [
     ('mw_pair_keep_selfcheck.py', 'fast'),
     ('ai_codeact_tools_selfcheck.py', 'fast'),
     ('ai_semantic_state_selfcheck.py', 'fast'),
+    ('sweep_spec_selfcheck.py', 'fast'),
+    ('sweep_ai_wiring_selfcheck.py', 'fast'),
     ('ai_superposition_selfcheck.py', 'fast'),
     ('ai_pair_superposition_selfcheck.py', 'fast'),
     ('gui_diag_summary_test.py', 'fast'),
@@ -101,6 +115,8 @@ _PLAN = [
     ('gui_ellip_row_test.py', 'slow'),
     ('gui_cost_dialog_test.py', 'slow'),
     ('sublevel_trim_selfcheck.py', 'slow'),
+    ('sweep_gui_selfcheck.py', 'slow'),
+    ('sweep_e2e_selfcheck.py', 'slow'),
     ('ui_selftest.py', 'slow'),
 ]
 

@@ -343,6 +343,16 @@ class MainWindow(QMainWindow):
         self.canvas_tabs.currentChanged.connect(self._on_canvas_tab_changed)
         top.addWidget(self.canvas_tabs, 3)
 
+        # 并行扫描的人侧可见面（用户口径 2026-09-15："倾向于 AI 使用，但
+        # 需要做出 UI 让人类知道在并行，画布上也要有一行文本"）。
+        # 两个部件都**只读** src.sweep.registry.status()——与 AI 的
+        # `sweep_status` 读同一份 status.json（P2 人机同源），且都不阻塞
+        # 主线程（取消只写 cancel 文件，等待交给 1 Hz 轮询）。
+        from src.ui.sweep_panel import SweepProgressWindow, CanvasBanner
+        self.sweep_banner = CanvasBanner(self.canvas_tabs)
+        self.sweep_window = SweepProgressWindow(self, banner=self.sweep_banner)
+        self.sweep_banner._on_click = self.sweep_window.raise_panel
+
         self.panel_scroll = QScrollArea()
         self.panel_scroll.setWidgetResizable(True)
         self.panel_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)

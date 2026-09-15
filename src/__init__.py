@@ -114,12 +114,29 @@ _patch_arc_datafolder()
 from .core import pair_core       # noqa: E402,F401
 from .core import evolve_exact    # noqa: E402,F401
 from .core import waveforms       # noqa: E402,F401
-from .ui import fields            # noqa: E402,F401
-from .ui import ui_theme          # noqa: E402,F401
-from .ui import ui_single         # noqa: E402,F401
-from .ui import ui_radar          # noqa: E402,F401
-from .ui import ui_waves          # noqa: E402,F401
-from .ui import ui_dynamic        # noqa: E402,F401
-from .ui import evolve_worker     # noqa: E402,F401
-from .ui import app_state         # noqa: E402,F401
-#from .ui import pages             # noqa: E402,F401
+
+# ---------------- UI 兼容导出改成**惰性**（2026-09-15） ----------------
+# 原先这里 8 行 `from .ui import …` 是**急切**导入 ⇒ 任何 `import src.core.X`
+# 都会连带拉起 PyQt5、fields/pm_setup 以及外部依赖 `param_manager`。
+# 后果：并行扫描的 runner 子进程（只想要核心物理）被迫加载整个 GUI 栈，
+# 每个 worker 白付一次导入代价，还可能把 Qt 带进 headless 进程。
+# 改成 PEP 562 惰性属性后：
+#   · `from src import ui_theme` / `src.ui_dynamic` 等**写法完全不变**；
+#   · `import src.core.runspec` 只拉起 core（无 Qt、无 param_manager）
+#     ⇒ runner/worker 真正 headless。
+#   · `import src.ui.xxx` 直接导入本来就不经这里，一直是好的。
+_LAZY_UI = ('fields', 'ui_theme', 'ui_single', 'ui_radar', 'ui_waves',
+            'ui_dynamic', 'evolve_worker', 'app_state')
+
+
+def __getattr__(name):
+    if name in _LAZY_UI:
+        import importlib
+        mod = importlib.import_module('%s.ui.%s' % (__name__, name))
+        globals()[name] = mod                 # 命中一次后转常规属性
+        return mod
+    raise AttributeError('module %r has no attribute %r' % (__name__, name))
+
+
+def __dir__():
+    return sorted(list(globals()) + list(_LAZY_UI))

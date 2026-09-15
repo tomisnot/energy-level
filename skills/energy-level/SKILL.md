@@ -42,6 +42,11 @@ energy-level http://127.0.0.1:8765/mcp`；通用 JSON 形态同上。
   add_level_group(n,l,j) remove_level_group(i) set_waves(list,atom)
   save_archive(path) load_archive(path)
   run_compute_and_wait(timeout=1800,poll=1.0,save_npz=False)
+  submit_compute(diag=True)
+  submit_sweep(axes=…)/sweep_status(sid)/sweep_result(sid,states=…)
+  cancel_sweep(sid)/list_sweeps()/run_sweep_and_wait(…)
+  job_status(jid) job_result(jid) list_jobs() result_states(…)
+  list_params(prefix) get_diag(scope) cancel_job(jid)
   activity(since=0) np(=numpy) json time ROOT`
 - 要自己写文件请**拼字符串**：`np.savez(ROOT + '/runtime/ai_results/x.npz', ...)`。
   用 `os.path.join` 会直接 `NameError`——这是刻意的设计边界（状态变更必须
@@ -108,6 +113,11 @@ summary()['code']
 | `run_python_async(code)` | **CodeAct 异步版**：立即返回 run_id | 长扫描/大系综；断线不丢结果 |
 | `run_result(run_id)` | 取运行状态与结果 | 只读文件，**长任务期间也能查** |
 | `list_runs(limit)` | 列出最近运行记录 | 断线重连后找回 run_id |
+| **`submit_sweep(axes,…)`** | **并行扫描**：一次调用把 N 个参数点交给**多进程池** | 立即返回 sweep_id；**跑网格的首选**，见下节 |
+| `sweep_status(sweep_id)` | 逐点进度（含每点百分比/进程数/定档理由） | 只读文件、不经 Qt 主线程 ⇒ 长扫描期间也能查 |
+| `sweep_result(sweep_id, states)` | 逐点摘要 + **关注态的汇总表** | `states=[…]` 给 `selected_table`（行=点，列=态） |
+| `cancel_sweep(sweep_id)` | 取消并行扫描 | 先优雅（已完成点保留），超时才硬杀进程树 |
+| `list_sweeps(limit)` | 列出最近的并行扫描 | 与 `list_jobs` 同构；断线后找回 sweep_id |
 
 ## v3 登记册的 AI 可及面（2026-09 参数管理改造）
 
@@ -221,6 +231,85 @@ submit_compute()                                # 重活走异步，别同步等
 `scripts/tmp/ai_job*.npz`（`run_compute_and_wait(save_npz=True)` 会给路径），
 用本地脚本读 npz 做精细分析，别往 context 灌数组。**脚本级的 result /
 stdout / 代码**则自动落在 `runtime/ai_results/`（见上"结果自动落盘"）。
+
+## 并行扫描（CPU 多进程）——2026-09-15 加，**跑网格的首选**
+
+**以前**：想扫 50 个点，只能写 `run_python` 脚本逐点 `run_compute_and_wait` ——
+串行、占满整个回合、还要自己写归并（`scripts/tmp/_scan2d_par.py` 那类）。
+**现在**：一次 `submit_sweep` 把整个网格交给**独立 runner 进程**的多进程池。
+
+```python
+r = submit_sweep(axes={
+      'field.lights[0].intensity': [4, 5, 6],
+      'dynamic.waves_A[0].freq_mhz': {'linspace': [7300, 7420, 25]},
+    }, states=['60S', '60P', '58G'], tag='freeze-2d', workers=10)
+# → {'ok':True,'sweep_id':'sw20260915_…','n_points':75,'workers':10,
+#    'workers_why':'…', 'dir':'runtime/sweeps/sw…'}   ← 立即返回，不阻塞
+sweep_status(r['sweep_id'])            # 逐点百分比 / 完成数 / 进程数
+sweep_result(r['sweep_id'], states=['60S', '58G'])['selected_table']
+#   → [{'k':0,'tag':'…','60S':0.9994,'58G':0.0012}, …]   ← 直接看趋势
+cancel_sweep(r['sweep_id'])            # 取消（已完成点保留）
+```
+
+### 轴怎么写
+
+- **轴键 = 登记册全路径**（`list_params()` 那套名字），可带索引：
+  `'dynamic.t_max'`、`'field.lights[0].intensity'`、`'dynamic.waves_A[0].env'`、
+  `'groups.list'`（整表替换）。规则 = **第一个 `[` 之前是登记键**，之后是索引/字段。
+- **轴值五种**：`[4,5,6]`（显式）、`{'linspace':[起,止,点数]}`、`{'arange':[起,止,步长]}`、
+  `{'logspace':[起,止,点数]}`、`{'value': 整表}`（把整个 list 当一个取值，用于
+  波形表/包络这类**本身就是 list** 的参数）。
+- 多轴 = **笛卡尔积**；顺序确定（轴名排序，**最后一个轴变化最快**）。
+- `points=[{路径:取值}, …]` 可显式逐点（与 axes 并用时排在 axes 之后）。
+
+### 结果口径（别读错）
+
+- `sweep_result(..., states=['60P','58G'])` 的 **`selected_table`**：行=扫描点、
+  列=态片段、值=**该片段命中的态终态布居之和**。这是看趋势最省事的形态。
+- 每点摘要里的布居是 **6 位小数舍入**（与 `job_result` 口径一致）；
+  **全精度**在每点 npz（`points/pt_XXXX.npz` 的 `final_pop`，float64）。
+  要做位级对拍就读 npz，别读摘要。
+- `record` 档位：`'final'`（默认，只存终态）/ `'pops'`（另存降采样序列
+  `series_t`/`series_pop`，点数由 `record_npts` 控）/ `'none'`（只留摘要）。
+- 落盘位置：`runtime/sweeps/<sweep_id>/`（`spec.json` 可复现、`status.json` 进度、
+  `points/` 每点成果、`runner.log`）。**每点跑完即落盘** ⇒ runner 被杀也不丢已完成点。
+
+### 并行度是自动定的
+
+不传 `workers` 时按 `min(核数−1, 可用内存×40% ÷ 单进程峰值, 点数)` 定档，
+两体按实测锚点 dim=4624→1.36 GB 做 dim² 外推。**为什么是这个数**写在
+`sweep_status(...)['workers_why']` 里（一句人话）。要提速就显式给 `workers`，
+但**先看 `estimate_cost()` 的内存建议**——两体大 dim 下 W×1.36 GB 会吃满内存。
+
+### 为什么它和"人点运行"同源
+
+runner 用的是 `src/core/runspec.py`（无 Qt）：`build_states` / `build_fields_*` /
+`resolve_psi` / `resolve_decays` / `god_kwargs_from_params` / `evolve_run`。
+GUI 的 `_current_states`/`_run_*` 也调同一批函数 ⇒ **扫描 ≠ 另一套配置解析**，
+不会出现"离线脚本与登记册基组不同源"那类静默分叉。
+`checks/sweep_e2e_selfcheck.py` 的 G 包按**生效值**对拍这条。
+
+### 并行扫描的坑
+
+1. **需要开发模式（非 frozen）**：runner 是 `sys.executable scripts/sweep_runner.py`
+   子进程。PyInstaller 打包运行下会**明确报错**（不静默退化）。
+2. **子进程继承提交侧的 `sys.path`**（`EL_SWEEP_SYS_PATH`）：软件本体可能依赖
+   项目外的包（本项目的 `param_manager` 就是同级另一个仓库），不继承就会
+   在远处的 worker 里 import 失败、很难归因。
+3. **每个 worker 独立付一次导入/JIT 成本**：`hard` 引擎的 numba JIT 每进程
+   各编一次（几秒）。点很短时"并行"可能比串行慢——**点越多越划算**。
+4. **`V_dd` 是每 worker 记忆化的**：不碰 `dynamic.pair.R_um/theta_deg/phi_deg`
+   的轴，每个 worker 只算一次 V_dd；碰了这三者就每点重算（很贵）。
+5. **位级一致的前提是 BLAS 线程钉成 1**：runner 与 worker 都设
+   `OMP/MKL/NUMBA=1`；GUI 交互跑用默认线程数 ⇒ "GUI 单跑结果 vs 扫描点"
+   只保证到积分器容差级（不是逐位）。
+6. **不是所有 solve.* 每个引擎都收**：`frozen_h_ns` 是 sambe 两体的旋钮，
+   `evolve_mixed*` 签名里**没有**它。runspec 按签名**显式白名单**过滤并
+   把被丢掉的键写进 `warnings`（不静默、也不 TypeError）。
+7. **扫描不参与 `undo`**：提交/取消只记 `journal`（**无快照**），所以
+   「撤销AI」不会被一次扫描顶掉（撤的是最近一次真正的状态变更）。
+8. **人机同源可见**：扫描期间 GUI 右下角有逐点进度悬浮窗、画布顶部有一行
+   "⚡ 并行扫描运行中"，两者读的是**同一份** `status.json`（= 你 `sweep_status` 读的）。
 
 ## 波形格式（set_waves 的 waves 列表元素）
 

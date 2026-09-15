@@ -71,3 +71,56 @@ def make_levels(cache, specs):
     return states
 
 
+# ---------------- 子能级唯一身份键（跨模块共用） ----------------
+# 2026-09-15：从 src/ui/ui_waves.py **搬到这里**（无 Qt）。原因：并行扫描的
+# runner 跑在独立子进程里，要按身份键解析初态；若继续放 ui_waves，子进程
+# 就会被拖进 PyQt5 导入。ui_waves 保留同名再导出，既有调用方零改动。
+def state_key(s):
+    """子能级身份键：(kind, n, l, j, m, energy_rounded)。
+
+    - kind='F' 时 m = m_F；kind='mJ' 时 m = m_J
+    - 末位能量（MHz，6 位小数）使键跨 B 稳定、与 F 标号无关、天然无重复；
+      旧存档（无能量位）经 find_state_index 前缀回退兼容。
+    """
+    en = round(float(s['E_mhz']), 6)
+    if s.get('kind') == 'F':
+        return ('F', int(s['n']), int(s['l']), float(s['j']),
+                float(s['mF']), en)
+    return ('mJ', int(s['n']), int(s['l']), float(s['j']),
+            float(s['m']), en)
+
+
+def find_state_index(states, spec):
+    """states 中匹配身份键 spec 的第一个索引（0 基）；找不到返回 -1。
+
+    匹配顺序：① 完整键（含能量）精确；② 前 5 元 (kind,n,l,j,m) 精确
+    （兼容旧存档无能量位 / 能量微漂）；③ (kind,n,l,j,m) 组内能量最近
+    （B 漂移后 F 标号/能量变化）。
+    """
+    if not spec:
+        return -1
+    spec = tuple(spec)
+    keys = [state_key(s) for s in states]
+    # ① 完整键精确（含能量）
+    for i, k in enumerate(keys):
+        if k == spec:
+            return i
+    # ② 前 5 元精确（旧存档 / 同 (n,l,j,m) 能量微漂）
+    if len(spec) >= 5:
+        base = spec[:5]
+        for i, k in enumerate(keys):
+            if k[:5] == base:
+                return i
+    # ③ (kind,n,l,j,m) 组内能量最近
+    base = spec[:5]
+    best, bd = -1, None
+    ref_e = spec[5] if len(spec) > 5 else None
+    for i, k in enumerate(keys):
+        if k[:5] != base:
+            continue
+        d = abs(k[5] - ref_e) if ref_e is not None else 0.0
+        if bd is None or d < bd:
+            best, bd = i, d
+    return best
+
+

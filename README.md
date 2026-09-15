@@ -92,7 +92,16 @@ pip install "mcp>=2,<3" uvicorn     # 可选依赖；缺失时软件照常运行
 即可驱动：AI 改参数/点计算，GUI 实时反映（控件闪紫框）；人可随时点「撤销AI」回滚。
 
 - 工具面：状态读写 / 参数 / 能级组 / 波形 / 计算与作业 / 流水与撤销 / 存档 / 截图 /
-  **`run_python`（CodeAct，多步编排一次调用跑完）**——完整清单见手册 §1.9。
+  **`run_python`（CodeAct，多步编排一次调用跑完）** /
+  **`submit_sweep`（并行扫描，见下）**——完整清单见手册 §1.9。
+- **并行扫描（2026-09-15 加）**：`submit_sweep(axes={…})` 一次调用把整个参数网格交给
+  **独立 runner 进程的多进程池**（`src/sweep/`），立即返回 `sweep_id`；
+  `sweep_status` / `sweep_result` / `cancel_sweep` / `list_sweeps` 跟进。
+  轴用**登记册路径**表达（`'field.lights[0].intensity'`、`'dynamic.waves_A[0].env'`、
+  `'dynamic.t_max'`），支持 `{'linspace':…}` 等形态并自动做笛卡尔积；并行度按
+  **核数 + 可用内存**自动定档并给出理由。人侧在右下角有**逐点进度悬浮窗**、
+  画布顶部有一行「⚡ 并行扫描运行中」，两者与 AI 读**同一份** `status.json`。
+  设计与验收见 `docs/并行扫描-设计与验收.md`。
 - **给 AI 看的说明书**：`skills/energy-level/SKILL.md`（工具语义、单位约定、波形格式、
   20+ 条已知坑）。AI 使用中发现不符可回头修正（自我迭代）。
 - 人机协同协议与意见登记区见 `docs/AI协同-分工与请示.md`。
