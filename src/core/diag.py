@@ -74,7 +74,7 @@ def _omega_ratio(prs, cfg=None):
         ws = prs.get('w')
         vs = prs.get('v')
         if ws is not None and vs is not None:
-            num = _np.abs(_np.asarray(vs, dtype=float)).ravel()
+            num = _np.abs(_np.asarray(vs, dtype=complex)).ravel()
             den = _np.abs(_np.asarray(ws, dtype=float)).ravel()
             rr = [float(a) / float(b) for a, b in zip(num, den) if float(b) > 0]
             if rr:

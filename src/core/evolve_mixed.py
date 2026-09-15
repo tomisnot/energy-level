@@ -690,9 +690,11 @@ def _build_pair_geometry(E, optA_ac, optB_ac, omega_opt, bw_opt=None):
                                   float(K0[a] - K0[b]), env))
             else:
                 # D1：**不静默**——记账（数量 + 被剔项最大 |v|），供 diag 告警
+                # N3 修：`val` 是 complex（Kcw[a,b]），`float(val)` 会刷 ComplexWarning
+                # 且语义是"取实部"（将来出现复耦合会静默算错）⇒ 用 complex 再取模。
                 _BW_STATS['n_drop_bw'] += 1
                 _BW_STATS['max_drop_abs_v_mhz'] = max(
-                    _BW_STATS['max_drop_abs_v_mhz'], abs(float(val)))
+                    _BW_STATS['max_drop_abs_v_mhz'], abs(complex(val)))
     return K0, pairs_opt, P, dim
 
 
@@ -701,6 +703,17 @@ def _build_pair_geometry(E, optA_ac, optB_ac, omega_opt, bw_opt=None):
 # 与诊断告警）——违反项目自定的"改物理必须交代"。几何构建与 diag 装配不在同一函数
 # （前者返回 4 元组，不宜改签名），故用模块级统计传递；引擎单次运行、非重入，够用。
 _BW_STATS = {'n_drop_bw': 0, 'max_drop_abs_v_mhz': 0.0}
+
+
+def _take_bw_stats():
+    """**读取并清零**（N2 修：模块级计数器必须每次运行独立——原来跨运行累积，
+    实测同一进程连跑两次两体 mixed：run1 `n_drop_bw=16` → run2 `=32`，
+    会让诊断虚高、归因错；GUI 连续运行 / 脚本扫描 / MCP 多次 run_compute 都会中）。"""
+    n = int(_BW_STATS.get('n_drop_bw', 0))
+    m = float(_BW_STATS.get('max_drop_abs_v_mhz', 0.0))
+    _BW_STATS['n_drop_bw'] = 0
+    _BW_STATS['max_drop_abs_v_mhz'] = 0.0
+    return n, m
 
 
 def _split_waves(fields, mw_max=None):
@@ -1091,8 +1104,8 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
                       # 2026-09-15（核查报告 D1）：光场对因 BW_OPT 被丢弃的数量——
                       # 与成本窗同款的"改了模型必须交代"；原来完全静默、且
                       # diag 侧读的 n_drop_cap/n_drop_phase 根本没有写入端（哑告警）。
-                      n_drop_bw=int(_BW_STATS['n_drop_bw']),
-                      max_drop_bw_abs_v_mhz=float(_BW_STATS['max_drop_abs_v_mhz']),
+                      n_drop_bw=(_bw := _take_bw_stats())[0],
+                      max_drop_bw_abs_v_mhz=float(_bw[1]),
                       labels=[f"({states[i]['label']})×({states[j]['label']})"
                               for i in range(N) for j in range(N)],
                       stride=N2),

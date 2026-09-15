@@ -1225,8 +1225,9 @@ class DynamicPanel(QWidget):
             # sambe 另有自己的面板通道。原来这里是**静默丢弃** ⇒ 用户以为
             # "给 hard 压步长能防欠采样"，实际无声无效。现在**明确报出被忽略的键**。
             self.main.log('[引擎参数] method=%s 不接收这些运行级参数，已忽略：%s'
-                          '（仅 mixed 生效；hard 的 max_step_hard 目前须经库 API '
-                          '直调内核）' % (method, ', '.join(sorted(gk))), 10000)
+                          '（仅 mixed 生效；hard 的 max_step_hard 请经库 API 直调 '
+                          '`hard.evolve_hard`——该入口已收此形参）'
+                          % (method, ', '.join(sorted(gk))), 10000)
         if pk:
             engine_kwargs['param_overrides'] = pk
         # ── 运行前成本报告（t84）：成本只该"换速度"，不该默默改模型 ──
@@ -1407,6 +1408,12 @@ class DynamicPanel(QWidget):
         pk = gk.pop('param_overrides', None)
         if method == 'mixed':
             engine_kwargs.update(gk)
+        elif gk:
+            # B1（两体路径）同样不得静默：被忽略的运行级参数要报出来
+            self.main.log('[引擎参数] 两体 method=%s 不接收这些运行级参数，'
+                          '已忽略：%s（仅 mixed 生效；hard 请直调 '
+                          '`hard.evolve_hard_pair`）'
+                          % (method, ', '.join(sorted(gk))), 10000)
         if pk:
             engine_kwargs['param_overrides'] = pk
         self._worker = EvolveWorkerPair(
