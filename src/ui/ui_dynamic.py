@@ -937,8 +937,12 @@ class DynamicPanel(QWidget):
         if getattr(self, '_dlg', None) is not None:
             self._dlg.close()
         self._dlg = None
-        self._pbar = None
-        self._stage_label = None
+        # ⚠ 2026-09-14 修（用户实测：算完进度条停在 90% 多不动）：
+        #   这里原来还有 `self._pbar = None` / `self._stage_label = None`——
+        #   那是"进度框随运行销毁"时代的产物。现在它们是**常驻**控件
+        #   （主窗口底栏），抹掉引用后没人再写、于是永远停在最后一次轮询值；
+        #   而下游 `_reset_progress_ui` 判空也成了空操作。改为**显式收尾**。
+        self._reset_progress_ui(idle=True)
         self._run_active = False
         w = getattr(self, '_worker', None)
         if w is not None:
@@ -955,7 +959,6 @@ class DynamicPanel(QWidget):
         self._worker = None
         self.run_btn.setEnabled(True)
         self.run_btn.setText('运行演化')          # 收尾：按钮复位为"运行"
-        self._reset_progress_ui(idle=True)
 
     def _sweep_retired_workers(self):
         """丢掉**已经退出**的 worker 引用（防 `_retired_workers` 无界增长）。
@@ -1455,6 +1458,11 @@ class DynamicPanel(QWidget):
           饿死——修复前 GIL 被 njit 持有，整段积分进度条纹丝不动且取消
           按钮无响应）；
         - 收尾（跨扇区投影/loss/约化）条 95→100%。"""
+        # ⚠ 2026-09-14 修（用户实测：算完停在 90% 多）：收尾后仍可能有**已排队**的
+        #   定时器事件投递进来（`QTimer.stop()` 不撤销已 post 的 timeout），
+        #   在此写入就会把终态覆盖回 ~95%。终态只由 `_finish_run_ui` 写。
+        if not getattr(self, '_run_active', False):
+            return
         pa = self.progress_arr
         stage = int(pa[2]) if len(pa) > 2 else 0
         p0 = min(max(float(pa[0]), 0.0), 1.0)

@@ -517,6 +517,34 @@ def test_progress(app):
           and np.max(np.abs(r2['pops'].sum(axis=1) - 1)) < 1e-6)
 
 
+# ============ 5b. 进度**控件**收尾（用户实测：算完停在 90% 多）============
+def test_progress_widget_finish(app, win):
+    """底栏常驻进度控件必须被**显式收尾**，且迟到轮询不得覆盖终态。
+
+    用户实测："进度条算完了之后就没管他，一直停在百分之九十多"。
+    根因：`_finish_run_ui` 里残留 `self._pbar = None` / `self._stage_label = None`
+    （进度**框**随运行销毁时代的产物）——常驻控件被抹掉引用后没人再写，就停在
+    最后一次轮询值；且 `QTimer.stop()` 不撤销已 post 的 timeout，收尾后仍可能
+    有一个迟到 tick 把值写回 ~95%。本组不跑真实演化，直接驱动收尾路径——
+    毫秒级，却精确钉住这两点。
+    """
+    group('进度控件收尾（算完不得停在中间值）',
+          '收尾后归零 + 终态文本；迟到轮询不得覆盖终态（-9 用户实测）')
+    dyn = win.dynamic
+    dyn._pbar.setValue(950)                     # 模拟"跑到收尾阶段"
+    dyn._stage_label.setText('收尾…（12s）')
+    dyn._run_active = True
+    dyn._worker = None
+    dyn._finish_run_ui()
+    check('收尾后进度条归零（不再停在 90% 多）', dyn._pbar.value() == 0)
+    check('收尾后阶段文本为终态（空闲）', dyn._stage_label.text() == '空闲')
+    check('收尾后 _run_active 置否', dyn._run_active is False)
+    dyn.progress_arr = np.array([0.95, 0.0, 2.0])   # 迟到 tick 的景象
+    dyn._poll_progress()
+    check('迟到轮询不得覆盖终态',
+          dyn._pbar.value() == 0 and dyn._stage_label.text() == '空闲')
+
+
 # ================= 6b. 存档/恢复走 GUI 真实方法（t78） =================
 def test_archive_roundtrip(app, win):
     """驱动 app_entry 的 `_save_state` / `_load_state`（= 工具栏两个按钮的真实入口）。
@@ -590,6 +618,7 @@ def main():
     test_state_save(app)
     test_archive_roundtrip(app, win)
     test_progress(app)
+    test_progress_widget_finish(app, win)      # -9 用户实测：算完停在 90% 多
     win.close(); app.processEvents()
     flush()                          # 关闭最后一个不变式包
     ok = C.summary()
