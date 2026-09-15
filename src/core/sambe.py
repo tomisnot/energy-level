@@ -205,6 +205,35 @@ class SambeSetup:
             self.Kc_dense = None
             self.opt_Ko_d = None
 
+    # ---- 光场耦合算符的**唯一取用入口**（2026-09-15 架构统一）----
+    def kc_lists(self, gi):
+        """第 `gi` 组的**光场耦合算符列表**——所有消费者只准从这里取。
+
+        背景（一次真实事故，值得记）：`Kc_dense` 只是**性能表示**（段算符装配要
+        ndarray），`dim > dense_max` 时被置 None；调用方各自判空 ⇒ 有人写成
+        `Kc_dense[gi] or []`（崩）或 `Kc_dense[0] if Kc_dense else []`
+        （**超阈值时光场耦合整批消失**：配对数 1206→150、频移光完全失效，即 E1）。
+        当时只修了**两体**那一处，**单体**留到 2026-09-15 仍是崩溃。
+        把"稠密优先、缺失回退同源稀疏"收敛成这一个方法，新增调用方不会再各写一遍。
+        """
+        src = (self.Kc_dense if self.Kc_dense is not None
+               else (getattr(self, 'Kc_ext', None) or []))
+        # 边界（容易漏）：**纯微波场景没有光场组** ⇒ src 为空表，`src[0]` 会
+        # IndexError。旧代码靠 `... or [[]]` 这个"看着多余"的写法兜住
+        # （`[[]][0] == []`）——统一入口必须保留这一语义。
+        return (src[gi] if 0 <= gi < len(src) else None) or []
+
+    @staticmethod
+    def densify(Kcw):
+        """耦合算符 → 稠密复 ndarray（稀疏则 toarray）。
+
+        单原子路径按下标连续取用、需要 ndarray；稀疏分支回退时若直接
+        `np.asarray(sparse, complex)` 会得到 0 维 object 数组（后续 nonzero 崩），
+        故稠密化只在这里做一次。
+        """
+        import scipy.sparse as _sp
+        return np.asarray(Kcw.toarray() if _sp.issparse(Kcw) else Kcw, complex)
+
     def _c_mids_wf(self, groups, mid):
         """逐波形中点包络——flat list: [g0w0, g0w1, ...]。"""
         return [env_at(wf, mid) for g in groups for wf in _group_envs(g)]
@@ -688,7 +717,10 @@ def _propagate_adaptive(setup, groups, psi0, t_grid, tol, progress_arr, log,
         psi_prev = None
         psi_out = frozen_at(tb)
         est = 0.0
-        for n_nodes in (32, 64, 128):
+        # 节点阶梯统一走注册表（原来单体硬编码 (32,64,128)、两体读注册表 ⇒
+        # 改参数只在两体生效——核查报告 B3）。阶梯语义是"倍增到收敛"，
+        # 默认多一级 (16,32,64,128) 更准，故单体也纳入同一参数。
+        for n_nodes in _P.get('_NODE_LADDER'):
             glx, glw = _gl_nodes(n_nodes)
             nodes = ta + 0.5 * (tb - ta) * (glx + 1.0)
             ws = 0.5 * (tb - ta) * glw
@@ -1384,18 +1416,31 @@ def evolve_sambe_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
     E_shift = np.zeros(N)
     if ac_ize:
         from .evolve_mixed import ac_ize_physical_E
-        E2a, A_newA = ac_ize_physical_E(E0,
-                                         [f for f in fields_A
-                                          if f['omega_L_mhz'] > _P.get('MW_MAX_MHZ')])
-        E2b, A_newB = ac_ize_physical_E(E0,
-                                         [f for f in fields_B
-                                          if f['omega_L_mhz'] > _P.get('MW_MAX_MHZ')])
+        # 2026-09-15 修（核查报告 A1）：
+        #   ① 契约不符——被调方返回 **3** 元组 `(E, A_new, shifts)`，这里按 2 个解包
+        #      ⇒ `ac_ize=True` **必崩**（ValueError，实测 sambe.py:1413/1416）。
+        #   ② 更坏的是解包后的语义：返回的 `E` 是**未加位移**的原能级，位移在
+        #      `shifts` 里（mixed 把它做成时变对角 `ac_waves`）。原来写
+        #      `E_shift = E2a - E0` ⇒ **恒为 0** ⇒ 一旦只修解包就会变成
+        #      "**删掉远强对却不补位移**"——比崩溃更糟（静默改物理）。
+        #   ③ 本路径没有时变 AC 对角通道，故取**峰值强度**的位移作**静态对角**：
+        #      这是明确的近似（sambe 本来就是分段静态/frozen-H 的精度档），
+        #      故在此**大声写日志**，不静默。
+        (E2a, A_newA, sh_a) = ac_ize_physical_E(
+            E0, [f for f in fields_A
+                 if f['omega_L_mhz'] > _P.get('MW_MAX_MHZ')])
+        (E2b, A_newB, sh_b) = ac_ize_physical_E(
+            E0, [f for f in fields_B
+                 if f['omega_L_mhz'] > _P.get('MW_MAX_MHZ')])
         # A/B 同构假设：E_shift 取 A 侧（B 侧位移并入 A 侧——同场时同 δ）
-        E_shift = E2a - E0
-        if np.max(np.abs((E2b - E0) - E_shift)) > 1.0:
+        E_shift = np.asarray(sh_a, float)
+        if np.max(np.abs(np.asarray(sh_b, float) - E_shift)) > 1.0:
             log(f'[pair_exact] ⚠ A/B 光场 AC 位移不同（max 差 '
-                f'{np.max(np.abs((E2b-E0)-E_shift)):.1f} MHz）——取 A 侧'
-                f'（E_pair 位移近似；异构场建议 per_freq_M 大 M 或手工 AC 化）')
+                f'{np.max(np.abs(np.asarray(sh_b, float) - E_shift)):.1f} MHz）'
+                f'——取 A 侧（E_pair 位移近似；异构场建议 per_freq_M 大 M 或手工 AC 化）')
+        log(f'[pair_exact] AC 化位移按**静态峰值对角**注入：'
+            f'{E_shift.min():+.2f}..{E_shift.max():+.2f} MHz'
+            f'（近似：sambe 无时变 AC 对角通道；精确处理请用 mixed）')
         n_opt = 0
         fa2, fb2 = [], []
         for f, Anew in zip([f for f in fields_A if f['omega_L_mhz'] > _P.get('MW_MAX_MHZ')],

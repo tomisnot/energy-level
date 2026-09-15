@@ -255,11 +255,11 @@ class _MixedSetup:
         # t70 三角过滤：Kcw 为 Hermitian 全矩阵，双向打包会把同一耦合驱动两次）
         self.pairs = []
         for gi, g in enumerate(grps_opt):
-            Kcw_list = self.setup.Kc_dense[gi] or []
+            Kcw_list = self.setup.kc_lists(gi)   # 唯一入口（稠密缺失→同源稀疏）
             for wi_local, wf in enumerate(g['envs']):
                 if wi_local >= len(Kcw_list):
                     continue            # AC 化后零耦合波（t62e：仅占波行）
-                Kcw = np.asarray(Kcw_list[wi_local], complex)
+                Kcw = self.setup.densify(Kcw_list[wi_local])
                 ii, jj = np.nonzero(np.abs(Kcw) > 1e-12)
                 for a, b in zip(ii, jj):
                     if a >= b:
@@ -668,8 +668,7 @@ def _build_pair_geometry(E, optA_ac, optB_ac, omega_opt, bw_opt=None):
     #   （与"不加光"逐位相同）——这就是 E1"加一个远处能级配对数 1206→150"的真因，
     #   与 Θ/PHASE_TOL/候选窗无关。
     # 修法：稠密没有就用同源的**稀疏** `Kc_ext`（同矩阵、少一次 toarray）。
-    Kc_lists = (setup.Kc_dense[0] if setup.Kc_dense
-                else (getattr(setup, 'Kc_ext', None) or [[]])[0])
+    Kc_lists = setup.kc_lists(0)
     import scipy.sparse as _sp
     for Kcw, env in zip(Kc_lists, envs_out):
         if _sp.issparse(Kcw):
