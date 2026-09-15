@@ -936,6 +936,82 @@ runtime/ai_results/ 下的 JSON（返回值含 run_id）。超长任务用 run_p
 （人/AI 混合）。"""
 
 
+# ============================================================
+# 并行扫描（src/sweep）：AI **一次调用**提交整个网格
+# ============================================================
+# 为什么要有这一组工具：此前 AI 想跑网格只能写 `run_python` 脚本，在脚本里
+# 逐点 `run_compute_and_wait` —— 串行、占满整个回合、还要自己写归并。
+# 现在：`submit_sweep(axes={...})` 一次调用就把 N 点交给**独立 runner 进程**
+# 的多进程池，立即返回；`sweep_status`/`sweep_result` 按需取。
+# 人机同源：GUI 的悬浮进度窗读的是同一份 status.json（P2）。
+def _sweep_op(kind, detail, reason=''):
+    """并行扫描的提交/取消进流水（**无快照** → 不参与 undo，归因照旧，P3）。"""
+    try:
+        get_journal(_ROOT).record('ai', kind, detail, reason, None)
+    except Exception:                              # noqa: BLE001
+        pass
+
+
+def _t_submit_sweep(axes=None, points=None, workers=None, tag=None,
+                    record='final', record_npts=200, diag=False,
+                    states=None, top_n=8, reason=''):
+    """主线程：取登记册快照 → registry.submit（起独立 runner 进程，立即返回）。
+
+    快照就是**存档那份 params**（登记册即真值，P5）⇒ 扫描在构造上等于
+    "把人点运行的那份配置跑 N 次"，不需要 AI 复述任何配置。
+    """
+    from ..sweep import registry as rg
+    if _win() is None:
+        return {'ok': False, 'msg': '没有可见主窗口：并行扫描要由软件发起'
+                                    '（人机同一状态对象，P2）'}
+    params = (_state.to_dict() or {}).get('params') or {}
+    if not params.get('groups.list'):
+        return {'ok': False, 'msg': '基组为空：先用 set_groups 加能级组'}
+    if not axes and not points:
+        return {'ok': False, 'msg': '扫描点为空：给 axes 或 points'}
+    opts = {'record': str(record), 'record_npts': int(record_npts),
+            'diag': bool(diag), 'top_n': int(top_n),
+            'states': [str(s) for s in (states or [])]}
+    r = rg.submit(_ROOT, params, axes=axes, points=points, workers=workers,
+                  tag=tag, options=opts)
+    if r.get('ok'):
+        _sweep_op('submit_sweep', {'sweep': r['sweep_id'],
+                                   'n_points': r['n_points'],
+                                   'workers': r['workers'],
+                                   'tag': r.get('tag') or ''}, reason)
+        sid = r['sweep_id']
+        r['msg'] = ('已提交 %d 点（%s 进程，%s）。'
+                    '用 sweep_status(%r) 看进度、sweep_result(%r) 取结果、'
+                    'cancel_sweep(%r) 取消；GUI 右下角有逐点进度窗。'
+                    % (r['n_points'], r['workers'] or '自动',
+                       r['workers_why'], sid, sid, sid))
+    return r
+
+
+def _t_sweep_status(sweep_id=None, points_limit=200):
+    from ..sweep import registry as rg
+    return rg.status(_ROOT, sweep_id, points_limit=int(points_limit))
+
+
+def _t_sweep_result(sweep_id=None, states=None, with_points=True):
+    from ..sweep import registry as rg
+    return rg.result(_ROOT, sweep_id, states=states,
+                     with_points=bool(with_points))
+
+
+def _t_cancel_sweep(sweep_id=None, reason=''):
+    from ..sweep import registry as rg
+    r = rg.cancel(_ROOT, sweep_id)
+    _sweep_op('cancel_sweep', {'sweep': r.get('sweep_id'),
+                               'state': r.get('state')}, reason)
+    return r
+
+
+def _t_list_sweeps(limit=20):
+    from ..sweep import registry as rg
+    return rg.list_sweeps(_ROOT, limit=int(limit))
+
+
 def _register_tools(mcp):
     d = run_on_main   # 简写
 
@@ -1107,6 +1183,10 @@ def _register_tools(mcp):
                          'add_level_group(n,l,j)、remove_level_group(i)、'
                          'set_waves(waves,atom)、load_archive(path)、save_archive(path)、'
                          'run_compute_and_wait(timeout=1800,poll=1.0,save_npz=False)、'
+                         'submit_compute(diag=True)、'
+                         'submit_sweep(axes={…},workers=None,…)、sweep_status(sid)、'
+                         'sweep_result(sid,states=[…])、cancel_sweep(sid)、'
+                         'list_sweeps()、run_sweep_and_wait(…)、'
                          'activity(since=0)。'
                          '要把数据写文件请拼路径：np.savez(ROOT + "/runtime/ai_results/x.npz", ...)，'
                          '不要用 os.path.join（os 不存在）。'
@@ -1120,7 +1200,7 @@ def _register_tools(mcp):
                 code, _state, _ROOT, {'seq': _job_seq},
                 _t_run_compute, _t_job_status, _t_job_result,
                 timeout=timeout, t_load=_t_load_archive,
-                t_save=_t_save_archive, t_list_params=_t_list_params, t_diag=_t_get_diag, t_cancel=_t_cancel_job, t_jobs=_t_list_jobs, t_states=_t_result_states), timeout + 60)
+                t_save=_t_save_archive, t_list_params=_t_list_params, t_diag=_t_get_diag, t_cancel=_t_cancel_job, t_jobs=_t_list_jobs, t_states=_t_result_states, t_sweep_submit=_t_submit_sweep, t_sweep_status=_t_sweep_status, t_sweep_result=_t_sweep_result, t_sweep_cancel=_t_cancel_sweep, t_sweep_list=_t_list_sweeps), timeout + 60)
 
     @mcp.tool(description='CodeAct 异步版：立即返回 run_id，脚本在后台执行，'
                          '不再占住本次调用。长扫描/大系综用它——即使客户端断线，'
@@ -1185,6 +1265,57 @@ def _register_tools(mcp):
     async def list_runs(limit: int = 20) -> dict:
         return {'runs': run_store.list_runs(_ROOT, limit),
                 'dir': run_store.results_dir(_ROOT)}
+
+    # ---------------- 并行扫描（CPU 多进程） ----------------
+    @mcp.tool(description='**并行扫描**：一次调用把 N 个参数点交给多进程池算完'
+                         '（替代"写脚本逐点 run_compute_and_wait"）。'
+                         '立即返回 sweep_id，不阻塞。'
+                         'axes = {登记册路径: 取值列表 | {"linspace":[起,止,点数]} | '
+                         '{"arange":[起,止,步长]} | {"logspace":[起,止,点数]} | '
+                         '{"value": 整表}}，多轴自动做笛卡尔积；'
+                         '路径写法同 list_params，可带索引：'
+                         '"field.lights[0].intensity"、"dynamic.waves_A[0].env"、'
+                         '"dynamic.t_max"。也可用 points=[{路径:取值},…] 显式给点。'
+                         'workers 留空 = 自动（按核数与**可用内存**定档，'
+                         '两体大 dim 会自动降档；结论见 sweep_status 的 workers_why）。'
+                         'record: final(默认，只存终态) / pops(存降采样时间序列) / none。'
+                         'states=["60P","58G"] 可让每点额外回传这些态名的终态布居。'
+                         '结果用 sweep_status/sweep_result 取；取消用 cancel_sweep。')
+    async def submit_sweep(axes: dict = None, points: list = None,
+                           workers: int = None, tag: str = None,
+                           record: str = 'final', record_npts: int = 200,
+                           diag: bool = False, states: list = None,
+                           top_n: int = 8, reason: str = '') -> dict:
+        return await asyncio.to_thread(
+            d, lambda: _t_submit_sweep(axes, points, workers, tag, record,
+                                       record_npts, diag, states, top_n,
+                                       reason), 120)
+
+    @mcp.tool(description='并行扫描进度：逐点状态（queued/running/done/failed/'
+                         'cancelled）+ 每点百分比 + 汇总。sweep_id 留空 = 最近一次。'
+                         '**只读文件、不经 Qt 主线程** ⇒ 长扫描期间也能查。')
+    async def sweep_status(sweep_id: str = None, points_limit: int = 200) -> dict:
+        return _t_sweep_status(sweep_id, points_limit)
+
+    @mcp.tool(description='并行扫描结果：每点摘要（耗时/标签/终态 top 布居/npz 路径）。'
+                         'states=["60P","58G"] 时另给**汇总表** selected_table'
+                         '（行=扫描点，列=态片段，值=该片段命中态终态布居之和），'
+                         '这是看趋势最省事的形态。sweep_id 留空 = 最近一次。')
+    async def sweep_result(sweep_id: str = None, states: list = None,
+                           with_points: bool = True) -> dict:
+        return _t_sweep_result(sweep_id, states, with_points)
+
+    @mcp.tool(description='取消并行扫描：先**优雅**（通知各 worker 在安全点退出，'
+                         '已完成的点成果保留），超时才硬杀进程树。')
+    async def cancel_sweep(sweep_id: str = None, reason: str = '') -> dict:
+        return await asyncio.to_thread(
+            d, lambda: _t_cancel_sweep(sweep_id, reason), 180)
+
+    @mcp.tool(description='列出最近若干次并行扫描（sweep_id/状态/点数/进度/'
+                         '进程数/耗时），与 list_jobs 同构。断线重连后用它找回 '
+                         'sweep_id。')
+    async def list_sweeps(limit: int = 20) -> dict:
+        return _t_list_sweeps(limit)
 
 
 # ============================================================

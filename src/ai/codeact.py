@@ -72,7 +72,10 @@ def _diff_changes(before, after, jids):
 
 def _make_namespace(state_mod, root, jobs, t_run, t_status, t_result,
                     t_load=None, t_save=None, t_list_params=None, t_diag=None,
-                    t_cancel=None, t_jobs=None, t_states=None):
+                    t_cancel=None, t_jobs=None, t_states=None,
+                    t_sweep_submit=None, t_sweep_status=None,
+                    t_sweep_result=None, t_sweep_cancel=None,
+                    t_sweep_list=None):
     """构造受限命名空间。
 
     函数语义与细粒度 MCP 工具**保持一致**（同名、返回 dict、接受
@@ -107,6 +110,42 @@ def _make_namespace(state_mod, root, jobs, t_run, t_status, t_result,
         if isinstance(_sm, dict) and _sm.get('npz') and not res.get('npz'):
             res['npz'] = _sm['npz']
         return res
+
+    def submit_sweep(**kw):
+        """提交**并行扫描**（一次调用跑完整个参数网格）——AI 跑扫描的首选。
+
+        轴写法见 `submit_sweep` 工具说明（登记册路径 → 取值 / linspace / …）。
+        立即返回 sweep_id；之后用 sweep_status / sweep_result 跟进。
+        """
+        if t_sweep_submit is None:
+            return {'ok': False, 'msg': '本进程不支持并行扫描（服务端未接线）'}
+        return t_sweep_submit(**kw)
+
+    def run_sweep_and_wait(timeout=3600, poll=2.0, **kw):
+        """提交并行扫描并**阻塞**等待（期间泵 GUI 事件，人可看可取消）。
+
+        ⚠ 重活优先用 `submit_sweep` + 下一次调用 `sweep_result`——那才是
+        "不占回合"的正确姿势（同 submit_compute vs run_compute_and_wait）。
+        这个 helper 只给"脚本内必须当场拿到结果"的场合。
+        """
+        from PyQt5.QtWidgets import QApplication
+        r = submit_sweep(**kw)
+        if not r.get('ok'):
+            return r
+        sid = r['sweep_id']
+        t0 = time.time()
+        while time.time() - t0 < timeout:
+            st = t_sweep_status(sid) if t_sweep_status else {}
+            if st.get('ok') and not st.get('running'):
+                break
+            QApplication.processEvents()
+            time.sleep(poll)
+        out = (t_sweep_result(sid, kw.get('states'))
+               if t_sweep_result else {})
+        out['sweep_id'] = sid
+        out['submit'] = {k: r.get(k)
+                         for k in ('n_points', 'workers', 'workers_why')}
+        return out
 
     def submit_compute(diag=True):
         """**提交**演化并立即返回 job_id（不阻塞）——重活的正确用法。
@@ -143,6 +182,8 @@ def _make_namespace(state_mod, root, jobs, t_run, t_status, t_result,
                                    {'ok': False, 'msg': 'save_archive 不可用'}),
         'run_compute_and_wait': run_compute_and_wait,
         'submit_compute': submit_compute,
+        'submit_sweep': submit_sweep,
+        'run_sweep_and_wait': run_sweep_and_wait,
         'activity': lambda since=0: get_journal(root).since(since),
         # 二期 A：语义状态操作（P1/P5）——存在才注入，兼容旧 state_mod
         **{k: getattr(state_mod, k) for k in
@@ -156,7 +197,11 @@ def _make_namespace(state_mod, root, jobs, t_run, t_status, t_result,
     }
     for _k, _v in (('list_params', t_list_params), ('get_diag', t_diag),
                    ('cancel_job', t_cancel), ('list_jobs', t_jobs),
-                   ('result_states', t_states)):
+                   ('result_states', t_states),
+                   ('sweep_status', t_sweep_status),
+                   ('sweep_result', t_sweep_result),
+                   ('cancel_sweep', t_sweep_cancel),
+                   ('list_sweeps', t_sweep_list)):
         if _v is not None:
             ns[_k] = _v
     return ns
@@ -165,7 +210,8 @@ def _make_namespace(state_mod, root, jobs, t_run, t_status, t_result,
 def run_code(code, state_mod, root, jobs, t_run, t_status, t_result,
              timeout=1800.0, t_load=None, t_save=None, run_id=None,
              t_list_params=None, t_diag=None, t_cancel=None, t_jobs=None,
-             t_states=None):
+             t_states=None, t_sweep_submit=None, t_sweep_status=None,
+             t_sweep_result=None, t_sweep_cancel=None, t_sweep_list=None):
     """在主线程 exec 模型写的代码；返回 {ok, run_id, stdout, result, error}。
 
     调用方（server 的 run_python / run_python_async）负责经
@@ -182,7 +228,12 @@ def run_code(code, state_mod, root, jobs, t_run, t_status, t_result,
                           t_load=t_load, t_save=t_save,
                           t_list_params=t_list_params, t_diag=t_diag,
                           t_cancel=t_cancel, t_jobs=t_jobs,
-                          t_states=t_states)
+                          t_states=t_states,
+                          t_sweep_submit=t_sweep_submit,
+                          t_sweep_status=t_sweep_status,
+                          t_sweep_result=t_sweep_result,
+                          t_sweep_cancel=t_sweep_cancel,
+                          t_sweep_list=t_sweep_list)
     env['result'] = None
     j.suppress_snapshot = True          # 脚本内逐 op 照记、快照统一挂到末尾
     t0 = time.time()

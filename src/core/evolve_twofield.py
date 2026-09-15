@@ -107,7 +107,16 @@ def _build_A(cache, states, freq_mhz, intensity_mwcm2, pol, det_selector):
 
     det_selector(i, j, E) → bool：是否把该对收入（近共振筛选）。
     E 为 states 能量数组（旋转前）。"""
-    q = {'σ+': +1, 'π': 0, 'σ-': -1}.get(pol, 0)
+    # N6 修（第三方复核）：这是全仓库第 4 份 q 映射，且主路径（普通光场）选
+    # "椭圆偏"时同样**静默按 π** 处理——比支路那处更常见。统一走 `_POL_Q`，
+    # 并对不支持的情形明确告警。（GUI 可见性见 build_two_field 的 log 通道。）
+    import warnings as _warn
+    from .evolve_util import _POL_Q as _POLMAP
+    if pol == '椭圆偏':
+        _warn.warn('hard/两场引擎不支持"椭圆偏"（只吃单 q 偏振）：本场已按 '
+                   'π(Δm=0) 处理。需要真椭偏请改用 mixed 或 sambe 档。',
+                   RuntimeWarning, stacklevel=2)
+    q = _POLMAP.get(pol, 0)
     E0_sq = core.field_e0_sq(float(intensity_mwcm2))
     N = len(states)
     E = np.array([s['E_mhz'] for s in states], float)

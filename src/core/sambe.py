@@ -717,10 +717,13 @@ def _propagate_adaptive(setup, groups, psi0, t_grid, tol, progress_arr, log,
         psi_prev = None
         psi_out = frozen_at(tb)
         est = 0.0
-        # 节点阶梯统一走注册表（原来单体硬编码 (32,64,128)、两体读注册表 ⇒
-        # 改参数只在两体生效——核查报告 B3）。阶梯语义是"倍增到收敛"，
-        # 默认多一级 (16,32,64,128) 更准，故单体也纳入同一参数。
-        for n_nodes in _P.get('_NODE_LADDER'):
+        # 核查报告 B3 的**保守处置**（第三方 N4 指出我上一版改法有问题）：
+        # 该阶梯的语义是"相邻两档之差 ≤ tol 即接受**后一档**"——起点从 32 降到 16
+        # 会让典型路径由"返回 64 点"变成"返回 32 点"（少一档、且多付一次 16 点
+        # 求解）⇒ 那是**单体引擎的数值行为变化**，必须重跑单体锚才敢动。
+        # 故单体**保持原状**；`_NODE_LADDER` 只作用于两体（B3 要修的本是"改参数
+        # 只在一半生效"，此处以注释/文档说明为准，不擅自改数值行为）。
+        for n_nodes in (32, 64, 128):
             glx, glw = _gl_nodes(n_nodes)
             nodes = ta + 0.5 * (tb - ta) * (glx + 1.0)
             ws = 0.5 * (tb - ta) * glw
@@ -1433,14 +1436,30 @@ def evolve_sambe_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
             E0, [f for f in fields_B
                  if f['omega_L_mhz'] > _P.get('MW_MAX_MHZ')])
         # A/B 同构假设：E_shift 取 A 侧（B 侧位移并入 A 侧——同场时同 δ）
-        E_shift = np.asarray(sh_a, float)
-        if np.max(np.abs(np.asarray(sh_b, float) - E_shift)) > 1.0:
+        # N1 修（2026-09-15 第三方复核）：`shifts_list` 是**逐场列表**
+        # （list[ndarray(N,)]）。直接 `np.asarray(sh, float)` 得 (n_field, N) ⇒
+        # 有光场时 E 被广播成二维、随后 `E_pair[i*N+j] = E[i]+E[j]` 抛
+        # "setting an array element with a sequence"；0 光场时 np.asarray([]) 是
+        # (0,) ⇒ np.max/min 归约抛 zero-size。**必须逐场累加 + 0 场早退 + 形状断言**。
+        def _sum_shifts(sh):
+            arr = [np.asarray(x, float).ravel() for x in (sh or [])]
+            return np.sum(np.stack(arr), axis=0) if arr else np.zeros(N)
+
+        E_shift = _sum_shifts(sh_a)
+        assert E_shift.shape == (N,), ('E_shift 形状应为 (N,)', E_shift.shape)
+        _shb = _sum_shifts(sh_b)
+        if np.max(np.abs(_shb - E_shift)) > 1.0:
             log(f'[pair_exact] ⚠ A/B 光场 AC 位移不同（max 差 '
-                f'{np.max(np.abs(np.asarray(sh_b, float) - E_shift)):.1f} MHz）'
+                f'{np.max(np.abs(_shb - E_shift)):.1f} MHz）'
                 f'——取 A 侧（E_pair 位移近似；异构场建议 per_freq_M 大 M 或手工 AC 化）')
+        # ⚠ 近似声明（第三方 N1）：峰值位移被当作**整窗静态对角**（K_static 与时间
+        # 无关）⇒ 脉冲之外也带着满位移。对"620 ns 窗 + 40 ns 脉冲"是**定性错误**；
+        # mixed 用的是 env(t)² **时变**对角。精确做法是经 opt_terms 注入
+        # kro(I_P, Ko)·env²（sambe 已支持该通道）。故本开关**只适用于包络近似恒定**
+        # 的场景——时变脉冲请用 mixed。
         log(f'[pair_exact] AC 化位移按**静态峰值对角**注入：'
             f'{E_shift.min():+.2f}..{E_shift.max():+.2f} MHz'
-            f'（近似：sambe 无时变 AC 对角通道；精确处理请用 mixed）')
+            f'（⚠ 整窗恒定，仅适用包络近似恒定；时变脉冲请用 mixed）')
         n_opt = 0
         fa2, fb2 = [], []
         for f, Anew in zip([f for f in fields_A if f['omega_L_mhz'] > _P.get('MW_MAX_MHZ')],
