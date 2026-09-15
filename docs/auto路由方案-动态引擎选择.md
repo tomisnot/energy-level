@@ -39,7 +39,7 @@
 - 检测：光场强度高（Rabi/失谐 > 阈值？）或场数多且共享流形（STIRAP）
 - 原则：RWA 误差 ~ (Ω/Δ)² 与 (Ω/ω)²——**强光近共振 → sambe**（无 RWA）
 - 弱光远失谐 → hard 够（RWA 1e-14 可忽略）
-- **已实测（2026-09-06，tempsimu/_route_stirap_data.py）**：STIRAP.json 双光场
+- **已实测（2026-09-06，scripts/tmp/_route_stirap_data.py）**：STIRAP.json 双光场
   光1 (5S↔6P) 旋转系残差 −295.722 THz → hard RWA 完全失效——跨流形链 STIRAP
   **结构性硬路由 sambe**（非 <1e-3 精度偏好问题，无放宽空间）
 
@@ -84,7 +84,7 @@ def route_auto(states, waves, t_grid, preference='auto'):
    STIRAP.json（光1 713.28 THz 5S↔6P + 光2 295.72 THz 6P↔60S）route_auto 无 cache/
    有 cache/两体 三情形均路由 sambe ✓；build_two_field rot_pick：5S 全 +713.282 THz、
    6P 全 +295.723 THz → 光1 耦合对旋转系残差 **−295.722 THz**（光2 对 −196.6 MHz 正常）
-   → **hard 对跨流形链 RWA 完全失效，结构性硬路由 sambe**（脚本 tempsimu/_route_stirap_data.py）
+   → **hard 对跨流形链 RWA 完全失效，结构性硬路由 sambe**（脚本 scripts/tmp/_route_stirap_data.py）
 2. **hard 在强光近共振（大 Rabi）的 RWA 误差**：vs sambe——归档于 t39 仲裁
    （ip4/hard 同源 RWA；STIRAP 光2 强脉冲区 ip4 中段误差 2.2e-2，末态收敛 9e-4）
 3. **变频场景唯一性确认**：ArbitraryWave → hard（sambe 光子块需固定载频，无隐藏路径）

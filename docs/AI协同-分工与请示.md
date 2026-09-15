@@ -42,7 +42,7 @@
    这些是"静默改物理"的类别，不问就答等于编。
 
 ### 临时脚本的放法与纪律
-- 一律放 `tempsimu/`（该目录**不进版本控制**），文件名带任务前缀；
+- 一律放 `scripts/tmp/`（该目录**不进版本控制**），文件名带任务前缀；
 - 脚本用**本地批量通道**（直接 import `src.core.*`）可快 3–5×，但**不改软件状态、
   不进 journal**；需要"人看得见"时走 MCP。两条通道结果必须能对上（这是交叉验证）；
 - 引擎侧改动要重启（同上）；`OMP/MKL/NUMBA=1` 防线程超订；并行用**独立进程分块**
@@ -77,7 +77,7 @@
 5. `docs/历史-任务报告汇编.md`（**历史只作历史**：原「AI协同-二期升级方案」等 32 份
    已完成文档已并入这里，每条 4 行 + `git show` 定位原文）
 
-> 2026-09-14 项目瘦身：上面提到的 `tempsimu/` 脚本/日志已随草稿区清理移出仓库
+> 2026-09-14 项目瘦身：上面提到的 `scripts/tmp/` 脚本/日志已随草稿区清理移出仓库
 > （打包在仓库外 `_archive_EnergyLevel_scratch_20260914.zip`），文中路径仅作历史记录；
 > 原文可用 `git show <commit>:<路径>` 取回。
 
@@ -244,7 +244,7 @@
       与新增 §10。判据/容差**不动**（原本就没为它放宽）。
 
 - [ ] #9 类型：可疑 场景：**离线批量通道与登记册的基组构造规则不同** → 未来结论会静默分叉
-      | 证据：`tempsimu/contrast_scan.py` / `dual_scan.py`（已随 2026-09-14 草稿区
+      | 证据：`scripts/tmp/contrast_scan.py` / `dual_scan.py`（已随 2026-09-14 草稿区
       清理移出仓库，原文见 git 历史）用 `make_levels(..., kind='mJ')`
       对**所有**组展开（6P 当 4 个 mJ 态，68 态）；软件登记册把 6P_3/2 展开成 16 个
       (F,m_F) 态（N=84）。本次两条通道 **4 位小数吻合**（C=0.9982、60S 保留=0.9994），
@@ -293,12 +293,12 @@
       | 已做：① `_finish_run_ui` 仍在跑就交给 `finished` 释放（`_retired_workers`）；
       ② 作业登记表新增 `thread_finished`（worker.finished 置位）——**引用活得比线程久**，
       登记表只记状态不参与生命周期；③ **成果抗崩溃**：done 一到即落盘
-      `ai_results/job_<jid>.json` **+ 全量 npz**（`tempsimu/ai_job<jid>_*.npz`），
+      `runtime/ai_results/job_<jid>.json` **+ 全量 npz**（`scripts/tmp/ai_job<jid>_*.npz`），
       且 `job_result` 即使 `save_npz=False` 也回传该路径（长两体作业的价值不靠"记得再存"）；
       ④ 自检：`checks/gui_worker_lifetime_test.py`（8 项，qInstallMessageHandler 抓 Qt 消息）、
       `checks/pair_mem_estimate_selfcheck.py`（13 项，已跑通）。
       | **仍需使用者**：① ~~完整 stderr~~ → **已给：确无 Python traceback**（销毁在 C++ 侧）；
-      ② ~~WER LocalDumps~~ → **已配好**（`tempsimu/crashdumps`，DumpType=2，DumpCount=3），
+      ② ~~WER LocalDumps~~ → **已配好**（`scripts/tmp/crashdumps`，DumpType=2，DumpCount=3），
       下次崩溃自动落全 dump，用 cdb 看 `~QThread` 调用栈即可钉死销毁者。
       在拿到 dump 之前**不动别处**——避免"猜着改"引入新风险。
       ✅ 本轮窗口已补跑的验收：`checks/gui_worker_lifetime_test.py` **10/10 通过**
@@ -334,15 +334,15 @@
 
 ## 七.0 事故现场保全守则（2026-09-12，用一次真实损失换来）
 
-> 本节与 §六 #11 提到的 `tempsimu/` 日志/探针已随 **2026-09-14 草稿区清理**移出仓库
+> 本节与 §六 #11 提到的 `scripts/tmp/` 日志/探针已随 **2026-09-14 草稿区清理**移出仓库
 > （打包件在仓库外），路径仅作历史记录；守则本身与是否留着老日志无关，照旧执行。
 
 1. **每个实例用带标识的日志名**，**绝不复用同一路径**：
-   `python main.py *> tempsimu/_app_out_<pid>_<HHMMSS>.log 2> tempsimu/_app_err_<pid>.log`。
+   `python main.py *> scripts/tmp/_app_out_<pid>_<HHMMSS>.log 2> scripts/tmp/_app_err_<pid>.log`。
    教训：崩溃实例（PID 27228）的 stderr 尾 12 行虽被抓到，但 20:36 的重启沿用了
-   `tempsimu/_app_err.log` 同一路径（该文件已归档）→ **文件被截断覆盖**，当场丢失上下文。
-2. **崩溃后第一件事：保全现场**（`Copy-Item` 到 `tempsimu/crashdumps/` 再重启）。
-3. **WER 全 dump 已配**（`HKCU\...\LocalDumps\python.exe` → `tempsimu/crashdumps`、
+   `scripts/tmp/_app_err.log` 同一路径（该文件已归档）→ **文件被截断覆盖**，当场丢失上下文。
+2. **崩溃后第一件事：保全现场**（`Copy-Item` 到 `scripts/tmp/crashdumps/` 再重启）。
+3. **WER 全 dump 已配**（`HKCU\...\LocalDumps\python.exe` → `scripts/tmp/crashdumps`、
    `DumpType=2`、`DumpCount=3`）⇒ 下次崩溃自动落全 dump；
    用 `cdb -z <dump> -c "!analyze -v; ~*k"` 看 `~QThread` 调用栈。
 4. **判据优先于猜测**：本次靠"消息 + 失败码"已能定位到 `qFatal` in `QThread::~QThread`
@@ -380,7 +380,7 @@ job_* / web_* …`）**加上技能文档本身**，没有任何 `mcp__energy-le
    开发者如认为某处该测/不该测，走 §五 格式提意见，由使用者裁。
 
 **同事的接入方案（它自己的第一项工程任务）**：
-1. 写一个临时客户端脚本（建议仍放 `tempsimu/`，**用完即弃、不进版本控制**）：
+1. 写一个临时客户端脚本（建议仍放 `scripts/tmp/`，**用完即弃、不进版本控制**）：
    最简 MCP over streamable-HTTP 客户端（`initialize` →
    记 session id → `tools/call`），端点取 `.mcp-port`；用 `pwsh` 运行即可。
    优先用现成库（`mcp` 或 `httpx/requests`），失败再手写 HTTP。

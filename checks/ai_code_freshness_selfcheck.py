@@ -132,9 +132,9 @@ _b.append(('B2 src_core_mtime / src_ai_mtime 是有限浮点',
                for k in ('src_core_mtime', 'src_ai_mtime'))))
 _b.append((f'B3 ROOT 下扫到的 .py 数在合理区间（只算 src/ + app 层，25–80）'
            f'（{d["n_files"]}）', 25 <= d['n_files'] <= 80))
-_b.append((f'B4 newest 里没有 checks/ 或 tempsimu/（不扫非进程代码）'
+_b.append((f'B4 newest 里没有 checks/ 或 scripts/tmp/（不扫非进程代码）'
            f'（{[it["path"] for it in d["newest"]]}）',
-           all(not it['path'].startswith(('checks/', 'tempsimu/'))
+           all(not it['path'].startswith(('checks/', 'scripts/tmp/', 'runtime/'))
                for it in d['newest'])))
 C.group('B 真实仓库 code_status 契约（键齐 / 类型 / 规模 / 不扫非进程代码）', _b)
 

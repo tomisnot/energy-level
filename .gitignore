@@ -2,7 +2,7 @@
 __pycache__/
 .arcdata/
 save_state/
-tempsimu/
+scripts/tmp/
 .dsh-vision-toolkit/
 microwave_pulse/
 
@@ -25,4 +25,4 @@ ui_design/screenshots/
 .dsh/
 
 # CodeAct（run_python）运行记录：result/stdout/代码，本机产物，不入库
-ai_results/
+runtime/ai_results/

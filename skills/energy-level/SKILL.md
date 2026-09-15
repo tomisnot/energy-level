@@ -43,13 +43,13 @@ energy-level http://127.0.0.1:8765/mcp`；通用 JSON 形态同上。
   save_archive(path) load_archive(path)
   run_compute_and_wait(timeout=1800,poll=1.0,save_npz=False)
   activity(since=0) np(=numpy) json time ROOT`
-- 要自己写文件请**拼字符串**：`np.savez(ROOT + '/ai_results/x.npz', ...)`。
+- 要自己写文件请**拼字符串**：`np.savez(ROOT + '/runtime/ai_results/x.npz', ...)`。
   用 `os.path.join` 会直接 `NameError`——这是刻意的设计边界（状态变更必须
   全部经 ParamRegistry），不是缺陷。
 - **把结论赋给 `result` 变量**（自动回传，JSON 化）；过程信息用 `print`。
 - 数组不要整体回传（>50 元素会被截成形状摘要）——print 统计量或存 npz。
 - undo 语义：整段脚本算**一步**，撤销回到脚本执行前。
-- **结果自动落盘**（2026-09-10 加）：每次执行都写 `ai_results/<run_id>.json`
+- **结果自动落盘**（2026-09-10 加）：每次执行都写 `runtime/ai_results/<run_id>.json`
   （含 result / stdout / **完整代码** / 状态 / 耗时），保留最近 200 份。
   返回值含 `run_id`。所以**脚本末尾报错或客户端断线都不会丢结果**。
 - 超长任务用 `run_python_async(code)` 立即拿 `run_id` 后台跑，再用
@@ -208,9 +208,9 @@ submit_compute()                                # 重活走异步，别同步等
 注意：对称组合（两个 amp 都是 1）是**暗态**，布居不摆（坑 13）。
 
 **改参数扫描**：`set_param` 逐个改 → 每次 `run_compute`；演化数组落在
-`tempsimu/ai_job*.npz`（`run_compute_and_wait(save_npz=True)` 会给路径），
+`scripts/tmp/ai_job*.npz`（`run_compute_and_wait(save_npz=True)` 会给路径），
 用本地脚本读 npz 做精细分析，别往 context 灌数组。**脚本级的 result /
-stdout / 代码**则自动落在 `ai_results/`（见上"结果自动落盘"）。
+stdout / 代码**则自动落在 `runtime/ai_results/`（见上"结果自动落盘"）。
 
 ## 波形格式（set_waves 的 waves 列表元素）
 
@@ -307,8 +307,8 @@ env 采样   = √[ (1 + δ(t)) / (1 + b) ]    # 峰值恰为 1
    `run_compute_and_wait` 全被拒："已有演化在运行（人或 AI 发起）"）。**重活一律用 `run_python_async`**，
    两体+光学场的窗口开短（t_max ≤ 200 ns、npts ≈ 101），提交前先估量级。
 10. **两体作业的 npz 现在**自动**落盘（2026-09-12 起，原坑已修）**：AI 作业一完成，
-    `_jobs` 里就存了 `ai_results/job_<jid>.json`（摘要）**与全量 npz**
-    （`tempsimu/ai_job<jid>_*.npz`）；`job_result(jid)` **即使不给 `save_npz`**
+    `_jobs` 里就存了 `runtime/ai_results/job_<jid>.json`（摘要）**与全量 npz**
+    （`scripts/tmp/ai_job<jid>_*.npz`）；`job_result(jid)` **即使不给 `save_npz`**
     也会回传该 npz 路径（`summary['npz']`，带 `npz_auto=True`）。
     仍建议：**跑完立刻** `job_result(jid, save_npz=True)` 再存一份并记下路径
     （npz 只保留最近 100 份）。
@@ -407,7 +407,7 @@ env 采样   = √[ (1 + δ(t)) / (1 + b) ]    # 峰值恰为 1
       `src/` 内无 `quit()/sys.exit` 可达路径。**崩溃时确无 Python traceback**
       （使用者抓到原 stderr：8 条 `Terminating session` + 唯一一条 Qt 原生消息）⇒
       **没有 Python 层触发者**，销毁在 C++ 侧。
-      **WER 全 dump 已配好**（`tempsimu/crashdumps`、DumpType=2、DumpCount=3）→
+      **WER 全 dump 已配好**（`scripts/tmp/crashdumps`、DumpType=2、DumpCount=3）→
       下次崩溃自动落 dump，用 cdb 看 `~QThread` 调用栈即可钉死。
       ✅ **已修并验**：`_finish_run_ui` 不再丢"仍在跑的 worker"的最后一根引用
       （`_retired_workers` + `finished` 释放，同时覆盖取消路径）；自检
@@ -480,8 +480,8 @@ env 采样   = √[ (1 + δ(t)) / (1 + b) ]    # 峰值恰为 1
     - **你现在就该做的**：① 大两体作业先读 `estimate_cost()` 的
       `est_peak_gb / avail_ram_gb / mem_advice`（锚点 dim=4624→1.36 GB，dim² 外推，
       **偏保守上界**；软建议峰值 ≤ 可用内存 40%）；
-      ② 作业一完成**摘要 + 全量 npz 已自动落盘**（`ai_results/job_<jid>.json`、
-      `tempsimu/ai_job<jid>_*.npz`），进程随后死掉也拿得到；
+      ② 作业一完成**摘要 + 全量 npz 已自动落盘**（`runtime/ai_results/job_<jid>.json`、
+      `scripts/tmp/ai_job<jid>_*.npz`），进程随后死掉也拿得到；
       ③ 仍建议跑完立刻 `job_result(jid, save_npz=True)` 再存一份并记路径。
 25. **`get_activity` 的 `detail` 可能是"摘要"（2026-09-14 加的体积闸）**：写入侧对
     `detail` 有 **4 KB 上限**——超限的值只留**形状/长度/前 8 项**，并附

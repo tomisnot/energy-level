@@ -617,7 +617,7 @@ def _evolve_lindblad_eig(E_rot, rwa_g, consts, Ls, psi0, t, record_amp=False,
     """常数 H（旋转系）+ 常数 L：Liouvillian 本征分解精确解（第一性原理）。
 
     ρ_vec(t) = Σ_k e^{λ_k t} v_k (w_k† ρ0)——机器精度、成本与时长无关
-    （同 tempsimu 的 solve_me，单位约定已修正：H 乘 2π×1e-3，L 只乘 1e-3）。
+    （同 scripts/tmp 的 solve_me，单位约定已修正：H 乘 2π×1e-3，L 只乘 1e-3）。
     H = diag(E_rot) + Σ (Ω/2)·c·A + c·diag(ac)；c 为常数包络值。
     返回 (t, pops, loss, rho_f)；pops 为 (n_t, N)，loss 为虚拟汇布居。
     """

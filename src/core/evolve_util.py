@@ -5,7 +5,7 @@
 t74 归位本模块。
 
 单位约定（与各引擎一致）：Γ 用 MHz；时间 ns；速率 = Γ×1e-3 /ns
-（Lindblad 跳变算符不乘 2π，与 tempsimu 的 2π 修复一致）。
+（Lindblad 跳变算符不乘 2π，与 scripts/tmp 的 2π 修复一致）。
 """
 import numpy as np
 
@@ -172,7 +172,7 @@ def decay(g, gamma_mhz, e=None):
     """衰变通道工厂 → {'from': g, 'to': e, 'gamma_mhz': Γ}。
 
     物理：跳变算符 L = √Γ |e⟩⟨g|（Lindblad），Γ 单位 MHz；时间单位 ns，
-    速率 = Γ×1e-3 /ns（与 tempsimu 的 2π 修复一致，L 不需乘 2π）。
+    速率 = Γ×1e-3 /ns（与 scripts/tmp 的 2π 修复一致，L 不需乘 2π）。
     g  ：衰变态（states 索引 | (n,l,j,m) | dict(n,l,j,m)）
     e  ：落点（同上；None → 丢失：布居离开建模空间，累积为结果 loss）
     g==e：纯退相（|g⟩⟨g| 型测量算符，相干衰减速率 Γ/2，布居不变）

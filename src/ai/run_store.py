@@ -9,7 +9,7 @@
     AI 侧既不知道它是否还在跑，也拿不到最终结果。
 
 本模块为此提供三件事：
-  1. 每次 run_python 在 `<root>/ai_results/` 下留一份 JSON 记录：开始先写
+  1. 每次 run_python 在 `runtime/ai_results/` 下留一份 JSON 记录：开始先写
      status=running，结束覆写为 ok/error（原子替换，不留半个文件）；
   2. run_id → 文件名的确定性映射，状态查询**只读文件、不经 Qt 主线程**
      ——这点是硬约束：run_python 的脚本在主线程 exec，长任务期间任何走
@@ -25,7 +25,7 @@ import json
 import os
 import time
 
-RESULTS_DIRNAME = 'ai_results'   # 相对项目根；与 tempsimu 分开，便于区分
+from .paths import RESULTS_DIRNAME     # 相对项目根（唯一真值源）
 KEEP = 200                       # 保留最近多少份运行记录
 _CODE_HEAD = 1200                # 列表/概览里保留的代码头部长度
 _CODE_FULL = 200000              # 完整代码落盘上限（防超大脚本撑爆记录）

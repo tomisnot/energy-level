@@ -27,8 +27,8 @@ C = Checker('run_store_selfcheck')
 root = tempfile.mkdtemp(prefix='el_runstore_')
 try:
     d = run_store.results_dir(root)
-    _p1 = [('results_dir = <root>/ai_results',
-            d == os.path.join(root, 'ai_results'))]
+    _p1 = [('results_dir = <root>/runtime/ai_results',
+            d == os.path.join(root, 'runtime', 'ai_results'))]
 
     # ---------- run_id ----------
     rid = run_store.new_run_id()

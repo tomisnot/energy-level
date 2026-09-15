@@ -3,8 +3,8 @@
 
 背景两件事：
   1. 长两体作业跑完时进程被 Qt fail-fast 杀掉 → 结果随进程消失（"成果全丢"）⇒
-     AI 作业 done 一到就自动落盘：`ai_results/job_<jid>.json`（摘要）+
-     `tempsimu/ai_<jid>_<HHMMSS>.npz`（全量数组），且 `job_result` 即使
+     AI 作业 done 一到就自动落盘：`runtime/ai_results/job_<jid>.json`（摘要）+
+     `runtime/ai_results/ai_<jid>_<HHMMSS>.npz`（全量数组），且 `job_result` 即使
      `save_npz=False` 也回传该 npz 路径。
   2. 命名 bug（使用者实测）：曾写成 `ai_job{jid}_*`，而 jid 已含 "job" ⇒
      得到 `ai_jobjob3_210422.npz`。现统一为 `ai_{jid}_*`。
@@ -107,7 +107,8 @@ try:
             p and os.path.basename(p).startswith('ai_jobZ_')
             and 'jobjob' not in os.path.basename(p),
             os.path.basename(p or ''))
-    check('A3 落在 tempsimu/ 下', p and os.path.dirname(p).endswith('tempsimu'),
+    check('A3 落在 runtime/ai_results/ 下',
+      p and os.path.basename(os.path.dirname(p)) == 'ai_results',
             str(p))
 
     print('B) _dump_job_json 返回 (json, npz) 且都落盘')

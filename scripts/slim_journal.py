@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""slim_journal.py —— 把历史 `_journal/*.jsonl` 的巨型 detail 迁成摘要（一次性维护工具）。
+"""slim_journal.py —— 把历史 `runtime/_journal/*.jsonl` 的巨型 detail 迁成摘要（一次性维护工具）。
 
 背景（2026-09-14 用户裁决"巨型 detail 瘦身 + 修写入侧"）：
   2026-09-10 的日志 37 MB，几乎全是 `set_param('dynamic.waves_A')` 的
@@ -8,7 +8,7 @@
   **把闸之前写下的老文件**按同一把闸重写。
 
 纪律：读 → 断言 → 原子写（临时文件 + os.replace）。任何一条不通过就**不写**。
-原始文件内容在 git 历史里（`git show <commit>:_journal/2026-09-10.jsonl`），
+原始文件内容在 git 历史里（`git show <commit>:runtime/_journal/2026-09-10.jsonl`），
 另有一份仓库外打包（见报告）。
 
 用法：
@@ -84,7 +84,7 @@ def main():
                     help='只处理大于该体积的文件（KB）')
     a = ap.parse_args()
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    d = os.path.join(root, '_journal')
+    d = os.path.join(root, 'runtime', '_journal')
     tot_b = tot_a = 0
     print('%-26s %10s %10s %8s %10s' % ('file', 'before', 'after', 'slimmed',
                                         'worst_detail'))

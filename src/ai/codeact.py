@@ -16,7 +16,7 @@ context。
     快照的 run_python op——undo 一步回到脚本开始前，流水仍完整。
   - 等待计算用泵事件循环（processEvents），不冻结 GUI，人可随时取消。
 
-结果落盘（2026-09-10 加）：每次执行都在 `<root>/ai_results/` 留一份 JSON
+结果落盘（2026-09-10 加）：每次执行都在 `<root>/runtime/ai_results/` 留一份 JSON
 记录（先 running、结束覆写 ok/error），见 run_store 模块。这条是旁路：
 落盘失败不影响脚本本身，但**结果不再依赖调用方是否收到响应**——客户端
 断线后可用 list_runs / run_result 取回。
@@ -170,7 +170,7 @@ def run_code(code, state_mod, root, jobs, t_run, t_status, t_result,
 
     调用方（server 的 run_python / run_python_async）负责经
     dispatch.run_on_main 投递到这里。run_id 由调用方给定或此处自动生成；
-    无论传不传，本次执行都会在 ai_results/ 留一份记录。
+    无论传不传，本次执行都会在 runtime/ai_results/ 留一份记录。
     """
     rid = run_id or run_store.new_run_id()
     run_store.start(root, rid, code)     # 先落 running，断线也能看到在跑

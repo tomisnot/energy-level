@@ -1491,7 +1491,7 @@ def evolve_sambe_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
             f'（用户指定 per_freq_M；dim = N²·Π(2M_g+1)）')
 
     if device == 'cuda':
-        # t57：GPU 全驻留路径（torch；const 段合并移植自 tempsimu/_t50_full）
+        # t57：GPU 全驻留路径（torch；const 段合并移植自 scripts/tmp/_t50_full）
         from .evolve_sambe_pair_gpu import gpu_propagate_pair
         setup = _PairSambeSetup(E_pair, N, groups, M, V, gamma_pair,
                                 dense_max=10 ** 9)

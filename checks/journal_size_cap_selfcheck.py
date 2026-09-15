@@ -2,7 +2,7 @@
 """自检：**journal 的 detail 体积闸**（2026-09-14 用户裁决"巨型 detail 瘦身 + 修写入侧"）。
 
 来历（不是假想）：`set_param('dynamic.waves_A')` 的 detail.old/new 曾带**整条波形
-包络**，实测**单条 748 KB**；`_journal/2026-09-10.jsonl` 一天写到 **37 MB**，
+包络**，实测**单条 748 KB**；`runtime/_journal/2026-09-10.jsonl` 一天写到 **37 MB**，
 审计文件变成不可读的 blob 堆。现在 `src/ai/journal.py` 的 `Op` 在 record 时就把
 detail 过 `slim_detail()`；本自检是它的闸——**"以后不再产生 MB 级记录"必须可验证**。
 
@@ -12,7 +12,7 @@ detail 过 `slim_detail()`；本自检是它的闸——**"以后不再产生 MB
     （审计靠 sha1 比对；顶层标量键 `path`/`job` 必须原样，GUI 状态栏与 AI 归因靠它）
   B 未超限的 detail **原对象返回**（不加任何包装，行为与改前逐位一致）
   C `OpJournal.record` → 落盘单行 ≤ 上限 + 固定开销；内存里的 op.detail 同样已瘦
-  D 仓库现有 `_journal/*.jsonl`：每行都合法 JSON 且 ≤ 阈值（历史迁移的回归闸）
+  D 仓库现有 `runtime/_journal/*.jsonl`：每行都合法 JSON 且 ≤ 阈值（历史迁移的回归闸）
   E 幂等：瘦过的 detail 再瘦一次**不再变**（迁移脚本可重跑）
   F 非 dict detail（超长字符串 / 巨型列表）也能收口
   G **undo 快照不受影响**：detail 瘦身绝不碰 `snapshot`（撤销的绝对正确性优先）
@@ -30,6 +30,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 from checks.checklib import Checker                                  # noqa: E402
+from src.ai.paths import JOURNAL_DIRNAME               # noqa: E402
 from src.ai.journal import (OpJournal, slim_detail, _json_bytes,     # noqa: E402
                             _MAX_DETAIL_BYTES)
 
@@ -85,7 +86,7 @@ tmp = tempfile.mkdtemp(prefix='_jrnl_cap_')
 try:
     j = OpJournal(tmp)
     op = j.record('ai', 'set_param', _huge_detail(), reason='体积闸自检')
-    f = os.path.join(tmp, '_journal')
+    f = os.path.join(tmp, JOURNAL_DIRNAME)
     lines = []
     for nm in os.listdir(f):
         with io.open(os.path.join(f, nm), encoding='utf-8') as fh:
@@ -108,8 +109,8 @@ try:
 finally:
     shutil.rmtree(tmp, ignore_errors=True)
 
-print('\nD) 仓库现有 _journal/*.jsonl：行合法 + 单行 ≤ 16 KB（历史迁移回归闸）')
-jd = os.path.join(ROOT, '_journal')
+print('\nD) 仓库现有 runtime/_journal/*.jsonl：行合法 + 单行 ≤ 16 KB（历史迁移回归闸）')
+jd = os.path.join(ROOT, JOURNAL_DIRNAME)
 worst, nlines, bad = 0, 0, 0
 if os.path.isdir(jd):
     for nm in sorted(os.listdir(jd)):
@@ -125,7 +126,7 @@ if os.path.isdir(jd):
                     json.loads(x)
                 except Exception:                          # noqa: BLE001
                     bad += 1
-C.group('D 现有 _journal/*.jsonl：合法 + 单行 ≤ 16 KB + 条目数没丢', [
+C.group('D 现有 runtime/_journal/*.jsonl：合法 + 单行 ≤ 16 KB + 条目数没丢', [
     ('D1 每行都是合法 JSON（无损坏）', bad == 0),
     ('D2 最大单行 ≤ 16 KB', worst <= 16 * 1024),
     ('D3 记录数仍是 5 位数量级（迁移没丢条目）', nlines > 2000),

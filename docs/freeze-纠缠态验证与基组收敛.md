@@ -1,7 +1,7 @@
 # freeze 在"交换后的纠缠态"上的验证 + 基组收敛性事故
 
 > 会话：2026-09-12 晚。执行者：主代理（使用者/物理侧，走原生 MCP）。
-> 所有"软件"数据都由本软件的引擎产出；"离线"数据走 `tempsimu/` 本地批量
+> 所有"软件"数据都由本软件的引擎产出；"离线"数据走 `scripts/tmp/` 本地批量
 > 通道（`import src.core.*`）。两条通道在本轮多次逐位吻合，故可互证。
 
 ---
@@ -174,7 +174,7 @@
 3. **工程含义**：**换任何配置都必须重标定 freeze 频率**（用户口径"老方案、各种能级配置
    都试过"正是这个经验的体现）。所以"平坦性"不是可选项而是硬需求——否则每个新基组/新光强
    都要重扫，实验结果变成"标定产物"。
-4. 数据：`tempsimu/missing_groups.npz`、`tempsimu/peak_summary.npz`；脚本
+4. 数据：`scripts/tmp/missing_groups.npz`、`scripts/tmp/peak_summary.npz`；脚本
    `_missing_groups.py` / `_peak_scan.py` / `_peak_merge.py`。
 
 
@@ -202,7 +202,7 @@ C_ent 行=I, 列=ω       7360  7365  7370  7375  7380  7385  7390  7395  7400
   ③ 或换宽带的脉冲（更短 τ + 更高 I，但有 60S 损伤风险：I≥5.5 起
   保留掉到 0.73–0.94）／用啁啾（`env` 文件或微波任意波形）。
 - 图：`ui_design/screenshots/ent_jitter.png`；复核数据
-  `tempsimu/ent_jitter_tolcheck.npz`。
+  `scripts/tmp/ent_jitter_tolcheck.npz`。
 
 ---
 
@@ -235,8 +235,8 @@ C_ent      = P_end(60S) − P_end(60P)         = 0.9919
 R=12 µm、θ=30°；t_max=120 ns、npts=241；freeze 脉冲**同相同时加在 A 与 B**
 （全局场；12 µm 对应相位差 ~0.002 rad，可忽略）；**不加频移光**（它会引入
 光子块使 dim×3，且 freeze 期间它的作用是调谐已被打断的交换）。
-初态 = §5.1 的半交换纠缠态。数组：`tempsimu/ai_job3_205454.npz`；
-判决脚本 `tempsimu/_pair_freeze_verdict.py`。
+初态 = §5.1 的半交换纠缠态。数组：`scripts/tmp/ai_job3_205454.npz`；
+判决脚本 `scripts/tmp/_pair_freeze_verdict.py`。
 
 | 量 | 两体实算（job3） | 因子化预言 | 差 |
 |---|---|---|---|

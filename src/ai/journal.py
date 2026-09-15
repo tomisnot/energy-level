@@ -5,7 +5,7 @@
 after, reason}。journal 同时是三样东西的数据源：
   - GUI"AI 动态"面板（P3 协同 UI）
   - MCP get_activity 工具（人/AI 都可读）
-  - 落盘审计 save_state/_journal/<日期>.jsonl
+  - 落盘审计 runtime/_journal/<日期>.jsonl（唯一真值源见 src/ai/paths.py）
 
 undo 采用"整 op 快照回滚"：op 记录变更前的可序列化状态（before 为
 SimState.to_dict 的浅快照），撤销即 restore 回那个快照。粒度粗但绝对
@@ -22,6 +22,8 @@ SimState.to_dict 的浅快照），撤销即 restore 回那个快照。粒度粗
 import hashlib
 import json
 import os
+
+from .paths import JOURNAL_DIRNAME
 import time
 
 _MAX_HISTORY = 200          # 内存中保留的可撤销 op 数
@@ -180,7 +182,7 @@ class OpJournal:
         if not self._root:
             return
         try:
-            d = os.path.join(self._root, '_journal')
+            d = os.path.join(self._root, JOURNAL_DIRNAME)
             os.makedirs(d, exist_ok=True)
             with open(os.path.join(d, time.strftime('%Y-%m-%d') + '.jsonl'),
                       'a', encoding='utf-8') as f:

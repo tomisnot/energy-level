@@ -25,6 +25,7 @@ from typing import Any
 
 from .dispatch import run_on_main
 from .journal import get_journal
+from .paths import RESULTS_DIRNAME
 from .sim_state import SimState, json_safe
 from . import run_store
 from . import code_freshness
@@ -36,7 +37,7 @@ code_freshness.mark_loaded()
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _PORT_FILE = os.path.join(_ROOT, '.mcp-port')
 _SHOT_DIR = os.path.join(_ROOT, 'ui_design', 'screenshots', '_ai')
-_NPZ_KEEP = 100                   # tempsimu 下 ai_*.npz 保留份数（防无限膨胀）
+_NPZ_KEEP = 100                   # ai_results/ 下 ai_*.npz 保留份数（防无限膨胀）
 
 _server_thread = None
 _server = None            # uvicorn.Server
@@ -416,8 +417,8 @@ def _dump_job_json(jid, res):
     被 Qt fail-fast 杀掉（`QThread: Destroyed while thread is still running`，
     见 `ui_dynamic._finish_run_ui`），`_jobs` 里的结果随进程消失。
     现在 done 一到就：
-      · 写 `ai_results/job_<jid>.json`（摘要，几 KB）；
-      · 写 `tempsimu/ai_<jid>_<HHMMSS>.npz`（**全量数组**：两体的 pops_2d
+      · 写 `runtime/ai_results/job_<jid>.json`（摘要，几 KB）；
+      · 写 `runtime/ai_results/ai_<jid>_<HHMMSS>.npz`（**全量数组**：两体的 pops_2d
         ~n_t·dim 量级，13 组/301 点 ≈ 8.5 MB —— 长作业的价值就在这里）。
       ⚠ 文件名用 `ai_{jid}_*`：jid 本身已含 "job"（如 `job3`）——曾写成
       `ai_job{jid}_*` 得到 `ai_jobjob3_*.npz`（使用者实测报告，难看但路径仍对得上）。
@@ -430,7 +431,7 @@ def _dump_job_json(jid, res):
         npath = s.get('npz')
         s['job_id'] = jid
         s['saved_at'] = time.time()
-        jpath = os.path.join(_ROOT, 'ai_results', f'job_{jid}.json')
+        jpath = os.path.join(_ROOT, RESULTS_DIRNAME, f'job_{jid}.json')
         os.makedirs(os.path.dirname(jpath), exist_ok=True)
         with open(jpath, 'w', encoding='utf-8') as f:
             _json.dump(s, f, ensure_ascii=False)
@@ -664,7 +665,7 @@ def _t_get_diag(scope='', job_id='', limit=200, save_npz=False):
                     'times_ns': list(snaps), 'shapes': shp,
                     'hint': 'save_npz=true 落盘全量矩阵并返回路径'}
         import time as _time
-        outdir = os.path.join(_ROOT, 'ai_results')
+        outdir = os.path.join(_ROOT, RESULTS_DIRNAME)
         os.makedirs(outdir, exist_ok=True)
         path = os.path.join(
             outdir, 'diag_H_%s.npz' % _time.strftime('%Y%m%d_%H%M%S'))
@@ -720,7 +721,7 @@ def _res_summary(res, save_npz=False, tag=''):
     """演化结果 dict → 摘要（top/终态布居 + 可选 npz 落盘）。
 
     两体标签取自 res['states_2d'] 的成对标签（见 _res_labels）。
-    落盘的 npz 会按 _NPZ_KEEP 保留最近若干份，防 tempsimu 无限膨胀
+    落盘的 npz 会按 _NPZ_KEEP 保留最近若干份，防 ai_results 无限膨胀
     （2026-09-10：一次抖动研究就堆了 200+ 个、共 189 MB）。
     """
     import numpy as np
@@ -759,7 +760,7 @@ def _res_summary(res, save_npz=False, tag=''):
             (labels[i] if i < len(labels) else f'#{i}'): round(float(arr[-1][i]), 5)
             for i in order}
         if save_npz:
-            path = os.path.join(_ROOT, 'tempsimu',
+            path = os.path.join(_ROOT, RESULTS_DIRNAME,
                                 f'ai_{tag or "res"}_{time.strftime("%H%M%S")}.npz')
             os.makedirs(os.path.dirname(path), exist_ok=True)
             np.savez_compressed(path, **{k: np.asarray(v)
@@ -772,8 +773,8 @@ def _res_summary(res, save_npz=False, tag=''):
 
 
 def _prune_npz(keep=_NPZ_KEEP):
-    """只保留 tempsimu 下最近的 keep 份 ai_*.npz（按名倒序=时序）。返回删除数。"""
-    d = os.path.join(_ROOT, 'tempsimu')
+    """只保留 ai_results 下最近的 keep 份 ai_*.npz（按名倒序=时序）。返回删除数。"""
+    d = os.path.join(_ROOT, RESULTS_DIRNAME)
     if keep <= 0 or not os.path.isdir(d):
         return 0
     try:
@@ -928,7 +929,7 @@ _INSTRUCTIONS = """Energy Level：Rb-87 里德堡原子仿真软件的 AI 接口
 job_status/job_result）；重复/组合动作（参数扫描、批量对比、结果后处理）
 用 run_python 一次跑完，省回合且大数组不离境。
 **结果不会丢**：每次 run_python 都会把 result/stdout/代码存到项目根
-ai_results/ 下的 JSON（返回值含 run_id）。超长任务用 run_python_async
+runtime/ai_results/ 下的 JSON（返回值含 run_id）。超长任务用 run_python_async
 立即拿 run_id 后台跑，再用 run_result / list_runs 取回——客户端断线也不丢。
 写操作先斩后奏：直接生效、GUI 实时反映；不满意用 undo（只撤 AI 自己的
 最近一步；run_python 整段算一步）。get_activity 可查所有操作流水
@@ -1107,11 +1108,11 @@ def _register_tools(mcp):
                          'set_waves(waves,atom)、load_archive(path)、save_archive(path)、'
                          'run_compute_and_wait(timeout=1800,poll=1.0,save_npz=False)、'
                          'activity(since=0)。'
-                         '要把数据写文件请拼路径：np.savez(ROOT + "/ai_results/x.npz", ...)，'
+                         '要把数据写文件请拼路径：np.savez(ROOT + "/runtime/ai_results/x.npz", ...)，'
                          '不要用 os.path.join（os 不存在）。'
                          '把结论赋给变量 result（自动回传 + 自动落盘）。'
                          '大数组用 print 出统计量、别整体回传。整段算一个 undo 单元。'
-                         '本次执行已自动存为 ai_results/<run_id>.json，返回值含 run_id。')
+                         '本次执行已自动存为 runtime/ai_results/<run_id>.json，返回值含 run_id。')
     async def run_python(code: str, timeout: float = 1800.0) -> dict:
         from .codeact import run_code
         return await asyncio.to_thread(
@@ -1123,7 +1124,7 @@ def _register_tools(mcp):
 
     @mcp.tool(description='CodeAct 异步版：立即返回 run_id，脚本在后台执行，'
                          '不再占住本次调用。长扫描/大系综用它——即使客户端断线，'
-                         '结果也已落盘 ai_results/<run_id>.json，重连后用 run_result '
+                         '结果也已落盘 runtime/ai_results/<run_id>.json，重连后用 run_result '
                          '或 list_runs 取回。用 run_result(run_id) 轮询进度。')
     async def run_python_async(code: str, timeout: float = 1800.0) -> dict:
         from .codeact import run_code
@@ -1149,11 +1150,11 @@ def _register_tools(mcp):
                          name=f'codeact-{rid}').start()
         return {'ok': True, 'run_id': rid,
                 'msg': f'已启动（后台执行）。用 run_result({rid!r}) 轮询；'
-                       f'记录在 ai_results/{rid}.json'}
+                       f'记录在 runtime/ai_results/{rid}.json'}
 
     @mcp.tool(description='取 CodeAct 运行的状态与结果。run_id 来自 run_python / '
                          'run_python_async 的返回值，或 list_runs。'
-                         '只读 ai_results/ 下的文件、**不经 Qt 主线程**，'
+                         '只读 runtime/ai_results/ 下的文件、**不经 Qt 主线程**，'
                          '所以长任务正在跑时也能查（这正是它存在的理由：'
                          'run_python 的脚本占用主线程，别的工具会被排队）。')
     async def run_result(run_id: str) -> dict:

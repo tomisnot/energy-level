@@ -5,7 +5,7 @@
 
 要钉住的核心性质（这是加这三个工具的唯一理由）：
   run_python 的脚本在 Qt 主线程 exec，所以长任务执行期间**任何经
-  run_on_main 的工具都会被排队**。run_result 只读 ai_results/ 下的文件、
+  run_on_main 的工具都会被排队**。run_result 只读 runtime/ai_results/ 下的文件、
   不经主线程，因此必须能在任务飞行中立刻作答。本自检会在异步任务执行
   期间反复轮询，要求至少拿到一次 status='running' 且响应及时——若日后
   有人给 run_result 加上主线程依赖，这条断言会立刻失败。

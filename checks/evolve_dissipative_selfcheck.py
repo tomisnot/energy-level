@@ -6,7 +6,7 @@
 
 场景（D 系列，全部第一性原理独立参考）：
   D1 解析衰变 e^{−Γt}（两能级，无场；eig / rk4 / auto 三路）
-  D2 CW 驱动 + 衰变 vs 独立 Liouvillian 本征参考（本文件内实现，同 tempsimu）
+  D2 CW 驱动 + 衰变 vs 独立 Liouvillian 本征参考（本文件内实现，同 scripts/tmp）
   D3 时变高斯包络 + 衰变 vs solve_ivp 向量化主方程（独立实现）
   D4 真实交换耦合（pair_core.exchange_coupling）+ 衰变 vs solve_me 参考
   D5 **multi 场 ac 约定回归**：ip4 / lindblad vs 第一性原理 solve_ivp

@@ -57,7 +57,7 @@ def baseline():
 def _iter_py(root):
     """只扫**进程内真正加载的代码**：`src/**/*.py` + 顶层 `app_entry.py`/`main.py`。
 
-    ⚠ 刻意不扫 `checks/`、`tempsimu/`、`save_state/` 等——改那些文件**不影响**
+    ⚠ 刻意不扫 `checks/`、`scripts/tmp/`、`runtime/`、`save_state/` 等——改那些文件**不影响**
     正在跑的进程，若算作 stale 就是**假警报**（实测踩过：扫全仓库时 400 个 .py，
     刚写完一个自检就报 stale）。
     """
