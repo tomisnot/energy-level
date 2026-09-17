@@ -99,8 +99,11 @@ pip install "mcp>=2,<3" uvicorn     # 可选依赖；缺失时软件照常运行
   `sweep_status` / `sweep_result` / `cancel_sweep` / `list_sweeps` 跟进。
   轴用**登记册路径**表达（`'field.lights[0].intensity'`、`'dynamic.waves_A[0].env'`、
   `'dynamic.t_max'`），支持 `{'linspace':…}` 等形态并自动做笛卡尔积；并行度按
-  **核数 + 可用内存**自动定档并给出理由。人侧在右下角有**逐点进度悬浮窗**、
-  画布顶部有一行「⚡ 并行扫描运行中」，两者与 AI 读**同一份** `status.json`。
+  **核数 + 可用内存**自动定档并给出理由。人侧在**底栏之上会向上展开一栏**
+  （`SweepStack`：表头 + 逐点进度条，可"收起/展开"，与 AI 读**同一份** `status.json`）。
+  ⚠ 2026-09-16 用户裁决改形态：原先的右下角浮窗"最小化"会被轮询弹回来
+  （可见性被用户与轮询两个主人同时管），画布顶部那行字与它职能重复 ⇒ 改为
+  布局内一栏、画布那行并入表头。
   设计与验收见 `docs/并行扫描-设计与验收.md`。
 - **给 AI 看的说明书**：`skills/energy-level/SKILL.md`（工具语义、单位约定、波形格式、
   20+ 条已知坑）。AI 使用中发现不符可回头修正（自我迭代）。
@@ -168,11 +171,12 @@ res = evolve_engine('hard', states, fields=fields, psi0=0,
 | 对象 | 前 | 后 |
 |---|---|---|
 | `README.md` | 90.8 KB / 1445 行（使用+原理+开发三部分） | 本文件（入口），正文逐字迁入 `docs/手册-界面·原理·开发.md` |
-| `docs/` | 45 篇 / 449 KB | **15 篇**；32 份历史报告 → `历史-任务报告汇编.md`（33 条 × 4 行，`git show` 可取原文） |
+| `docs/` | 45 篇 / 449 KB | **26 篇**；32 份历史报告 → `历史-任务报告汇编.md`（33 条 × 4 行，`git show` 可取原文） |
 | `checks/` 计数口径 | 677 项（= 断言条数，碎片化） | **183 项**（不变式包）+ **661 子条件**（覆盖面）；`--tier all` = 238 项 / 716 子条件 |
 | `checks/` 耗时（默认档） | 串行 635 s | **串行 358 s**；`--jobs 4` **128–135 s**（连跑 3 次 0 FAIL）；含 deep 档 165 s |
 | `checks/` 结构 | 32 脚本一档 | 31 脚本 + **三档**（`fast`/`full`/`deep`）+ `--jobs N` + 单脚本看门狗；新增 `engine_e2e_selfcheck.py`（7 包 / 25 子条件 / ~30 s）收敛五个重对拍（deep 档保留、不删） |
-| `_journal/` | 39.8 MB（单条 detail 曾达 748 KB） | **0.83 MB**；写入侧加 detail 体积闸（超限只存形状/长度/sha1）+ `checks/journal_size_cap_selfcheck.py` 21 项 |
+| `_journal/` | 39.8 MB（单条 detail 曾达 748 KB） | **0.83 MB**；写入侧加 detail 体积闸（超限只存形状/长度/sha1）+ `checks/journal_size_cap_selfcheck.py` 21 项 | 另有并行扫描自检四件（sweep_spec/e2e/ai_wiring/gui_selfcheck.py，已并入 selftest_all 分档）。
+
 | `scripts/` | 11 个（含 3 个改动前就已腐坏、3 个一次性产物） | 6 个（删腐坏/产物，加 `slim_journal.py`） |
 | `tempsimu/` `ai_results/` `ui_design/screenshots/` | 1301 / 126 / 71 个文件 | 34 / 0 / 6（由使用者侧清理，仓库外留有打包件） |
 

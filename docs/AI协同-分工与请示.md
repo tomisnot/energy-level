@@ -332,6 +332,106 @@
       聚合 32 → **35 脚本**（详见本轮报告的前后对比表）。
 
 
+- [ ] #14 类型：可疑（**MCP 回程体积**，使用者自查，2026-09-16） 场景：下发一条
+      **12001 点**的 `env=['file', t, amp]` 光场波形后，三条 MCP 观察路径里有**两条**
+      把整份采样数组原样回传
+      | 证据（同一状态实测）：`list_params('dynamic.waves_A')` 的 `value` = **292 B**（已摘要）
+      但 **`last_committed` = 241041 B** ⇒ 单条响应 **825×**（`_slim_params` 只处理 `value`
+      键，漏了 `last_committed`）；`get_state('dynamic')` 走
+      `to_dict → archive.snapshot(reg)` = `reg.collect()` 原始值 ⇒ 采样数组**从未过**
+      `_slim_env`；`run_python` 的 `_diff_changes` 只截 `params` **条数**（40）**不截单值** ⇒
+      脚本里 `set_waves` 一条大包络，回程就带整份新旧数组（本次实测该响应被 DSH 截掉
+      **576589 B**；对照 `journal` 同一操作有 4 KB 闸，**AI 回程没有**）
+      | 影响：白烧 context 甚至截断结果；大包络（随机抖动/啁啾/长分段调制）场景会直接
+      顶掉有用输出 | 建议：① `_slim_params` 也摘要 `last_committed`；② `_diff_changes`
+      单值加与 journal 同源的 4 KB 闸（超限留形状 + sha1）；③ `get_state` 对
+      `dynamic.waves_*` 一并 `_slim_env`。**已记入 SKILL 坑 27**。
+
+- [x] #15 类型：可疑（**假告警**，使用者自查，2026-09-16） 场景：`app_entry.py` 的
+      `_init_ai` 尾部有 **5 行死代码**，每次启动都抛 `NameError` 并被兜底吞掉，
+      状态栏因此**假报**"[AI] 端点启动失败（软件功能不受影响）"
+      | 证据：`app_entry.py:197-201` 引用**未定义**的 `_ai_job_cancel` / `_QT`
+      （本文件与 `import` 里都没有；`git show HEAD:app_entry.py` 同样如此，
+      `git log -S'_QT('` 显示自 `638eb40` 引入即错）；而 `_install_ai_job_indicator()`
+      （`app_entry.py:99-151`）**已**装好同样的 `clicked.connect(_cancel)` 与 QTimer
+      ⇒ 这 5 行既重复又必错。**工具面不受影响**：2026-09-16 实测 36 个 MCP 工具全部可用、
+      `get_activity` 能看到新写入落库（server 在死代码**之前**已起好）
+      | 影响：误导排查方向（"端点启动失败"其实是编码错误）；掩盖真故障 | 建议：删掉
+      这 5 行（需重启生效）；并让 `_init_ai` 的兜底**区分** `ImportError`（无 SDK）与
+      `AttributeError/NameError`（编程错误应吵出来）。**已记入 SKILL 坑 28**。
+- [x] #15 处置：**前半已修（2026-09-16 开发者，随"取消渠道统一"那一刀）**——
+      那 5 行随 `_install_ai_job_indicator()` 一并**删除**（使用者同时裁决
+      "旧「取消AI任务」已被「取消计算」代替，删除、统一渠道"）。
+      新增回归：`checks/gui_ai_job_indicator_test.py` 的 **E 包**用"stub 一个假
+      port → 断言 `_init_ai()` 真的返回它 + 状态栏装上「● AI 在线」+ op 流水
+      订阅真的装上"把"收尾被 NameError 打断"钉死；**A 包**断言旧入口在**属性与
+      AST** 两层都不复存在（改用 AST 扫描，避免注释里引用旧名字造成假红——
+      第一次就是这么假红的）。
+      ⚠ **后半（兜底区分 ImportError 与 NameError）未做**：那属于"启动期错误分型"
+      的独立改动；现状是消息里已带 `{e}`（能看到 NameError 原文），但前缀仍是
+      "端点启动失败"。留给后续。
+
+- [ ] #19 类型：不便（**并行进度 UI 形态**，使用者实测，2026-09-16） 场景：三条
+      ① 右下角并行进度浮窗**点了"最小化"还是弹回来**；② 画布顶部那行"并行扫描
+      运行中"与浮窗**职能重复**；③ 状态栏旧「取消AI任务」已被新的「取消计算」
+      按钮代替，**留着两套取消入口**
+      | 证据（使用者原话）："点击最小化之后还是弹出，直接改成不是弹窗，而是底栏
+      进度条那一块的向上展开"；"画布上面那个并行小行多余了，把他的职能跟底栏
+      进度条那一堆合并"；"旧的取消AI任务已经被新的取消计算按钮代替，请删除，
+      统一渠道"
+      | 影响：浮窗**在结构上无法最小化**——可见性被两个主人同时管着（用户 `hide()`
+      与 1 Hz 轮询 `show()`，下一拍就弹回来）；重复入口让人分不清该点哪个
+      | 建议：换成**布局内**部件（无窗口标志）、画布横幅删除并入表头、删掉 AI
+      专属取消按钮
+- [x] #19 处置：**全修（2026-09-16 开发者）**——
+      ① `src/ui/sweep_panel.py` 重写：`SweepProgressWindow`（`Qt.Tool` 浮窗）
+      → **`SweepStack`**（主窗口中央布局里的普通 `QWidget`；`app_entry` 用
+      `root.addWidget` 加在 `top` 之后 ⇒ 位于底栏正上方、**向上展开**）。
+      「最小化」→「收起/展开」，且**收放状态归用户**，轮询只更新内容、从不改
+      可见性（这是原 bug 的结构性根除，不是给按钮补个 flag）。
+      ② `CanvasBanner` **删除**，职能并入表头（收起时表头仍可见 ⇒ 信息不丢、
+      不再重复两处）。
+      ③ `app_entry._install_ai_job_indicator()` 与状态栏「取消AI作业」按钮一并
+      **删除**：运行中「运行演化」即「取消计算」，人与 AI 同走
+      `_on_run_clicked → _cancel_run`（**统一渠道**）。
+      自检同步重写：`checks/sweep_gui_selfcheck.py`（**6 包 / 27 子条件**，
+      C 包专门回归"收起后刻意跑一拍 `tick()` 仍是收起的"；B 包断言
+      `isWindow()==False`、在中央布局里、旧两类已不存在）；
+      `checks/gui_ai_job_indicator_test.py`（**5 包 / 21 子条件**，从"测那个
+      指示器"改为测"统一渠道"这条不变式，D 包断言取消**真的落到
+      `progress_arr[1]==1.0` 引擎标志**）。
+      **需重启软件**（进程内 UI 代码）。
+
+- [x] #16 类型：**文档过期**（使用者自查，2026-09-16）→ **已改**：harness 侧的 MCP
+      注册注释（`~/.dsh/profiles/web/cordis.patch.yml`）写"当前 **22** 个"工具，
+      实际 **36** 个（`src/ai/server.py::_register_tools` 里 36 个 `async def`，已用
+      `re.findall` 逐个点名核对，无多无少）。已把注释改成 36 个并按
+      "状态读/状态写/运行/并行扫描/CodeAct/存档留痕"六类重排清单。
+
+- [ ] #17 类型：缺失（**接口未接线**，使用者自查，2026-09-16） 场景：`run_python_async`
+      的脚本里**永远无法提交并行扫描**
+      | 证据：`submit_sweep` 在异步脚本内恒返回
+      `{'ok': False, 'msg': '本进程不支持并行扫描（服务端未接线）'}`。
+      根因：`src/ai/server.py` 的 `run_python_async._worker` 调 `run_code(...)` 时
+      **只传到 `t_states` 为止**，缺 `t_sweep_submit/t_sweep_status/t_sweep_result/
+      t_sweep_cancel/t_sweep_list`；而同步 `run_python` 那条调用**有**这五个
+      ⇒ `codeact._make_namespace` 里 `t_sweep_submit=None` ⇒ 返回上面的 msg
+      | 影响：长扫描/网格实验**只能走同步 run_python**（占满回合），
+      而"重活优先异步"正是 SKILL 与文档反复推荐的姿势；本轮因此先白试两次提交
+      | 建议：把 `run_python` 那串 sweep 回调**原样补进** `run_python_async._worker`
+      （两处调用应共用同一个 helper，避免再次漂移）。**需重启软件**。
+
+- [ ] #18 类型：不便（**启动方式与并行扫描互斥**，使用者自查，2026-09-16） 场景：
+      在 DSH 沙箱内由 AI 启动的软件，其 `submit_sweep` **必然全部失败**
+      | 证据：`sweep_status.note = "runner 崩溃：[WinError 5] 拒绝访问。"`，
+      traceback 停在 `ProcessPoolExecutor → mp.Pipe → _winapi.CreateFile`。
+      以 `danger-full-access` 重启软件后，**同一份 spec 立即 9/9 跑通**
+      | 影响：AI 自己起的实例看起来一切正常（GUI 起、MCP 通、单点运行也行），
+      **只有并行扫描静默全废**，极易误判为软件缺陷 | 结论：**不是软件缺陷**
+      （人双击启动不受影响），是沙箱继承 token 导致子进程无法建命名管道
+      | 建议：无需改代码；把它们写进文档/自检提示——判据即 `note` 里的
+      `[WinError 5]`。若将来要支持"AI 自起实例"，需要在启动处检测并**吵出来**。
+
 ## 七.0 事故现场保全守则（2026-09-12，用一次真实损失换来）
 
 > 本节与 §六 #11 提到的 `scripts/tmp/` 日志/探针已随 **2026-09-14 草稿区清理**移出仓库
