@@ -20,6 +20,11 @@ dist/
 # UI 设计检查的临时产物（可随时由 ui_design/*.py 重生成，不入库）
 ui_design/screenshots/
 
+# 研究配图的渲染产物（由 scripts/research/*.py 的 savefig 重生成，不入库）——
+# 与 ui_design/screenshots/ 同一先例：scripts/research/ 只入库 .py，不入库图片。
+# 若要归档某一版配图，用 `git add -f` 显式入库。
+scripts/research/figs_photon/
+
 # DSH 本机接线（实测是 **hardlink**：.dsh/skills/energy-level/SKILL.md ↔
 # skills/energy-level/SKILL.md，改一处两处都变；技能内容本身在 skills/ 内
 # 正常入库，.dsh/ 只是每台机器的挂载点，不入库）
