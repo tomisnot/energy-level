@@ -48,6 +48,10 @@ energy-level http://127.0.0.1:8765/mcp`；通用 JSON 形态同上。
   job_status(jid) job_result(jid) list_jobs() result_states(…)
   list_params(prefix) get_diag(scope) cancel_job(jid)
   activity(since=0) np(=numpy) json time ROOT`
+  ⚠ **`get_envelope` 不在白名单里**（2026-09-16 实测：脚本内调用 →
+  `NameError: name 'get_envelope' is not defined`）。要曲线就在**脚本外**
+  单独调一次 `get_envelope(path, index)`，再把数组拼进代码字面量；
+  或直接读 `get_state('dynamic')`（见坑 27，那条路给全量采样）。
 - 要自己写文件请**拼字符串**：`np.savez(ROOT + '/runtime/ai_results/x.npz', ...)`。
   用 `os.path.join` 会直接 `NameError`——这是刻意的设计边界（状态变更必须
   全部经 ParamRegistry），不是缺陷。
@@ -308,8 +312,11 @@ GUI 的 `_current_states`/`_run_*` 也调同一批函数 ⇒ **扫描 ≠ 另一
    把被丢掉的键写进 `warnings`（不静默、也不 TypeError）。
 7. **扫描不参与 `undo`**：提交/取消只记 `journal`（**无快照**），所以
    「撤销AI」不会被一次扫描顶掉（撤的是最近一次真正的状态变更）。
-8. **人机同源可见**：扫描期间 GUI 右下角有逐点进度悬浮窗、画布顶部有一行
-   "⚡ 并行扫描运行中"，两者读的是**同一份** `status.json`（= 你 `sweep_status` 读的）。
+8. **人机同源可见**：扫描期间 GUI **底栏之上会向上展开一栏**（`SweepStack`：
+   表头 + 逐点进度条，可"收起/展开"），它读的是**同一份** `status.json`
+   （= 你 `sweep_status` 读的）。⚠ 2026-09-16 起**不再是右下角浮窗、画布上
+   也没有单独一行字**（用户裁决：浮窗"最小化"后被轮询弹回来 ⇒ 改布局内部件；
+   画布那行职能并入表头）。
 
 ## 波形格式（set_waves 的 waves 列表元素）
 
@@ -606,6 +613,46 @@ env 采样   = √[ (1 + δ(t)) / (1 + b) ]    # 峰值恰为 1
     （连"重对拍"档）/ `--verbose`（展开子条件）。Qt/线程时序类脚本固定**先串行**跑。
     你若要跑检查，先 `python checks/selftest_all.py --tier fast`；报"全绿"时请带上
     `##SELFTEST_SUMMARY` 那一行（含 items/subs/fail），别只说"通过了"。
+
+27. **大包络会把 MCP 响应撑爆——三条路径只瘦身了一条**（2026-09-16 实测）：
+    用 12001 点的 `env=['file', t, amp]` 下发一条光场波形后，实测
+    · `list_params('dynamic.waves_A')`：`value` = **292 B**（已摘要化）但
+      **`last_committed` = 241041 B** ⇒ **单条响应 825×**。根因：`_slim_params`
+      只处理 `value` 键，没有 `last_committed`；
+    · `get_state('dynamic')`：走 `to_dict → archive.snapshot(reg)`（v3 就是
+      `reg.collect()` 的**原始值**）⇒ **整个 FileEnv 采样数组照原样回传**，
+      从未过 `_slim_env`；
+    · `run_python` 的返回值：`_diff_changes` 只截断 `params` **条数**（40 条），
+      **不截断单条 old/new 的值** ⇒ 脚本里 `set_waves` 一条大包络，响应里就带
+      整份新旧数组（本次实测该响应被 DSH 截掉 **576589 B**；对照：`journal`
+      同一操作有 4 KB 闸，AI 回程**没有**）。
+    **结论（省回合也省 context）**：要曲线**只在需要时**用
+    `get_envelope(path, index)` 单独取一次；别把大 `FileEnv` 塞进
+    `run_python`/`get_state`/`list_params` 的观察路径；分段包络用**少量折点**
+    表达（本次用户配置只有 6 个点，够了）。
+    **建议修法**（开发者）：`_slim_params` 也摘要 `last_committed`；
+    `_diff_changes` 给单值加与 journal 同源的 4 KB 闸（超限留形状 + sha1）；
+    或 `get_state` 对 `dynamic.waves_*` 一并 `_slim_env`。
+
+28. **⚠ `app_entry.py` 的 `_init_ai` 尾部曾有 5 行死代码 —— 工具面不受影响，
+    但状态栏会假报"端点启动失败"**（2026-09-16 读码定位）：
+    `app_entry.py:197-201`（`self._ai_job_btn.clicked.connect(_ai_job_cancel)`、
+    `self._ai_job_timer = _QT(self)` 等）引用了**未定义**的 `_ai_job_cancel` 与
+    `_QT`（本文件、`import` 里都不存在；`HEAD` 版本同样如此）⇒
+    `_init_ai` 执行到这里抛 `NameError`，被 `except Exception` 兜住、打出一条
+    `[AI] 端点启动失败（软件功能不受影响）: …`，**看起来像端点挂了**。
+    实际不影响 AI：MCP server 在此之前**已经起好**，且
+    `_install_ai_job_indicator()`（`app_entry.py:99-151`）已把 **同样的**
+    `clicked.connect(_cancel)` 与 QTimer 装好 ⇒ 这 5 行是重复且必错的。
+    ✅ **已修（2026-09-16）**：这 5 行连同 `_install_ai_job_indicator()` 与
+    状态栏「取消AI作业」按钮**一并删除**（用户裁决"统一渠道"：运行中
+    「运行演化」即「取消计算」，人与 AI 同走 `_on_run_clicked → _cancel_run`）。
+    回归 = `checks/gui_ai_job_indicator_test.py` 的 **E 包**（stub 假 port →
+    断言 `_init_ai()` 真返回它 + 「● AI 在线」标签 + op 订阅都装上）。
+    **教训（仍未处理的那半）**：`except Exception` 太宽会把**真 bug 伪装成环境
+    问题**——`_init_ai` 的兜底至少该区分 `ImportError`（无 SDK）与
+    `AttributeError/NameError`（编程错误应吵出来）；目前消息里带 `{e}`
+    （能看到 NameError 原文）但前缀仍是"端点启动失败"。见登记区 #15。
 
 ## 人机协同约定
 

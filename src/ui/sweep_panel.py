@@ -1,35 +1,43 @@
 # -*- coding: utf-8 -*-
-"""并行扫描的人侧可见面：右下角悬浮进度窗 + 画布顶部文本条。
+"""并行扫描的人侧可见面：**主窗口底栏之上向上展开的一栏**。
 
-## 为什么要这两个东西
+## 形态（2026-09-16 用户裁决，取代原来的右下角悬浮窗）
 
-用户口径（2026-09-15）："这个功能倾向于 AI 使用，所以不太需要考虑人类操作
-方便，但**需要做出 UI 让人类知道在并行**"。也就是 G3 的那一条——AI 跑的东西
-人得看得见、能接管。
+用户原话："点击最小化之后还是弹出，直接改成**不是弹窗**，而是底栏进度条那一块
+的**向上展开**；然后画布上面那个并行小行多余了，把他的职能跟底栏进度条那一堆
+合并。"
 
-设计上刻意与 AI 侧**同源**（P2）：两者都只读 `src.sweep.registry.status()`，
-而它读的是 runner 写的 `status.json`。所以"人看到的"和 `sweep_status` 返回的
-永远是同一份事实，不存在两套口径。
+于是：
+- **不再是独立窗口**（旧实现是 `Qt.Tool | FramelessWindowHint` 的浮窗，
+  点"最小化"→ `hide()`，但 1 Hz 轮询下一次 tick 又 `show()` 回来 ⇒ 最小化无效）。
+  现在它是主窗口中央布局里的一个普通 `QWidget`（`app_entry` 用
+  `root.addWidget(...)` 加在 `top` 之后），**几何由布局决定，没有"弹"这个概念**。
+- **画布顶部那行字（CanvasBanner）删掉**：它的职能（"现在有并行在跑"）并入本栏
+  的**表头**——表头永远可见，逐点行才收放。
+- **"最小化"变成"收起/展开"**：收起 = 只留表头（仍在底栏那一块，看得见进度），
+  再点展开。这个状态由**用户**决定，轮询**不会**把它顶回来。
 
-## 两个部件的分工
+## 人机同源（P2，不变）
 
-- `SweepProgressWindow`：**详情**。纵向一叠逐点进度条（每行 = 一个扫描点），
-  含进程数、已用时长、逐点标签（`freq_mhz=7380.0`）、以及「取消扫描」。
-  超过 `MAX_ROWS` 点则把余下的折成一行"其余 N 点"聚合条（不无限长高）。
-- `CanvasBanner`：**一眼可见**。画布顶部居中一行字（"⚡ 并行扫描运行中 · 12/25"），
-  点它把悬浮窗拉到前面。用户原话："画布也要有处理不能放着，可以显示一行文本"。
+本栏只读 `src.sweep.registry.status()` → runner 写的 `status.json`，
+与 AI 的 `sweep_status` 读的是**同一份事实**。
+取消只调 `registry.cancel_request()`（写 cancel 文件即返回），
+**绝不阻塞主线程**——等待与结论交给轮询（本项目 Qt 事故史的直接教训）。
 
-两者都不写任何状态：取消按钮只调 `registry.cancel_request()`（写 cancel 文件
-后立即返回），等待与结论交给轮询——主线程绝不被 runner 的退出阻塞
-（本项目 Qt 事故史的直接教训）。
+## 高度预算
+
+逐点行放在 `QScrollArea` 里（最高 `BODY_MAX_H`），点很多也不会把画布挤没；
+每行是**单行**（标签 + 进度条 + 百分比），比"标签一行、条一行"省一半高度。
 """
 import os
 
-from PyQt5.QtCore import Qt, QTimer, QEvent
+from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-                             QProgressBar, QPushButton)
+                             QProgressBar, QPushButton, QScrollArea,
+                             QSizePolicy)
 
-MAX_ROWS = 24                      # 超过就折叠成聚合行（窗不能无限长）
+MAX_ROWS = 16                      # 最多建多少行（其余折叠成聚合行）
+BODY_MAX_H = 190                   # 逐点区最高像素（超出内部滚动）
 IDLE_HIDE_S = 8.0                  # 结束后再留几秒让人看清"完成了"
 POLL_MS = 1000
 
@@ -37,69 +45,78 @@ _STATE_TAG = {'queued': '排队', 'running': '运行', 'done': '完成',
               'failed': '失败', 'cancelled': '取消'}
 
 
-def _short_tag(tag, n=34):
+def _short_tag(tag, n=30):
     tag = str(tag or '')
     return tag if len(tag) <= n else tag[:n - 1] + '…'
 
 
-class SweepProgressWindow(QWidget):
-    """右下角悬浮窗：纵向一叠逐点进度条（人机同源数据）。"""
+class SweepStack(QWidget):
+    """底栏之上的一栏：表头（常显）+ 逐点进度（可收放）。"""
 
-    def __init__(self, main, root=None, parent=None, banner=None):
+    def __init__(self, main, root=None, parent=None):
         super().__init__(parent)
         self.main = main
-        self.banner = banner           # CanvasBanner（可为 None）
         self.root = root or os.path.dirname(os.path.dirname(
             os.path.dirname(os.path.abspath(__file__))))
-        self.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint |
-                            Qt.WindowStaysOnTopHint)
-        self.setAttribute(Qt.WA_ShowWithoutActivating, True)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         self.setStyleSheet(
-            'QWidget{background:#20242c;color:#e8eaf0;}'
-            'QLabel{color:#e8eaf0;}'
-            'QPushButton{color:#e8eaf0;background:#2f3542;border:1px solid '
-            '#4a5266;border-radius:3px;padding:2px 8px;}'
-            'QPushButton:hover{background:#3b4455;}'
-            'QProgressBar{border:1px solid #4a5266;border-radius:2px;'
-            'background:#171a20;text-align:center;color:#cfd4e0;'
+            'SweepStack{background:#f7f8fa;border-top:1px solid #d6d9de;}'
+            'QLabel{color:#3a4150;}'
+            'QPushButton{color:#3a4150;background:#eceff4;'
+            'border:1px solid #d6d9de;border-radius:3px;padding:1px 8px;}'
+            'QPushButton:hover{background:#e2e7ef;}'
+            'QProgressBar{border:1px solid #d6d9de;border-radius:2px;'
+            'background:#ffffff;text-align:center;color:#5b6270;'
             'font-size:8pt;}'
             'QProgressBar::chunk{background:#6c8cff;}')
 
-        root_box = QVBoxLayout(self)
-        root_box.setContentsMargins(8, 6, 8, 8)
-        root_box.setSpacing(4)
+        box = QVBoxLayout(self)
+        box.setContentsMargins(8, 3, 8, 4)
+        box.setSpacing(2)
 
         head = QHBoxLayout()
-        self.title = QLabel('并行扫描')
+        head.setSpacing(6)
+        self.title = QLabel('⚡ 并行扫描')
         self.title.setStyleSheet('font-weight:600;')
         self.info = QLabel('')
-        self.info.setStyleSheet('color:#9aa3b8;')
+        self.info.setStyleSheet('color:#5b6270;')
+        self.btn_toggle = QPushButton('收起')
+        self.btn_toggle.setToolTip('收起逐点进度（表头保留；再点展开）')
+        self.btn_toggle.clicked.connect(self._on_toggle)
         self.btn_cancel = QPushButton('取消扫描')
-        self.btn_cancel.setToolTip('请求取消（worker 在安全点退出，已完成的点保留）')
+        self.btn_cancel.setToolTip('请求取消：worker 在安全点退出，已完成的点保留')
         self.btn_cancel.clicked.connect(self._on_cancel)
-        self.btn_hide = QPushButton('最小化')
-        self.btn_hide.setToolTip('只收起这个窗；扫描继续，画布上仍有进度提示')
-        self.btn_hide.clicked.connect(self.hide)
         head.addWidget(self.title)
-        head.addStretch(1)
         head.addWidget(self.info)
+        head.addStretch(1)
         head.addWidget(self.btn_cancel)
-        head.addWidget(self.btn_hide)
-        root_box.addLayout(head)
+        head.addWidget(self.btn_toggle)
+        box.addLayout(head)
 
-        self._rows = []            # [(QLabel, QProgressBar)]
-        self._body = QVBoxLayout()
-        self._body.setSpacing(2)
-        root_box.addLayout(self._body)
-        self._agg = None           # 折叠聚合行
+        # 逐点区（可滚动、可整体收起）
+        self._host = QWidget()
+        self._body = QVBoxLayout(self._host)
+        self._body.setContentsMargins(0, 0, 0, 0)
+        self._body.setSpacing(1)
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QScrollArea.NoFrame)
+        self._scroll.setMaximumHeight(BODY_MAX_H)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._scroll.setWidget(self._host)
+        box.addWidget(self._scroll)
+
+        self._rows = []            # [(QLabel, QProgressBar, QLabel)]
+        self._agg = None           # 聚合行
         self._sid = None
+        self._collapsed = False    # **用户**的收放选择（轮询不许覆盖它）
         self._idle_since = None
         self._terminal_seen = None
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self.tick)
         self._timer.start(POLL_MS)
-        self.hide()
+        self.setVisible(False)
 
     # ---------------- 数据（与 AI 的 sweep_status 同一份） ----------------
     def _status(self):
@@ -125,19 +142,15 @@ class SweepProgressWindow(QWidget):
         self._idle_since = None
         self._terminal_seen = None
         self.refresh(st)
-        if not self.isVisible():
-            self.show()
-        self._reposition()
+        self.setVisible(True)          # 只有"新扫描出现"才会显形；不看浮窗状态
 
     def _maybe_idle_hide(self):
         import time
         if self._idle_since is None:
             return
         if time.time() - self._idle_since > IDLE_HIDE_S:
-            self.hide()
             self._idle_since = None
-            if self.banner is not None:
-                self.banner.set_line('')           # 画布提示同步收起
+            self.setVisible(False)     # 整栏收起，布局把空间还回画布
 
     def refresh(self, st):
         sid = st.get('sweep_id')
@@ -146,32 +159,39 @@ class SweepProgressWindow(QWidget):
         n = len(pts)
         show = min(n, MAX_ROWS)
         while len(self._rows) < show:
-            i = len(self._rows)
             lab = QLabel('')
-            lab.setStyleSheet('font-size:8pt;')
+            lab.setFixedWidth(180)
             bar = QProgressBar()
             bar.setRange(0, 1000)
             bar.setFixedHeight(12)
-            self._body.addWidget(lab)
-            self._body.addWidget(bar)
-            self._rows.append((lab, bar))
-        for i in range(len(self._rows)):
-            lab, bar = self._rows[i]
+            pct = QLabel('')
+            pct.setFixedWidth(42)
+            pct.setStyleSheet('color:#5b6270;')
+            row = QHBoxLayout()
+            row.setSpacing(6)
+            row.addWidget(lab)
+            row.addWidget(bar, 1)
+            row.addWidget(pct)
+            self._body.addLayout(row)
+            self._rows.append((lab, bar, pct))
+        for i, (lab, bar, pct) in enumerate(self._rows):
             if i >= show:
-                lab.hide()
-                bar.hide()
+                lab.setVisible(False)
+                bar.setVisible(False)
+                pct.setVisible(False)
                 continue
             p = pts[i]
-            lab.show()
-            bar.show()
-            lab.setText('pt%02d %s  %s' % (
-                p.get('k', i), _short_tag(p.get('tag')),
-                _STATE_TAG.get(p.get('state'), p.get('state') or '')))
-            bar.setValue(int(round(1000 * float(p.get('frac') or 0.0))))
+            lab.setVisible(True)
+            bar.setVisible(True)
+            pct.setVisible(True)
+            lab.setText('pt%02d %s' % (p.get('k', i), _short_tag(p.get('tag'))))
+            frac = float(p.get('frac') or 0.0)
+            bar.setValue(int(round(1000 * frac)))
+            pct.setText('%.0f%%' % (100 * frac))
         if n > show:
             if self._agg is None:
                 self._agg = QLabel('')
-                self._agg.setStyleSheet('font-size:8pt;color:#9aa3b8;')
+                self._agg.setStyleSheet('color:#5b6270;')
                 self._body.addWidget(self._agg)
             rest = pts[show:]
             done = sum(1 for p in rest if p.get('state') == 'done')
@@ -179,42 +199,26 @@ class SweepProgressWindow(QWidget):
                    if rest else 0.0)
             self._agg.setText('其余 %d 点：完成 %d（平均 %.0f%%）'
                               % (len(rest), done, 100 * avg))
-            self._agg.show()
+            self._agg.setVisible(True)
         elif self._agg is not None:
-            self._agg.hide()
-        self.title.setText('并行扫描 %s' % (st.get('tag') or sid or ''))
-        self.info.setText('%s/%s · %s 进程 · %.0fs · %s'
-                          % (st.get('n_done'), st.get('n_points'),
-                             st.get('workers'), float(st.get('elapsed_s')
-                                                      or 0.0),
-                             st.get('state') or ''))
-        self.adjustSize()
-        self._reposition()
-        # 画布那一行（用户口径：并行时画布不能"放着没人管"）
-        if self.banner is not None:
-            done, tot = st.get('n_done'), st.get('n_points')
-            if st.get('state') in ('done', 'failed', 'cancelled'):
-                self.banner.set_line('⚡ 并行扫描%s：%s/%s 点（%s）'
-                                     % (_STATE_TAG.get(st.get('state'),
-                                                       st.get('state')),
-                                        done, tot, st.get('tag') or sid))
-            else:
-                self.banner.set_line(
-                    '⚡ 并行扫描运行中：%s/%s 点 · %s 进程 · %.0fs'
-                    '（点这里看逐点进度）'
-                    % (done, tot, st.get('workers'),
-                       float(st.get('elapsed_s') or 0.0)))
+            self._agg.setVisible(False)
 
-    def _reposition(self):
-        """贴主窗口右下角（每 tick 一次，人拖动/缩放主窗也跟得上）。"""
-        try:
-            g = self.main.geometry() if self.main is not None else None
-            if g is None:
-                return
-            self.move(g.right() - self.width() - 24,
-                      g.bottom() - self.height() - 48)
-        except Exception:                          # noqa: BLE001
-            pass
+        tag = st.get('tag') or sid or ''
+        state_txt = _STATE_TAG.get(st.get('state'), st.get('state') or '')
+        # 表头承担原画布那行字的职能（用户裁决 2026-09-16）
+        self.info.setText(
+            '%s · %s/%s 点 · %s 进程 · %.0fs · %s'
+            % (tag, st.get('n_done'), st.get('n_points'), st.get('workers'),
+               float(st.get('elapsed_s') or 0.0), state_txt))
+        self._apply_collapsed()
+
+    def _apply_collapsed(self):
+        self._scroll.setVisible(not self._collapsed)
+        self.btn_toggle.setText('展开' if self._collapsed else '收起')
+
+    def _on_toggle(self):
+        self._collapsed = not self._collapsed
+        self._apply_collapsed()
 
     def _on_cancel(self):
         try:
@@ -225,59 +229,3 @@ class SweepProgressWindow(QWidget):
         except Exception as e:                     # noqa: BLE001
             if self.main is not None:
                 self.main.log('取消失败：%s' % e, 5000)
-
-    def raise_panel(self):
-        self.show()
-        self.raise_()
-        self._reposition()
-
-
-class CanvasBanner(QLabel):
-    """画布顶部一行的"并行运行中"提示（点它 → 抬起悬浮窗）。
-
-    用户口径："画布也要有处理不能放着，可以显示一行文本，并行运行中"。
-    它是**只读**提示：不阻塞画布、不抢焦点，扫描结束后自行隐藏。
-    """
-
-    def __init__(self, parent, on_click=None):
-        super().__init__(parent)
-        self._on_click = on_click
-        self.setStyleSheet(
-            'background:rgba(108,140,255,0.92);color:#ffffff;'
-            'border-radius:4px;padding:3px 10px;font-size:9pt;')
-        self.setAlignment(Qt.AlignCenter)
-        self.setAttribute(Qt.WA_TransparentForMouseEvents, False)
-        self.setCursor(Qt.PointingHandCursor)
-        self.setText('⚡ 并行扫描运行中')
-        self.hide()
-        parent.installEventFilter(self)
-
-    def eventFilter(self, obj, ev):
-        if ev.type() == QEvent.Resize:
-            self._reposition()
-        return False
-
-    def _reposition(self):
-        p = self.parentWidget()
-        if p is None:
-            return
-        self.adjustSize()
-        w = min(self.width(), max(120, p.width() - 24))
-        self.move(int((p.width() - w) / 2), 8)
-
-    def set_line(self, text):
-        if not text:
-            self.hide()
-            return
-        self.setText(text)
-        self.adjustSize()
-        self._reposition()
-        self.show()
-
-    def mousePressEvent(self, ev):
-        if self._on_click is not None:
-            try:
-                self._on_click()
-            except Exception:                      # noqa: BLE001
-                pass
-        super().mousePressEvent(ev)
