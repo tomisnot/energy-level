@@ -163,6 +163,9 @@ def validate(key, value):
     if t == 'wave_list':
         # 逐波真契约是领域知识（认识 POLS / env 元组结构）→ 委托 engine（注入 InvalidValue）
         return runtime.engine().validate_wave_list(value)
+    if t == 'atom_list':
+        # 多体逐原子真契约是领域知识（认识 g/r/pos 结构）→ 委托 engine
+        return runtime.engine().validate_atom_list(value)
     # 归一化：int 字段收整数值浮点（JSON 常把 201 发成 201.0）——**先归一再校验**
     if (t == 'int' and isinstance(value, float)
             and not isinstance(value, bool) and float(value).is_integer()):

@@ -38,7 +38,7 @@ C = Checker('mecha_purity')
 
 # mecha 是 src 下的叶子框架包：绝对 import 只准 stdlib / 框架基础设施库（numpy·mcp·
 # starlette…），一旦踩到这些"领域/同层业务包"就是越界（框架↛领域）。
-_DOMAIN_ABS = {'arc', 'core', 'adapter', 'ui', 'sweep', 'manybody', 'julia'}
+_DOMAIN_ABS = {'arc', 'core', 'adapter', 'ui', 'sweep', 'julia'}
 
 
 def _read(path):
@@ -51,7 +51,7 @@ def _mecha_domain_hits(tree):
 
     规则（mecha 只准 import stdlib/框架库 + 自己）：
       · 相对 import level≥2（from ..core / from ..adapter / from .. import core）→ 出了 mecha → 违规
-      · 绝对 src.X（X≠mecha）→ 违规；裸 arc/core/adapter/ui/sweep/manybody → 违规
+      · 绝对 src.X（X≠mecha）→ 违规；裸 arc/core/adapter/ui/sweep → 违规
       · level==1 相对（mecha 内部）与 stdlib/框架库 → 放行
     """
     hits = []

@@ -34,8 +34,13 @@ class ManyBodyModel:
         self.beams = []            # I5 串扰标定用（M0 只占位，不接线）
 
     # ---- 摆点（生成器只是便利，产出仍是任意点云） ----
-    def add_atom(self, g, r, pos):
-        """g/r = (n,l,j,m) 四元组；pos = (x,y,z) µm。返回原子 id。"""
+    def add_atom(self, g, r, pos, Omega_mhz=0.0, delta_mhz=0.0, gamma_mhz=0.0):
+        """g/r = (n,l,j,m) 四元组；pos = (x,y,z) µm；Ω/δ/Γ = 逐原子驱动/失谐/衰减（MHz）。
+
+        Ω/δ/Γ 是**运行级**量（calibrate 只读 g/r/pos，不读驱动 ⇒ 改驱动不重标定）；
+        存进原子条目只为"模型卡自带一份默认驱动"，build_run 时抽成驱动数组。
+        返回原子 id。
+        """
         g = tuple(map(float, g))
         r = tuple(map(float, r))
         for q in (g, r):
@@ -45,7 +50,10 @@ class ManyBodyModel:
         if len(pos) != 3:
             raise ValueError(f'位置须为 (x,y,z) µm，收到 {pos!r}')
         i = len(self.atoms)
-        self.atoms.append(dict(id=i, g=g, r=r, pos=pos))
+        self.atoms.append(dict(id=i, g=g, r=r, pos=pos,
+                               Omega_mhz=float(Omega_mhz),
+                               delta_mhz=float(delta_mhz),
+                               gamma_mhz=float(gamma_mhz)))
         return i
 
     def add_array(self, kind, n, spacing_um=5.0, jitter=0.0, rng=None,
@@ -75,7 +83,10 @@ class ManyBodyModel:
             if rng is None:
                 rng = np.random.default_rng(kw.get('seed'))
             pos = pos + rng.normal(0.0, float(jitter), pos.shape)
-        ids = [self.add_atom(g, r, p) for p in pos]
+        ids = [self.add_atom(g, r, p,
+                             Omega_mhz=kw.get('Omega_mhz', 0.0),
+                             delta_mhz=kw.get('delta_mhz', 0.0),
+                             gamma_mhz=kw.get('gamma_mhz', 0.0)) for p in pos]
         return ids
 
     def positions(self):
@@ -89,7 +100,11 @@ class ManyBodyModel:
                     r_cut_um=self.r_cut_um,
                     energy_window_mhz=self.energy_window_mhz,
                     atoms=[dict(id=a['id'], g=list(a['g']), r=list(a['r']),
-                                pos=list(a['pos'])) for a in self.atoms],
+                                pos=list(a['pos']),
+                                Omega_mhz=a.get('Omega_mhz', 0.0),
+                                delta_mhz=a.get('delta_mhz', 0.0),
+                                gamma_mhz=a.get('gamma_mhz', 0.0))
+                           for a in self.atoms],
                     beams=list(self.beams))
 
     @classmethod
@@ -99,7 +114,10 @@ class ManyBodyModel:
                 d.get('energy_window_mhz'))
         for a in d['atoms']:
             m.atoms.append(dict(id=a['id'], g=tuple(a['g']),
-                                r=tuple(a['r']), pos=tuple(a['pos'])))
+                                r=tuple(a['r']), pos=tuple(a['pos']),
+                                Omega_mhz=float(a.get('Omega_mhz', 0.0)),
+                                delta_mhz=float(a.get('delta_mhz', 0.0)),
+                                gamma_mhz=float(a.get('gamma_mhz', 0.0))))
         m.beams = list(d.get('beams', []))
         return m
 

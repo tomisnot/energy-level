@@ -22,7 +22,8 @@ H4[p,q] = ⟨p|V|q⟩（注意 vdd_sparse 的存储是转置序 ⟨q|V|p⟩，�
 import numpy as np
 from scipy import sparse as sp
 
-from ..core import static_pair as _sp
+from .. import static_pair as _sp
+from ..evolve_util import CONV          # MHz·ns → rad（2π×1e-3），同各演化引擎
 
 _DD_CONV = _sp._DD_CONV          # MHz·µm³/(a.u.)²
 _QS = (1, 0, -1)                 # T 指标 a ∈ {0,1,2} ↔ 球分量 q
@@ -217,57 +218,80 @@ def to_json_dict(calib):
 
 
 # =====================================================================
-# ED 装配（2^N 基，bit=1 ↔ r）——M0 顺带给 M1 打底
+# ED 装配（2^N 基，bit=1 ↔ r）——稀疏为主，稠密仅 tiny-N 交叉对照
 # =====================================================================
-def build_H_ed(calib, Om=None, delta=None, terms=None):
-    """calib → 2^N 稠密 H（MHz，复）。Om/delta：逐原子（缺省 0）。
+def build_H_sparse(calib, Om=None, delta=None, terms=None, gamma=None):
+    """calib → 2^N **稀疏** H（CSR，MHz，复）。Om/delta/gamma：逐原子（缺省 0）。
 
-    H = Σ_i [δ_i P_i + (Ω_i/2)(|r⟩⟨g|+h.c.)]
-      + Σ_{i<j} [V·P_iP_j + (J σ⁺_iσ⁻_j + A σ⁺_iσ⁺_j + h.c.)]
+    H = Σ_i [δ_i n_i + (Ω_i/2)σˣ_i − (i/2)Γ_i n_i]
+      + Σ_{i<j} [V·n_i n_j + (J σ⁺_iσ⁻_j + A σ⁺_iσ⁺_j + h.c.)]
+    基序 bit i ↔ 原子 i（MSB：bit(s,i)=(s>>(n−1−i))&1），bit=1 ↔ |r⟩。
+    矩阵元序 H[t,s]=⟨t|H|s⟩（与 calibrate_pair 的标准序一致）。
+
+    每行 O(N) 非零 ⇒ 取代 2^N×2^N 稠密（N=16 稠密需 68 GB，不可行）。
+    非厄米接缝（裁决③：默认关，gamma=None ⇒ 厄米）：gamma 是**布居衰减率 Γ(MHz)**，
+    同 evolve_util 约定（物理率 = Γ×1e-3 /ns）；演化用 exp(-i·CONV·H·t)，故 H 虚部
+    对角取 -i·Γ×1e-3/(2·CONV) ⇒ 布居恰按 exp(-Γ×1e-3·t) 衰减（与 auto_decays/Lindblad 一致）。
     """
     n = len(calib['atoms'])
     dim = 1 << n
     use = set(calib['terms'] if terms is None else terms)
     Om = np.zeros(n) if Om is None else np.asarray(Om, float)
     delta = np.zeros(n) if delta is None else np.asarray(delta, float)
-    H = np.zeros((dim, dim), complex)
+    gamma = np.zeros(n) if gamma is None else np.asarray(gamma, float)
+    s = np.arange(dim, dtype=np.int64)
+    bit = [((s >> (n - 1 - i)) & 1).astype(np.int8) for i in range(n)]
 
-    def bit(s, i):
-        return (s >> (n - 1 - i)) & 1
-
-    def flip(s, i, v):
-        return s ^ (1 << (n - 1 - i)) if bit(s, i) != v else s
-
-    for s in range(dim):
-        e = 0.0 + 0j
-        for i in range(n):
-            if bit(s, i):
-                e += delta[i]
-        # 对角相互作用（I1 的 nn 不可约组合；单粒子 delta 位移由调用方折进 δ）
+    rows, cols, vals = [], [], []
+    # ---- 对角：Σ δ_i n_i + Σ V_ij n_i n_j − (i/2)Σ Γ_i n_i ----
+    diag = np.zeros(dim, complex)
+    for i in range(n):
+        # 衰减项：Γ(MHz)→物理率 Γ×1e-3/ns；除以 CONV 抵消演化的 exp(-i·CONV·H·t) 的 2π
+        diag += (delta[i] - 0.5j * gamma[i] * 1e-3 / CONV) * bit[i]
+    if 'I1' in use:
         for p in calib['pairs']:
-            if 'I1' in use and bit(s, p['i']) and bit(s, p['j']):
-                e += p['V']
-        H[s, s] = e
-        # 单原子驱动 Ω/2（|s⟩ ↔ 翻一位；两支都填 ⇒ 厄米）
-        for i in range(n):
-            if bit(s, i) == 0:
-                H[flip(s, i, 1), s] += Om[i] / 2.0
-            else:
-                H[flip(s, i, 0), s] += Om[i] / 2.0
-        # 交换 J（约定 raw_J=⟨r_i g_j|V|g_i r_j⟩；H[t,s]=⟨t|V|s⟩）
-        for p in calib['pairs']:
-            if 'I2' not in use:
-                continue
-            i, j, J = p['i'], p['j'], p['J']
-            if bit(s, i) and not bit(s, j):          # s=|r_i g_j⟩→t=|g_i r_j⟩
-                H[flip(flip(s, i, 0), j, 1), s] += np.conj(J)
-            elif bit(s, j) and not bit(s, i):        # s=|g_i r_j⟩→t=|r_i g_j⟩
-                H[flip(flip(s, j, 0), i, 1), s] += J
-            # 双激发 A（约定 raw_A=⟨rr|V|gg⟩）
-            if 'I3' in use:
-                A = p['A']
-                if not bit(s, i) and not bit(s, j):  # |gg⟩→|rr⟩
-                    H[flip(flip(s, i, 1), j, 1), s] += A
-                elif bit(s, i) and bit(s, j):        # |rr⟩→|gg⟩
-                    H[flip(flip(s, i, 0), j, 0), s] += np.conj(A)
-    return H
+            diag = diag + p['V'] * (bit[p['i']] * bit[p['j']])
+    rows.append(s); cols.append(s); vals.append(diag)
+
+    # ---- 单原子驱动 Ω_i/2·σˣ_i：(t,s)=(flip_i(s), s)，翻一位 ----
+    for i in range(n):
+        if Om[i] == 0.0:
+            continue
+        t = s ^ (np.int64(1) << (n - 1 - i))
+        rows.append(t); cols.append(s)
+        vals.append(np.full(dim, Om[i] / 2.0, complex))
+
+    # ---- 交换 J（I2）+ 双激发 A（I3）：翻两位 ----
+    for p in calib['pairs']:
+        i, j = p['i'], p['j']
+        mi = np.int64(1) << (n - 1 - i)
+        mj = np.int64(1) << (n - 1 - j)
+        J = p['J'] if 'I2' in use else 0.0j
+        A = p['A'] if 'I3' in use else 0.0j
+        if J != 0:
+            # s=|r_i g_j⟩→t=|g_i r_j⟩：H[t,s]+=conj(J)；s=|g_i r_j⟩→t=|r_i g_j⟩：+=J
+            for sel, v in ((((bit[i] == 1) & (bit[j] == 0)), np.conj(J)),
+                           (((bit[i] == 0) & (bit[j] == 1)), J)):
+                ss = s[sel]
+                rows.append((ss ^ mi) ^ mj); cols.append(ss)
+                vals.append(np.full(ss.size, v, complex))
+        if A != 0:
+            # |gg⟩→|rr⟩：H[t,s]+=A；|rr⟩→|gg⟩：+=conj(A)
+            for sel, v in ((((bit[i] == 0) & (bit[j] == 0)), A),
+                           (((bit[i] == 1) & (bit[j] == 1)), np.conj(A))):
+                ss = s[sel]
+                rows.append((ss ^ mi) ^ mj); cols.append(ss)
+                vals.append(np.full(ss.size, v, complex))
+
+    return sp.coo_matrix(
+        (np.concatenate(vals), (np.concatenate(rows), np.concatenate(cols))),
+        shape=(dim, dim)).tocsr()          # tocsr 自动合并重复 (row,col)
+
+
+def build_H_ed(calib, Om=None, delta=None, terms=None, gamma=None):
+    """calib → 2^N **稠密** H（MHz，复）——tiny-N 交叉对照用。
+
+    内部委托 `build_H_sparse(...).toarray()`（同一矩阵，M0 约定不变）。
+    大 N 请直接用 build_H_sparse（稠密 2^N×2^N 内存不可行）。
+    """
+    return build_H_sparse(calib, Om, delta, terms, gamma).toarray()

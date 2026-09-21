@@ -54,6 +54,9 @@ GOLDEN = {
     'RWA_TOL': 1e-4, 'MW_MAX_MHZ': 1e5, 'RYDBERG_N_MIN': 20,
     'DIRECT_SOS_N_WINDOW': 3, 'AC_EFFECT_THRESHOLD_MHZ': 0.05,
     '_ENV_SAMPLES': 64, '_TAB_N': 2 ** 17,
+    # manybody（第 7 引擎家族，并入 core 后同被 protocol._scan_param_defs 扫出）
+    '_MB_DENSE_MAX': 4096, '_MB_FULLPOP_MAX': 65536, '_MB_MAX_DIM': 2 ** 20,
+    'MB_N_WINDOW': 3, 'MB_GUARD_MHZ': 1.0, 'MB_ED_MAX_DIM': 2 ** 20,
 }
 
 # ---------------- A. 收集不是复制（C1 单一定义点） ----------------
@@ -74,8 +77,10 @@ for rec in ep.values():
 solve_keys = set(R.solve_schema())
 derived_ok = solve_keys == {'solve.' + k for k in RS.SOLVE_KWARG}
 C.group('A registry 收集 core 的 Param（值逐位不变 + solve.* 派生）', [
-    ('收集到 32 个引擎参数（实际 %d）' % len(ep), len(ep) == 32),
-    ('32 个值逐位等于 golden（不符：%s）' % (val_bad or '无'), not val_bad),
+    ('收集到 %d 个引擎参数（= golden 数 %d）' % (len(ep), len(GOLDEN)),
+     len(ep) == len(GOLDEN)),
+    ('%d 个值逐位等于 golden（不符：%s）' % (len(GOLDEN), val_bad or '无'),
+     not val_bad),
     ('每个 record 带 name/home/type/unit/desc/default/tier',
      all({'name', 'home', 'type', 'desc', 'default', 'tier'} <= set(r)
          for r in ep.values())),

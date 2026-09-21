@@ -86,6 +86,14 @@ class EngineProtocol(ABC):
         """运行旁注：{n_waves, overlap_warning}（供 run 的 provenance）。"""
 
     # ---------- 可选领域能力（建场层等） ----------
+    def validate_atom_list(self, value):
+        """校验多体 atom_list（可选领域能力）；默认无——无多体的引擎不需实现。
+
+        与 validate_wave_list 同角色（逐波真契约是领域知识）；适配器注入 mecha 的
+        InvalidValue（core 不认识 mecha 错误类型）。仅多体领域的引擎需覆盖它。
+        """
+        raise NotImplementedError('本引擎未提供多体 atom_list 校验')
+
     def make_fields(self, session):
         """→ 建场层对象（领域可选能力）；默认无。mecha 只透传其公开方法，不认识具体动词。"""
         raise NotImplementedError('本引擎未提供建场层')

@@ -442,7 +442,10 @@ class SolverInspector(QDialog):
         if br is None:
             return []
         try:
-            res = br.params(include_internal=True)
+            # page_size 拉满：参数页要**全量**（engine+solve+config 三族）；
+            # list_params 默认 page_size=60 是给 AI/MCP 省 context 的分页，
+            # 参数增多（如并入 manybody.*）会把按字母序排最后的 solve.* 挤出首页。
+            res = br.params(include_internal=True, page_size=100000)
             if isinstance(res, dict):
                 return res.get('params') or []
             return res or []

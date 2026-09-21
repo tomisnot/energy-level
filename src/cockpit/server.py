@@ -91,6 +91,21 @@ def create_app(root=None, token=None):
             return d
         return JSONResponse(backend.config_tree(root))
 
+    async def api_claim_measured(request):
+        """M2 声称 vs 实测并排：每条 set/run 事件的 reason（AI 声称）| after
+        （choke point 产出的 readback 实测）。AI 伪造不了右列（readback 不经 AI）。"""
+        d = _guard(request)
+        if d:
+            return d
+        since = int(request.query_params.get('since_seq', 0))
+        evs = backend.read_events(root, since)
+        pairs = [{'seq': e.get('seq'), 'actor': e.get('actor'),
+                  'kind': e.get('kind'), 'target': e.get('target'),
+                  'claim': e.get('reason'), 'measured': e.get('after')}
+                 for e in evs if e.get('kind') in ('set', 'set_many', 'run')]
+        return JSONResponse({'pairs': pairs[-100:],
+                             'as_of_seq': backend.last_seq(root)})
+
     async def api_stream(request):
         """SSE：tail journal 文件，diff-since-seq 增量推（项目死了也能读到史）。"""
         d = _guard(request)
@@ -127,6 +142,7 @@ def create_app(root=None, token=None):
         Route('/api/orientation', api_orientation, methods=['GET']),
         Route('/api/alerts', api_alerts, methods=['GET']),
         Route('/api/config-tree', api_config_tree, methods=['GET']),
+        Route('/api/claim-measured', api_claim_measured, methods=['GET']),
         Route('/api/stream', api_stream, methods=['GET']),
         Route('/healthz', healthz, methods=['GET']),
     ]

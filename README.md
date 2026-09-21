@@ -57,8 +57,8 @@ src/core/                 引擎本体（**23 个文件**；含 `param.py` 就�
     tensor*.py            两体张量化
     evolve_util.py        衰变 / 初态 / 耗散工具（叶子模块，只 import numpy）
     diag.py / cost.py     诊断摘要 / 成本估算
+    manybody/             多体引擎家族（N 原子阵列 ED；模型卡/装配/演化/观测量）
 src/_archive/             evolve_floquet_pwc.py（Floquet 权威锚，被两个判据引用）
-src/manybody/             被 manybody_m0_selfcheck 依赖（多体扩展）
 src/mecha/                ★ **机甲框架语义内核**（引擎之外；`core ↛ mecha` 单向）
     registry.py           参数语义单一查询口（**收集** core 的 Param，非复制）
     bus.py                append-only 事件总线（唯一真值；指针+sha1；体积闸）
@@ -151,6 +151,8 @@ cd 'D:\desktop\Re0重构'
 | `hard_vdd_pack_selfcheck` | 9 | hard 打包 + 显式零矩阵 |
 | `evolve_dissipative_selfcheck` | 6 | 自发辐射 / 耗散 / 交换耦合 |
 | `manybody_m0_selfcheck` | 20 | 4 维对空间 V_dd **全精确标定** |
+| `manybody_m1_ed_selfcheck` | 7 | 多体 ED 引擎：N=1 拉比 / N=2 blockade 解析 3 能级 / 对称扇区 / 张量积 / 非厄米衰减 |
+| `manybody_integration_selfcheck` | 10 | 多体接入语义层：schema/校验/build_run 路由/Result 契约/查询/产物/线程拆分 |
 | `hard_dedup_selfcheck` | 5 | hard 家族去重 + `solve.MAX_STEP_HARD` 可达性 + 压步长不改变物理 |
 | **`levels_twopage_selfcheck`** | 7 | **两页同基准**（态集合 / 能量 / **label** 逐位一致）+ DC-Stark 两页生效 + 超精细加权 |
 | **`engine_contract_selfcheck`** | 6 | 分派表唯一 / 参数白名单＝签名 / torch 惰性 / diag 归属 / 无跨文件重名 / **判据私有依赖有界** |

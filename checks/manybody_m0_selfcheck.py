@@ -27,8 +27,8 @@ from arc import Rubidium87
 
 from src.core import core
 from src.core import static_pair as sp
-from src.manybody.model import ManyBodyModel
-from src.manybody import assemble as asm
+from src.core.manybody.model import ManyBodyModel
+from src.core.manybody import assemble as asm
 
 cache = core.ArcCache(Rubidium87())
 G = (60, 0, 0.5, 0.5)          # 60S_1/2 m=+1/2

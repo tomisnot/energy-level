@@ -45,6 +45,9 @@ class EngineAdapter(EngineProtocol):
     def validate_wave_list(self, value):
         return _cp.validate_wave_list(value, err=InvalidValue)
 
+    def validate_atom_list(self, value):
+        return _cp.validate_atom_list(value, err=InvalidValue)
+
     # ---------- cache ----------
     def make_cache(self):
         return _cp.make_cache(self.atom)

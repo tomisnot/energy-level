@@ -15,12 +15,14 @@ import importlib
 import os
 
 from . import runspec as _runspec
+from .manybody import schema_mb as _mb_schema   # 多体配置契约（schema_mb 只 import param，无环）
 
 __all__ = ['CONFIG_SCHEMA', 'SOLVE_META', 'config_schema', 'solve_schema',
            'solve_map', 'engine_params', 'engine_param_names', 'settable_keys',
-           'validate_wave_list', 'build_run', 'check_run', 'evolve_run',
-           'result_summary', 'summarize_run', 'make_cache', 'estimate',
-           'preview', 'list_levels', 'count_waves', 'runspec_read_keys']
+           'validate_wave_list', 'validate_atom_list', 'build_run', 'check_run',
+           'evolve_run', 'result_summary', 'summarize_run', 'make_cache',
+           'estimate', 'preview', 'list_levels', 'count_waves',
+           'runspec_read_keys']
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -34,7 +36,8 @@ CONFIG_SCHEMA = {
     'field.B_gauss': dict(type='float', unit='Gauss', desc='静磁场（Zeeman）'),
     'field.E_vpcm': dict(type='float', unit='V/cm',
                          desc='静电场（DC-Stark）；n=60 的 Inglis-Teller 约 25 V/cm'),
-    'dynamic.mode': dict(type='int', enum=[0, 1], desc='0=单体 / 1=两体'),
+    'dynamic.mode': dict(type='int', enum=[0, 1, 2],
+                         desc='0=单体 / 1=两体 / 2=多体（N 原子阵列，走 manybody.*）'),
     'dynamic.method': dict(type='str', enum=['mixed', 'sambe', 'hard'],
                            desc='引擎；sambe 遇耗散转 reference、遇任意波形改道 hard'),
     'dynamic.t_max': dict(type='float', unit='ns', required=True, lo=0.0,
@@ -78,23 +81,28 @@ _ENGINE_CACHE = None
 # 1. schema 收集（engine.* 扫 core 自己的 Param；solve.* 派生自 SOLVE_KWARG）
 # =====================================================================
 def _scan_param_defs():
-    """AST 扫 core 各模块**顶层** `NAME = Param(...)` 定义 → [(mod, name, lineno)]。"""
+    """AST 扫 core（含 manybody/ 子包）各模块**顶层** `NAME = Param(...)` → [(mod, name, lineno)]。"""
     defs = []
-    for fn in sorted(os.listdir(_HERE)):
-        if not fn.endswith('.py') or fn in ('param.py', 'protocol.py'):
-            continue
-        mod = fn[:-3]
-        try:
-            tree = ast.parse(open(os.path.join(_HERE, fn), encoding='utf-8').read())
-        except (SyntaxError, OSError):
-            continue
-        for node in tree.body:                       # 只扫顶层
-            if (isinstance(node, ast.Assign) and len(node.targets) == 1
-                    and isinstance(node.targets[0], ast.Name)
-                    and isinstance(node.value, ast.Call)
-                    and isinstance(node.value.func, ast.Name)
-                    and node.value.func.id == 'Param'):
-                defs.append((mod, node.targets[0].id, node.lineno))
+    scan = [(_HERE, '')]
+    mb = os.path.join(_HERE, 'manybody')
+    if os.path.isdir(mb):
+        scan.append((mb, 'manybody.'))
+    for d, prefix in scan:
+        for fn in sorted(os.listdir(d)):
+            if not fn.endswith('.py') or fn in ('param.py', 'protocol.py'):
+                continue
+            mod = prefix + fn[:-3]
+            try:
+                tree = ast.parse(open(os.path.join(d, fn), encoding='utf-8').read())
+            except (SyntaxError, OSError):
+                continue
+            for node in tree.body:                       # 只扫顶层
+                if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                        and isinstance(node.targets[0], ast.Name)
+                        and isinstance(node.value, ast.Call)
+                        and isinstance(node.value.func, ast.Name)
+                        and node.value.func.id == 'Param'):
+                    defs.append((mod, node.targets[0].id, node.lineno))
     return defs
 
 
@@ -146,16 +154,18 @@ def solve_schema():
 
 def config_schema():
     out = {}
-    for key, meta in CONFIG_SCHEMA.items():
-        rec = dict(meta)
-        rec.update(name=key, family='config', tier=meta.get('tier', 'run'))
-        out[key] = rec
+    for src_schema in (CONFIG_SCHEMA, _mb_schema.CONFIG_SCHEMA_MB):
+        for key, meta in src_schema.items():
+            rec = dict(meta)
+            rec.update(name=key, family='config', tier=meta.get('tier', 'run'))
+            out[key] = rec
     return out
 
 
 def settable_keys():
-    """可写键全集 = config + solve（**不含 engine.***，它只读）。"""
-    return sorted(set(CONFIG_SCHEMA) | set('solve.' + k for k in _runspec.SOLVE_KWARG))
+    """可写键全集 = config（含 manybody.*）+ solve（**不含 engine.***，它只读）。"""
+    return sorted(set(CONFIG_SCHEMA) | set(_mb_schema.CONFIG_SCHEMA_MB)
+                  | set('solve.' + k for k in _runspec.SOLVE_KWARG))
 
 
 # =====================================================================
@@ -247,6 +257,15 @@ def validate_wave_list(waves, err=None):
     return waves
 
 
+def validate_atom_list(atoms, err=None):
+    """多体 `manybody.atoms` 逐原子真校验（委托 schema_mb；adapter 注入 InvalidValue）。
+
+    与 validate_wave_list 同角色：把“橡皮图章”换成当场报错（g/r 四元组 /
+    pos 三元组 / Ω・δ・Γ 数值）。core 不认识 mecha 错误类型，故 err 由 adapter 注入。
+    """
+    return _mb_schema.validate_atom_list(atoms, err=err)
+
+
 # =====================================================================
 # 3. 运行（复用 runspec 唯一分派）+ cache 工厂 + 波形计数
 # =====================================================================
@@ -274,9 +293,109 @@ def count_waves(snap):
 
 # =====================================================================
 # 4. 查询：estimate / preview / list_levels（纯查询，不跑演化）
+#    多体（dynamic.mode==2）走 _mb_* 分支（委托 manybody 的 cost_mb/runspec_mb）
 # =====================================================================
+def _is_many(snap):
+    return int((snap or {}).get('dynamic.mode') or 0) == 2
+
+
+def _mb_estimate(cache, snap):
+    """多体 dry-run 成本预估：dim=2^N + ED 可行性 + cost_mb 外推（不标定、不演化）。"""
+    from .manybody import cost_mb, runspec_mb
+    model = runspec_mb.model_from_params(snap)
+    n = len(model.atoms)
+    solver = (snap or {}).get('manybody.solver') or 'auto'
+    out = {'backend': 'sim', 'method': solver, 'two_body': False,
+           'nbody': 'many', 'n_atoms': n, 'warnings': []}
+    if n == 0:
+        out['warnings'].append('manybody.atoms 为空——先摆原子才能预估')
+        return out
+    dim = 1 << n
+    out['dim'] = dim
+    ed_max = int(_mb_schema.mb_get(snap, 'manybody.ed_max_dim'))
+    out['ed_feasible'] = cost_mb.ed_feasible(n, ed_max)
+    t_max = (snap or {}).get('dynamic.t_max')
+    npts = (snap or {}).get('dynamic.npts')
+    if t_max and npts:
+        out['est_sec'] = round(cost_mb.estimate_mb_cost(n, float(t_max),
+                                                        int(npts)), 1)
+        gb = cost_mb.estimate_mb_peak_gb(n, int(npts))
+        out['est_peak_gb'] = round(gb, 3) if gb else None
+    out['note'] = ('多体 ED 成本 ∝ 2^N（N=%d, dim=%d）；est_sec 粗估，'
+                   '决定要不要走 async' % (n, dim))
+    if not out['ed_feasible']:
+        out['warnings'].append(
+            'dim=2^%d=%d 超 ed_max_dim=%d——ED 不可行（等 M3 的 MPS/TEBD）'
+            % (n, dim, ed_max))
+    return out
+
+
+def _mb_preview(cache, snap):
+    """多体行为预览：标定（碰 ARC，主线程；记忆化预热）→ 耦合对/blockade/被丢项。
+
+    标定失败**不致命**：降级为几何-only 预览 + note（preview 是纯查询，不该因
+    ARC 问题整体失败）。
+    """
+    from .manybody import runspec_mb
+    model = runspec_mb.model_from_params(snap)
+    n = len(model.atoms)
+    out = {'backend': 'sim', 'nbody': 'many', 'n_atoms': n, 'dim': 1 << n,
+           'template': model.template, 'terms': list(model.terms),
+           'waves': [], 'driven': [], 'notes': []}
+    if n == 0:
+        out['notes'].append('manybody.atoms 为空——先摆原子')
+        out['basis_enough'] = False
+        return out
+    Oms = [abs(float(a.get('Omega_mhz', 0.0) or 0.0)) for a in model.atoms]
+    out['max_Omega_mhz'] = round(max(Oms), 6) if Oms else 0.0
+    try:
+        second_order = bool(_mb_schema.mb_get(snap, 'manybody.second_order'))
+        guard = float(_mb_schema.mb_get(snap, 'manybody.guard_mhz'))
+        calib = runspec_mb.calibrate_memo(cache, model,
+                                          second_order=second_order,
+                                          guard_mhz=guard)
+    except Exception as e:                          # noqa: BLE001
+        out['notes'].append('标定失败（降级为几何预览，不影响规模报告）：%s' % e)
+        out['basis_enough'] = True
+        return out
+    pairs = calib.get('pairs') or []
+    out['n_pairs'] = len(pairs)
+    out['n_dropped'] = len(calib.get('dropped') or [])
+    out['dropped_amp'] = calib.get('dropped_amp')
+    Vs = [abs(float(p['V'])) for p in pairs]
+    out['max_V_mhz'] = round(max(Vs), 6) if Vs else 0.0
+    out['n_guarded'] = sum(int((p.get('info') or {}).get('n_guarded', 0))
+                           for p in pairs)
+    if out['max_V_mhz'] and out['max_Omega_mhz']:
+        out['blockade_note'] = ('max|V|/max|Ω|=%.3g（≫1 为 blockade 区）'
+                                % (out['max_V_mhz'] / out['max_Omega_mhz']))
+    out['basis_enough'] = True
+    out['notes'].append('多体预览：%d 原子、%d 耦合对、dim=2^%d=%d（标定碰 ARC，'
+                        '已记忆化预热）' % (n, len(pairs), n, 1 << n))
+    return out
+
+
+def _mb_list_levels(cache, snap):
+    """多体：逐原子 (g,r) 身份 + 产物态寻址说明（供 psi0 选择；不碰 cache）。"""
+    from .manybody import runspec_mb
+    model = runspec_mb.model_from_params(snap)
+    n = len(model.atoms)
+    atoms = [{'id': i, 'g': list(a['g']), 'r': list(a['r']),
+              'pos': list(a['pos']), 'Omega_mhz': a.get('Omega_mhz', 0.0),
+              'delta_mhz': a.get('delta_mhz', 0.0)}
+             for i, a in enumerate(model.atoms)]
+    return {'n_atoms': n, 'dim': 1 << n, 'nbody': 'many', 'atoms': atoms,
+            'psi0_hint': ('设 manybody.psi0：None=全基态|g…g⟩ / "grg"模式串 / '
+                          'int产物态索引 / "ground"(Lanczos基态) / '
+                          '["sup",[["grg",amp],…]]叠加'),
+            'note': ('多体基是 2^%d=%d 个产物态 |g/r⟩^N（原子 0 在左/MSB）；'
+                     '布居/关联/纠缠熵见结果 pops_atom/corr/S' % (n, 1 << n))}
+
+
 def estimate(cache, snap):
     """dry-run 成本预估（复用 cost.py + build_states）。**不跑演化、不算 V_dd**。"""
+    if _is_many(snap):
+        return _mb_estimate(cache, snap)
     from . import cost
     groups = _runspec.groups_from_params(snap)
     method = snap.get('dynamic.method') or 'mixed'
@@ -319,6 +438,8 @@ def preview(cache, snap):
 
     重叠告警（detect_wave_overlap）由 adapter 叠加（那是建场层的领域逻辑）。
     """
+    if _is_many(snap):
+        return _mb_preview(cache, snap)
     from . import static_atom as SA
     groups = _runspec.groups_from_params(snap)
     B = float(snap.get('field.B_gauss') or 0.0)
@@ -394,6 +515,8 @@ def preview(cache, snap):
 
 def list_levels(cache, snap):
     """列出当前基组的态（label + 身份键 + 能量）——语义寻址，不猜索引。"""
+    if _is_many(snap):
+        return _mb_list_levels(cache, snap)
     from .atomic_levels import state_key
     groups = _runspec.groups_from_params(snap)
     if not groups:
@@ -414,10 +537,18 @@ def list_levels(cache, snap):
 # 5. I6 交叉校验：AST 扫 runspec 实读的键（core 侧自检，防 schema 漂）
 # =====================================================================
 def runspec_read_keys():
-    """AST 扫 `runspec.py` 里对快照 `p` 的读取 → (literal_keys, dynamic_patterns)。"""
-    src = open(os.path.join(_HERE, 'runspec.py'), encoding='utf-8').read()
-    tree = ast.parse(src)
+    """AST 扫 `runspec.py` + `manybody/runspec_mb.py` 对快照 `p` 的读取
+    → (literal_keys, dynamic_patterns)。I6：这些键都须在 config_schema（防漂）。
+
+    识别 `p.get('lit')` / `_required(p,'lit')` / `mb_get(p,'lit')`（多体默认回落口）。
+    """
     literals, dynamic = set(), set()
+    _nodes = []
+    for _path in (os.path.join(_HERE, 'runspec.py'),
+                  os.path.join(_HERE, 'manybody', 'runspec_mb.py')):
+        if os.path.exists(_path):
+            _nodes.extend(
+                ast.walk(ast.parse(open(_path, encoding='utf-8').read())))
 
     def _str_of(node):
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
@@ -427,7 +558,7 @@ def runspec_read_keys():
     def _recv_is_p(node):
         return any(isinstance(x, ast.Name) and x.id == 'p' for x in ast.walk(node))
 
-    for nd in ast.walk(tree):
+    for nd in _nodes:
         if not isinstance(nd, ast.Call):
             continue
         f = nd.func
@@ -438,7 +569,7 @@ def runspec_read_keys():
                 literals.add(s)
             elif isinstance(nd.args[0], ast.BinOp):
                 dynamic.add(ast.unparse(nd.args[0]))
-        if (isinstance(f, ast.Name) and f.id == '_required'
+        if (isinstance(f, ast.Name) and f.id in ('_required', 'mb_get')
                 and len(nd.args) >= 2
                 and isinstance(nd.args[0], ast.Name) and nd.args[0].id == 'p'):
             s = _str_of(nd.args[1])

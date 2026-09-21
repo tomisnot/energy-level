@@ -76,24 +76,40 @@ def _required(p, key):
     return p[key]
 
 
-# (method, two_body) → 引擎函数。**唯一分派表**：`build_run` 按它的**签名**筛参数，
+# (method, nbody) → 引擎函数。**唯一分派表**：`build_run` 按它的**签名**筛参数，
 # `evolve_run` 按它调用——"哪个 method 走哪个函数"只有这一个事实源。
+# nbody ∈ {'single','pair','many'}（旧 two_body:bool 经 _as_nbody 兼容映射）。
+# manybody 走惰性 import ⇒ core 顶层不 import manybody（无环）。
 _ENGINE_TABLE = {
-    ('mixed', False): ('.evolve_mixed', 'evolve_mixed'),
-    ('mixed', True): ('.evolve_mixed', 'evolve_mixed_pair'),
-    ('sambe', False): ('.sambe', 'evolve_sambe'),
-    ('sambe', True): ('.sambe', 'evolve_sambe_pair'),
-    ('hard', False): ('.hard', 'evolve_hard'),
-    ('hard', True): ('.hard', 'evolve_hard_pair'),
+    ('mixed', 'single'): ('.evolve_mixed', 'evolve_mixed'),
+    ('mixed', 'pair'): ('.evolve_mixed', 'evolve_mixed_pair'),
+    ('sambe', 'single'): ('.sambe', 'evolve_sambe'),
+    ('sambe', 'pair'): ('.sambe', 'evolve_sambe_pair'),
+    ('hard', 'single'): ('.hard', 'evolve_hard'),
+    ('hard', 'pair'): ('.hard', 'evolve_hard_pair'),
+    ('ed', 'many'): ('.manybody.engine_ed', 'evolve_manybody'),
+    ('tebd', 'many'): ('.manybody.engine_ed', 'evolve_tebd_stub'),
 }
 
+_NBODY_OF_BOOL = {False: 'single', True: 'pair'}
 
-def engine_fn(method, two_body):
-    """(method, two_body) → 引擎函数（唯一分派表的查询口，惰性 import）。"""
-    key = (str(method), bool(two_body))
+
+def _as_nbody(nbody):
+    """two_body:bool（旧调用）| 'single'/'pair'/'many' → 规范 nbody 串。"""
+    if isinstance(nbody, bool):
+        return _NBODY_OF_BOOL[nbody]
+    return str(nbody)
+
+
+def engine_fn(method, nbody):
+    """(method, nbody) → 引擎函数（唯一分派表的查询口，惰性 import）。
+
+    nbody 收 bool（旧：False=single/True=pair）或 'single'/'pair'/'many'。
+    """
+    key = (str(method), _as_nbody(nbody))
     if key not in _ENGINE_TABLE:
-        raise ValueError('未知引擎 method=%r two_body=%s；合法：%s'
-                         % (method, two_body, sorted(_ENGINE_TABLE)))
+        raise ValueError('未知引擎 method=%r nbody=%s；合法：%s'
+                         % (method, key[1], sorted(_ENGINE_TABLE)))
     mod, name = _ENGINE_TABLE[key]
     import importlib
     return getattr(importlib.import_module(mod, __package__), name)
@@ -479,6 +495,12 @@ def build_run(cache, params, *, pump=None, vdd=True, method=None, diag=False,
     """
     p = params or {}
     mode = int(p.get('dynamic.mode') or 0)
+    if mode == 2:
+        # 多体（N 原子阵列）：委托 manybody.runspec_mb（同一 RunSpec 契约；
+        # calibrate 在此主线程碰 ARC/SQLite，守 B-1① 线程亲和）
+        from .manybody.runspec_mb import build_run_manybody
+        return build_run_manybody(cache, p, pump=pump, method=method,
+                                  diag=diag, t_grid=t_grid)
     is_pair = (mode == 1) if two_body is None else bool(two_body)
 
     warnings = []
@@ -586,6 +608,11 @@ def summarize_run(run):
         'engine_kwargs_keys': sorted(run.get('engine_kwargs') or {}),
         'warnings': list(run.get('warnings') or []),
     }
+    if run.get('nbody') == 'many':
+        out.update(nbody='many', n_atoms=run.get('n_atoms'),
+                   dim=run.get('dim'), terms=run.get('terms'),
+                   template=run.get('template'), solver=run.get('method'))
+        return out
     if run['two_body']:
         out['pair'] = run.get('pair')
         out['vdd_nnz'] = (None if run.get('vdd_matrix') is None
@@ -614,6 +641,14 @@ def evolve_run(run, progress_arr=None, log=None, cache=None):
             '运行级引擎参数覆写尚未接线（参数已就地定义在各引擎模块）：%s'
             % ', '.join(sorted(ovr)))  # 早失败，不静默
     meth = run['method']
+    if run.get('nbody') == 'many':
+        # 多体：唯一分派表取 engine_fn(meth,'many')；分支只备料（透传 calib/驱动/psi0）
+        fn = engine_fn(meth, 'many')
+        return fn(run['calib'], run.get('psi0'), run['t'],
+                  Om=run.get('Om'), delta=run.get('delta'),
+                  gamma=run.get('gamma'), terms=run.get('terms'),
+                  segments=run.get('segments'),
+                  progress_arr=progress_arr, log=log, **ek)
     tb = bool(run['two_body'])
     # 引擎函数来自**唯一分派表**；下面的分支只负责"给这个引擎备料"
     # （mixed 的 cache 透传、sambe 单体的"仅显式覆写 DEFAULT_RTOL 才传 tol"等）。
@@ -742,6 +777,12 @@ def check_run(run):
     t = np.asarray(run['t'], float)
     if len(t) < 2:
         problems.append('时间网格少于 2 点，演化无意义')
+    if run.get('nbody') == 'many':
+        # 多体无"波形"概念（驱动来自 atoms 的 Ω/δ）：只查原子数，不套用
+        # 单/两体的"既无波形也无耗散=空演化"判据（对多体是误报）
+        if int(run.get('n_atoms') or 0) <= 0:
+            problems.append('多体：没有原子（manybody.atoms 为空）')
+        return problems
     n_w = run.get('n_waves') or {}
     if not sum(int(v or 0) for v in n_w.values()):
         has_decay = bool(run.get('decays') or run.get('decays_A'))
