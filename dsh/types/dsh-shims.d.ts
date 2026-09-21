@@ -62,11 +62,13 @@ declare module '@deepseek-ai/cordis' {
     readonly tools: ToolRuntime
     readonly slots: SlotsRuntime
     readonly logger: Logger
-    /** 布局控制（ui-layout 提供）：左栏开关 + 右栏(details)开关。 */
+    /** 布局控制（ui-layout 提供，对齐运行版 dsh 0.1.5-rc.2 的 ILayout）。 */
     readonly layout: {
       toggleSidebar(): void
-      openDetails(): void
-      closeDetails(): void
+      selectPanel(panelId: string | null): void
+      /** 预留右栏 grid track（track）+ 是否全屏盖住（fullscreen）。 */
+      openRightbar(track: boolean, fullscreen: boolean): void
+      closeRightbar(): void
     }
     /** 注册可逆副作用：setup 返回 disposer；await 之。 */
     effect(setup: () => unknown | Promise<unknown>, label?: string): Promise<void>

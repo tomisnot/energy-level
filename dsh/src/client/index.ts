@@ -59,17 +59,19 @@ export async function apply(ctx: Context): Promise<void> {
 
     const unsub = subscribeCockpitMode(() => {
       if (getCockpitMode()) {
-        ctx.layout.openDetails()
+        // 运行版 dsh(0.1.5-rc.2) 的 ctx.layout 是 openRightbar/closeRightbar（非 openDetails）；
+        // 全部可选链：API 缺失时降级不崩整站。openRightbar(true,false)=预留右栏 grid track。
+        ctx.layout?.openRightbar?.(true, false)
         // 左栏若开着则关掉（记住是我们关的，OFF 时复原）
         const fr = document.querySelector('[data-re0-frame]')
         if (fr && !fr.hasAttribute('data-sidebar-collapsed')) {
-          ctx.layout.toggleSidebar()
+          ctx.layout?.toggleSidebar?.()
           weClosedSidebar = true
         }
         mountFrame()
       } else {
-        ctx.layout.closeDetails()
-        if (weClosedSidebar) { ctx.layout.toggleSidebar(); weClosedSidebar = false }
+        ctx.layout?.closeRightbar?.()
+        if (weClosedSidebar) { ctx.layout?.toggleSidebar?.(); weClosedSidebar = false }
         unmountFrame()
       }
     })
