@@ -28,11 +28,21 @@ types/dsh-shims.d.ts       本地最小类型 shim（@deepseek-ai/* 是宿主提
 
 ## 加载
 
+**⚠ 首次/新检出必先装依赖**：host 代码 import `@modelcontextprotocol/sdk` + `ws`，缺 `dsh/node_modules`
+则 dsh 加载插件即崩（`ERR_MODULE_NOT_FOUND: @modelcontextprotocol/sdk`）。node_modules 不入 git，
+故覆盖/检出后必须重装：
+
 ```sh
-# 开发期（tsx 直接加载源，无需构建）
+cd dsh && npm install && cd ..
+```
+
+（走 AI 模式启动器 `python 能级.py` 会自动检测缺失并 npm install，可略过手动这步。）
+
+```sh
+# 开发期（tsx 直接加载源、无需构建；但仍需上面装过依赖）
 dsh web --patch ./dsh/cordis.source.patch.yml
 # 交付期（先构建）
-cd dsh && npm install && npm run bundle && cd ..
+cd dsh && npm run bundle && cd ..
 dsh web --patch ./dsh/cordis.patch.yml
 ```
 

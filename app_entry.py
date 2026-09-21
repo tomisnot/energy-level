@@ -451,10 +451,23 @@ def run_ai():
 
     dsh_exe = shutil.which('dsh')
     dsh_args = 'web --patch ./dsh/cordis.source.patch.yml'
+    dsh_dir = os.path.join(here, 'dsh')
+
+    # 依赖预检：dsh/node_modules 缺失（新检出/清理后）→ 自动 npm install。
+    # 否则 re0-mecha 插件 import @modelcontextprotocol/sdk 失败，dsh 启动即崩。
+    if dsh_exe and os.path.isdir(dsh_dir) \
+            and not os.path.isdir(os.path.join(dsh_dir, 'node_modules')):
+        print('[launcher] dsh/node_modules 缺失 → 自动 npm install（首次约 15-60s）…',
+              flush=True)
+        try:
+            subprocess.run('npm install', shell=True, cwd=dsh_dir)
+        except Exception as e:                          # noqa: BLE001
+            print('[launcher] ⚠ npm install 失败：%s（dsh 可能起不来）' % e)
+
     print('=' * 70)
     print('  AI 模式：Hub(:8765)+驾驶舱(:8766) 已后台起（各自独立窗、可最小化）')
     print('  下面**前台启动 dsh**（较慢，启动输出直接显示在本窗，请等它起来）：')
-    print('  · dsh 起来后，浏览器打开它打印的 URL = AI 界面')
+    print('  · dsh 起来后会**自动打开浏览器** = AI 界面（URL 也在下面打印）')
     print('  · 驾驶舱不用单独开——它是 dsh 插件，在 dsh 网页头部「◈ 驾驶舱」按钮里')
     print('  · 停：本窗 Ctrl+C（一并收尾 Hub/驾驶舱）')
     print('=' * 70, flush=True)
@@ -462,7 +475,12 @@ def run_ai():
     try:
         if dsh_exe:
             # 前台跑 dsh：输出继承本控制台（启动进度/URL 可见），阻塞到 dsh 退出
-            subprocess.run('"%s" %s' % (dsh_exe, dsh_args), shell=True, cwd=here)
+            rc = subprocess.run('"%s" %s' % (dsh_exe, dsh_args), shell=True,
+                                cwd=here).returncode
+            if rc not in (0, None):
+                print('[launcher] ⚠ dsh 退出码 %s（崩溃？）——看上面的报错。' % rc)
+                print('           常见：dsh/node_modules 缺依赖（删掉它重跑会自动 npm'
+                      ' install）、patch 路径错、或端口冲突。')
         else:
             print('[launcher] ⚠ 没在 PATH 找到 dsh——请手动运行：dsh %s' % dsh_args)
             print('[launcher] Hub/驾驶舱保持后台运行；本窗回车结束（并收尾后台服务）…')
