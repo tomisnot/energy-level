@@ -17,7 +17,7 @@ from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 from PyQt5.QtWidgets import *
 
 from ..core import core
-from .. import pm_setup as pm
+from . import _mecha_bind as MB
 
 
 class FieldPanel(QWidget):
@@ -46,19 +46,19 @@ class FieldPanel(QWidget):
         # ---- 静磁场 + 静电场 + 添加光 一行 ----
         row = QHBoxLayout()
         row.addWidget(QLabel('磁场 B (G)'))
-        _reg = self.page.param_reg
-        self.b_spin = pm.spinbox(_reg, 'field.B_gauss', 21.7, 0.0, 1000000.0,
+        _binder = self.page.binder
+        self.b_spin = MB.spinbox(_binder, 'field.B_gauss', 21.7, 0.0, 1000000.0,
                                  decimals=2, width=90,
-                                 spec=pm.ParamSpec(
+                                 spec=MB.ParamSpec(
                                      'float', unit='G',
                                      desc='静磁场（量子化轴 z）',
                                      aliases=['B', '磁场']))
         self.b_spin.setToolTip('静磁场（量子化轴 z）：三页共用，Zeeman 能移')
         row.addWidget(self.b_spin)
         row.addWidget(QLabel('电场 E (V/cm)'))
-        self.e_spin = pm.spinbox(_reg, 'field.E_vpcm', 0.0, -1e6, 1e6,
+        self.e_spin = MB.spinbox(_binder, 'field.E_vpcm', 0.0, -1e6, 1e6,
                                  decimals=3, width=90, parent=self,
-                                 spec=pm.ParamSpec(
+                                 spec=MB.ParamSpec(
                                      'float', unit='V/cm',
                                      desc='静电场（DC-Stark）',
                                      aliases=['E', '电场']))
@@ -67,11 +67,12 @@ class FieldPanel(QWidget):
         row.addStretch(1)
         # ---- 偶极伙伴窗口 + 光子块阶数（AC-Stark Floquet 精度/成本权衡）----
         row.addWidget(QLabel('窗口'))
-        self.window_spin = pm.spinbox(_reg, 'field.window', 3, 1, 5,
-                                      width=52,
-                                      spec=pm.ParamSpec(
-                                          'int',
-                                          desc='AC 偶极伙伴窗口（Δn 圈数）'))
+        # AC 精度 = 静态页显示参数（A10：Re0 删了 set_ac_stark_config 全局，改
+        # build_level_rows 显式传参）→ 本地 GUI 态，不入 run-config registry
+        self.window_spin = QSpinBox()
+        self.window_spin.setRange(1, 5)
+        self.window_spin.setValue(3)
+        self.window_spin.setFixedWidth(52)
         self.window_spin.setToolTip(
             'AC 能移基组的偶极伙伴窗口（Δn 圈数）。\n'
             'window=3 全伙伴（N~400，n=4 时 ~13s/次）；\n'
@@ -80,11 +81,10 @@ class FieldPanel(QWidget):
         self.window_spin.valueChanged.connect(self._changed)
         row.addWidget(self.window_spin)
         row.addWidget(QLabel('光子块'))
-        self.n_photon_spin = pm.spinbox(_reg, 'field.n_photon', 4, 1, 12,
-                                        width=56,
-                                        spec=pm.ParamSpec(
-                                            'int',
-                                            desc='AC Floquet 光子块阶数'))
+        self.n_photon_spin = QSpinBox()
+        self.n_photon_spin.setRange(1, 12)
+        self.n_photon_spin.setValue(4)
+        self.n_photon_spin.setFixedWidth(56)
         self.n_photon_spin.setToolTip(
             'AC 能移 Floquet 光子块阶数（块数 = 2n+1）。\n'
             'n=4（默认）近/远失谐均收敛（n=1 与 n=4 差约 6%）；\n'
@@ -229,9 +229,8 @@ class FieldPanel(QWidget):
         data_changed/changed 发射——拖动滑块不逐 tick 全量重算（AC 已
         13× 提速，防抖锦上添花）；set_ac_stark_config 立即执行（廉价）。
         """
-        core.set_ac_stark_config(
-            n_photon=int(self.n_photon_spin.value()),
-            sos_n_window=int(self.window_spin.value()))
+        # A10：Re0 删了 set_ac_stark_config 全局；AC 精度改为 build_level_rows
+        # 显式传参（见 ac_kwargs），取 AC 位移时透传，不再设全局
         if getattr(self, '_debounce_timer', None) is None:
             self._debounce_timer = QTimer(self)
             self._debounce_timer.setSingleShot(True)
@@ -257,6 +256,11 @@ class FieldPanel(QWidget):
 
     def e_vpcm(self):
         return float(self.e_spin.value())
+
+    def ac_kwargs(self):
+        """AC-Stark 精度（A10：显式传给 build_level_rows，不再用全局 setter）。"""
+        return {'n_photon': int(self.n_photon_spin.value()),
+                'sos_n_window': int(self.window_spin.value())}
 
     # ---------------- 光场表格 ----------------
     def _pol_text(self, r):

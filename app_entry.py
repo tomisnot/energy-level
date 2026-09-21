@@ -41,14 +41,15 @@ from PyQt5.QtWidgets import (QButtonGroup, QPushButton, QApplication, QMainWindo
                              QListWidgetItem, QTableWidget, QTableWidgetItem,
                              QHeaderView, QLineEdit, QMenu, QAbstractItemView)
 
-from arc import Rubidium87
 from src.core import core
-from src import archive
-from src import fields
-from src import ui_dynamic
-from src import ui_theme
+from src.ui import fields
+from src.ui import ui_dynamic
+from src.ui import ui_theme
+from src.ui import _mecha_bind
 from src.ui.ui_group import EnergyGroupPanel
 from src.ui.ui_spectrum import LevelAnalysisPanel
+from src.mecha.app_bridge import AppBridge
+from src.adapter import EngineAdapter
 
 matplotlib.rcParams['font.family'] = 'sans-serif'
 matplotlib.rcParams['font.sans-serif'] = ['Microsoft YaHei', 'SimHei', 'DejaVu Sans']
@@ -77,8 +78,12 @@ class MainWindow(QMainWindow):
             app.setStyleSheet(ui_theme.QSS)
         self.statusBar().showMessage('就绪', 3000)
 
-        self.atom = Rubidium87()
-        self.cache = core.ArcCache(self.atom)
+        # mecha 门面（本地 sim 档：GUI 进程内托管内核）——注入领域引擎 + 装配
+        # Bus/Authority/Session/Ops/Jobs；cache 由引擎建。AI 模式的 Hub 是另一进程
+        # （adapter/serve），GUI 是其客户端（迁移计划 §44 修正：Hub 独立）。
+        self.app_bridge = AppBridge(engine=EngineAdapter(), mode='human')
+        self.cache = self.app_bridge.cache
+        self.binder = _mecha_bind.Binder(self.app_bridge)   # 面板控件 ↔ session
         self.groups = []
         self.groups_store = None
         self.field_state = None
@@ -90,10 +95,9 @@ class MainWindow(QMainWindow):
         self._selected_spec_row = -1
         self._level_all = []
         self._level_by_key = {}
-        # t82：模式位 + 引擎参数会话覆写（唯一真值；检视器「引擎参数」页与
-        # 参数注册表 engine.* 都读写这一份，运行时装进 params.override 快照）
+        # 视图模式位（极简/上帝 = 检视器显隐）；写权（human/AI）是另一维，走
+        # app_bridge.switch_mode。engine.* 只读（点1），故不再有引擎覆写状态。
         self.god_mode = False
-        self.engine_overrides = {}
         self._build_ui()
 
     def log(self, msg, timeout=8000):
@@ -102,65 +106,8 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(str(msg), timeout)
 
     def closeEvent(self, ev):
-        try:
-            from src.ai import server as ai_server
-            ai_server.stop_server()
-        except Exception:
-            pass
         super().closeEvent(ev)
 
-    def _init_ai(self):
-        """启动进程内 MCP server（AI 协同端点）+ journal → 状态栏联动。
-
-        失败不影响软件本体使用（如无 mcp SDK / 端口占用），仅日志提示。
-        """
-        try:
-            from src.ai import server as ai_server
-            from src.ai.journal import get_journal
-            port = ai_server.start_server(self)
-            if port:
-                # P3：状态栏常驻 AI 在线指示（人随时知道 AI 通道开着）
-                from PyQt5.QtWidgets import QLabel
-                ind = QLabel(f'● AI 在线 :{port}')
-                ind.setToolTip(f'MCP 端点 http://127.0.0.1:{port}/mcp\n'
-                               'AI 的每次操作会显示在这里，并可一键撤销')
-                ind.setStyleSheet('color:#a855f7; padding:0 8px;')
-                self.statusBar().addPermanentWidget(ind)
-                # P3：人一键撤销最近一个 AI 操作（可逆与可归因的落地）
-                from PyQt5.QtWidgets import QPushButton
-                undo_btn = QPushButton('撤销AI')
-                undo_btn.setToolTip('撤销最近一个 AI 操作（回滚其变更前状态）')
-                undo_btn.setStyleSheet('color:#a855f7;')
-
-                def _ui_undo():
-                    r = ai_server.ui_undo_last_ai()
-                    self.log(r.get('msg', ''), 5000)
-                undo_btn.clicked.connect(_ui_undo)
-                self.statusBar().addPermanentWidget(undo_btn)
-                # 取消渠道**统一**（2026-09-16 用户裁决）：不再有独立的
-                # 「取消AI作业」按钮——运行中「运行演化」按钮即"取消计算"，
-                # 人与 AI 的作业都走它（同一条 _on_run_clicked → _cancel_run）。
-                # 顺带修一个静默故障：原先这里三行 `_ai_job_btn.connect(
-                # _ai_job_cancel)` / `_QT(self)` / `_ai_job_tick()` 引用了
-                # **从未定义**的名字（全库无定义）→ NameError 被本函数末尾的
-                # except 吞掉 ⇒ 下面这段 op 流水订阅与 `return port` **一直
-                # 没执行**（AI 端点其实起来了，但收尾被中断）。删除即修。
-                # P3 协同 UI：AI 来源的 op 滚动到状态栏（人自己的不刷屏）
-                j = get_journal(os.path.dirname(os.path.abspath(__file__)))
-
-                def _on_op(op):
-                    if op.actor.startswith('ai'):
-                        d = op.detail
-                        txt = f"[AI] {op.kind}: {d.get('path') or d.get('job') or ''}" \
-                              f"{'（' + op.reason + '）' if op.reason else ''}"
-                        self.log(txt, 6000)
-                j.subscribe(_on_op)
-                # 人机写操作统一落账由 param_framework op→journal 桥完成
-                # （server.start_server 内 reg.on_op(_journal_bridge) 接线）
-            return port
-        except Exception as e:
-            self.log(f'[AI] 端点启动失败（软件功能不受影响）: {e}')
-            return None
 
     def bind_store(self, groups_store, field_state):
         self.groups_store = groups_store
@@ -224,9 +171,7 @@ class MainWindow(QMainWindow):
                     self.group_panel.level_table.setItem(r, 2, QTableWidgetItem(''))
 
     def _build_ui(self):
-        # 参数注册表先建（面板构造时标准件就地登记 = 定义即注册）
-        from src.pm_setup import new_registry
-        self.param_reg = new_registry(self)
+        # 面板控件经 _mecha_bind 就地绑到 session（定义即注册）；binder 已在 __init__ 建。
         main_widget = QWidget(self)
         self.setCentralWidget(main_widget)
         root = QVBoxLayout(main_widget)
@@ -307,13 +252,8 @@ class MainWindow(QMainWindow):
         top.addWidget(self.panel_scroll, 2)
 
         self._on_canvas_tab_changed(0)
-        # 参数登记收尾：标准件已在面板创建处工厂就地登记（定义即注册），
-        # 这里补登外部/非标参数（光场表/能级组/波形/psi/衰变/模式）+ 播种。
-        # 存档/恢复/AI 三条路都吃这一张册（登记即存档）。
-        from src.pm_setup import register_panel_params
-        for _panel in ('field', 'group', 'dynamic', 'engine', 'solve'):
-            register_panel_params(self.param_reg, self, _panel)
-        self.param_reg.seed_baseline()
+        # 面板控件经 _mecha_bind 已就地绑到 session；非标量（能级组/波形/psi/衰变）
+        # 由各自面板/run 流程写 session（见 ui_dynamic run 流）。存档=session 快照。
         menubar = self.menuBar()
         fm = menubar.addMenu('文件')
         fm.addAction('保存状态', self._save_state)
@@ -366,34 +306,28 @@ class MainWindow(QMainWindow):
             self.dynamic.set_god_mode(god)
         self.log('已切到' + ('上帝模式（检视器已打开）' if god else '极简模式'))
 
-    def set_engine_overrides(self, values):
-        """引擎参数会话覆写唯一写入口（注册表 engine.* 的 write_fn 调它）。
-
-        写进 store 后**必须同步检视器页**：否则 AI/程序改了参数，界面上的灯
-        亮了、数字还是旧的（实测踩过）。同步走各 binding 的 display 通道。
-        """
-        self.engine_overrides = dict(values or {})
-        insp = getattr(getattr(self, 'dynamic', None), '_inspector', None)
-        if insp is not None:
-            insp.set_engine_overrides(self.engine_overrides)
+    def apply_solve_params(self, values):
+        """把 solve.* 运行级参数写进 session（经 choke point）；engine.* 只读忽略
+        （点1：引擎内核常量不开放覆写）。调用方：ui_dynamic 成本档、检视器 set_god_params。"""
+        for k, v in (values or {}).items():
+            if str(k).startswith('solve.'):
+                try:
+                    self.app_bridge.write(k, v, reason='apply_solve_params',
+                                          actor='gui')
+                except Exception:                      # noqa: BLE001
+                    pass
 
     def _on_engine_param_edited(self, name, value):
-        """检视器页改**某一个**引擎参数 → 更新会话真值 + 注册表记账。
-
-        逐参数（不是整批替换）：非法/半成品输入不会牵连其它覆写。
-        `value=None` = 清该项覆写（回默认）。人这条路与 AI 走 `set_param`
-        最终都落在 `engine_overrides` 同一份状态上（P2/P3）。
-        """
-        from src import pm_setup as pm
-        # name 是**全路径**（engine.X / solve.Y）；统一走 god_write（判等→清覆写）
-        key = name if '.' in name else pm.god_key('engine', name)
-        pm.god_write(self, key, value)
-        reg = getattr(self, 'param_reg', None)
-        if reg is not None:
-            try:
-                reg.note_change(key, source='user')
-            except Exception:
-                pass
+        """检视器改**某一个**参数：solve.* 可写（经 choke point 落 session，人机同路）；
+        engine.* 只读（点1：引擎内核常量不开放覆写）。value=None = 清该项（回默认）。"""
+        key = name if '.' in str(name) else ('solve.' + str(name))
+        if str(key).startswith('engine.'):
+            self.log('engine.* 为只读（引擎内核常量）：%s 未改' % key, 6000)
+            return
+        try:
+            self.app_bridge.write(key, value, reason='检视器改 %s' % key, actor='gui')
+        except Exception as e:                          # noqa: BLE001
+            self.log('写 %s 失败：%s' % (key, e), 6000)
 
     def _on_canvas_tab_changed(self, idx):
         self.page_stack.setCurrentIndex(idx)
@@ -418,11 +352,9 @@ class MainWindow(QMainWindow):
         path, _ = QFileDialog.getSaveFileName(self, '保存状态', 'rb87_state.json', 'JSON (*.json)')
         if not path:
             return
-        snapshot = archive.snapshot(self.param_reg)   # v3：登记册即存档
         try:
-            with open(path, 'w', encoding='utf-8') as f:
-                json.dump(snapshot, f, ensure_ascii=False, indent=1)
-        except Exception as e:
+            self.app_bridge.save(path, reason='GUI 保存状态')   # session 快照（mecha-session-v1）
+        except Exception as e:                          # noqa: BLE001
             QMessageBox.warning(self, '保存失败', str(e))
             return
         QMessageBox.information(self, '保存状态', f'已保存 → {path}')
@@ -432,18 +364,11 @@ class MainWindow(QMainWindow):
         if not path:
             return
         try:
-            with open(path, encoding='utf-8') as f:
-                state = json.load(f)
-        except Exception as e:
+            self.app_bridge.load(path, reason='GUI 恢复状态')   # 写 session→bus→面板自动刷新
+        except Exception as e:                          # noqa: BLE001
             QMessageBox.warning(self, '恢复失败', str(e))
             return
-        try:
-            unknown = archive.restore(self.param_reg, state)
-            if unknown:
-                self.log(f'存档含 {len(unknown)} 个未识别键（已忽略）', 6000)
-        except Exception as e:
-            QMessageBox.warning(self, '恢复失败', str(e))
-            return
+        self.refresh()
         QMessageBox.information(self, '恢复状态', f'已恢复 ← {path}')
 
     def _apply_fullscreen_layout(self):
@@ -467,7 +392,6 @@ def main():
     app = QApplication(sys.argv)
     window = MainWindow()
     window.showMaximized()
-    window._init_ai()
     return app.exec_()
 
 

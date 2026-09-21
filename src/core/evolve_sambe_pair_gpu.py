@@ -8,16 +8,19 @@ CPU frozen（引擎 _pair_propagate）按**输出网格区间**分段 + eigh 复
 - 包络值缓存键 → const 相邻区间共享 eigh（引擎级 const 合并同款）
 - 输出用 _physical_pops 同款 nphase 相干投影
 → 与 CPU 同一冻结点/同一 eigh 复用/同一投影 → 逐位一致（≤1e-10 目标）
+
+**本模块是 torch 的唯一入口**：`import src.core` 不会拉 torch——调用点
+（`sambe.evolve_sambe_pair` 的 device 分支）在函数体内惰性导入本模块。
 """
 import numpy as np
 import torch
 
-_CONV = 2 * np.pi * 1e-3
+from .evolve_util import CONV
 
 
 def gpu_propagate_pair(setup, groups, psi0_2d, t_grid, frozen_h_ns=8.0,
                        log=None):
-    """GPU 全驻留传播（镜像 CPU frozen 语义）。返回 pops_2d (len(t), N²)。"""
+    """GPU 全驻留传播（镜像 CPU frozen 语义）。返回 pops (len(t), N²)。"""
     log = log or (lambda *a: None)
     N2 = setup.N2
     try:
@@ -48,8 +51,8 @@ def gpu_propagate_pair(setup, groups, psi0_2d, t_grid, frozen_h_ns=8.0,
         return np.array([float(np.asarray(wf(np.atleast_1d(tv))).flat[0])
                          for wf, _ in envs_all])
 
-    from .sambe import _embed_pair
-    X0_ext = _embed_pair(psi0_2d, setup)
+    from .sambe import embed
+    X0_ext = embed(psi0_2d, setup)
     X = torch.from_numpy(np.ascontiguousarray(X0_ext)) \
         .to(torch.complex128).cuda()
     pops = np.zeros((len(t_grid), N2))
@@ -86,7 +89,7 @@ def gpu_propagate_pair(setup, groups, psi0_2d, t_grid, frozen_h_ns=8.0,
                 _val[0] = (w, v)
             vc = v.to(torch.complex128)
             a0 = vc.t() @ Xc
-            Xc = vc @ (a0 * torch.exp(-1j * _CONV * w * hh)
+            Xc = vc @ (a0 * torch.exp(-1j * CONV * w * hh)
                        .to(torch.complex128))
             n_prop += 1
         return Xc

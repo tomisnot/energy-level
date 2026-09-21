@@ -4,7 +4,7 @@ import numpy as np
 import scipy.linalg
 
 from . import static_atom as core
-from .field_build import _env_samples, _sublevel_row
+from .field_build import env_samples, sublevel_row
 
 # numba JIT（可选）：加速 ip4 主循环（强耦合/长时窗时步数可达 10^6~10^7）
 try:
@@ -12,12 +12,15 @@ try:
 except Exception:
     _njit = None
 
-from .evolve_util import _CONV             # t74：常量单源
-from .evolve_util import (_POL_Q, _onehot, _as_vector, decay, auto_decays,
-                          _resolve_state_idx, _decay_ops)  # t74 工具归位
-from .field_build import _field_geometry  # t74：ip4 场格式归一归位场层
-from . import params as _P
-# 光频/微波分界：Ω/ωL < 此值 → RWA（反旋转误差 ~1e-7）；≥ → 非 RWA
+from .evolve_util import CONV             # t74：常量单源
+from .evolve_util import (_POL_Q, _onehot, as_vector, decay, auto_decays,
+                          resolve_state_idx, decay_ops)  # t74 工具归位
+from .field_build import field_geometry  # t74：ip4 场格式归一归位场层
+from .param import Param   # 就地参数声明（值+元数据同处；mecha.registry 扫出全表）
+
+
+# ==== 本模块的参数（就地定义；Param 声明值+元数据同处，透明子类读点免改）====
+RWA_TOL = Param(1e-4, 'RWA 有效性 Ω/ωL；光频/微波分界：< 本值 → RWA（反旋转误差 ~1e-7），≥ → 非 RWA', tier='check')
 
 
 def _assign_reference(states, fields):
@@ -46,7 +49,7 @@ def _assign_reference(states, fields):
     ref[start] = 0.0
     edges = []
     for f in fields:
-        g = _field_geometry(states, f)
+        g = field_geometry(states, f)
         for gi, ei in zip(g['g_idx'], g['e_idx']):
             edges.append((_key(gi), _key(ei), g['omega_L_mhz']))
     for _ in range(len(keys) + 2):
@@ -82,7 +85,7 @@ def hamiltonian(states, fields, t_ns, bs=False):
     ref, _ = _assign_reference(states, fields)
     H = np.diag(E - ref)
     for f in fields:
-        g = _field_geometry(states, f)
+        g = field_geometry(states, f)
         if bs and g['omega_L_mhz'] > 1e-6:
             bs_shift = g['omega0_mhz'] ** 2 / (4.0 * g['omega_L_mhz'])
             for i in g['g_idx']:
@@ -101,19 +104,19 @@ def hamiltonian(states, fields, t_ns, bs=False):
 # ============================================================
 # 算法 2：相互作用绘景 RK4（第一性原理，任意时变包络；光频 RWA + 微波非 RWA）
 # ============================================================
-def _rwa_reference(states, fields):
+def reference_rwa(states, fields):
     """ip4 的旋转参考：RWA 场级联传播 + 非 RWA 场 e 跟随 g（共享参考）。
 
     返回 (ref_arr, rwa_geoms, non_geoms, E_rot)。
     """
     N = len(states)
-    geoms = [_field_geometry(states, f) for f in fields]
+    geoms = [field_geometry(states, f) for f in fields]
 
     def _ratio(g):
         return (g.get('real_omega0_mhz', g['omega0_mhz'])
                 / max(g['omega_L_mhz'], 1e-9))
-    rwa_g = [g for g in geoms if _ratio(g) < _P.get('RWA_TOL')]
-    non_g = [g for g in geoms if _ratio(g) >= _P.get('RWA_TOL')]
+    rwa_g = [g for g in geoms if _ratio(g) < RWA_TOL]
+    non_g = [g for g in geoms if _ratio(g) >= RWA_TOL]
 
     def _key(i):
         s = states[i]
@@ -217,7 +220,7 @@ def _rwa_vtilde_sp(B, mats, S, n_terms, N, sidx, u, ps, nz_i, nz_j,
 def _rwa_rk4_core_numpy(mats, S, Ec, dt, psi0, out_step, n_out, N,
                         n_terms, record_amp, t_end, progress_arr):
     """numpy 回退版（无 numba）。返回 (psi_starts, psi_last, div)。"""
-    c = -1j * _CONV
+    c = -1j * CONV
     w05 = np.exp(1j * Ec * (dt / 2.0))
     w1 = np.exp(1j * Ec * dt)
     psi = np.array(psi0, complex)
@@ -351,7 +354,7 @@ def _evolve_rwa(E, states, fields, psi0, t, frac=40.0, record_amp=False,
 
     - 光频（Ω/ωL < RWA_TOL）→ RWA 旋转系耦合（反旋转误差 ~1e-7）；
     - 微波等强驱动 → 非 RWA：保留 cos(ω t) 反旋转项（第一性原理）。
-    - 参考系：RWA 级联 + 非 RWA 共享（_rwa_reference）。
+    - 参考系：RWA 级联 + 非 RWA 共享（reference_rwa）。
     - 相互作用绘景 H0=diag(E−ref)：相位精确除去 → 每步误差 ~(Ω·dt)³，
       dt = 最快非 RWA 载波周期/frac（默认 40 → 误差 ~1e-6，~1 min 内）。
     - 全 RWA 且包络恒常 → 一次对角化精确解（RWA 内精确，秒出）。
@@ -359,7 +362,7 @@ def _evolve_rwa(E, states, fields, psi0, t, frac=40.0, record_amp=False,
     N = len(states)
     if progress_arr is None:
         progress_arr = np.zeros(2)
-    ref_arr, rwa_g, non_g = _rwa_reference(states, fields)
+    ref_arr, rwa_g, non_g = reference_rwa(states, fields)
     E_rot = np.asarray(E, float) - ref_arr
     # 旁观态（不在任何耦合对里）无相位演化需求（ψ=0），但其 E_rot 绝对值
     # 可达光频量级（如 6P↔60S 光场把 60S 参考抬到 ~2.96e8 MHz），会让
@@ -378,7 +381,7 @@ def _evolve_rwa(E, states, fields, psi0, t, frac=40.0, record_amp=False,
 
     # ---- 全 RWA 且包络恒常 → 一次对角化精确解 ----
     if not non_g and rwa_g:
-        consts = [_env_samples(g['waveform'], t_out[-1]) for g in rwa_g]
+        consts = [env_samples(g['waveform'], t_out[-1]) for g in rwa_g]
         if all(c for _, c in consts):
             H0 = np.diag(E_rot).astype(float)
             for g, (c, _) in zip(rwa_g, consts):
@@ -388,7 +391,7 @@ def _evolve_rwa(E, states, fields, psi0, t, frac=40.0, record_amp=False,
                     H0 = H0 + c * np.diag(np.asarray(a, float))
             evals, evecs = np.linalg.eigh(H0)
             coef = evecs.T @ psi0
-            ph = np.exp(-1j * _CONV * evals[:, None] * t_out[None, :])
+            ph = np.exp(-1j * CONV * evals[:, None] * t_out[None, :])
             psi_t = evecs @ (coef[:, None] * ph)
             pops = np.abs(psi_t).T ** 2
             return t_out, pops, (psi_t[:, -1] if record_amp else None)
@@ -418,15 +421,15 @@ def _evolve_rwa(E, states, fields, psi0, t, frac=40.0, record_amp=False,
                 if A[i, j] > 1e-12:
                     w_max = max(w_max, abs(E_rot[i] - E_rot[j]) + wL)
     if w_max > 0:
-        dt_carrier = 2.0 * np.pi / (_CONV * w_max) / frac
+        dt_carrier = 2.0 * np.pi / (CONV * w_max) / frac
     else:
         dt_carrier = 0.01                        # 无耦合（慢变包络兜底）
     # RK4 精度约束：dt·‖Ṽ‖ ≲ 0.05（经验值 → 布居误差 ~1e-4~1e-5）。
     # 正常场景（Ω ≪ ω_L）dt_carrier 已满足；超强耦合（Ω ≳ ω_L，如
     # 100 mW/cm² 里德堡微波 → Ω~19 GHz）时载波约束不足以保证精度，
     # 必须按耦合幅度加密步长，否则 |ψ| 漂移 ~1e-2。
-    dt_acc = 0.06 / (_CONV * max(cmax, 1e-6))
-    dt_stab = 2.0 / (_CONV * max(cmax, 1e-6))    # RK4 稳定性上界
+    dt_acc = 0.06 / (CONV * max(cmax, 1e-6))
+    dt_stab = 2.0 / (CONV * max(cmax, 1e-6))    # RK4 稳定性上界
     dt_res = t_out[-1] / 500.0                   # 至少 500 步
     dt = min(dt_carrier, dt_acc, dt_stab, dt_res, 0.05)
     if dt <= 0 or not np.isfinite(dt):
@@ -451,7 +454,7 @@ def _evolve_rwa(E, states, fields, psi0, t, frac=40.0, record_amp=False,
     for g in non_g:
         sgrid.append((g['M'],
                       g['omega0_mhz'] * np.asarray(g['waveform'](tg), float)
-                      * np.cos(_CONV * g['omega_L_mhz'] * tg)))
+                      * np.cos(CONV * g['omega_L_mhz'] * tg)))
     # 统一场算符 M = A + diag(ac_shift)：对角位移随包络 env(t) 时变，
     # 相互作用绘景里对角元相位自动抵消（|u|²=1），无需独立 ac 机制。
     mats = [M for M, _ in sgrid]
@@ -467,9 +470,9 @@ def _evolve_rwa(E, states, fields, psi0, t, frac=40.0, record_amp=False,
     out_step = np.minimum(np.ceil(t_out / dt).astype(int), M)
     pops = np.zeros((len(t_out), N))
     pops[0] = np.abs(psi0) ** 2
-    Ec = _CONV * E_rot
+    Ec = CONV * E_rot
     n_terms = len(mats)
-    c = -1j * _CONV
+    c = -1j * CONV
 
     def rk4_step_arb(ps, t0, h):
         """任意子步（输出时刻精确记录用）：callable 求 s。"""
@@ -485,7 +488,7 @@ def _evolve_rwa(E, states, fields, psi0, t, frac=40.0, record_amp=False,
                 out = out + (g['omega0_mhz'] / 2.0
                              * env_of(g, t)) * (u * (g['M'] @ (u.conj() * ps)))
             for g in non_g:
-                s = g['omega0_mhz'] * env_of(g, t) * np.cos(_CONV * g['omega_L_mhz'] * t)
+                s = g['omega0_mhz'] * env_of(g, t) * np.cos(CONV * g['omega_L_mhz'] * t)
                 out = out + s * (u * (g['M'] @ (u.conj() * ps)))
             return out
 
@@ -552,7 +555,7 @@ def _evolve_rwa(E, states, fields, psi0, t, frac=40.0, record_amp=False,
 # ============================================================
 # 算法 3：Lindblad 主方程（自发辐射等马尔可夫耗散，第一性原理）
 # ============================================================
-def _e_rot(E, ref_arr, states, rwa_g, non_g):
+def reference_e_rot(E, ref_arr, states, rwa_g, non_g):
     """旋转系对角能（与 ip4 同款归一）：旁观态（无耦合）归零、
     耦合态减共同参考——避免光频量级 E_rot 使相位/步长爆炸。"""
     N = len(states)
@@ -569,44 +572,18 @@ def _e_rot(E, ref_arr, states, rwa_g, non_g):
     return E_rot
 
 
-def _decay_ops(decays, states):
-    """衰变通道 → (Ls, N_eff)。L = √Γ|to⟩⟨from|（Γ MHz → √(Γ×1e-3)/ns）。
-
-    to=None → 汇入虚拟 loss 态（下标 N）：H 不耦合它，trace 守恒，
-    布居只进不出 → loss = ρ[N,N]。返回 (Ls, N_eff)。
-    """
-    N = len(states)
-    has_loss = any(d.get('to') is None for d in decays)
-    N_eff = N + (1 if has_loss else 0)
-    Ls = []
-    for d in decays:
-        fi = _resolve_state_idx(states, d['from'])
-        if fi is None:
-            raise ValueError('衰变通道 from 不能为 None（必须指定衰变态）')
-        ti = _resolve_state_idx(states, d['to'])
-        gam = float(d.get('gamma_mhz', 0.0))
-        if gam < 0 or not np.isfinite(gam):
-            raise ValueError(f'衰变率非法: {gam}（须 ≥0 有限值）')
-        if ti is None:
-            ti = N
-        L = np.zeros((N_eff, N_eff), complex)
-        L[ti, fi] = np.sqrt(gam * 1e-3)
-        Ls.append(L)
-    return Ls, N_eff
-
-
 def _lindblad_eligible(states, fields, t_end):
     """lindblad_eig 前提：旋转系下 H 恒定——
     全部场 RWA 可容（Ω/ωL < 阈值）+ 包络恒常 + 无残留拍频（闭环一致）。"""
     if not fields:
         return True
-    geoms = [_field_geometry(states, f) for f in fields]
+    geoms = [field_geometry(states, f) for f in fields]
     for g in geoms:
         ratio = (g.get('real_omega0_mhz', g['omega0_mhz'])
                  / max(g['omega_L_mhz'], 1e-9))
-        if ratio >= _P.get('RWA_TOL'):
+        if ratio >= RWA_TOL:
             return False
-        if not _env_samples(g['waveform'], t_end)[1]:
+        if not env_samples(g['waveform'], t_end)[1]:
             return False
     _, deltas = _assign_reference(states, fields)
     return all(abs(d) <= 1e-6 for d in deltas)
@@ -631,7 +608,7 @@ def _evolve_lindblad_eig(E_rot, rwa_g, consts, Ls, psi0, t, record_amp=False,
         if a is not None and np.any(np.asarray(a, float) != 0.0):
             H0[:N, :N] += c * np.diag(np.asarray(a, float))
     I = np.eye(N_eff)
-    Lv = -1j * _CONV * (np.kron(I, H0) - np.kron(H0.conj().T, I))
+    Lv = -1j * CONV * (np.kron(I, H0) - np.kron(H0.conj().T, I))
     for L in Ls:
         LdL = L.conj().T @ L
         Lv = Lv + (np.kron(L.conj(), L)
@@ -818,9 +795,9 @@ def _evolve_lindblad(E, states, fields, decays, psi0, t, frac=20.0,
     N = len(states)
     if progress_arr is None:
         progress_arr = np.zeros(2)
-    ref_arr, rwa_g, non_g = _rwa_reference(states, fields)
-    E_rot = _e_rot(np.asarray(E, float), ref_arr, states, rwa_g, non_g)
-    Ls, N_eff = _decay_ops(decays, states)
+    ref_arr, rwa_g, non_g = reference_rwa(states, fields)
+    E_rot = reference_e_rot(np.asarray(E, float), ref_arr, states, rwa_g, non_g)
+    Ls, N_eff = decay_ops(decays, states)
     t_out = np.asarray(t, float)
 
     # ---- 步长（ip4 同款启发；耗散率并入耦合幅度约束） ----
@@ -844,11 +821,11 @@ def _evolve_lindblad(E, states, fields, decays, psi0, t, frac=20.0,
     gmax = max((abs(L).max() ** 2 for L in Ls), default=0.0)   # Γ(1/ns)
     cmax = max(cmax, 0.5 * gmax)
     if w_max > 0:
-        dt_carrier = 2.0 * np.pi / (_CONV * w_max) / frac
+        dt_carrier = 2.0 * np.pi / (CONV * w_max) / frac
     else:
         dt_carrier = 0.01
-    dt_acc = 0.06 / (_CONV * max(cmax, 1e-6))
-    dt_stab = 2.0 / (_CONV * max(cmax, 1e-6))
+    dt_acc = 0.06 / (CONV * max(cmax, 1e-6))
+    dt_stab = 2.0 / (CONV * max(cmax, 1e-6))
     dt_res = t_out[-1] / 500.0
     dt = min(dt_carrier, dt_acc, dt_stab, dt_res, 0.05)
     if dt <= 0 or not np.isfinite(dt):
@@ -869,7 +846,7 @@ def _evolve_lindblad(E, states, fields, decays, psi0, t, frac=20.0,
         for g in non_g:
             env = float(np.asarray(g['waveform'](np.atleast_1d(tv))).flat[0])
             H[:N, :N] += (g['omega0_mhz'] * env
-                          * np.cos(_CONV * g['omega_L_mhz'] * tv)) * g['A']
+                          * np.cos(CONV * g['omega_L_mhz'] * tv)) * g['A']
             a = g.get('ac_shift')
             if a is not None and np.any(np.asarray(a, float) != 0.0):
                 H[:N, :N] += env * np.diag(np.asarray(a, float))
@@ -888,7 +865,7 @@ def _evolve_lindblad(E, states, fields, decays, psi0, t, frac=20.0,
 
     def _rhs_lindblad(rho, tv):
         H = H_at(tv)
-        d = -1j * _CONV * (H @ rho - rho @ H)
+        d = -1j * CONV * (H @ rho - rho @ H)
         for ti, fi, val in jumps:
             g = (val * val.conj()).real
             rff = rho[fi, fi].real
@@ -929,7 +906,7 @@ def _evolve_lindblad(E, states, fields, decays, psi0, t, frac=20.0,
         for g in non_g:
             sgrid.append((g['A'],
                           g['omega0_mhz'] * np.asarray(g['waveform'](tg), float)
-                          * np.cos(_CONV * g['omega_L_mhz'] * tg)))
+                          * np.cos(CONV * g['omega_L_mhz'] * tg)))
             a = g.get('ac_shift')
             if a is not None and np.any(np.asarray(a, float) != 0.0):
                 sgrid.append((np.diag(np.asarray(a, float)),
@@ -949,13 +926,13 @@ def _evolve_lindblad(E, states, fields, decays, psi0, t, frac=20.0,
         for k, (Mk, _) in enumerate(sgrid):
             for p, (i, j) in enumerate(pairs):
                 W[k, p] = Mk[i, j]
-        W *= _CONV                                   # MHz → rad/ns
+        W *= CONV                                   # MHz → rad/ns
         nnz_i = np.array([i for i, _ in pairs], np.int64)
         nnz_j = np.array([j for _, j in pairs], np.int64)
         S = np.stack([s for _, s in sgrid]) if sgrid \
             else np.zeros((0, ng))
         Ec = np.zeros(N_eff, complex)
-        Ec[:N] = _CONV * E_rot
+        Ec[:N] = CONV * E_rot
         ti = np.array([t for t, _, _ in jumps], np.int64)
         fi = np.array([f for _, f, _ in jumps], np.int64)
         gam = np.array([(v * v.conj()).real for _, _, v in jumps], float)
@@ -1021,11 +998,11 @@ def _evolve_reference_lab(E, geoms, psi0, t, record_amp):
         for g in geoms:
             env = float(np.asarray(g['waveform'](np.atleast_1d(tv))).flat[0])
             H = H + (g['omega0_mhz'] * env
-                     * np.cos(_CONV * g['omega_L_mhz'] * tv)) * g['A']
+                     * np.cos(CONV * g['omega_L_mhz'] * tv)) * g['A']
         return H
 
     def _rhs_ref(tv, y):
-        return -1j * _CONV * (H_at(tv) @ y)
+        return -1j * CONV * (H_at(tv) @ y)
 
     sol = solve_ivp(_rhs_ref, (t[0], t[-1]), np.asarray(psi0, complex),
                     t_eval=t, rtol=1e-8, atol=1e-10)
@@ -1045,7 +1022,7 @@ def _evolve_reference_hybrid(E, states, fields, psi0, t, record_amp, thresh=1e-4
     """
     from scipy.integrate import solve_ivp
     N = len(states)
-    geoms = [_field_geometry(states, f) for f in fields]
+    geoms = [field_geometry(states, f) for f in fields]
 
     def _key(i):
         s = states[i]
@@ -1056,7 +1033,7 @@ def _evolve_reference_hybrid(E, states, fields, psi0, t, record_amp, thresh=1e-4
                 / max(g['omega_L_mhz'], 1e-9))
     rwa_g = [g for g in geoms if _ratio(g) < thresh]
     non_g = [g for g in geoms if _ratio(g) >= thresh]
-    ref_arr, _, _ = _rwa_reference(states, fields)
+    ref_arr, _, _ = reference_rwa(states, fields)
     H0 = np.diag(E - ref_arr).astype(float)
     H0 = H0 - np.min(np.diag(H0)) * np.eye(N)
     for g in rwa_g:
@@ -1070,11 +1047,11 @@ def _evolve_reference_hybrid(E, states, fields, psi0, t, record_amp, thresh=1e-4
         for g in non_g:
             env = float(np.asarray(g['waveform'](np.atleast_1d(tv))).flat[0])
             H = H + (g['omega0_mhz'] * env
-                     * np.cos(_CONV * g['omega_L_mhz'] * tv)) * g['A']
+                     * np.cos(CONV * g['omega_L_mhz'] * tv)) * g['A']
         return H
 
     def _rhs_ref(tv, y):
-        return -1j * _CONV * (H_at(tv) @ y)
+        return -1j * CONV * (H_at(tv) @ y)
 
     sol = solve_ivp(_rhs_ref, (t[0], t[-1]), np.asarray(psi0, complex),
                     t_eval=t, rtol=1e-9, atol=1e-11)
@@ -1095,8 +1072,8 @@ def evolve(states, fields, psi0, t_grid, method='auto', backend='auto',
     """单原子含时演化（独立模块，不含任何静态能移计算）。
 
     states : make_levels 输出（全部考虑的能级）
-    fields : field()/group_field()/real_field() 输出列表（任意多组时变光场）；
-             method='exact' 时为 kind='exact' 场（waveforms.build_fields_exact）
+    fields : field() 输出列表（任意多组时变光场）；
+             method='exact' 时为 kind='exact' 场（build_fields_exact）
     psi0   : 初态——states 索引 | (n,l,j,m) | dict(n,l,j,m) | 复向量
     t_grid : 时间数组（ns）
     method : 'auto'（默认）自动调度
@@ -1131,11 +1108,11 @@ def evolve(states, fields, psi0, t_grid, method='auto', backend='auto',
       （decays 全为显式落点或未配置时恒 0）；有耗散时 Σpops + loss = 1。
     """
     t = np.asarray(t_grid, float)
-    psi0v = _as_vector(states, psi0)
+    psi0v = as_vector(states, psi0)
     E = np.array([s['E_mhz'] for s in states])       # 裸能（ref/ω_L 基准，不含 AC）
     decays = list(decays or [])
     if decays:
-        _decay_ops(decays, states)                   # 提前校验（解析错误尽早报）
+        decay_ops(decays, states)                   # 提前校验（解析错误尽早报）
     if method == 'exact':
         # 第一性原理引擎：实验室系无 RWA/无旋转系/无近远分流；ac_shift 作为
         # H0 常数对角修正传入（旧接口兼容）；场须为 kind='exact'
@@ -1189,7 +1166,7 @@ def evolve(states, fields, psi0, t_grid, method='auto', backend='auto',
                                    progress_arr=progress_arr)
         out = dict(t=t, pops=pops, states=states,
                    om_mhz=[g['omega0_mhz']
-                           for g in [_field_geometry(states, f) for f in fields]],
+                           for g in [field_geometry(states, f) for f in fields]],
                    method='ip4', backend='numpy',
                    loss=np.zeros(len(t)))
         if record_amp:
@@ -1197,7 +1174,7 @@ def evolve(states, fields, psi0, t_grid, method='auto', backend='auto',
         return out
 
     if method == 'lindblad_eig':
-        Ls, N_eff = _decay_ops(decays, states)
+        Ls, N_eff = decay_ops(decays, states)
         if not _lindblad_eligible(states, fields, t[-1]):
             raise ValueError(
                 "method='lindblad_eig' 要求旋转系下 H 恒定：全部光场 RWA 可容"
@@ -1208,15 +1185,15 @@ def evolve(states, fields, psi0, t_grid, method='auto', backend='auto',
                 '自动改用 lindblad（RK4）')
             method = 'lindblad'
         else:
-            ref_arr, rwa_g, non_g = _rwa_reference(states, fields)
-            E_rot = _e_rot(E, ref_arr, states, rwa_g, non_g)
-            consts = [_env_samples(g['waveform'], t[-1]) for g in rwa_g]
+            ref_arr, rwa_g, non_g = reference_rwa(states, fields)
+            E_rot = reference_e_rot(E, ref_arr, states, rwa_g, non_g)
+            consts = [env_samples(g['waveform'], t[-1]) for g in rwa_g]
             t, pops, loss, rho_f = _evolve_lindblad_eig(
                 E_rot, rwa_g, consts, Ls, psi0v, t, record_amp=record_amp,
                 progress_arr=progress_arr)
             out = dict(t=t, pops=pops, states=states,
                        om_mhz=[g['omega0_mhz']
-                               for g in [_field_geometry(states, f)
+                               for g in [field_geometry(states, f)
                                          for f in fields]],
                        method='lindblad_eig', backend='numpy', loss=loss)
             if record_amp:
@@ -1229,7 +1206,7 @@ def evolve(states, fields, psi0, t_grid, method='auto', backend='auto',
             backend=backend, progress_arr=progress_arr)
         out = dict(t=t, pops=pops, states=states,
                    om_mhz=[g['omega0_mhz']
-                           for g in [_field_geometry(states, f) for f in fields]],
+                           for g in [field_geometry(states, f) for f in fields]],
                    method='lindblad', backend='numpy', loss=loss)
         if record_amp:
             out['rho'] = rho_f
@@ -1253,7 +1230,7 @@ def rwa_error_estimate(states, fields):
     """
     out = []
     for f in fields:
-        g = _field_geometry(states, f)
+        g = field_geometry(states, f)
         wL = max(g['omega_L_mhz'], 1e-9)
         r = g['omega0_mhz'] / wL
         out.append(dict(omega0_mhz=g['omega0_mhz'],
@@ -1284,26 +1261,12 @@ def level_pops(states, pops, n, l, j, m=None):
 
 
 # ---- t19 函数级改名兼容别名（旧名 = 新名，外部零改动）----
-_ip4_reference = _rwa_reference
 _ip4_vtilde_impl = _rwa_vtilde_impl
 _ip4_vtilde_sp = _rwa_vtilde_sp
 _ip4_vtilde = _rwa_vtilde
 _ip4_rk4_core_numpy = _rwa_rk4_core_numpy
 _ip4_rk4_core = _rwa_rk4_core
-_evolve_ip4 = _evolve_rwa
 _evolve_full = _evolve_reference_lab
 _evolve_full_hybrid = _evolve_reference_hybrid
 
 
-def __getattr__(name):
-    """PEP 562 回落：把历史 re-export 的引擎参数转发到注册表。
-
-    这些模块过去用 `from .params import X` 顺带充当转发站（外部代码
-    `core.RYDBERG_N_MIN` / `from .evolve_rwa import RWA_TOL`）。参数读取点
-    已改为 `_P.get(...)`，转发站随之消失——这里补一层回落，
-    使旧式属性访问继续可用，并且同样响应 `params.override()`。
-    """
-    from . import params as _p
-    if name in _p.DEFAULTS or name in _p.ALIASES:
-        return _p.get(name)
-    raise AttributeError(f'module {__name__!r} has no attribute {name!r}')

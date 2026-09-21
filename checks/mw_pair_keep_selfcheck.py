@@ -45,20 +45,21 @@ from arc import Rubidium87                                       # noqa: E402
 from src.core import static_atom as core                         # noqa: E402
 from src.core.atomic_levels import make_levels                   # noqa: E402
 from src.core.waveforms import Wave, GaussianEnv                 # noqa: E402
-from src.core.field_build import build_fields_exact, _group_by_freq  # noqa: E402
+from src.core.field_build import build_fields_exact, group_by_freq  # noqa: E402
 from src.core.evolve_twofield import build_two_field             # noqa: E402
 from src.core.evolve_mixed import _MixedSetup                    # noqa: E402
 from src.core.coupling import (mw_pair_keep, mw_cap_mhz,        # noqa: E402
                               mw_candidate_mask)
-from src.core.evolve_util import _CONV                           # noqa: E402
+from src.core.evolve_util import CONV                           # noqa: E402
 # 成本预算现在**默认不限制**（None）；要按成本剔除必须显式给值。
 # _BUD = 4e4 是 t79/t80 时代的默认档，保留下来当「显式成本档」的回归锚。
 _BUD = 4e4
-from src.core.params import (PHASE_TOL,            # noqa: E402
-                             M_EST_BW_MHZ, MW_MAX_MHZ)
+from src.core.coupling import PHASE_TOL                        # noqa: E402
+from src.core.sambe import M_EST_BW_MHZ                        # noqa: E402
+from src.core.static_atom import MW_MAX_MHZ                    # noqa: E402
 
 C = Checker('mw_pair_keep')
-Cv = _CONV
+Cv = CONV
 
 # ---------------------------------------------------------------
 # A. 判据语义（纯函数）
@@ -264,8 +265,8 @@ def _mixed_pairs(t_end, cap=None):
     # 分流约定（params.MW_MAX_MHZ）：载频 ≤ 100 GHz 视为微波，> 视为光场
     f_mw = [f for f in fields if f['omega_L_mhz'] <= MW_MAX_MHZ]
     f_opt = [f for f in fields if f['omega_L_mhz'] > MW_MAX_MHZ]
-    grps_opt = _group_by_freq(f_opt) if f_opt else []
-    grps_mw = _group_by_freq(f_mw) if f_mw else []
+    grps_opt = group_by_freq(f_opt) if f_opt else []
+    grps_mw = group_by_freq(f_mw) if f_mw else []
     s = _MixedSetup(E, grps_opt, grps_mw, N, mw_cap=cap, t_end_ns=t_end)
     keys = set()
     for pr in s.pairs:

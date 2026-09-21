@@ -13,7 +13,8 @@ A⊗I + I⊗A（每原子各驱动一次）。复用 tensor.py 的直积工具�
 """
 import numpy as np
 import scipy.sparse as sp
-from . import params as _P
+
+from .static_atom import MW_MAX_MHZ
 
 
 
@@ -55,7 +56,7 @@ def lift_fields(fields_A, fields_B, N):
             w = float(f['omega_L_mhz'])
             A = np.asarray(f['A'], float)
             env = f.get('waveform') or _one
-            if w > _P.get('MW_MAX_MHZ'):
+            if w > MW_MAX_MHZ:
                 g = opt_by_w.setdefault(w, {'A': np.zeros((N2, N2)),
                                             'waves': []})
                 g['A'] = g['A'] + lift_single_A(A, N)

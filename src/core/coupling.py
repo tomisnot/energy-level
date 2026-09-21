@@ -11,7 +11,14 @@
 判据推导与历史动因见 `docs/参数与判据决策史.md`。"""
 import numpy as np
 
-from .evolve_util import _CONV
+from .evolve_util import CONV
+from .static_atom import MW_MAX_MHZ
+from .param import Param   # 就地参数声明（值+元数据同处；mecha.registry 扫出全表）
+
+# ==== 本模块的参数（就地定义；Param 声明值+元数据同处，透明子类读点免改）====
+R_CRIT = Param(0.0135, 'AC 化边界 r=Ω/ω；r > 本值的远强对从光子块剔除，位移走 far_sos 注入', tier='run')   # AC 化边界
+_RHS_ENV_TAB_N = Param(20001, 'mixed RHS 表点数；包络/相位查表点数（内存/构建预算）', tier='internal')   # mixed RHS 表点数
+PHASE_BUDGET = Param(None, '微波候选窗相预算；None = 不限制（成本旋钮已迁到 solve.COST_BUDGET）', unit='rad', tier='run')   # None → 不透明 _ParamObj，读点用 .value
 
 
 def stage_progress(arr, st, frac):
@@ -42,7 +49,7 @@ def pack_rhs(pairs, t_end, n_tab=None):
       · 任意波形（无单一载频）用它表达，与 hard 的 cos(φ_f(t)) 同构。
     相位与包络共用同一时间基（linspace(0,t_end,n_tab)）与 env_dt。
     """
-    n_tab = _P.get('_RHS_ENV_TAB_N') if n_tab is None else int(n_tab)
+    n_tab = _RHS_ENV_TAB_N if n_tab is None else int(n_tab)
     grp = {}
     order = []
     for p in pairs:
@@ -88,7 +95,7 @@ def pack_rhs(pairs, t_end, n_tab=None):
 # ============================================================
 # 微波候选窗：相预算派生（成本侧）
 # ============================================================
-def mw_cap_mhz(T_ns, phase_budget=None, Cv=_CONV):
+def mw_cap_mhz(T_ns, phase_budget=None, Cv=CONV):
     """微波候选窗上限（MHz）：ΔD_max = PHASE_BUDGET / (C · T)。
 
     φ-帧微波项振荡在 (|ΔD| ± ω)，DOP853 步长按最快项走；把"愿意付多少步"
@@ -98,17 +105,17 @@ def mw_cap_mhz(T_ns, phase_budget=None, Cv=_CONV):
     与 `mw_pair_keep`（PHASE_TOL，精度侧）配成一对。
     phase_budget=None → params.PHASE_BUDGET。
     """
-    b = _P.get('PHASE_BUDGET') if phase_budget is None else float(phase_budget)
+    b = PHASE_BUDGET.value if phase_budget is None else float(phase_budget)
     if b is None or float(b) <= 0.0:
         # 未设预算（默认）= **不做成本剔除**：只留绝对上界，
         # 于是"哪些耦合进 RHS"完全由精度判据 Θ 与物理尺度决定。
-        return float(_P.get('MW_MAX_MHZ'))
+        return float(MW_MAX_MHZ)
     T = max(float(T_ns), 1e-12)            # T→0 时由调用方的绝对上界兜
     return float(b) / (Cv * T)
 
 
 def mw_candidate_mask(Omega, dE, omega_mhz, T_ns, phase_budget=None,
-                      cap_abs_mhz=None, Cv=_CONV):
+                      cap_abs_mhz=None, Cv=CONV):
     """向量化「微波候选对」筛选（成本 + 精度，与 mixed 同构 → 两引擎保留集一致）。
 
       Ω : Rabi 矩阵（MHz）    dE: 两端能量差（MHz，实验室系）
@@ -117,7 +124,7 @@ def mw_candidate_mask(Omega, dE, omega_mhz, T_ns, phase_budget=None,
       ② Δ = | |dE| − ω | > min(mw_cap_mhz(T), cap_abs_mhz) → 丢（成本）
       ③ Θ = C·T·Ω²/max(Ω, Δ) < PHASE_TOL → 丢（精度）
     """
-    cap_abs_mhz = _P.get('MW_MAX_MHZ') if cap_abs_mhz is None else cap_abs_mhz
+    cap_abs_mhz = MW_MAX_MHZ if cap_abs_mhz is None else cap_abs_mhz
     Om = np.abs(np.asarray(Omega, float))
     dE = np.abs(np.asarray(dE, float))
     det = np.abs(dE - float(omega_mhz))
@@ -126,7 +133,7 @@ def mw_candidate_mask(Omega, dE, omega_mhz, T_ns, phase_budget=None,
     den = np.maximum(Om, det)
     with np.errstate(divide='ignore', invalid='ignore'):
         theta = Cv * float(T_ns) * Om ** 2 / den
-    keep &= (theta >= _P.get('PHASE_TOL'))
+    keep &= (theta >= PHASE_TOL)
     return keep
 
 
@@ -134,7 +141,7 @@ def mw_candidate_mask(Omega, dE, omega_mhz, T_ns, phase_budget=None,
 # 微波对精度判据（累积相位）
 # ============================================================
 def mw_pair_keep(Omega_mhz, det_mhz, T_ns, cap_mhz=None,
-                 theta_tol=None, Cv=_CONV):
+                 theta_tol=None, Cv=CONV):
     """单个微波耦合对是否保留（标量版；向量化见 `mw_candidate_mask`）。
 
       Θ = Cv · T · Ω² / max(Δ, Ω) ≥ θ_tol  且  Δ ≤ cap_mhz
@@ -146,7 +153,7 @@ def mw_pair_keep(Omega_mhz, det_mhz, T_ns, cap_mhz=None,
 
     `cap_mhz` 是成本预算（见 `mw_cap_mhz`），不是物理近似；None = 不设上限。
     """
-    theta_tol = _P.get('PHASE_TOL') if theta_tol is None else theta_tol
+    theta_tol = PHASE_TOL if theta_tol is None else theta_tol
     if Omega_mhz <= 0.0:
         return False
     if cap_mhz is not None and abs(det_mhz) > float(cap_mhz):
@@ -158,7 +165,7 @@ def mw_pair_keep(Omega_mhz, det_mhz, T_ns, cap_mhz=None,
 # ============================================================
 # 静态耦合（V_dd）丢弃判据：累积相位 Θ —— hard / mixed 共用
 # ============================================================
-def static_phase_keep(vals, dE, T, theta_tol=None, Cv=_CONV):
+def static_phase_keep(vals, dE, T, theta_tol=None, Cv=CONV):
     """V_dd 累积相位判据：Θ = C·T·|V|²/max(|ΔE|, |V|) ≥ theta_tol → 保留。
 
     参数
@@ -175,7 +182,7 @@ def static_phase_keep(vals, dE, T, theta_tol=None, Cv=_CONV):
     判据只用 (|V|,|ΔE|,T)，**与基组标度、引擎、参考系无关**——故可跨算法共用。
     |V|=|ΔE|=0 的元素 Θ 记 0（丢弃）。
     """
-    theta_tol = _P.get('PHASE_TOL') if theta_tol is None else theta_tol
+    theta_tol = PHASE_TOL if theta_tol is None else theta_tol
     v = np.abs(np.asarray(vals, complex)).ravel()
     d = np.abs(np.asarray(dE, float)).ravel()
     if v.shape != d.shape:
@@ -200,12 +207,12 @@ def static_phase_keep(vals, dE, T, theta_tol=None, Cv=_CONV):
 # （env=恒 1）。gamma 为扩展空间长度 NonHermitian 对角（MHz）。
 # ============================================================
 from numba import njit as _njit
-from . import params as _P
 
 @_njit(cache=True, nogil=True)
 def rhs_phi_pairs(t, phi, iis, jjs, vals, dDs, is_mw, wcos, n_pairs_w,
                   env_tab, env_dt, has_ph, ph_tab, Cv, gamma=None,
-                  ac_base=None, ac_env_tab=None, ac_env_dt=1.0):
+                  ac_base=None, ac_env_tab=None, ac_env_dt=1.0,
+                  loss_base=None, loss_env_tab=None, loss_env_dt=1.0):
     """φ-帧 RHS：−iC·[光场 env·Kc∘e^{iC·ΔD·t} + 微波 env·cos(φ)·A∘e^{iC·ΔD·t}
     + V_dd 当场]·φ + 逐波时变 AC 对角 −iC·Σ shifts·env²·φ + 耗散对角。
 
@@ -269,6 +276,25 @@ def rhs_phi_pairs(t, phi, iis, jjs, vals, dDs, is_mw, wcos, n_pairs_w,
         for k in range(phi.shape[0]):
             if gamma[k] != 0.0:
                 res[k] -= 0.5 * Cv * gamma[k] * phi[k]
+    # 时变损耗对角 −½·Σ_w env_w(t)²·loss_ns_w[k]·φ（散射/光电离：与 AC 位移块
+    # 同构，但作用为**实衰减**而非相位；loss_base 直接以 /ns 存，不再乘 Cv。
+    # None ⇒ 整块跳过 ⇒ 与不接场致损耗逐位一致）。
+    if loss_base is not None and loss_env_tab is not None:
+        n_ls = loss_base.shape[0]
+        for wi in range(n_ls):
+            ei = t / loss_env_dt
+            i0 = int(ei)
+            if i0 >= loss_env_tab.shape[1] - 1:
+                i0 = loss_env_tab.shape[1] - 2
+            f = ei - i0
+            envv = (loss_env_tab[wi, i0] * (1.0 - f)
+                    + loss_env_tab[wi, i0 + 1] * f)
+            dev = envv * envv
+            if dev != 0.0:
+                for k in range(phi.shape[0]):
+                    v = loss_base[wi, k]
+                    if v != 0.0:
+                        res[k] -= 0.5 * dev * v * phi[k]
     return res
 
 
@@ -288,6 +314,10 @@ def rhs_phi_pairs(t, phi, iis, jjs, vals, dDs, is_mw, wcos, n_pairs_w,
 # 三个内核因此不再产生自己的缓存条目，全部并入本包装的条目。
 # 数值上只是把同一批实参原样转发（附加参数走元组），逐位不变。
 from .dop853 import _dop853_driver          # noqa: E402  （系数已上收 dop853，无环）
+
+
+# ==== 本模块的参数（就地定义；Param 声明值+元数据同处，透明子类读点免改）====
+PHASE_TOL = Param(1e-4, '弱耦合可忽略门（V_dd 与微波对共用）', unit='rad', tier='check')   # 弱耦合可忽略门
 
 
 @_njit(cache=True, nogil=True)

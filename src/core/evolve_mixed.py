@@ -15,27 +15,44 @@ DOP853 直接积分**即可，无需 Strang 分裂 + eigh 冻结（那会引入�
 
 理论推导见 `docs/混合引擎理论推导-光Sambe微波当场.md`，
 判据与历史动因见 `docs/参数与判据决策史.md`。
+
+判据白盒接口（内部件，**不是**产品 API；改名/改签名要同步 checks/）：
+  · `_MixedSetup`        —— mixed 单体 setup（`mw_pair_keep_selfcheck`、
+                            `params_registry_selfcheck` 构造它验 T 自适应/成本上限）
+  · `_assemble_H_snapshot` —— H 快照（`ai_h_snapshot_guard_selfcheck` 验尺寸闸）
 """
 import numpy as np
 
-from .evolve_util import (_as_vector, _single_loss_rates, _loss_and_norm,
-                          pair_psi0_vector, _CONV)
+from .evolve_util import (as_vector, _single_loss_rates, _loss_and_norm,
+                          pair_psi0_vector, split_field_loss, CONV)
 from . import tensor as _tensor
 from .diag import h_snapshot_ok as _h_snap_ok
 from .diag import h_snapshot_note as _h_snap_note
 from .coupling import (rhs_phi_pairs, pack_rhs, stage_progress,
                        static_phase_keep, mw_pair_keep, mw_cap_mhz,
                        dop853_driver_mixed)  # 薄包装：让磁盘缓存命中
-from .field_build import _group_by_freq
-from .sambe import (_SambeSetup, _m_analytic, _embed,
+from .field_build import group_by_freq
+from .sambe import (_SambeSetup, _m_analytic, embed,
                     sector_sum_pops, sector_sum_amp)
-from . import params as _P
+
+from .static_atom import MW_MAX_MHZ
+from .coupling import PHASE_TOL, R_CRIT, _RHS_ENV_TAB_N
+from .param import Param   # 就地参数声明（值+元数据同处；mecha.registry 扫出全表）
+
+
+# ==== 本模块的参数（就地定义；Param 声明值+元数据同处，透明子类读点免改）====
+ATOL_RTOL_RATIO = Param(1e-2, 'atol/rtol 比（派生 DEFAULT_ATOL 用；非独立旋钮）', tier='internal')
+BW_OPT = Param(2e4, '光场对过滤带宽（mixed）', unit='MHz', tier='run')
+DEFAULT_RTOL = Param(1e-8, '积分相对容差（mixed 入口默认 rtol）', tier='run')
+DEFAULT_ATOL = Param(DEFAULT_RTOL * ATOL_RTOL_RATIO, '积分绝对容差（派生 = DEFAULT_RTOL × ATOL_RTOL_RATIO，非独立旋钮）', tier='internal')
+M_EST_TOL = Param(1e-6, '光子块截断容差', tier='run')
+_AC_ENV_TAB_N = Param(4001, 'mixed AC 表点数；AC 时变对角的独立包络表点数（AC 只跟随慢变光强）', tier='internal')
 # ---- AC 化层（唯一消费者家族就是 mixed）----
 
 
 def classify_pairs(A, omega, r_crit=None):
     """按 r=Ω/ω 分类：True = 保留（近/弱对——光子块动态）；False = AC 化。"""
-    r_crit = _P.get('R_CRIT') if r_crit is None else r_crit
+    r_crit = R_CRIT if r_crit is None else r_crit
     A = np.asarray(A, float)
     r = np.abs(A) / omega
     keep = (r <= r_crit) & (np.abs(A) > 1e-9)
@@ -62,7 +79,7 @@ def acize_physical(E, fields_opt, r_crit=None):
       shifts_list[f]：第 f 个光场的 N 维位移向量（env² 全量时变语义——
         K0 用纯 E；RHS 时变对角 Σ_f shifts_f·env_f(t)² 由调用侧组装）
     """
-    r_crit = _P.get('R_CRIT') if r_crit is None else r_crit
+    r_crit = R_CRIT if r_crit is None else r_crit
     N = len(E)
     shifts_list = []
     A_new = []
@@ -85,7 +102,7 @@ def acize_physical(E, fields_opt, r_crit=None):
     return A_new, shifts_list
 def ac_ize_physical_E(E, f_opt, r_crit=None):
     """远强对 AC 化入口（唯一消费者家族是 mixed）。"""
-    r_crit = _P.get('R_CRIT') if r_crit is None else r_crit
+    r_crit = R_CRIT if r_crit is None else r_crit
     A_new, shifts_list = acize_physical(E, f_opt, r_crit)
     return E, A_new, shifts_list
 
@@ -150,7 +167,7 @@ def _cost_report(setup, states, T, phase_budget, alts=(1e4, 4e4)):
     真实耦合，但用户有权知道这要付多少，并**在运行前**决定要不要省。
     步数标定沿用 t80 的锚：最坏总步数 ≈ C·Δ_max·T/0.535。
     """
-    Cv = _CONV
+    Cv = CONV
     mw = [p for p in setup.pairs if int(p[4]) == 1]
     dets = [abs(abs(float(p[3])) - float(p[5])) for p in mw]
     dmax = max(dets) if dets else 0.0
@@ -200,7 +217,7 @@ class _MixedSetup:
         if not grps_opt:
             Ms = []                 # 无光场：光子维退化，无组可覆写（t77）
         elif M_override is None:
-            Ms = _m_analytic(grps_opt, _P.get('M_EST_TOL'), self.E)
+            Ms = _m_analytic(grps_opt, M_EST_TOL, self.E)
         elif np.isscalar(M_override):
             Ms = [int(M_override)] * len(grps_opt)
         else:
@@ -210,8 +227,8 @@ class _MixedSetup:
                     f'per_freq_M 长度 {len(Ms)} != 载频组数 {len(grps_opt)}')
         self.M_used = list(Ms)
         self.T = float(t_end_ns) if t_end_ns else None
-        # t75/t80：过滤带宽覆写（上帝模式）——None=params.py 默认
-        self.bw = float(bw_opt) if bw_opt is not None else _P.get('BW_OPT')
+        # t75/t80：过滤带宽覆写——None = 用本模块顶部的 BW_OPT
+        self.bw = float(bw_opt) if bw_opt is not None else BW_OPT
         # 微波候选窗 = 相预算派生（mw_cap_mhz(T)），再夹绝对上界 MW_MAX_MHZ
         # —— 与 `build_two_field` 的 `min(mw_cap_mhz, MW_MAX_MHZ)` 同构，
         # 保证两引擎保留集一致、且 MW_MAX_MHZ 这个旋钮在任何路径都真的生效。
@@ -220,9 +237,9 @@ class _MixedSetup:
             self.mw_cap = float(mw_cap)
         elif self.T is not None:
             self.mw_cap = min(mw_cap_mhz(self.T, phase_budget),
-                              _P.get('MW_MAX_MHZ'))
+                              MW_MAX_MHZ)
         else:
-            self.mw_cap = _P.get('MW_MAX_MHZ')
+            self.mw_cap = MW_MAX_MHZ
         self.mw_pair_stats = {'keep': 0, 'drop_cap': 0, 'drop_phase': 0,
                                'drop_cost_loud': 0, 'loud_max_om': 0.0,
                                'loud_max_det': 0.0}
@@ -296,8 +313,8 @@ class _MixedSetup:
                                 # 故此处在"Θ 判据本来会保留"时记一条吵闹统计，
                                 # 让日志/诊断能立刻回答"路径为什么消失"。
                                 if self.T is not None:
-                                    _th = _CONV * self.T * om ** 2 / max(det, om)
-                                    if _th >= _P.get('PHASE_TOL'):
+                                    _th = CONV * self.T * om ** 2 / max(det, om)
+                                    if _th >= PHASE_TOL:
                                         self.mw_pair_stats['drop_cost_loud'] += 1
                                         if om > self.mw_pair_stats['loud_max_om']:
                                             self.mw_pair_stats['loud_max_om'] = om
@@ -341,7 +358,7 @@ class _MixedSetup:
 
     def pack(self, T, n_tab=None):
         """pairs → coupling.pack_rhs 数组（t73：与两体 mixed 同一打包层）。"""
-        n_tab = _P.get('_RHS_ENV_TAB_N') if n_tab is None else int(n_tab)
+        n_tab = _RHS_ENV_TAB_N if n_tab is None else int(n_tab)
         self.pack = pack_rhs(self.pairs, T, n_tab=n_tab)
         return self.pack
 
@@ -352,7 +369,7 @@ def evolve_mixed(states, fields, psi0, t_grid, tol=None,
                  driver='numba', decays=None,
                  per_freq_M=None, r_crit=None, diag=False,
                  bw_opt=None, mw_cap=None, mw_max=None, mw_arb=None,
-                 phase_budget=None, dry_run=False):
+                 phase_budget=None, dry_run=False, field_loss=None):
     """混合引擎主入口：φ-帧单 DOP853（光场 Sambe 结构 + 微波 cos 硬积分）。
 
     fields : kind='exact' 场列表（build_fields_exact 输出；光场 + 微波混合）。
@@ -373,7 +390,7 @@ def evolve_mixed(states, fields, psi0, t_grid, tol=None,
     phase_budget : t80 上帝模式覆写——微波候选窗的**无量纲相预算**（rad），
             默认 params.PHASE_BUDGET（微波候选窗的主旋钮）
     """
-    tol = _P.get('DEFAULT_RTOL') if tol is None else tol
+    tol = DEFAULT_RTOL if tol is None else tol
     log = log or (lambda *a: None)
     t = np.asarray(t_grid, float)
     if progress_arr is None:
@@ -382,8 +399,8 @@ def evolve_mixed(states, fields, psi0, t_grid, tol=None,
     N = len(states)
     E = np.array([s['E_mhz'] for s in states], float)
     E = E - float(E.min())
-    psi0v = _as_vector(states, psi0)
-    C = _CONV
+    psi0v = as_vector(states, psi0)
+    C = CONV
 
     # t62 耗散（落点=丢失）：Gamma_ns（/ns）→ gamma（MHz）传给内核；
     # Gamma_ns 收尾的 loss 曲线复用，不重复计算（t77 清理）
@@ -392,19 +409,19 @@ def evolve_mixed(states, fields, psi0, t_grid, tol=None,
     if decays:
         Gamma_ns = _single_loss_rates(states, decays)
         if np.any(Gamma_ns):
-            gamma = Gamma_ns / _CONV
+            gamma = Gamma_ns / CONV
             log(f'[mixed] 耗散 {int((Gamma_ns > 0).sum())} 态'
                 f'（落点=丢失，NonHermitian）')
-    mm = float(mw_max) if mw_max is not None else _P.get('MW_MAX_MHZ')
+    mm = float(mw_max) if mw_max is not None else MW_MAX_MHZ
     f_opt = [f for f in fields if f['omega_L_mhz'] > mm]
     f_mw = [f for f in fields if f['omega_L_mhz'] <= mm]
     # t62 AC 化（正确组合）+ t62e 时变化：远强对剔除 + per-field far_sos 位移
     # t75：r_crit 可由上帝模式覆写（None=R_CRIT 默认）
-    rc = float(r_crit) if r_crit is not None else _P.get('R_CRIT')
+    rc = float(r_crit) if r_crit is not None else R_CRIT
     E2, A_opt_new, shifts_list = ac_ize_physical_E(E, f_opt, rc)
     f_opt_ac = [dict(f, A=A) for f, A in zip(f_opt, A_opt_new)]
-    grps_opt = _group_by_freq(f_opt_ac)
-    grps_mw = _group_by_freq(f_mw) if f_mw else []
+    grps_opt = group_by_freq(f_opt_ac)
+    grps_mw = group_by_freq(f_mw) if f_mw else []
     if not grps_opt:
         # 无光场（纯微波，或光波被 AC 化/偏振选择定则全部剔除）——光子维
         # 退化 P=1：φ-帧回到实验室系，微波/V_dd 当场精确积分（t77）
@@ -437,7 +454,7 @@ def evolve_mixed(states, fields, psi0, t_grid, tol=None,
     ac_env_dt = 1.0
     if ac_waves:
         n_acv = len(ac_waves)
-        n_ac_tab = _P.get('_AC_ENV_TAB_N')
+        n_ac_tab = _AC_ENV_TAB_N
         ac_base = np.zeros((n_acv, setup.dim), float)
         ac_env_tab = np.zeros((n_acv, n_ac_tab), float)
         ts_ac = np.linspace(0.0, T, n_ac_tab)
@@ -449,6 +466,27 @@ def evolve_mixed(states, fields, psi0, t_grid, tol=None,
                         ac_base[wi, pn * N + i] = v
             ac_env_tab[wi] = np.asarray(wf(ts_ac), float)
         ac_env_dt = T / (n_ac_tab - 1)
+    # 场致损耗（opt-in）：逐波 env²×逐态时变对角，与 ac 块同构（实衰减而非相位）。
+    # loss_base 以 /ns 存（out_mhz×1e-3），跨光子扇区平铺；field_loss=None → 不建。
+    loss_base = None
+    loss_env_tab = None
+    loss_env_dt = 1.0
+    if field_loss is not None and getattr(field_loss, 'channels', None):
+        _ls = [ch for ch in field_loss.channels if float(ch['out_mhz']) > 0.0]
+        if _ls:
+            n_ls = len(_ls)
+            n_ls_tab = _AC_ENV_TAB_N
+            loss_base = np.zeros((n_ls, setup.dim), float)
+            loss_env_tab = np.zeros((n_ls, n_ls_tab), float)
+            ts_ls = np.linspace(0.0, T, n_ls_tab)
+            for wi, ch in enumerate(_ls):
+                rate_ns = float(ch['out_mhz']) * 1e-3        # MHz → /ns（env=1 峰值）
+                src = int(ch['src'])
+                for pn in range(setup.P):
+                    loss_base[wi, pn * N + src] = rate_ns
+                loss_env_tab[wi] = np.asarray(ch['env_fn'](ts_ls), float)
+            loss_env_dt = T / (n_ls_tab - 1)
+            log(f'[mixed] 场致损耗 {n_ls} 通道（env²×逐态，NonHermitian）')
     pack = setup.pack(T)
     _st = setup.mw_pair_stats
     log(f'[mixed] 波 {len(setup._wcos)}'        f'（mw {int(setup._is_mw.sum())}）；耦合对 {len(setup.pairs)}'
@@ -480,7 +518,7 @@ def evolve_mixed(states, fields, psi0, t_grid, tol=None,
         return {'dry_run': True, 'method': 'mixed',
                 'cost': _cost_report(setup, states, T, phase_budget)}
 
-    X0 = _embed(psi0v, setup.setup)
+    X0 = embed(psi0v, setup.setup)
     prog = (np.zeros(3) if progress_arr is None
             else np.asarray(progress_arr, float))
     stat = np.zeros(6) if diag else np.zeros(4)
@@ -490,7 +528,7 @@ def evolve_mixed(states, fields, psi0, t_grid, tol=None,
     if driver == 'numba':
         # 阶段 1（积分）由驱动在首个接受步置位——调用内的 numba 装载/
         # 编译期保持阶段 0（"准备"标签 + 耗时），GUI 显示不失真
-        y_out = dop853_driver_mixed(X0, t, T, float(tol), _P.get('DEFAULT_ATOL'),
+        y_out = dop853_driver_mixed(X0, t, T, float(tol), DEFAULT_ATOL,
                                     max_step, prog, stat, dt_hist,
                                     float(max_step_hard or 0.0),
                                     pack['iis'], pack['jjs'],
@@ -498,7 +536,8 @@ def evolve_mixed(states, fields, psi0, t_grid, tol=None,
                                     pack['wcos'], pack['n_pairs_w'],
                                     pack['env_tab'], pack['env_dt'],
                                     pack['has_ph'], pack['ph_tab'], float(C),
-                                    gamma, ac_base, ac_env_tab, ac_env_dt)
+                                    gamma, ac_base, ac_env_tab, ac_env_dt,
+                                    loss_base, loss_env_tab, loss_env_dt)
     else:
         from scipy.integrate import solve_ivp
         stage_progress(prog, 1, 0.0)         # 阶段 1：积分（scipy 无内部钩子）
@@ -509,9 +548,10 @@ def evolve_mixed(states, fields, psi0, t_grid, tol=None,
                                  pack['wcos'], pack['n_pairs_w'],
                                  pack['env_tab'], pack['env_dt'],
                                  pack['has_ph'], pack['ph_tab'], C,
-                                 gamma, ac_base, ac_env_tab, ac_env_dt)
+                                 gamma, ac_base, ac_env_tab, ac_env_dt,
+                                 loss_base, loss_env_tab, loss_env_dt)
         sol = solve_ivp(rhs, (0.0, T), X0, method='DOP853', t_eval=t,
-                        rtol=tol, atol=_P.get('DEFAULT_ATOL'), max_step=max_step)
+                        rtol=tol, atol=DEFAULT_ATOL, max_step=max_step)
         if not sol.success:
             raise RuntimeError(f'混合引擎积分失败: {sol.message}')
         y_out = sol.y.T       # (len(t), dim) 统一布局
@@ -527,7 +567,14 @@ def evolve_mixed(states, fields, psi0, t_grid, tol=None,
         stage_progress(prog, 2, i / max(len(t) - 1, 1))
     stage_progress(prog, 2, 1.0)
     # t62 耗散：loss 曲线（梯形积分）+ 含 loss 范数偏差（同 hard）
-    loss, norm_dev = _loss_and_norm(pops, Gamma_ns, t)
+    comp = None
+    if field_loss is not None and getattr(field_loss, 'channels', None):
+        comp = split_field_loss(t, pops, Gamma_ns, field_loss,
+                                trap=getattr(field_loss, 'trap', None))
+        loss = comp['spont'] + comp['scatter'] + comp['photoion']
+        norm_dev = float(np.max(np.abs(pops.sum(axis=1) + loss - 1.0)))
+    else:
+        loss, norm_dev = _loss_and_norm(pops, Gamma_ns, t)
     # ---- t75 诊断快照（diag=True 才采集；数值路径零改动）----
     if diag:
         pr = setup.pairs
@@ -592,6 +639,8 @@ def evolve_mixed(states, fields, psi0, t_grid, tol=None,
                                  n_rej=int(stat[2]), dt_min_hit=False,
                                  max_norm_dev=norm_dev,
                                  P=setup.P, dim=setup.dim))
+    if comp is not None:
+        out['loss_components'] = comp
     if record_amp:
         Xf = np.exp(-1j * C * setup.D_full * T) * y_out[-1]
         out['psi_amp'] = Xf
@@ -611,7 +660,7 @@ def _ac_ize_pair(E, A_o, omega_opt, r_crit=None):
     静态位移 = 与动态双计（375ns 交换 0.012 vs 0.558 的根因，t70 实验定案；
     旧 inject=True 考古语义已随 t73b 深度清理移除）。
     """
-    r_crit = _P.get('R_CRIT') if r_crit is None else r_crit
+    r_crit = R_CRIT if r_crit is None else r_crit
     if A_o is None or not np.any(np.abs(A_o) > 1e-9):
         return None
     A_new, _ = acize_physical(
@@ -628,7 +677,7 @@ def _build_pair_geometry(E, optA_ac, optB_ac, omega_opt, bw_opt=None):
     optA_ac / optB_ac 元素 (A_new, env)——A 侧 lift_side_A(A⊗I)、B 侧 I⊗A。
     """
     from .tensor_fields import lift_side_A
-    bw_opt = _P.get('BW_OPT') if bw_opt is None else float(bw_opt)
+    bw_opt = BW_OPT if bw_opt is None else float(bw_opt)
     N = len(E)
     N2 = N * N
 
@@ -652,7 +701,7 @@ def _build_pair_geometry(E, optA_ac, optB_ac, omega_opt, bw_opt=None):
     # 无光场合法（t77）：全光波被 AC 化/选择定则剔除时没有光子组可挂，
     # 光子维退化 P=1（setup.P 自动给出）→ 微波/V_dd 当场精确积分。
     # Ms 必须随组数走：固定 [1] 会在零组时触发 photon_geometry 的长度校验。
-    grps = _group_by_freq(flds)
+    grps = group_by_freq(flds)
     setup = _SambeSetup(E_pair, grps, [1] * len(grps))
     P = setup.P
     dim = N2 * P
@@ -725,7 +774,7 @@ def _split_waves(fields, mw_max=None):
     回流——与 sambe T4/T6 修过的同频合并 bug 同类）。逐波后每波独立驱动，
     交叉项不可能出现；pack_rhs 按 (is_mw, w, id(env)) 分组天然支持同频多波。
     """
-    mw_max = _P.get('MW_MAX_MHZ') if mw_max is None else mw_max
+    mw_max = MW_MAX_MHZ if mw_max is None else mw_max
     opt, mw = [], []
     for f in fields or []:
         A = np.asarray(f['A'], float)
@@ -749,7 +798,7 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
              **无光场合法**（两侧都无光波，或光波被 AC 化/选择定则剔除）：
              光子维退化 P=1，自动等价于微波/V_dd 当场精确积分（t77）。
     psi0_pair  : **两体纠缠初态** spec（['pair_sup', […]]；见
-             evolve_util._as_pair_vector）——非 None 时完全取代
+             evolve_util.as_pair_vector）——非 None 时完全取代
              psi0_A/psi0_B（逐原子直积）。交换后的结果就是这种态。
     vdd_matrix  : V_dd 稀疏/稠密矩阵（N²×N²）；None 且给 R_um/cache 时算
     r_crit : t75 上帝模式覆写——AC 化 r=Ω/ω 阈值（None=默认 R_CRIT）
@@ -757,14 +806,14 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
     bw_opt / mw_cap / mw_max : t75/t80 上帝模式覆写——φ-帧过滤带宽 /
             微波候选窗**绝对**上界（MHz）/ 微波-光场分界（None=默认）
     phase_budget : t80 上帝模式覆写——微波候选窗的无量纲相预算（rad）
-    返回 dict(t, pops_2d, pops_A, pops_B, states_2d, loss_A, loss_B,
+    返回 dict(t, pops, pops_A, pops_B, states, loss_A, loss_B,
               method='mixed', backend='mixed-phi-dop853-pair', error_report)。
 
     注意：V_dd 在 φ-帧同扇区 → ΔD=E_pair 差自动涌现（与 n 无关）；
     耗散（t62 实现）：寿命通道（落点=丢失）NonHermitian 对角——与
     hard_pair 同语义（_pair_loss_vectors；显式落点/纯退相拒绝）。
     """
-    tol = _P.get('DEFAULT_RTOL') if tol is None else tol
+    tol = DEFAULT_RTOL if tol is None else tol
     log = log or (lambda *a: None)
     if progress_arr is None:
         progress_arr = np.zeros(3)
@@ -782,12 +831,12 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
         GammaA, GammaB, has = _tensor._pair_loss_vectors(
             states, decays_A, decays_B, N, N2)
         if has:
-            gamma = (GammaA + GammaB) / _CONV
+            gamma = (GammaA + GammaB) / CONV
             log(f'[mixed_pair] 耗散 {int((gamma > 0).sum())} 两体态'
                 f'（落点=丢失，NonHermitian）')
 
     # ---- t69 最终形态：逐波拆分（每波形独立 A/ω/env——废除合并模型）----
-    mm = float(mw_max) if mw_max is not None else _P.get('MW_MAX_MHZ')
+    mm = float(mw_max) if mw_max is not None else MW_MAX_MHZ
     optA, mwA = _split_waves(fields_A, mm)
     optB, mwB = _split_waves(fields_B, mm)
 
@@ -824,7 +873,7 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
     # ---- AC 化逐波（每波独立剔除远强对；位移不注入——t70 定案，见
     # _ac_ize_pair docstring。t73b：shifts 全 0 → 时变 AC 对角路径移除）----
     # t75：r_crit 可由上帝模式覆写
-    rc = float(r_crit) if r_crit is not None else _P.get('R_CRIT')
+    rc = float(r_crit) if r_crit is not None else R_CRIT
     optA_ac = [(A_new, env) for (A, om, env) in optA
                if (A_new := _ac_ize_pair(E, A, om, rc)) is not None]
     optB_ac = [(A_new, env) for (A, om, env) in optB
@@ -835,7 +884,7 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
 
     # ---- 光子块结构（K0 纯 E——t62f 语义；共享扇区 M=1）----
     stage_progress(progress_arr, 0, 0.2)     # AC 化完成 → 光子块几何
-    bw = float(bw_opt) if bw_opt is not None else _P.get('BW_OPT')
+    bw = float(bw_opt) if bw_opt is not None else BW_OPT
     K0, pairs_opt, P, dim = _build_pair_geometry(
         E, optA_ac, optB_ac, om_o, bw_opt=bw)
     has_opt = P > 1                      # t77：P=1 即无光场退化
@@ -876,7 +925,7 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
         _keep, _info = static_phase_keep(
             _vals, E_pair[coo.row] - E_pair[coo.col], T)
         log(f'[mixed_pair] V_dd 累积相位判据：保留 {_info["n_keep"]}/'
-            f'{_vals.size}（θ_tol={_P.get("PHASE_TOL"):.0e} rad；被剔项 max|V|='
+            f'{_vals.size}（θ_tol={PHASE_TOL:.0e} rad；被剔项 max|V|='
             f'{_info["max_v_drop"]:.3g} MHz，保留项最快相位 '
             f'{_info["max_rate_keep"]:.3g} rad/ns）')
         for a0, b0, vv in zip(coo.row[_keep], coo.col[_keep], _vals[_keep]):
@@ -938,7 +987,7 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
         pair_tags.append('光场')
 
     log(f'[mixed_pair] 微波对累积相位判据：保留 {mw_stats["keep"]}'
-        f'（θ_tol={_P.get("PHASE_TOL"):.0e} rad；成本预算剔除 '
+        f'（θ_tol={PHASE_TOL:.0e} rad；成本预算剔除 '
         f'{mw_stats["drop_cap"]}，累积相位剔除 {mw_stats["drop_phase"]}）')
 
     # 任意波形微波（t79）：8 元组带 ph_fn → 内核走 cos(φ(t)) 查表。
@@ -985,7 +1034,7 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
     X0[pc * N2: (pc + 1) * N2] = psi0_2d
 
     pack = pack_rhs(pairs, T)
-    Cv = _CONV
+    Cv = CONV
     stat = np.zeros(6) if diag else np.zeros(4)
     dt_hist = (np.zeros((100000, 2)) if diag else None)
     stage_progress(progress_arr, 0, 0.9)     # 打包/env 表完成（JIT 在驱动首调）
@@ -1126,9 +1175,9 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
                   photon_blocks=({f'{om_o:.6g}MHz': P} if has_opt else {}),
                   ac_shifts=None)
     out = dict(
-        t=t, pops_2d=pops, pops_A=pops_A, pops_B=pops_B,
+        t=t, pops=pops, pops_A=pops_A, pops_B=pops_B,
         loss_A=loss_A, loss_B=loss_B,
-        states_2d=[{
+        states=[{
             'label': f"({states[i]['label']}) x ({states[j]['label']})",
             'E_mhz': E_pair[i * N + j],
             'ket_i': i, 'ket_j': j,
@@ -1143,15 +1192,3 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
     return out
 
 
-def __getattr__(name):
-    """PEP 562 回落：把历史 re-export 的引擎参数转发到注册表。
-
-    这些模块过去用 `from .params import X` 顺带充当转发站（外部代码
-    `core.RYDBERG_N_MIN` / `from .evolve_rwa import RWA_TOL`）。参数读取点
-    已改为 `_P.get(...)`，转发站随之消失——这里补一层回落，
-    使旧式属性访问继续可用，并且同样响应 `params.override()`。
-    """
-    from . import params as _p
-    if name in _p.DEFAULTS or name in _p.ALIASES:
-        return _p.get(name)
-    raise AttributeError(f'module {__name__!r} has no attribute {name!r}')

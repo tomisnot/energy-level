@@ -98,9 +98,9 @@ r1 = run(max_step_hard=None)
 r2 = run(max_step_hard=0.0)
 group('A 默认关：三者逐位一致 + 默认路径步长确实超 max_step')
 check('A1 不传 ≡ None（逐位）',
-        float(np.max(np.abs(r0['pops_2d'] - r1['pops_2d']))) == 0.0)
+        float(np.max(np.abs(r0['pops'] - r1['pops']))) == 0.0)
 check('A2 不传 ≡ 0.0（逐位，= 与改前行为一致）',
-        float(np.max(np.abs(r0['pops_2d'] - r2['pops_2d']))) == 0.0)
+        float(np.max(np.abs(r0['pops'] - r2['pops']))) == 0.0)
 dt0 = np.asarray(r0['diag']['solver']['dt'], float)
 check('A3 默认路径的步长确实**超过** max_step=0.05（证明"只管起步"）',
         float(dt0.max()) > 0.05,
@@ -124,31 +124,34 @@ check('B3 nfev 上升', float(rc['diag']['solver']['nfev'])
 print('C) 精度：压步长不改变物理')
 group('C 精度：压步长不改变物理（<1e-3 / <1e-4）')
 check('C1 压步长后布居与默认路径差 < 1e-3',
-        float(np.max(np.abs(rc['pops_2d'] - r0['pops_2d']))) < 1e-3,
-        'max|Δ|=%.2e' % float(np.max(np.abs(rc['pops_2d'] - r0['pops_2d']))))
+        float(np.max(np.abs(rc['pops'] - r0['pops']))) < 1e-3,
+        'max|Δ|=%.2e' % float(np.max(np.abs(rc['pops'] - r0['pops']))))
 check('C2 更紧的硬上限（0.02 ns）也一致（< 1e-4）',
-        float(np.max(np.abs(run(max_step_hard=0.02)['pops_2d']
-                             - r0['pops_2d']))) < 1e-4)
+        float(np.max(np.abs(run(max_step_hard=0.02)['pops']
+                             - r0['pops']))) < 1e-4)
 
 print('D) 接线：solve.MAX_STEP_HARD 在册 + 映射 + 入参')
-from src import pm_setup                                         # noqa: E402
+from src.core import runspec as _rs                             # noqa: E402
+from src.mecha import registry as _reg                          # noqa: E402
+from src.mecha import runtime as _rt                            # noqa: E402
+from src.adapter import EngineAdapter as _EA                     # noqa: E402
+_rt.set_engine(_EA())      # registry.solve_schema/describe 需引擎（config_schema 来自 engine）
 from src.core.evolve_mixed import evolve_mixed_pair as _emp      # noqa: E402
 from src.core.hard import evolve_hard_pair as _ehp               # noqa: E402
 import inspect                                                   # noqa: E402
 
 group('D 接线：在册 + 映射 + 两体入口入参 + 说明书')
-check('D1 _SOLVE_SPECS 含 MAX_STEP_HARD',
-        any(n == 'MAX_STEP_HARD' for (n, *_r) in pm_setup._SOLVE_SPECS))
-check('D2 god_split 映射到 kwarg max_step_hard',
-        pm_setup.god_split({'solve.MAX_STEP_HARD': 0.05})[1]
+check('D1 SOLVE_KWARG 含 MAX_STEP_HARD',
+        'MAX_STEP_HARD' in _rs.SOLVE_KWARG)
+check('D2 god_kwargs_from_params 映射到 kwarg max_step_hard',
+        _rs.god_kwargs_from_params({'solve.MAX_STEP_HARD': 0.05})
         == {'max_step_hard': 0.05})
 check('D3 mixed 两体入口有 max_step_hard',
         'max_step_hard' in inspect.signature(_emp).parameters)
 check('D4 hard 两体入口有 max_step_hard',
         'max_step_hard' in inspect.signature(_ehp).parameters)
-check('D5 MAX_STEP 说明已改成"初始步长上限"（说明书即 prompt）',
-        '初始' in dict((n, d) for (n, _t, d, _u, _k)
-                       in pm_setup._SOLVE_SPECS)['MAX_STEP'])
+check('D5 MAX_STEP 说明含"起步"（只约束起步、非全程硬上限；说明书即 prompt）',
+        '起步' in (_reg.solve_schema().get('solve.MAX_STEP') or {}).get('desc', ''))
 
 flush()
 ok = C.summary()

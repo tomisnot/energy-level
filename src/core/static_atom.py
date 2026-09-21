@@ -52,13 +52,15 @@
 
 import numpy as np
 from scipy.constants import physical_constants as pc, h, hbar, c, epsilon_0
-from . import params as _P
-# t80：删两个本模块**自己不用**的 AC 分流常量导入：
-#   · `AC_FAR_DETUNE_CUTOFF_HZ` —— 只是 `AC_NEAR_CUTOFF_MHZ` 的 Hz 版定义式，
-#     仓库内无第二消费者；
-#   · `AC_NEAR_CUTOFF_MHZ` —— 本模块不引用，但 `field_build.real_field` 曾
-#     经 `static_atom.AC_NEAR_CUTOFF_MHZ` **绕道**取它（把本模块当转发站）。
-#     已改为 field_build 直连 params 单源，故这里可以清掉。
+
+from .param import Param   # 就地参数声明（值+元数据同处；mecha.registry 扫出全表）
+
+
+# ==== 本模块的参数（就地定义；Param 声明值+元数据同处，透明子类读点免改）====
+AC_EFFECT_THRESHOLD_MHZ = Param(0.05, 'UI「受影响」阈值；|AC| > 本值 → UI 标记“受寻址光影响”（显示阈值，非引擎精度）', unit='MHz', tier='run')
+DIRECT_SOS_N_WINDOW = Param(3, 'Floquet 偶极伙伴窗；静态 AC-Stark 的 Floquet 基组自动纳入偶极伙伴 |Δn| ≤ 本值', tier='run')
+MW_MAX_MHZ = Param(1e5, '微波/光场分界；载频 ≤ 本值按微波处理，> 按光场；兼作微波候选窗的绝对上界（兜 T→0）', unit='MHz', tier='physics')
+RYDBERG_N_MIN = Param(20, '里德堡下限；n ≥ 本值视为里德堡态（超精细可忽略）——物理事实', tier='physics')
 
 # ---------------- 物理常数与单位换算 ----------------
 # ARC 的 getEnergy 返回的是能量相对电离阈的绑定能，单位是 eV（见 ARC 源码 docstring）。
@@ -186,9 +188,9 @@ def _sos_basis_range(n):
     - 低激发态：只取近邻低态 [5, 19]，远里德堡伙伴贡献可忽略。
     这样避免大量慢速 Numerov 波函数计算，又不丢失重要物理贡献。
     """
-    if n >= _P.get('RYDBERG_N_MIN'):
-        return _P.get('RYDBERG_N_MIN'), SOS_BASIS_N_MAX
-    return SOS_BASIS_N_MIN, _P.get('RYDBERG_N_MIN') - 1
+    if n >= RYDBERG_N_MIN:
+        return RYDBERG_N_MIN, SOS_BASIS_N_MAX
+    return SOS_BASIS_N_MIN, RYDBERG_N_MIN - 1
 
 
 _dipole_partners_cache = {}
@@ -244,7 +246,7 @@ class ArcCache:
         info = self._state.get(key)
         if info is None:
             A_hz = B_hz = None
-            if n < _P.get('RYDBERG_N_MIN'):
+            if n < RYDBERG_N_MIN:
                 try:
                     A_hz, B_hz = self.atom.getHFSCoefficients(n, l, j)
                 except ValueError:
@@ -389,7 +391,7 @@ def get_hyperfine_levels(cache, n, l, j, B_gauss):
 # AC-Stark（唯一后端 = direct Floquet 对角化，见 direct_ac_stark_shifts）
 # ============================================================
 
-def _sublevel_energy(cache, n, l, j, m, B_gauss):
+def sublevel_energy(cache, n, l, j, m, B_gauss):
     """里德堡 mJ 子能级的裸能量（MHz，fine + Zeeman）。"""
     return cache.E_mhz(n, l, j) + cache.gJ(l, j) * MU_B_MHZ_PER_G * m * B_gauss
 
@@ -408,7 +410,7 @@ def _partner_sublevels(cache, n1, l1, j1, m2, B_gauss):
     """
     hf = get_hyperfine_levels(cache, n1, l1, j1, B_gauss)
     if hf is None:
-        return [(_sublevel_energy(cache, n1, l1, j1, m2, B_gauss), 1.0)]
+        return [(sublevel_energy(cache, n1, l1, j1, m2, B_gauss), 1.0)]
     norm = 2.0 * cache.I + 1.0
     out = []
     for F, mF, e_hf, w, amps in hf:
@@ -454,8 +456,8 @@ def far_sos_shift_mhz(d_au, E0_sq, omega_rad, nu_rad):
     w_ki = nu_rad
     denom = w_ki ** 2 - omega_rad ** 2
     if abs(denom) < 1e-6 * max(w_ki ** 2, omega_rad ** 2, 1.0):
-        # 近共振（SOS 二阶公式发散）：该对应由 real_field 走 dressed 分支；
-        # 兜底返回 0 防除零（位移应来自 dressed 精确解）。
+        # 近共振：二阶 SOS 公式发散，兜底返回 0 防除零。
+        # 近共振位移由 `direct_ac_stark_shifts` 的 dressed 分支精确给出。
         return 0.0
     dE = -(E0_sq / (4.0 * hbar)) * (d_cm ** 2) * (2.0 * w_ki) / denom
     return dE / (2.0 * np.pi * hbar) / 1e6          # MHz
@@ -475,7 +477,7 @@ def dc_stark_shift_mhz(cache, n, l, j, m, groups, E_vpcm, B_gauss=0.0):
     E = E_vpcm * 100.0                     # V/cm → V/m
     E2 = E * E
     total = 0.0
-    E_i = _sublevel_energy(cache, n, l, j, m, B_gauss)
+    E_i = sublevel_energy(cache, n, l, j, m, B_gauss)
     added = {(g['n'], g['l'], g['j']) for g in groups}
     targets = [(g['n'], g['l'], g['j']) for g in groups]
     for p in dipole_partners(n, l, j):
@@ -514,21 +516,45 @@ _DIRECT_COUPLING_KEY = None
 _DIRECT_COUPLING = None    # (states, E_mhz, C_unit)：单位耦合，只依赖(基组,B,偏振)，不依赖频率/强度
 _DIRECT_SHIFT_CACHE = {}   # 结果缓存：键=(耦合键, n_photon, freq, I) → 位移 dict（同参免重复对角化）
 _DIRECT_SHIFT_CACHE_MAX = 64
-# 面板级 AC-Stark 配置（fields.py 光子块/窗口控件写入；后端缺省读取，静态+动态共用）
-_AC_UI_CFG = dict(n_photon=None, sos_n_window=None)
+# AC-Stark 精度的**缺省值**（就地定义；**没有全局可变配置**）。
+# 调用方（静态页面板）要改精度就**显式传参**给
+# `direct_ac_stark_shifts` / `direct_ac_stark_sweep` 的同名形参。
+# **只影响静态页的能级显示**——AC 位移是静态显示量，不参与演化。
+AC_N_PHOTON = 4          # 光子块阶数（块数 = 2·本值+1）
+AC_SOS_N_WINDOW = None   # 偶极伙伴窗；None = 用 DIRECT_SOS_N_WINDOW
+# Floquet 空间 NM = N·(2n+1)，对角化要 **NM²** 的 evecs + NM² 的 H_diag：
+#   NM= 8784 → ~0.6 GiB + 1.2 GiB
+#   NM=18864 → ~2.7 GiB + 5.3 GiB
+#   NM=42848 → ~13.7 GiB（**实测 OOM**，来自 n_photon=6 + sos_n_window=200）
+# 上界取 12000（≈1.1 + 2.1 GiB）——挡住"面板上随手一调就把进程撑爆"。
+AC_NM_MAX = 12000
 
 
-def set_ac_stark_config(n_photon=None, sos_n_window=None):
-    """设置全局 AC-Stark 精度配置（光子块阶数 / 偶极伙伴窗口）。
+def _ac_precision(n_photon, sos_n_window):
+    """缺省 → 本模块常量；并做入口校验（非正/负值直接拒）。"""
+    n_photon = AC_N_PHOTON if n_photon is None else int(n_photon)
+    sos_n_window = (DIRECT_SOS_N_WINDOW if sos_n_window is None
+                    else int(sos_n_window))
+    if n_photon < 1:
+        raise ValueError('n_photon 必须 >= 1（得到 %r）' % n_photon)
+    if sos_n_window < 0:
+        raise ValueError('sos_n_window 必须 >= 0（得到 %r）' % sos_n_window)
+    return n_photon, sos_n_window
 
-    供静态页面板控件调用；direct_ac_stark_shifts / direct_ac_stark_sweep
-    在参数缺省（None）时读取此配置 → 静态页与动态页（real_field 经
-    _floquet_ac_static）统一受控。None 表示保持当前值。
+
+def _ac_check_space(N, n_photon):
+    """Floquet 空间 NM 的**内存闸**：对角化要 NM² 内存，超界在入口报错。
+
+    实测：NM=42848 时一个 evecs 就要 13.7 GiB（`_ArrayMemoryError`）。
     """
-    if n_photon is not None:
-        _AC_UI_CFG['n_photon'] = int(n_photon)
-    if sos_n_window is not None:
-        _AC_UI_CFG['sos_n_window'] = int(sos_n_window)
+    NM = int(N) * (2 * int(n_photon) + 1)
+    if NM > AC_NM_MAX:
+        raise ValueError(
+            'AC-Stark Floquet 空间过大：N=%d × (2×%d+1) = NM=%d > 上界 %d'
+            '（对角化要 NM² ≈ %.1f GiB）——调小 n_photon / sos_n_window，'
+            '或显式提高 static_atom.AC_NM_MAX'
+            % (N, n_photon, NM, AC_NM_MAX, NM * NM * 8 / 2 ** 30))
+    return NM
 
 
 def _occ_keys_direct(items):
@@ -679,11 +705,7 @@ def direct_ac_stark_shifts(cache, groups, address_cfg, B_gauss=0.0,
     """
     if not address_cfg.get('enabled', False) or not groups:
         return {}
-    if n_photon is None:
-        n_photon = _AC_UI_CFG['n_photon'] or 4          # 面板配置优先，缺省 4
-    if sos_n_window is None:
-        sos_n_window = (_AC_UI_CFG['sos_n_window']
-                        or _P.get('DIRECT_SOS_N_WINDOW'))
+    n_photon, sos_n_window = _ac_precision(n_photon, sos_n_window)
     global _DIRECT_COUPLING_KEY, _DIRECT_COUPLING
     ckey = (tuple(sorted((g['n'], g['l'], g['j']) for g in groups)),
             round(float(B_gauss), 6),
@@ -697,6 +719,7 @@ def direct_ac_stark_shifts(cache, groups, address_cfg, B_gauss=0.0,
         _DIRECT_COUPLING = (states, E, C_unit)
     states, E, C_unit = _DIRECT_COUPLING
     N = len(states)
+    _ac_check_space(N, n_photon)
     freq_mhz = address_cfg['frequency_hz'] / 1e6
     Ival = float(address_cfg['intensity'])
     # 结果缓存：同参数直接返回（不重对角化）
@@ -789,14 +812,11 @@ def direct_ac_stark_sweep(cache, groups, address_cfg, B_gauss, intensities,
     if (not address_cfg.get('enabled', False) or not groups
             or len(intensities) == 0):
         return [], {}
-    if n_photon is None:
-        n_photon = _AC_UI_CFG['n_photon'] or 4
-    if sos_n_window is None:
-        sos_n_window = (_AC_UI_CFG['sos_n_window']
-                        or _P.get('DIRECT_SOS_N_WINDOW'))
+    n_photon, sos_n_window = _ac_precision(n_photon, sos_n_window)
     states = _direct_basis(cache, groups, B_gauss, sos_n_window)
     N = len(states)
     M = 2 * n_photon + 1
+    _ac_check_space(N, n_photon)
     E = np.array([s['E_mhz'] for s in states], dtype=np.float64)
     keys = _occ_keys_direct(states)
     freq_mhz = address_cfg['frequency_hz'] / 1e6
@@ -836,58 +856,103 @@ def direct_ac_stark_sweep(cache, groups, address_cfg, B_gauss, intensities,
 # 子能级行（UI 直接渲染）
 # ============================================================
 
-def build_level_rows(cache, field_B, groups, address_cfg, visible):
-    """计算可见能级组的全部子能级，返回行 dict 列表（UI 直接绘制）。
+def build_level_rows(cache, field_B, groups, address_cfg, visible,
+                     E_vpcm=0.0, n_photon=None, sos_n_window=None):
+    """静态页能级行：可见能级组的全部子能级 → 行 dict 列表（UI 直接绘制）。
 
-    AC-Stark 唯一后端 = direct（Floquet 矩阵对角化，第一性原理）；
-    legacy（逐伙伴解析/微扰）已于 2025-08 删除。
-    每行字段：x/E0/E/ac/affected/label/qstr/color/n/l/j/kind('mJ'/'F')/mj 或 mF/amps。
+    AC-Stark 唯一后端 = direct（Floquet 矩阵对角化，第一性原理）。
+    `E_vpcm` 给静电场（V/cm），与动态基组同源（`base_sublevels`）。
+    `n_photon` / `sos_n_window` 给 AC 精度（None = `AC_N_PHOTON` /
+    `AC_SOS_N_WINDOW`）——**显式传参**，没有全局配置（见 `_ac_precision`）。
+    每行字段：x/E0/E/ac/affected/label/**group_label**/qstr/color/n/l/j/kind/mj 或 mF/amps。
     """
-    return build_level_rows_direct(cache, field_B, groups, address_cfg, visible)
+    return build_level_rows_direct(cache, field_B, groups, address_cfg,
+                                   visible, E_vpcm, n_photon, sos_n_window)
 
 
-def _base_level_rows(cache, field_B, visible):
-    """构造可见能级组的**保留**子能级行（ac=0，E=E0，affected=False）。
+def dc_stark_hf(cache, n, l, j, amps, groups, E_vpcm, B_gauss):
+    """超精细态的 DC 位移 = Σ_{mJ} |amps[mJ]|²·ΔE(mJ)（按 mJ 分量加权）。
 
-    里德堡态忽略核自旋（只画 fine-structure 的 m_J 子能级）；低激发态
-    画出所有超精细子能级 (F, m_F)。AC 位移由 direct 一次对角化填入
-    （build_level_rows_direct）。
-    行字段：x/E0/E/ac/affected/label/qstr/color/n/l/j/kind/mj 或 mF/amps。
+    DC 场耦合的是 mJ，不是 mF。把 mF 直接当 m 传给 `dc_stark_shift_mhz`
+    会因 |m2| ≤ j1 的选取规则整项落空（实测恒返回 0）——静默失效。
+    """
+    tot = 0.0
+    for mj, am in (amps or {}).items():
+        w = float(abs(am) ** 2)
+        if w > 1e-12:
+            tot += w * dc_stark_shift_mhz(cache, n, l, j, float(mj),
+                                          groups, E_vpcm, B_gauss)
+    return tot
 
-    ⚠ 2026-09-14 修（使用者裁决"裁剪后应影响静态页；能级组是两页共同区域，
-    必须一致"）：本函数原来**不看 `ms`/`Fs`**，把整组子能级全画出来；而
-    `direct_ac_stark_shifts` 的基组**是裁剪过的** ⇒ 被裁掉的子能级在这里
-    仍出图、且按 `shifts.get(key, 0.0)` 拿到 **ac=0.0 + affected=False**，
-    看起来像"不受光影响"——**误导性显示**。现在逐组过 `apply_trim`
-    （`None/None` 原样返回 ⇒ 默认全展开路径逐位不变）。
+
+def base_sublevels(cache, groups, B_gauss=0.0, E_vpcm=0.0, pump=None):
+    """**静态页与动态页共用的唯一**「组 → 子能级」实现。
+
+    里德堡态忽略核自旋（fine-structure 的 m_J）；低激发态展开超精细 (F, m_F)。
+
+    每项 dict：n/l/j/kind/mj/mF/F/amps/E_mhz/qstr + **两个名字**：
+      · `label`       = **身份名**（`auto_label(n,l,j)` + 量子数），与
+                        `make_levels` 生成的**逐字相同** ⇒ 两页同字。
+                        也是静态页 `(label, qstr)` 行身份键的一半。
+      · `group_label` = 能级组条目上的**人工名**（用户起的名），**只供显示**。
+    外加从组带下来的 `color`。`E_mhz = 组中心 + Zeeman（或超精细 e_hf）+ DC-Stark`。
+
+    **不含 AC 位移**：AC 是静态页的显示层叠加（`_fill_ac`），动态页的光移由
+    场耦合在传播中涌现，两者不混。逐子能级裁剪（组的 ms/Fs）在此统一施加。
+    `E_vpcm=0` 时能量与旧的逐页实现逐位相同。`pump` 为可选 callable(frac)，逐组上报。
     """
     rows = []
-    for group in visible:
-        n, l, j = group['n'], group['l'], group['j']
-        color = group.get('color', '#1f77b4')
-        E0_mhz = cache.E_mhz(n, l, j)
-        hf = get_hyperfine_levels(cache, n, l, j, field_B)
-        g_rows = []                      # 本组行先入局部表，裁剪后再并入
+    n_groups = max(len(groups), 1)
+    for gi, g in enumerate(groups):
+        n, l, j = int(g['n']), int(g['l']), float(g['j'])
+        color = g.get('color', '#1f77b4')
+        group_label = g.get('label')
+        base = auto_label(n, l, j)
+        E0 = cache.E_mhz(n, l, j)
+        hf = get_hyperfine_levels(cache, n, l, j, B_gauss)
+        g_rows = []
         if hf is None:
             gJ = cache.gJ(l, j)
             for m in np.arange(-j, j + 1, 1.0):
-                E_level = E0_mhz + gJ * MU_B_MHZ_PER_G * m * field_B
+                e = E0 + gJ * MU_B_MHZ_PER_G * m * B_gauss
+                if abs(E_vpcm) > 1e-9:
+                    e += dc_stark_shift_mhz(cache, n, l, j, float(m),
+                                            groups, E_vpcm, B_gauss)
                 g_rows.append(dict(
-                    x=float(m), E0=E_level, E=E_level, ac=0.0, color=color,
-                    label=group['label'], affected=False,
-                    qstr=f'm_J={m:+.1f}',
-                    n=n, l=l, j=j, kind='mJ', mj=m, mF=None, amps=None))
+                    n=n, l=l, j=j, kind='mJ', mj=m, mF=None, F=None,
+                    amps=None, E_mhz=float(e), qstr=f'm_J={m:+.1f}',
+                    color=color, label=f'{base} m_J={m:+.1f}',
+                    group_label=group_label))
         else:
-            for F, mF, e_hf, _w, mJ_amps in hf:
-                E_level = E0_mhz + e_hf
+            for F, mF, e_hf, _w, amps in hf:
+                e = E0 + e_hf
+                if abs(E_vpcm) > 1e-9:
+                    e += dc_stark_hf(cache, n, l, j, amps, groups,
+                                      E_vpcm, B_gauss)
                 g_rows.append(dict(
-                    x=float(mF), E0=E_level, E=E_level, ac=0.0, color=color,
-                    label=group['label'], affected=False,
-                    qstr=f'F={F:.1f}, m_F={mF:+.1f}',
                     n=n, l=l, j=j, kind='F', F=float(F), mj=None, mF=mF,
-                    amps=mJ_amps))
-        _ms, _Fs = trim_of(group)
-        rows.extend(apply_trim(g_rows, _ms, _Fs))
+                    amps=amps, E_mhz=float(e),
+                    qstr=f'F={F:.1f}, m_F={mF:+.1f}',
+                    color=color, label=f'{base} F={F:.1f}, m_F={mF:+.1f}',
+                    group_label=group_label))
+        rows.extend(apply_trim(g_rows, *trim_of(g)))
+        if pump is not None:
+            pump((gi + 1) / n_groups)
+    return rows
+
+
+def _base_level_rows(cache, field_B, visible, E_vpcm=0.0):
+    """`base_sublevels` → 静态页行结构。只做投影：补 x/E0/E/ac/affected。
+
+    能量本身由共用实现给出（含 DC-Stark）；AC 位移由
+    `build_level_rows_direct` 一次 Floquet 对角化填入。
+    """
+    rows = []
+    for r in base_sublevels(cache, visible, field_B, E_vpcm):
+        rows.append(dict(
+            r,
+            x=float(r['mF'] if r['kind'] == 'F' else r['mj']),
+            E0=r['E_mhz'], E=r['E_mhz'], ac=0.0, affected=False))
     return rows
 
 
@@ -896,16 +961,18 @@ def _fill_ac(rows, acs):
     for r, ac in zip(rows, acs):
         r['ac'] = ac
         r['E'] = r['E0'] + ac
-        r['affected'] = abs(ac) > _P.get('AC_EFFECT_THRESHOLD_MHZ')
+        r['affected'] = abs(ac) > AC_EFFECT_THRESHOLD_MHZ
     return rows
 
 
-def build_level_rows_direct(cache, field_B, groups, address_cfg, visible):
+def build_level_rows_direct(cache, field_B, groups, address_cfg, visible,
+                            E_vpcm=0.0, n_photon=None, sos_n_window=None):
     """AC-Stark 唯一后端：ac 来自一次 Floquet 对角化（direct_ac_stark_shifts），
     自洽含近共振 dressed + 远失谐反旋项 + 多态耦合。"""
-    rows = _base_level_rows(cache, field_B, visible)
+    rows = _base_level_rows(cache, field_B, visible, E_vpcm)
     if address_cfg.get('enabled', False):
-        shifts = direct_ac_stark_shifts(cache, groups, address_cfg, field_B)
+        shifts = direct_ac_stark_shifts(cache, groups, address_cfg, field_B,
+                                        n_photon, sos_n_window)
         _fill_ac(rows, (shifts.get(key, 0.0) for key in _occ_keys_direct(rows)))
     return rows
 
@@ -957,28 +1024,17 @@ def apply_trim(rows, ms=None, Fs=None):
 
 
 def _group_sublevel_rows(cache, n, l, j, B_gauss=0.0, ms=None, Fs=None):
-    """构造单个能级组的子能级行（含超精细/Zeeman 能量），供最近跃迁对查找。
+    """单个能级组的子能级行（供最近跃迁对查找）——走 `base_sublevels`。
 
-    ms / Fs：**逐子能级裁剪**（2026-09-12 加）——见 `sublevel_trim`。
-    两者都为 None（默认）时与改前**逐位一致**。
+    跃迁查找用**场无关**的基准能量，故不给静电场（`E_vpcm=0`）。
+    `ms`/`Fs` 为逐子能级裁剪，两者都为 None 即全展开。
     """
-    rows = []
-    hf = get_hyperfine_levels(cache, n, l, j, B_gauss)
-    if hf is None:
-        gJ = cache.gJ(l, j)
-        for m in np.arange(-j, j + 1, 1.0):
-            e = cache.E_mhz(n, l, j) + gJ * MU_B_MHZ_PER_G * m * B_gauss
-            rows.append(dict(n=n, l=l, j=j, kind='mJ', mj=float(m), mF=None,
-                             amps=None, E_mhz=float(e), qstr=f'm_J={m:+.1f}'))
-    else:
-        for F, mF, e_hf, w, amps in hf:
-            e = cache.E_mhz(n, l, j) + e_hf
-            # ⚠ 2026-09-14 修：行里必须有 **F**——`sublevel_trim` 的 Fs 判据读
-            #   row['F']，此前只写进 qstr ⇒ Fs 裁剪**永远匹配不到**（静默出 0 态）。
-            rows.append(dict(n=n, l=l, j=j, kind='F', F=float(F), mj=None,
-                             mF=mF, amps=amps,
-                             E_mhz=float(e), qstr=f'F={F:.1f}, m_F={mF:+.1f}'))
-    return apply_trim(rows, ms, Fs)
+    g = dict(n=n, l=l, j=j)
+    if ms is not None:
+        g['ms'] = ms
+    if Fs is not None:
+        g['Fs'] = Fs
+    return base_sublevels(cache, [g], B_gauss, 0.0)
 
 
 def _closest_sublevel_pair(cache, gi, gk, q, E0, B_gauss, freq_hz):
@@ -1106,15 +1162,3 @@ def spectrum_lines(cache, rows, ac_on, coeffs=None):
     return lines
 
 
-def __getattr__(name):
-    """PEP 562 回落：把历史 re-export 的引擎参数转发到注册表。
-
-    这些模块过去用 `from .params import X` 顺带充当转发站（外部代码
-    `core.RYDBERG_N_MIN` / `from .evolve_rwa import RWA_TOL`）。参数读取点
-    已改为 `_P.get(...)`，转发站随之消失——这里补一层回落，
-    使旧式属性访问继续可用，并且同样响应 `params.override()`。
-    """
-    from . import params as _p
-    if name in _p.DEFAULTS or name in _p.ALIASES:
-        return _p.get(name)
-    raise AttributeError(f'module {__name__!r} has no attribute {name!r}')

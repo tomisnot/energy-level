@@ -27,7 +27,6 @@ rhs 为任意 njit 编译的 RHS 回调（单体/两体通用）。
 import numpy as np
 from numba import njit
 
-from .params import _TAB_N  # t74c 参数单源
 
 _np = np
 

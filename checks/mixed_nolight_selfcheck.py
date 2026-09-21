@@ -26,9 +26,10 @@ from checks.checklib import Checker                            # noqa: E402
 from arc import Rubidium87                                     # noqa: E402
 from src.core import static_atom as core                       # noqa: E402
 from src.core.atomic_levels import make_levels                 # noqa: E402
-from src.core.evolve_engine import evolve_engine               # noqa: E402
+from src.core.evolve_mixed import evolve_mixed, evolve_mixed_pair  # noqa: E402
 from src.core.field_build import build_fields_exact            # noqa: E402
-from src.core.hard import build_two_field                      # noqa: E402
+from src.core.hard import (build_two_field, evolve_hard,       # noqa: E402
+                           evolve_hard_pair)
 from src.core.static_pair import vdd_sparse                    # noqa: E402
 from src.core.waveforms import Wave, GaussianEnv               # noqa: E402
 
@@ -63,7 +64,7 @@ C.check('零耦合光波被丢弃（只剩微波）',
         [x['label'] for x in f1] == ['微波'],
         f'实际 {[x["label"] for x in f1]}')
 t1 = np.linspace(0.0, 120.0, 121)
-r1 = evolve_engine('mixed', s1, fields=f1, psi0=0, t_grid=t1, n_body=1)
+r1 = evolve_mixed(s1, f1, 0, t1)
 C.check('原 ValueError 场景现可运行',
         r1['backend'] == 'mixed-phi-dop853')
 C.check('无光场 → P=1 且维度退化到 N',
@@ -78,10 +79,8 @@ s2 = _levels([+0.5], [-0.5])
 nu2 = s2[1]['E_mhz'] - s2[0]['E_mhz']
 f2 = [_mw(nu2)]
 t2 = np.linspace(0.0, 200.0, 201)
-r_m = evolve_engine('mixed', s2, fields=build_fields_exact(cache, s2, f2),
-                    psi0=0, t_grid=t2, n_body=1)
-r_h = evolve_engine('hard', s2, fields=build_two_field(cache, s2, f2),
-                    psi0=0, t_grid=t2, n_body=1)
+r_m = evolve_mixed(s2, build_fields_exact(cache, s2, f2), 0, t2)
+r_h = evolve_hard(s2, build_two_field(cache, s2, f2), 0, t2)
 C.check('单体共振 π 脉冲确实发生',
         r_m['pops'][:, 1].max() > 0.99,
         f'最大 60P {r_m["pops"][:, 1].max():.4f}')
@@ -97,26 +96,22 @@ metaA = build_two_field(cache, s3, f3)
 t3 = np.linspace(0.0, 200.0, 201)
 i0 = 0
 
-p_nv_m = evolve_engine('mixed', s3, fields_A=fA, fields_B=fA, psi0_A=i0,
-                       psi0_B=i0, t_grid=t3, n_body=2)
-p_nv_h = evolve_engine('hard', s3, fields_A=metaA, fields_B=metaA, psi0_A=i0,
-                       psi0_B=i0, t_grid=t3, n_body=2)
+p_nv_m = evolve_mixed_pair(s3, fA, fA, i0, i0, t3)
+p_nv_h = evolve_hard_pair(s3, metaA, metaA, i0, i0, t3)
 C.close('两体（无 V_dd）mixed_pair ≡ hard_pair',
-        float(np.abs(p_nv_m['pops_2d'] - p_nv_h['pops_2d']).max()),
+        float(np.abs(p_nv_m['pops'] - p_nv_h['pops']).max()),
         0.0, rtol=0.0, atol=1e-6)
 
 V = vdd_sparse(cache, [dict(x) for x in s3], R_um=12.0,
                theta_deg=30.0, phi_deg=0.0)
-p_v_m = evolve_engine('mixed', s3, fields_A=fA, fields_B=fA, psi0_A=i0,
-                      psi0_B=i0, t_grid=t3, n_body=2, vdd_matrix=V)
-p_v_h = evolve_engine('hard', s3, fields_A=metaA, fields_B=metaA, psi0_A=i0,
-                      psi0_B=i0, t_grid=t3, n_body=2, vdd_matrix=V)
+p_v_m = evolve_mixed_pair(s3, fA, fA, i0, i0, t3, vdd_matrix=V)
+p_v_h = evolve_hard_pair(s3, metaA, metaA, i0, i0, t3, vdd_matrix=V)
 C.check('两体 P=1 且含 V_dd 时仍收敛',
         p_v_m['error_report']['P'] == 1
         and p_v_m['error_report']['max_norm_dev'] < 1e-5,
         f'norm={p_v_m["error_report"]["max_norm_dev"]:.2e}')
 C.close('两体（含 V_dd）mixed_pair ≡ hard_pair（t78 统一判据后）',
-        float(np.abs(p_v_m['pops_2d'] - p_v_h['pops_2d']).max()),
+        float(np.abs(p_v_m['pops'] - p_v_h['pops']).max()),
         0.0, rtol=0.0, atol=1e-6)
 
 # ---- 5. 有光场回归：光子块仍是 P=3 ----
@@ -125,7 +120,7 @@ f5 = build_fields_exact(cache, s5, [
     Wave('寻址光', 295.7237e6, GaussianEnv(0.0, 1e9), pol='σ-',
          intensity_mwcm2=1e4),
     _mw(nu2)])
-r5 = evolve_engine('mixed', s5, fields=f5, psi0=0, t_grid=t1, n_body=1)
+r5 = evolve_mixed(s5, f5, 0, t1)
 C.check('有光场时光子块未被误退化（P=3）',
         r5['error_report']['P'] == 3,
         f'P={r5["error_report"]["P"]}')

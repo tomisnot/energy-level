@@ -1,14 +1,15 @@
+from .static_atom import MW_MAX_MHZ
+from .sambe import _M_MAX
 # -*- coding: utf-8 -*-
 """诊断摘要/模型卡的**唯一真值源**（P5：一套代码，两个渲染器）。
 
-背景（2026-09-12）：`diag` 快照本身早已统一（`evolve_mixed[_pair]` 产出，
-契约写在 `solver_inspector` 顶部），但**摘要的组装有三套**——GUI 检视器
-`load_diag`、MCP `get_diag`（`server._diag_summary`）、以及新加的模型卡
-（`server._res_summary` 内联块）→ 数字会分叉（模型卡里 `n_microwave=None`
-而 `get_diag` 有值，就是分叉的现场）。
+诊断快照本身由**引擎**产出，契约写在 `solver_inspector` 顶部。
+**目前只有 `evolve_mixed` / `evolve_mixed_pair` 产出**（`out['diag']`，
+`diag=True` 时；sambe / hard / two_field / rwa / reference 都不产出）——
+`summarize(None, {'method': …})` 的消息会点名这件事。
 
-本模块把这些摘要收敛成一处：GUI、`get_diag`、模型卡都调 `summarize()`
-与 `warnings()`。**不改变 diag 快照本身**（那是引擎的产物）。
+本模块把 GUI 检视器、MCP `get_diag`、模型卡三处摘要收敛成一处，都调
+`summarize()` 与 `warnings()`。**不改变 diag 快照本身**（那是引擎的产物）。
 """
 import numpy as np
 
@@ -94,12 +95,16 @@ def _omega_ratio(prs, cfg=None):
 def summarize(diag, cfg=None):
     """diag 快照 → 规范化摘要（GUI 摘要头 / get_diag / 模型卡共用）。
 
-    cfg（可选）：{'basis_n':…, 'has_mw':bool, 'has_opt':bool}
-    —— 用于**判定式警告**（缺数据时不猜）。
+    cfg（可选）：{'basis_n':…, 'has_mw':bool, 'has_opt':bool, 'method':str}
+    —— 用于**判定式警告**（缺数据时不猜）；`method` 给定时，无快照的消息会点名。
     """
     cfg = dict(cfg or {})
     if not isinstance(diag, dict):
-        return {'msg': '无诊断快照（diag=True 才有）', 'warnings': []}
+        m = cfg.get('method')
+        who = 'method=%s ' % m if m else '本引擎 '
+        return {'msg': '%s不产出诊断快照——诊断当前只有 mixed 引擎产出'
+                       '（传 diag=True 也不会改变这一点）' % who,
+                'warnings': []}
     meta = diag.get('meta') or {}
     solv = diag.get('solver') or {}
     prs = diag.get('pairs') or {}
@@ -160,8 +165,7 @@ def warnings(diag, cfg=None):
                  '数值未必错）' % ratio)
     Ms = pho.get('Ms') or meta.get('M') or []
     try:
-        from . import params as _P
-        m_max = _P.get('_M_MAX')
+        m_max = _M_MAX
         if Ms and m_max and max(int(x) for x in Ms) >= int(m_max):
             w.append('光子块 M 达上限 %s：截断误差可能 > tol' % m_max)
     except Exception:                              # noqa: BLE001
@@ -199,8 +203,7 @@ def config_hints(reg_read):
     freqs = [float(w.get('freq_mhz') or 0.0) for w in waves]
     cfg['max_freq_mhz'] = max(freqs) if freqs else None
     try:
-        from . import params as _P
-        mw_max = float(_P.get('MW_MAX_MHZ'))
+        mw_max = float(MW_MAX_MHZ)
     except Exception:                              # noqa: BLE001
         mw_max = 1e5
     cfg['has_mw'] = any(0.0 < f < mw_max for f in freqs)

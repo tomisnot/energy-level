@@ -1,20 +1,25 @@
 # -*- coding: utf-8 -*-
 """核心计算包：物理计算（无 UI 依赖）。
 
-模块地图（t74/t74b 后终态）：
+模块地图：
 - static_atom.py    单原子静态（能级 / AC/DC-Stark / 偶极矩阵元 / 谱线 / 偏振）
 - static_pair.py    两体静态（pair 哈密顿 / vdW / 交换耦合 / 耦合强度雷达图）
 - atomic_levels.py  能级构造（make_levels / gaussian / square / step）
-- field_build.py    场构造（field/group/real + build_fields_exact）
+- field_build.py    场构造（field / build_fields_exact）
 - waveforms.py      波形数据层（Wave / 包络 / 序列化）
-- sambe.py          Sambe 引擎（核心层 + 单体 + 两体，t74 合一）
-- evolve_mixed.py   混合引擎（单/两体 + acize，t74/t74b 合一）
+- sambe.py          Sambe 引擎（核心层 + 单体 + 两体）
+- evolve_mixed.py   混合引擎（单/两体 + acize）
 - hard.py           hard 引擎单/两体 + build_two_field
 - evolve_twofield.py 两场引擎家族
 - evolve_reference.py 参考积分器（H0 IP + Lindblad BDF）
-- evolve_rwa.py     ip4/Lindblad 遗留引擎（数值权威参照）
-- dop853.py / coupling.py / project.py / tensor.py / tensor_fields.py /
-  params.py / evolve_util.py / evolve_engine.py / route.py  公共层与调度
+- evolve_rwa.py     ip4/Lindblad 遗留引擎（数值权威参照，GUI 不暴露）
+- dop853.py / coupling.py / tensor.py / tensor_fields.py /
+  params.py / evolve_util.py  公共层与调度
+
+**唯一分派点**：`runspec.evolve_run`（`build_run` 的对称面）。
+判据直接调各引擎——引擎函数本身就是公开面，不必经 method 字符串间接。
+
+**能级基准唯一处**：`static_atom.base_sublevels`（静态页与动态基组共用）。
 
 兼容导出：旧名 → 新模块（供 checks/scripts 历史脚本零改动运行）。
 """

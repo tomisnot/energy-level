@@ -27,7 +27,7 @@ from checklib import Checker
 
 ck = Checker('evolve_exact_pair_selfcheck')
 
-_CONV = 2 * np.pi * 1e-3
+from src.core.evolve_util import CONV
 
 
 def pair_reference_dense(states, vdd, psi0_2d, t, fields=None):
@@ -38,7 +38,7 @@ def pair_reference_dense(states, vdd, psi0_2d, t, fields=None):
     Vd = vdd.toarray() if sp.issparse(vdd) else np.asarray(vdd, complex)
 
     def rhs(tt, y):
-        return -1j * _CONV * ((np.diag(E_pair) + Vd) @ y)
+        return -1j * CONV * ((np.diag(E_pair) + Vd) @ y)
 
     sol = solve_ivp(rhs, (float(t[0]), float(t[-1])), psi0_2d,
                     method='DOP853', t_eval=t, rtol=1e-10, atol=1e-12)
@@ -103,11 +103,11 @@ def ep2(states, cache):
     iP = next(i for i, s in enumerate(states) if s['l'] == 1)
     kSP, kPS = iS * N + iP, iP * N + iS
     V_ex = abs(V[kSP, kPS])
-    t_peak_th = np.pi / (2 * _CONV * V_ex)
+    t_peak_th = np.pi / (2 * CONV * V_ex)
     t = np.linspace(0, 2.5 * t_peak_th, 401)
     r = evolve_exact_pair(states, [], [], iS, iP, t, vdd_matrix=V,
                           tol=1e-7)
-    pPS = r['pops_2d'][:, kPS]
+    pPS = r['pops'][:, kPS]
     i_pk = int(np.argmax(pPS))
     ck.check(f'EP2a 交换首峰 t={t[i_pk]:.2f} ≈ 理论 {t_peak_th:.2f} ns'
              '（≤2%）',
@@ -159,7 +159,7 @@ def ep3():
     r = evolve_exact_pair(states, [], [], psi0_A, psi0_B, t, vdd_matrix=V,
                           tol=1e-7, record_amp=True)
     pops_ref = pair_reference_dense(states, V, psi0_2d, t)
-    d = float(np.max(np.abs(r['pops_2d'] - pops_ref)))
+    d = float(np.max(np.abs(r['pops'] - pops_ref)))
     ck.check(f'EP3a vdW 通道（|gg⟩↔|ee⟩ 失谐 {Ddet}）≡ 稠密参考'
              f'（Δ={d:.2e} ≤ 1e-5）', d <= 1e-5, f'Δ={d}')
     # (b) 相干相位提取位移：初态 (|g⟩+|u⟩)/√2 ⊗ |g⟩ → |gg⟩ 获位移 δ，
@@ -175,7 +175,7 @@ def ep3():
     t1_, t2_ = 100.0, 300.0
     ph1, ph2 = coh_phase(t1_), coh_phase(t2_)
     dph = np.angle(np.exp(1j * (ph2 - ph1)))     # 卷绕回 (−π, π]
-    delta_fit = -dph / (_CONV * (t2_ - t1_))
+    delta_fit = -dph / (CONV * (t2_ - t1_))
     err = abs(delta_fit - delta_th)
     ck.check(f'EP3b 相位提取 δ={delta_fit:+.4f} vs 解析 {delta_th:+.4f} MHz'
              f'（|Δ|={err:.4f} ≤ {max(0.1 * abs(delta_th), 0.02):.3f}）',
@@ -203,7 +203,7 @@ def ep4():
                           decays_A=[decay(1, G)])
     exp_dec = np.exp(-G * 1e-3 * t)
     ddec = float(np.max(np.abs(r['pops_A'][:, 1] - exp_dec)))
-    cons = float(np.max(np.abs(r['pops_2d'].sum(axis=1)
+    cons = float(np.max(np.abs(r['pops'].sum(axis=1)
                                + r['loss_A'] + r['loss_B'] - 1.0)))
     ck.check(f'EP4a 寿命衰变 ≡ e^{{−Γt}}（Δ={ddec:.2e} ≤ 1e-6）',
              ddec <= 1e-6, f'Δ={ddec}')
@@ -246,8 +246,8 @@ def ep5():
     A2 = np.kron(A_drv, np.eye(N))
 
     def rhs(tt, y):
-        Hc = env(tt) * np.cos(_CONV * 1000.0 * tt)
-        return -1j * _CONV * ((np.diag(E_pair) + Vd + Hc * A2) @ y)
+        Hc = env(tt) * np.cos(CONV * 1000.0 * tt)
+        return -1j * CONV * ((np.diag(E_pair) + Vd + Hc * A2) @ y)
 
     sol = solve_ivp(rhs, (0.0, 200.0), psi0_2d, method='DOP853',
                     t_eval=t, rtol=1e-10, atol=1e-12)
@@ -258,9 +258,9 @@ def ep5():
     for tol in (1e-4, 1e-7):
         r = evolve_exact_pair(states, [fldA], [], 0, 0, t,
                               vdd_matrix=V, tol=tol)
-        errs[tol] = float(np.max(np.abs(r['pops_2d'] - ref)))
+        errs[tol] = float(np.max(np.abs(r['pops'] - ref)))
         if tol == 1e-7:
-            nd = float(np.max(np.abs(r['pops_2d'].sum(axis=1) - 1.0)))
+            nd = float(np.max(np.abs(r['pops'].sum(axis=1) - 1.0)))
             # 单级缺陷无 Picard 二级修正，累计漂移 ~ tol·段数量级（百段）
             ck.check(f'EP5b 幺正范数（tol=1e-7）|Σp−1|={nd:.2e} ≤ 5e-6',
                      nd <= 5e-6, f'nd={nd}')

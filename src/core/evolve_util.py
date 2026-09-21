@@ -9,7 +9,7 @@ t74 归位本模块。
 """
 import numpy as np
 
-_CONV = 2 * np.pi * 1e-3
+CONV = 2 * np.pi * 1e-3
 
 _POL_Q = {'π': 0, 'σ+': +1, 'σ-': -1}
 
@@ -26,7 +26,7 @@ def _onehot(N, i):
     return v
 
 
-def _as_vector(states, psi0):
+def as_vector(states, psi0):
     """初态 → 复向量。
 
     psi0 支持：索引 | (n,l,j,m) | dict(n,l,j,m) | 复数组 |
@@ -72,7 +72,7 @@ def _as_vector(states, psi0):
                     '；收到 %r' % (item,))
             if isinstance(amp, (list, tuple)) and len(amp) == 2:
                 amp = complex(float(amp[0]), float(amp[1]))   # amp 写 [re,im]
-            v = v + complex(amp) * _as_vector(states, spec)
+            v = v + complex(amp) * as_vector(states, spec)
         nrm = float(np.linalg.norm(v))
         if nrm <= 0.0:
             raise ValueError('叠加态各分量幅度全为零')
@@ -116,8 +116,8 @@ def _resolve_level_idx(states, quad):
                      % (n, l, j, m))
 
 
-def _as_pair_vector(states, spec):
-    """**两体初态 spec** → N² 复向量（索引 k = iA*N + iB，与 states_2d 一致）。
+def as_pair_vector(states, spec):
+    """**两体初态 spec** → N² 复向量（索引 k = iA*N + iB，与 states 一致）。
 
     spec = ``['pair_sup', [[nA,lA,jA,mA, nB,lB,jB,mB, re, im], …]]``
     （`SimState.build_pair_sup_spec` 产出）。逐分量按 (n,l,j,m) 在当前
@@ -159,12 +159,12 @@ def pair_psi0_vector(states, psi0_A=None, psi0_B=None, psi0_pair=None):
     **静默覆盖**（P1：不许沉默改物理）。
     """
     if psi0_pair is not None:
-        return _as_pair_vector(states, psi0_pair)
+        return as_pair_vector(states, psi0_pair)
     if psi0_A is None or psi0_B is None:
         raise ValueError('两体初态：要么给 psi0_pair（两体 spec），'
                          '要么同时给 psi0_A 与 psi0_B')
-    a = _as_vector(states, psi0_A)
-    b = _as_vector(states, psi0_B)
+    a = as_vector(states, psi0_A)
+    b = as_vector(states, psi0_B)
     return np.kron(a, b)          # k = iA*N + iB（与 tensor._as_product_psi 同）
 
 
@@ -207,7 +207,7 @@ def auto_decays(cache, states, tau_max_s=1e-4, temperature=0.0):
     return out
 
 
-def _resolve_state_idx(states, key):
+def resolve_state_idx(states, key):
     """能级定位：索引 | (n,l,j,m) | dict(n,l,j,m) → 下标；None → None。"""
     if key is None:
         return None
@@ -226,7 +226,7 @@ def _resolve_state_idx(states, key):
     raise ValueError(f'衰变端点 {key} 不在能级列表中')
 
 
-def _decay_ops(decays, states):
+def decay_ops(decays, states):
     """衰变通道 → (Ls, N_eff)。L = √Γ|to⟩⟨from|（Γ MHz → √(Γ×1e-3)/ns）。
 
     to=None → 汇入虚拟 loss 态（下标 N）：H 不耦合它，trace 守恒，
@@ -237,10 +237,10 @@ def _decay_ops(decays, states):
     N_eff = N + (1 if has_loss else 0)
     Ls = []
     for d in decays:
-        fi = _resolve_state_idx(states, d['from'])
+        fi = resolve_state_idx(states, d['from'])
         if fi is None:
             raise ValueError('衰变通道 from 不能为 None（必须指定衰变态）')
-        ti = _resolve_state_idx(states, d['to'])
+        ti = resolve_state_idx(states, d['to'])
         gam = float(d.get('gamma_mhz', 0.0))
         if gam < 0 or not np.isfinite(gam):
             raise ValueError(f'衰变率非法: {gam}（须 ≥0 有限值）')
@@ -261,15 +261,16 @@ def _single_loss_rates(states, decays):
     """
     Gamma = np.zeros(len(states))
     for ch in decays or []:
-        g_idx = _resolve_state_idx(states, ch['from'])
+        g_idx = resolve_state_idx(states, ch['from'])
         if g_idx is None:
             raise ValueError(
                 f'hard 耗散：通道 from 无法解析到基组 ({ch["from"]!r})')
         to = ch.get('to')
-        if to is not None and _resolve_state_idx(states, to) is not None:
+        if to is not None and resolve_state_idx(states, to) is not None:
             raise NotImplementedError(
                 'hard 耗散仅支持落点=丢失（寿命通道）；显式落点 / 纯退相'
-                '请用单原子 lindblad 引擎')
+                '请改用 sambe 档（含耗散时自动走 Lindblad 主方程），'
+                '或脚本 evolve_rwa.evolve(method="lindblad")')
         gam_ns = float(ch['gamma_mhz']) * 1e-3          # MHz → /ns
         if gam_ns <= 0:
             continue
@@ -291,3 +292,50 @@ def _loss_and_norm(pops, Gamma_ns, t):
     loss[1:] = np.cumsum(0.5 * (rate[1:] + rate[:-1]) * dt)
     norm_dev = float(np.max(np.abs(pops.sum(axis=1) + loss - 1.0)))
     return loss, norm_dev
+
+
+def _cumtrapz(rate, t):
+    """0 锚定的累积梯形积分（与 _loss_and_norm 同口径）。"""
+    out = np.zeros(len(t))
+    if len(t) > 1:
+        dt = np.diff(t)
+        out[1:] = np.cumsum(0.5 * (rate[1:] + rate[:-1]) * dt)
+    return out
+
+
+def split_field_loss(t, pops, Gamma_ns, field_loss=None, trap=None):
+    """分项 loss 记账：spont / scatter / photoion / escape（budget），与内核 ODE 同源。
+
+    - spont：常数 Γ_ns（自发辐射，落点=丢失），∫pops·Γ_ns。
+    - scatter/photoion：逐通道 ∫pops[:,src]·env(t)²·out_mhz·1e-3（与内核 loss_base
+      同一 env²×逐态口径；out_mhz 为 env=1 峰值 /MHz）。
+    - escape（可选·budget 档）：N_sc=∫pops[:,src]·env²·tot_mhz·1e-3（总散射事件），
+      loss_esc=1−exp(−N_sc/n_crit)。**报告性**——budget 逃逸不回灌 ψ（精确回灌属
+      增广态那一层），故不计入 pops.sum+spont+scatter+photoion=1 的守恒式。
+    返回 dict(spont, scatter, photoion, escape, n_sc)，各为长度 len(t) 的数组。
+    """
+    n_t = len(t)
+    spont = (_cumtrapz(pops @ Gamma_ns, t) if np.any(Gamma_ns)
+             else np.zeros(n_t))
+    scatter = np.zeros(n_t)
+    photoion = np.zeros(n_t)
+    n_sc = np.zeros(n_t)
+    if field_loss is not None:
+        for ch in field_loss.channels:
+            rate_pk = float(ch['out_mhz']) * 1e-3          # /ns @ env=1
+            e = np.asarray(ch['env_fn'](np.atleast_1d(np.asarray(t, float))),
+                           float)
+            env_sq = e * e
+            contrib = pops[:, ch['src']] * env_sq * rate_pk
+            if ch['kind'] == 'photoion':
+                photoion = photoion + _cumtrapz(contrib, t)
+            else:
+                scatter = scatter + _cumtrapz(contrib, t)
+                tot_pk = float(ch['tot_mhz']) * 1e-3
+                n_sc = n_sc + _cumtrapz(pops[:, ch['src']] * env_sq * tot_pk, t)
+    escape = np.zeros(n_t)
+    if trap is not None and getattr(trap, 'enabled', False) \
+            and trap.mode == 'budget' and np.any(n_sc):
+        escape = 1.0 - np.exp(-n_sc / trap.n_crit)
+    return dict(spont=spont, scatter=scatter, photoion=photoion,
+                escape=escape, n_sc=n_sc)

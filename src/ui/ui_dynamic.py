@@ -28,13 +28,12 @@ from matplotlib import colormaps
 from matplotlib.ticker import MaxNLocator
 
 from ..core import core, pair_core
-from .. import pm_setup as pm
+from . import _mecha_bind as MB
 from ..core.atomic_levels import make_levels
 from ..core.evolve_util import decay, auto_decays  # t74 工具归位
 from . import ui_waves
 from ..core import waveforms
 from . import ui_theme
-from .evolve_worker import EvolveWorker
 from .ui_waves import state_key, find_state_index
 
 # readout_cb 末尾"复杂配置…"哨兵项 data（t30：全能级读出率加权）
@@ -125,24 +124,24 @@ class DynamicPanel(QWidget):
         vdd_lay.setContentsMargins(0, 0, 0, 0)
         vdd_lay.setSpacing(2)
         vdd_lay.addWidget(QLabel('R:'))
-        _reg = self.main.param_reg
-        self.vdd_R_sb = pm.spinbox(_reg, 'dynamic.pair.R_um', 5.0, 0.1, 1000.0,
+        _reg = self.main.binder          # _mecha_bind.Binder（取代旧 param_reg）
+        self.vdd_R_sb = MB.spinbox(_reg, 'dynamic.pair.R_um', 5.0, 0.1, 1000.0,
                                    decimals=1, width=128,
-                                   spec=pm.ParamSpec('float', unit='μm',
+                                   spec=MB.ParamSpec('float', unit='μm',
                                                      desc='原子间距'))
         self.vdd_R_sb.setToolTip('原子间距 R（μm）')
         vdd_lay.addWidget(self.vdd_R_sb)
         vdd_lay.addWidget(QLabel('θ:'))
-        self.vdd_theta_sb = pm.spinbox(_reg, 'dynamic.pair.theta_deg', 0.0,
+        self.vdd_theta_sb = MB.spinbox(_reg, 'dynamic.pair.theta_deg', 0.0,
                                        0.0, 180.0, decimals=1, width=128,
-                                       spec=pm.ParamSpec('float', unit='°',
+                                       spec=MB.ParamSpec('float', unit='°',
                                                          desc='V_dd 极角'))
         self.vdd_theta_sb.setToolTip('极角 θ（°）')
         vdd_lay.addWidget(self.vdd_theta_sb)
         vdd_lay.addWidget(QLabel('φ:'))
-        self.vdd_phi_sb = pm.spinbox(_reg, 'dynamic.pair.phi_deg', 0.0,
+        self.vdd_phi_sb = MB.spinbox(_reg, 'dynamic.pair.phi_deg', 0.0,
                                      0.0, 360.0, decimals=1, width=128,
-                                     spec=pm.ParamSpec('float', unit='°',
+                                     spec=MB.ParamSpec('float', unit='°',
                                                        desc='V_dd 方位角'))
         self.vdd_phi_sb.setToolTip('方位角 φ（°）')
         vdd_lay.addWidget(self.vdd_phi_sb)
@@ -169,18 +168,19 @@ class DynamicPanel(QWidget):
         sa_lay.setContentsMargins(0, 0, 0, 0)
         sa_lay.setSpacing(4)
         sa_lay.addWidget(QLabel('frozen_h(ns)'))
-        self.frozen_h_sb = pm.spinbox(_reg, 'dynamic.frozen_h_ns', 0.0, 0.0,
+        self.frozen_h_sb = MB.spinbox(_reg, 'solve.FROZEN_H_NS', 0.0, 0.0,
                                       100.0, decimals=2, width=72,
-                                      spec=pm.ParamSpec(
+                                      spec=MB.ParamSpec(
                                           'float', unit='ns',
                                           desc='Sambe 冻结段长（0=默认）'))
         self.frozen_h_sb.setToolTip(
             '全频段 Sambe 纯冻结段长（ns，包络变化尺度内）；0 = 默认路径')
         sa_lay.addWidget(self.frozen_h_sb)
         sa_lay.addWidget(QLabel('per_freq_M'))
-        self.perfreq_m_edit = pm.lineedit(
-            _reg, 'dynamic.per_freq_M', '', width=120,
-            spec=pm.ParamSpec('str', desc='逐载频光子块阶数（空=自动）'))
+        # per_freq_M：str 输入但 session 键 solve.PER_FREQ_M 是 int_or_list——留本地
+        # QLineEdit，run 流程解析后写 session（B-1③-3），免 str→int_or_list 校验失败。
+        self.perfreq_m_edit = QLineEdit()
+        self.perfreq_m_edit.setFixedWidth(120)
         self.perfreq_m_edit.setPlaceholderText('[1,1] 或空=自动')
         self.perfreq_m_edit.setToolTip(
             '逐载频光子块阶数（列表 [M1,M2,…] 或 int 全体）；空 = 自动探针')
@@ -272,15 +272,15 @@ class DynamicPanel(QWidget):
         # ---- 时间 / 方法 / 截断 一行 ----
         rowt = QHBoxLayout()
         rowt.addWidget(QLabel('t_max(ns)'))
-        self.tmax_sb = pm.spinbox(_reg, 'dynamic.t_max', 1500.0, 10, 1e6,
+        self.tmax_sb = MB.spinbox(_reg, 'dynamic.t_max', 1500.0, 10, 1e6,
                                   decimals=0,
-                                  spec=pm.ParamSpec(
+                                  spec=MB.ParamSpec(
                                       'float', unit='ns', desc='演化总时长',
                                       aliases=['tmax', '时长']))
         rowt.addWidget(self.tmax_sb)
         rowt.addWidget(QLabel('点数'))
-        self.npts_sb = pm.spinbox(_reg, 'dynamic.npts', 1501, 10, 50000,
-                                  spec=pm.ParamSpec('int', desc='时间网格点数'))
+        self.npts_sb = MB.spinbox(_reg, 'dynamic.npts', 1501, 10, 50000,
+                                  spec=MB.ParamSpec('int', desc='时间网格点数'))
         rowt.addWidget(self.npts_sb)
         rowt.addWidget(QLabel('方法'))
         # t25→t71：方法选项收敛——sambe：第一性原理 Sambe 光子块（实验室系无
@@ -292,10 +292,12 @@ class DynamicPanel(QWidget):
         # 引擎层仍可用（evolve_rwa ip4 / route_auto 脚本调用），GUI 不再暴露；
         # 默认 mixed（t77 起亦支持纯微波：光子维退化 P=1）；
         # 仅任意波形（无单载频）不支持，UI 自动降级 hard。
-        self.method_cb = pm.combobox(
-            _reg, 'dynamic.method', ['sambe', 'hard', 'mixed'], current=2,
-            spec=pm.ParamSpec('str', options=['sambe', 'hard', 'mixed'],
+        self.method_cb = MB.combobox(
+            _reg, 'dynamic.method', ['sambe', 'hard', 'mixed'],
+            spec=MB.ParamSpec('str', options=['sambe', 'hard', 'mixed'],
                               desc='演化引擎'))
+        # 旧 pm.combobox current=2（默认 mixed）；MB.combobox 无此参 → 默认落 options[0]。
+        # TODO(fine-tune)：app_entry 初始化 session 时 seed dynamic.method='mixed'。
         self.method_cb.currentTextChanged.connect(self._on_method_changed)
         rowt.addWidget(self.method_cb)
         # t82：上帝模式开关搬到菜单栏那一行（MainWindow 的「极简/上帝」分段钮）。
@@ -776,10 +778,10 @@ class DynamicPanel(QWidget):
         别的值一律当"未设"，绝不把垃圾喂进引擎（P1：不许静默改物理）。
         """
         v = None
-        reg = getattr(self.main, 'param_reg', None)
-        if reg is not None:
+        br = getattr(self.main, 'app_bridge', None)
+        if br is not None:
             try:
-                v = reg.read('dynamic.psi_pair')
+                v = br.get('dynamic.psi_pair')
             except Exception:                      # noqa: BLE001
                 v = None
         if v is None:
@@ -846,24 +848,27 @@ class DynamicPanel(QWidget):
                     '或开启/配置自发辐射（自动档需基组含 6P 等低激发态），'
                     '再运行演化。')
                 return
-            mode = self._decay_mode()
-            if mode == 'custom':
-                decays = self._resolve_decay_cfgs(states)
-            elif mode == 'auto':
-                self._prep('自动自发辐射（ARC 寿命）', 0.8)
-                decays = auto_decays(self.cache, states)
-                if decays:
-                    self.main.log(f'[动态] 自动自发辐射：{len(decays)} 通道'
-                                  '（Γ=1/τ(ARC)，τ≤100µs，落点=丢失）')
-            else:
-                decays = []
-            t = np.linspace(0, self.tmax_sb.value(), self.npts_sb.value())
+            # 同步配置 → session（人机同路径 I5）；ops.prepare 在**主线程** build_run
+            # （基组/场/V_dd/auto_decays 都碰 cache，ARC SQLite 线程亲和 → 必须主线程，
+            # 见 B-1①）。单/两体同一入口（dynamic.mode 决定），不再手动分派。
+            self._prep('同步配置 → 会话', 0.7)
+            self._sync_run_config()
             self._run_states = states
-
-            if self._is_two_body:
-                self._run_two_body(states, t)
-            else:
-                self._run_single_body(states, t, decays)
+            ops = self.main.app_bridge.ops
+            self._prep('构建 RunSpec（基组/场/V_dd/寿命）', 0.85)
+            prepared = ops.prepare(actor='gui', reason='GUI 运行演化',
+                                   diag=bool(self._god_mode))
+            prepared = self._preflight_cost(prepared, ops)   # 成本报告（可能重建/取消）
+            if prepared is None:
+                self._prep('已取消（成本预检）', 0.0)
+                return
+            self._prep('开始演化', 1.0)
+            from .evolve_worker import RunWorker
+            self._worker = RunWorker(ops, prepared, self.progress_arr,
+                                     actor='gui', reason='GUI 运行演化')
+            self._worker.done.connect(self._on_evolve_done)
+            self._worker.log_msg.connect(self.main.log)
+            self._worker.start()
         except RuntimeError as e:
             # 主线程预处理被取消（_prep 泵检测 prog[1]≠0）；worker 内的
             # 取消走 done('cancelled') 信号，不经此处。
@@ -875,6 +880,49 @@ class DynamicPanel(QWidget):
             # 其余返回路径（提示/取消/异常）在此统一清理。
             if getattr(self, '_worker', None) is None:
                 self._finish_run_ui()
+
+    def _sync_run_config(self):
+        """运行前把当前 GUI 配置同步进 session（供 ops.prepare 读；人机同路径 I5）。
+
+        MB 绑定的标准件（t_max/npts/method/pair.*/frozen_h）已实时写 session；这里补
+        **非标准件**（能级组/波形/初态/衰变/per_freq_M）——旧时靠 register_panel_params
+        的 external 登记，Re0 改为运行前一次性 write_many（单/两体同一入口）。
+        """
+        from ..core import waveforms as _wf
+        two = bool(self._is_two_body)
+        patch = {
+            'groups.list': [dict(g) for g in self.main_groups],
+            'dynamic.mode': 1 if two else 0,
+            'dynamic.method': self.method_cb.currentText(),
+            'dynamic.t_max': float(self.tmax_sb.value()),
+            'dynamic.npts': int(self.npts_sb.value()),
+            'dynamic.decay_index': int(self.decay_mode_cb.currentIndex()),
+        }
+        if patch['dynamic.decay_index'] == 2:            # 自定义衰变通道
+            patch['dynamic.decays'] = [dict(c) for c in self.decay_cfgs]
+        if two:
+            patch['dynamic.waves_A'] = _wf.serialize_waves(list(self.wave_panel_A.waves))
+            patch['dynamic.waves_B'] = _wf.serialize_waves(list(self.wave_panel_B.waves))
+            patch['dynamic.psi_A'] = self._psi_sup('A') or self._psi_key_for(self.psi_combo_A)
+            patch['dynamic.psi_B'] = self._psi_sup('B') or self._psi_key_for(self.psi_combo_B)
+            patch['dynamic.pair.R_um'] = float(self.vdd_R_sb.value())
+            patch['dynamic.pair.theta_deg'] = float(self.vdd_theta_sb.value())
+            patch['dynamic.pair.phi_deg'] = float(self.vdd_phi_sb.value())
+            pp = self._pair_psi0_spec()
+            if pp is not None:
+                patch['dynamic.psi_pair'] = pp
+            if self.method_cb.currentText() == 'sambe':  # 两体 sambe 高级参数
+                fh, pf = self._sambe_adv_params()
+                if fh is not None:
+                    patch['solve.FROZEN_H_NS'] = fh
+                if pf is not None:
+                    patch['solve.PER_FREQ_M'] = pf
+        else:
+            patch['dynamic.waves_single'] = _wf.serialize_waves(list(self.wave_panel.waves))
+            patch['dynamic.psi_single'] = (self._psi_sup('single')
+                                           or self._psi_key_for(self.psi_combo))
+        patch = {k: v for k, v in patch.items() if v is not None}   # 不写垃圾进 session
+        self.main.app_bridge.write_many(patch, reason='GUI 运行前同步配置', actor='gui')
 
     def _prep(self, label, frac):
         """主线程预处理进度泵（t72）：写阶段 0 进度 + 泵事件 + 取消检查。
@@ -1123,202 +1171,6 @@ class DynamicPanel(QWidget):
             for msg in warns:
                 self.main.log(f'⚠ 任意波形「{w.name}」：{msg}')
 
-    def _run_single_body(self, states, t, decays):
-        """单原子演化路径（定时器/对话框已在 _run 启动）。
-
-        **2026-09-15（P4 同源收敛）**：场构造/改道判据/初态解析改调
-        `src.core.runspec`（无 Qt）——并行扫描的 runner 走**同一段代码**，
-        所以"扫描"与"人点运行"在构造上不可能分叉。
-        """
-        from ..core import runspec as _rs
-        waves = list(self.wave_panel.waves)
-        method = self.method_cb.currentText()
-        # t79：**mixed 已支持任意波形微波**（微波项 env·cos(ωt) →
-        # env·cos(φ(t))，相位走查表插值）——不再整体改道 hard：那会把光场
-        # 一起从 Sambe 光子块（无 RWA）降级到旋转系 RWA，等于作废用户选
-        # mixed 的意图。sambe 仍不支持（光子块扩展空间需单一载频）→ 只有它
-        # 改道 hard。光强包络（FileEnv）是普通 Wave，三者都不受影响。
-        method, _note = _rs.effective_method(method, [waves])
-        if _note:
-            self.main.log(_note)
-        engine_kwargs = {}          # t79：mw_arb 与上帝模式覆写都挂这里
-        self._sync_t_end(t)
-        self._check_arb_applicability(waves, states, t)
-        self._prep('构造驱动场', 0.85)
-        fields, _ek, _notes = _rs.build_fields_single(
-            self.cache, method, states, waves, float(t[-1]))
-        engine_kwargs.update(_ek)
-        for _m in _notes:
-            self.main.log(_m)
-        self.wave_data = waveforms.waveforms_to_env(waves, t)
-        # 初态：spec 优先（叠加态持久真值）；没选到能级 → 报错，不静默回落
-        psi0 = self._psi0_for('single')
-
-        self._prep('驱动场就绪', 1.0)
-        # 上帝模式覆写：param_overrides（引擎参数页，任何引擎都吃）单独取出，
-        # 其余 kwargs（per_freq_M/r_crit/max_step/tol/diag…）只对 mixed 有效。
-        # （engine_kwargs 已在分支前初始化；mw_arb 也挂同一字典，故用 update）
-        gk = self._collect_god_kwargs()      # 引擎参数覆写与模式无关
-        pk = gk.pop('param_overrides', None)
-        if method == 'mixed':
-            engine_kwargs.update(gk)         # 只给 mixed 传它认得的 kwargs
-        elif gk:
-            # 2026-09-15 修（核查报告 B1）：`solve.*`（MAX_STEP / MAX_STEP_HARD /
-            # COST_BUDGET / PER_FREQ_M…）**只有 mixed 吃**；hard 侧连统一入口
-            # `hard.evolve_hard` 都没有 `max_step_hard` 形参（只有内核收），
-            # sambe 另有自己的面板通道。原来这里是**静默丢弃** ⇒ 用户以为
-            # "给 hard 压步长能防欠采样"，实际无声无效。现在**明确报出被忽略的键**。
-            self.main.log('[引擎参数] method=%s 不接收这些运行级参数，已忽略：%s'
-                          '（仅 mixed 生效；hard 的 max_step_hard 请经库 API 直调 '
-                          '`hard.evolve_hard`——该入口已收此形参）'
-                          % (method, ', '.join(sorted(gk))), 10000)
-        if pk:
-            engine_kwargs['param_overrides'] = pk
-        # ── 运行前成本报告（t84）：成本只该"换速度"，不该默默改模型 ──
-        # 默认成本预算为空 = 不限制（真实耦合一律保留）→ 可能跑很久，
-        # 故先把代价摆给用户，由他决定是否上成本档。False = 取消本次运行。
-        if method == 'mixed' and not self._preflight_cost(
-                states, fields, t, engine_kwargs):
-            self._prep('已取消（成本预检）', 0.0)
-            self._finish_run_ui()          # 停表/关进度框/恢复运行按钮
-            return
-        self._worker = EvolveWorker(states, fields, psi0, t,
-                                     method,
-                                     'auto',
-                                     self.progress_arr, decays=decays,
-                                     engine_kwargs=engine_kwargs)
-        self._worker.done.connect(self._on_evolve_done)
-        self._worker.log_msg.connect(self.main.log)
-        self._worker.start()
-
-    def _run_two_body(self, states, t):
-        """双原子演化路径（后台线程；定时器/对话框已在 _run 启动）。
-
-        **2026-09-15（P4 同源收敛）**：场构造/改道判据改调
-        `src.core.runspec.build_fields_pair`（无 Qt）——两体并行扫描走同一段。
-        """
-        from ..core import runspec as _rs
-        waves_A = list(self.wave_panel_A.waves)
-        waves_B = list(self.wave_panel_B.waves)
-        method = self.method_cb.currentText()
-        # t79：mixed 已支持任意波形微波（微波项 cos(φ(t))）——不再改道；
-        # 只有 sambe（光子块需单一载频）保留改道。光强包络（FileEnv）是
-        # 普通 Wave，三者都不受影响。
-        method, _note = _rs.effective_method(method, [waves_A, waves_B])
-        if _note:
-            self.main.log(_note)
-        engine_kwargs = {}          # t79：mw_arb_A/B 与上帝模式覆写都挂这里
-        self._sync_t_end(t)
-        self._check_arb_applicability(waves_A + waves_B, states, t)
-        self._prep('构造驱动场 A', 0.82)
-        fields_A, fields_B, _ek, _notes = _rs.build_fields_pair(
-            self.cache, method, states, waves_A, waves_B, float(t[-1]))
-        self._prep('构造驱动场 B', 0.87)
-        engine_kwargs.update(_ek)
-        for _m in _notes:
-            self.main.log(_m)
-        # 波形预览：合并 A+B
-        env_A = waveforms.waveforms_to_env(waves_A, t)
-        env_B = waveforms.waveforms_to_env(waves_B, t)
-        self.wave_data = [(f'A:{nm}', th, env, f, I)
-                          for nm, th, env, f, I in env_A] \
-                        + [(f'B:{nm}', th, env, f, I)
-                           for nm, th, env, f, I in env_B]
-        psi0_A = self._psi0_for('A')
-        psi0_B = self._psi0_for('B')
-        # 两体**纠缠**初态（AI 面 set_pair_superposition 写进 dynamic.psi_pair）：
-        # 非 None 时引擎侧取代 psi_A/psi_B 的逐原子直积——这是
-        # "交换后的结果"唯一能表达的通道（逐原子直积写不出纠缠）。
-        psi0_pair = self._pair_psi0_spec()
-        if psi0_pair is not None:
-            self.main.log('[双原子] 初态 = 两体纠缠 spec（psi_pair，'
-                          '取代逐原子直积）：%d 个分量'
-                          % len(psi0_pair[1]))
-        R_um = self.vdd_R_sb.value()
-        theta_deg = self.vdd_theta_sb.value()
-        phi_deg = self.vdd_phi_sb.value()
-
-        # ---- 自发辐射（寿命通道 v1：单原子 decay 列表，两原子共用 states）----
-        # 在**主线程**构建：auto 档调 ARC getStateLifetime（SQLite 线程安全约束）。
-        self._prep('配置自发辐射', 0.9)
-        decays_A = decays_B = None
-        mode = self.decay_mode_cb.currentIndex()
-        if mode == 0:                       # 自动（ARC 寿命，落点=丢失）
-            decays_A = auto_decays(self.cache, states)
-            decays_B = auto_decays(self.cache, states)
-            if decays_A or decays_B:
-                self.main.log(f'[双原子] 自动寿命：A {len(decays_A)}'
-                              f'/B {len(decays_B)} 条通道（落点=丢失）')
-        elif mode == 2:                     # 自定义（双原子 v1：仅落点=丢失）
-            lab2idx = {s['label']: i for i, s in enumerate(states)}
-            outA, outB = [], []
-            for c in self.decay_cfgs:
-                fi = lab2idx.get(c['from'])
-                if fi is None:
-                    continue
-                if c.get('to'):
-                    raise NotImplementedError(
-                        '双原子自定义衰变 v1 仅支持「丢失」落点'
-                        '（spontaneous radiation 按寿命处理）；'
-                        '显式落点请用单原子模式。')
-                ch = decay(fi, float(c['gamma_mhz']), None)
-                outA.append(ch)
-                outB.append(ch)
-            decays_A, decays_B = outA, outB
-        # 注意：A/B 共用同一 states → 同一通道集（各自原子的"从态"相同，
-        # 但两体基上原子 A/B 的 from 分别作用——由 pair_evolve 张量化）。
-
-        # ---- V_dd 在主线程预计算（复用 self.cache）----
-        # ARC 的 SQLite 连接不能跨线程（sqlite3: objects created in a
-        # thread can only be used in that same thread）；pair_evolve 的
-        # R_um+cache 路径会在工作线程里访问 cache → 崩溃。这里把 V_dd
-        # 矩阵先在主线程算好，工作线程只做纯 numpy/scipy 演化。
-        # 基组顺序 = 实际演化所用 states 顺序（与 pair_evolve 内部一致）。
-        self.main.log(f'[双原子] 预计算 V_dd（R={R_um:g} μm, '
-                      f'θ={theta_deg:g}°, φ={phi_deg:g}°）…')
-        # t72：progress 回调逐行上报（首次构建含 dme 查询/Numerov 计算，
-        # 可能几十秒——泵进程让对话框显示进度并保持可取消）
-        vdd_matrix = pair_core.vdd_sparse(
-            self.cache, [dict(s) for s in states],
-            R_um, theta_deg, phi_deg,
-            progress=lambda f: self._prep('预计算 V_dd', 0.9 + 0.09 * f))
-        self._prep('V_dd 就绪', 1.0)
-        n_dd = vdd_matrix.nnz
-        self.main.log(f'[双原子] V_dd 非零元 {n_dd} 个，开始演化…')
-
-        from .evolve_worker import EvolveWorkerPair
-        # t26：外部后端已退役归档（checks/_archive/）——
-        # sambe 走 Python evolve_sambe_pair / evolve_exact_pair（同引擎）
-        # t62：sambe 两体高级参数（frozen_h_ns/per_freq_M——面板，目标 5）
-        frozen_h, per_freq_M = (self._sambe_adv_params()
-                                if method == 'sambe' else (None, None))
-        # 上帝模式覆写：param_overrides 对任何引擎生效；其余只对 mixed 有效
-        # （engine_kwargs 已在分支前初始化；mw_arb_A/B 也挂同一字典，故用 update）
-        gk = self._collect_god_kwargs(pair=True)   # 引擎参数覆写与模式无关
-        pk = gk.pop('param_overrides', None)
-        if method == 'mixed':
-            engine_kwargs.update(gk)
-        elif gk:
-            # B1（两体路径）同样不得静默：被忽略的运行级参数要报出来
-            self.main.log('[引擎参数] 两体 method=%s 不接收这些运行级参数，'
-                          '已忽略：%s（仅 mixed 生效；hard 请直调 '
-                          '`hard.evolve_hard_pair`）'
-                          % (method, ', '.join(sorted(gk))), 10000)
-        if pk:
-            engine_kwargs['param_overrides'] = pk
-        self._worker = EvolveWorkerPair(
-            states, fields_A, fields_B, psi0_A, psi0_B,
-            t, self.progress_arr,
-            vdd_matrix=vdd_matrix,
-            decays_A=decays_A, decays_B=decays_B,
-            method=method,
-            per_freq_M=per_freq_M, frozen_h_ns=frozen_h,
-            psi0_pair=psi0_pair,
-            engine_kwargs=engine_kwargs)
-        self._worker._cache_ref = self.cache
-        self._worker.done.connect(self._on_pair_evolve_done)
-        self._worker.log_msg.connect(self.main.log)
-        self._worker.start()
 
     def _on_run_clicked(self):
         """运行/取消同一个按钮（2026-09-14 使用者裁决，取代进度弹窗）。
@@ -1389,33 +1241,37 @@ class DynamicPanel(QWidget):
         if getattr(self, '_stage_label', None) is not None:
             self._stage_label.setText(lab)
 
-    def _preflight_cost(self, states, fields, t, engine_kwargs):
-        """mixed 起算前的**成本报告** → 用户选择。返回 False = 取消运行。
+    def _preflight_cost(self, prepared, ops):
+        """mixed 单体起算前的**成本报告** → 用户选择。返回 None = 取消；否则返回
+        （可能因成本档改动而重新 prepare 的）prepared。数据源改自 ops.prepare 的
+        handle（RunSpec 内含 states/fields），不再手动建（B-1③）。
 
-        背景（用户裁决）：成本预算曾作为引擎参数、默认 4e4 rad，于是构造期
-        就按成本窗删对且完全静默 —— 那是"为了跑得快悄悄改模型"。现在默认
-        不限制（`solve.COST_BUDGET` 留空），真实耦合一律保留；代价与省法都
-        摆到运行前这一次选择里。
-
-        AI 发起的运行**不弹窗**（会卡住没人点的模态）：服务器会置
-        `_ai_initiated`，此时只写日志并采用"完整物理"（忠实）路径。
+        背景（用户裁决）：成本预算曾作为引擎参数、默认 4e4 rad，构造期就按成本窗
+        删对且静默 —— 那是"为了跑得快悄悄改模型"。现在默认不限制（solve.COST_BUDGET
+        留空），真实耦合一律保留；代价与省法都摆到运行前这一次选择里。
+        AI 发起的运行不弹窗（`_ai_initiated`）：只写日志、采用"完整物理"路径。
         """
+        run = (prepared or {}).get('run') or {}
+        if run.get('method') != 'mixed' or run.get('two_body'):
+            return prepared              # 成本报告只针对单体 mixed（其余直接跑）
         try:
             import numpy as _np
-
             from ..core.evolve_mixed import evolve_mixed as _em
+            states = run['states']
+            fields = run['fields']
+            t = _np.linspace(0, run['t_max'], run['npts'])
             keys = ('per_freq_M', 'r_crit', 'bw_opt', 'mw_cap', 'mw_max',
                     'mw_arb', 'phase_budget')
-            kw = {k: v for k, v in (engine_kwargs or {}).items() if k in keys}
+            kw = {k: v for k, v in (run.get('engine_kwargs') or {}).items() if k in keys}
             rep = (_em(states, fields, _np.zeros(len(states), complex), t,
                        dry_run=True, **kw) or {}).get('cost') or {}
         except Exception as e:                        # noqa: BLE001
             self.main.log(f'成本预检跳过（{e}）')
-            return True
+            return prepared
         dmax = float(rep.get('max_det_mhz') or 0.0)
         alts = rep.get('alt') or {}
         if not alts or dmax < 3000.0:
-            return True                    # 便宜算例：不打扰，直接跑
+            return prepared                # 便宜算例：不打扰，直接跑
         alt = alts.get(4e4) or alts[sorted(alts)[-1]]
         worst = rep.get('worst') or {}
         head = (f'本次「完整物理」保留 {rep.get("n_mw", 0)} 对微波耦合，'
@@ -1440,7 +1296,7 @@ class DynamicPanel(QWidget):
         if getattr(self, '_ai_initiated', False):
             self.main.log(f'[成本预检] {head}；{detail.splitlines()[1]}'
                           f'AI 运行 → 采用完整物理路径（不弹窗）')
-            return True
+            return prepared
         # ⚠ 弹对话框之前**必须先把进度框撤下**：进度框在 _run 开头 400ms 后
         # 自动弹出，且是 `Qt.WindowModal` —— 模态阻塞的是整个父窗口（含挂在
         # 它下面的其它对话框），于是成本报告被压在下面、**根本点不到**（实测 bug）。
@@ -1468,7 +1324,7 @@ class DynamicPanel(QWidget):
         if clicked is b_cancel:
             # 取消＝本轮未起算：进度框不再恢复，由调用方 _finish_run_ui 收尾
             self.main.log('成本预检：用户取消本次运行')
-            return False
+            return None
         # 继续运行 → 恢复进度 UI。**不要**再启动 400ms 定时器：到点会再造
         # 一个进度框（旧框没人更新 → 屏幕上两个框、一个动一个不动，实测 bug）。
         if dlg_was and dlg is not None:
@@ -1476,54 +1332,16 @@ class DynamicPanel(QWidget):
         else:
             self._show_progress()        # 幂等：已有框就直接返回
         if clicked is b_fast:
-            # 写会话真值（运行级参数）：进存档、可 undo、AI 也看得见
-            d = dict(getattr(self.main, 'engine_overrides', None) or {})
-            d['solve.COST_BUDGET'] = 4e4
-            self.main.set_engine_overrides(d)
-            engine_kwargs['phase_budget'] = 4e4
+            # 写会话真值（solve.COST_BUDGET，运行级）→ 进存档、可 undo、AI 也看得见；
+            # 配置变了 → 重新 prepare（build_run 按成本窗剔除远失谐对）。
+            self.main.apply_solve_params({'solve.COST_BUDGET': 4e4})
             self.main.log(f'成本档已设 solve.COST_BUDGET=4e4 rad'
                           f'（剔除 {alt.get("n_drop", 0)} 对远失谐耦合，'
                           f'快 ~{alt.get("speedup", 1):.1f}×）')
-        return True
+            return ops.prepare(actor='gui', reason='GUI 运行（成本档后重建）',
+                               diag=bool(self._god_mode))
+        return prepared
 
-    def _collect_god_kwargs(self, pair=False):
-        """t75：从检视器旋钮读取覆写 kwargs（空=默认不传；diag 恒开）。
-
-        pair=True 时排除 per_freq_M（两体 P=3 固定，暂不支持覆写）。
-        """
-        # 引擎参数覆写 = 会话真值（engine_overrides），**与模式无关**：
-        # 极简模式下它照样生效（否则切模式会偷偷改变结果语义）。
-        # 行编辑框默认"回车才提交"（框架约定），运行前统一提交一次，
-        # 免掉"打了字没回车 → 以为生效了"的坑；非法值提交时框架会红灯拒绝。
-        reg = getattr(self.main, 'param_reg', None)
-        if reg is not None and self._inspector is not None:
-            try:
-                reg.commit_pending()
-            except Exception:
-                pass
-        from .. import pm_setup as pm
-        # 单一映射点：会话 store → (数值容差覆写, 求解器 kwarg)
-        pk, solve_kw = pm.god_split(getattr(self.main, 'engine_overrides', None))
-        ek = {}
-        if pk:
-            ek['param_overrides'] = pk
-        ek.update(solve_kw)         # max_step / per_freq_M / frozen_h_ns
-        # 非法输入：非模态提示（状态栏），不弹框、也不牵连其它覆写
-        bad = (self._inspector.param_errors()
-               if self._inspector is not None else [])
-        if bad:
-            self.main.log('引擎参数有 %d 项非法已忽略：%s'
-                          % (len(bad), '；'.join(e for _n, e in bad[:3])), 9000)
-        # 场景级旋钮（per_freq_M / r_crit / max_step / tol）+ diag 只在上帝模式取
-        if self._god_mode and self._inspector is not None:
-            rest = self._inspector.god_values(pair=pair) or {}
-            rest.pop('param_overrides', None)
-            ek.update(rest)
-        # 诊断采集：上帝模式（人想看）或 AI 显式要求（run_compute(diag=True)）
-        if self._god_mode or getattr(self, '_ai_wants_diag', False):
-            ek['diag'] = True
-        self._last_god_kwargs = dict(ek)
-        return ek
 
     def set_god_mode(self, on):
         """菜单栏模式开关的唯一下游：显示/隐藏检视器 + 徽标。
@@ -1557,8 +1375,8 @@ class DynamicPanel(QWidget):
     def _open_inspector(self, diag=None):
         """确保检视器存在（非模态）并按需装载诊断。
 
-        常驻语义（t82）：建一次就不再销毁；回填会话覆写（engine_overrides
-        + 场景级旋钮）而不是"最近一次 kwargs"，保证组件与后台参数一一绑定。
+        常驻语义（t82）：建一次就不再销毁；回填走会话现值（registry），
+        保证组件与后台参数一一绑定。
         非 dict 入参（如 Qt 信号误传的 bool）一律按 None 处理。
         """
         from .solver_inspector import SolverInspector
@@ -1567,11 +1385,8 @@ class DynamicPanel(QWidget):
         if self._inspector is None:
             self._inspector = SolverInspector(self, win=self.main)
             self._inspector.rerun_requested.connect(self._on_inspector_rerun)
-            self._inspector.param_edited.connect(
-                self.main._on_engine_param_edited)
-        # 回填只走会话真值（引擎参数页 + 求解旋钮都绑在同一批注册路径上）
-        self._inspector.set_engine_overrides(
-            getattr(self.main, 'engine_overrides', None) or {})
+        # 回填走会话现值（引擎参数页从 registry 建：engine.* 只读 / solve.* 可写）
+        self._inspector.refresh_param_display()
         if diag is not None:
             self._inspector.load_diag(diag)
         else:
@@ -1583,7 +1398,12 @@ class DynamicPanel(QWidget):
         self._inspector.activateWindow()
         return self._inspector
 
-    def _on_evolve_done(self, res, error):
+    def _on_evolve_done(self, result, error):
+        """演化完成回调（RunWorker 回传 ops 结果 dict：summary + artifact_id）。
+
+        大载荷（pops/t 数组）落 artifact（I3）→ 这里 load_artifact 取回绘图，与 AI
+        跑出的产物同一份（人机同产物）。单/两体统一走这里（_is_two_body 分流绘图）。
+        """
         self._finish_run_ui()
         if error == 'cancelled':
             return                                  # 静默（用户主动取消）
@@ -1593,27 +1413,29 @@ class DynamicPanel(QWidget):
                 f'{error}\n\n可尝试：降低光强、调整驱动频率/失谐，'
                 '或减小 t_max/点数。')
             return
+        # 从 artifact 取回演化数组（人机同产物；I3 大载荷不内联）
+        res = None
+        try:
+            from ..mecha.ops import load_artifact
+            aid = (result or {}).get('artifact_id')
+            _ops = self.main.app_bridge.ops
+            loaded = load_artifact(_ops.root, aid) if aid else None
+            if loaded is not None:
+                res = loaded[1]                     # (run, arrays, manifest) → arrays
+        except Exception as e:                       # noqa: BLE001
+            self.main.log('结果载入失败：%s' % e, 10000)
         self._last_res = res
-        if self._god_mode:                          # 上帝模式 → 检视器
-            self._open_inspector((res or {}).get('diag'))
+        self._last_summary = (result or {}).get('summary')
+        if self._god_mode:                           # 上帝模式 → 检视器（diag 接线见 B-2）
+            self._open_inspector(None)
         self._draw_top(self.wave_data)
         states = getattr(self, '_run_states', None)
-        if states is not None:
-            self._draw_bot(states, res)
+        if res is not None:
+            if bool(self._is_two_body):
+                self._draw_bot_pair(res)
+            elif states is not None:
+                self._draw_bot(states, res)
 
-    def _on_pair_evolve_done(self, res, error):
-        """双原子演化完成回调。"""
-        self._finish_run_ui()
-        if error == 'cancelled':
-            return
-        if error is not None:
-            QMessageBox.warning(self, '演化失败', f'{error}')
-            return
-        self._last_res = res
-        if self._god_mode:                          # 上帝模式 → 检视器
-            self._open_inspector((res or {}).get('diag'))
-        self._draw_top(self.wave_data)
-        self._draw_bot_pair(res)
 
     def _draw_top(self, E_list):
         """顶部：各通道**光强曲线**（I = 峰值光强×包络）。

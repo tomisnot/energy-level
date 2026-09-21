@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""场构造：field / group_field / real_field / build_fields_exact + 助手。
+"""场构造：field / build_fields_exact + 助手。
 
 任意波形（ArbitraryWave，无载频）的场构造**不在本模块**：见
 `evolve_twofield.arbitrary_mw_group()`（Hilbert 分解 env/φ → 两场 meta →
@@ -9,16 +9,25 @@ import numpy as np
 from . import static_atom as core
 from .atomic_levels import square
 
-from .evolve_util import _POL_Q
-from . import params as _P
-# AC_NEAR_CUTOFF_MHZ 直连 params 单源（勿经 static_atom 转发）
+from .evolve_util import _POL_Q, resolve_state_idx
+
+from .static_atom import MW_MAX_MHZ
+
+from .field_loss import (FieldLossConfig, add_scatter_pair, photoion_rate_mhz,
+                         TrapModel)
+from .param import Param   # 就地参数声明（值+元数据同处；mecha.registry 扫出全表）
+
+
+# ==== 本模块的参数（就地定义；Param 声明值+元数据同处，透明子类读点免改）====
+_ENV_SAMPLES = Param(64, 'field_build 包络探针数；包络恒常判断采样数（粗粒度）', tier='internal')
+# （原 AC_NEAR_CUTOFF_MHZ 的近/远分流随 real_field 一并删除）
 # 上态总衰变率缓存（(n,l,j) → Γ MHz；远失谐散射损失用）
 _lifetime_cache = {}
 
 
-def _env_samples(waveform, t_end):
+def env_samples(waveform, t_end):
     """采样包络判断恒常性。返回 (mean, is_constant)。"""
-    ts = np.linspace(0.0, float(t_end), _P.get('_ENV_SAMPLES'))
+    ts = np.linspace(0.0, float(t_end), _ENV_SAMPLES)
     vs = np.asarray(waveform(ts), float)
     return float(vs.mean()), bool(np.ptp(vs) < 1e-9)
 
@@ -26,53 +35,10 @@ def _env_samples(waveform, t_end):
 # ---------------- 能级 ----------------
 
 
-def _floquet_ac_static(cache, states, freq_mhz, intensity_mwcm2, pol,
-                       B_gauss, n_photon=None, sos_n_window=None):
-    """用静态页同款 Floquet 引擎（core.direct_ac_stark_shifts）计算
-    动态 states 每个能级的 AC 位移（MHz，峰值强度）。
-
-    - 基组：由 states 推断的组 + 全部偶极伙伴（window 由面板/全局配置）；
-    - 不分近/远失谐：近共振 dressed 与远失谐反旋项统一对角化；
-    - mJ 态直接取对应键的位移；F 态（低激发超精细）= Σ|amps|²·shift（mJ 分量加权）。
-    n_photon / sos_n_window 缺省（None）时读取面板全局配置（与静态页一致）。
-    """
-    from . import static_atom as _c
-    groups, seen = [], set()
-    for s in states:
-        k = (s['n'], s['l'], s['j'])
-        if k not in seen:
-            seen.add(k)
-            groups.append(dict(n=k[0], l=k[1], j=k[2]))
-    cfg = dict(enabled=True, frequency_hz=float(freq_mhz) * 1e6,
-               intensity=float(intensity_mwcm2), polarization=str(pol),
-               elliptical={})
-    shifts = _c.direct_ac_stark_shifts(cache, groups, cfg, float(B_gauss),
-                                       n_photon=n_photon,
-                                       sos_n_window=sos_n_window)
-    mlut = {}
-    for (n, l, j, qstr, _occ), v in shifts.items():
-        mlut.setdefault((n, l, j), {})[qstr] = v
-    ac = np.zeros(len(states))
-    for i, s in enumerate(states):
-        lut = mlut.get((s['n'], s['l'], s['j']), {})
-        if s.get('kind') == 'F':
-            amps = s.get('amps') or {}
-            tot = 0.0
-            for mj, am in amps.items():
-                v = lut.get(f'm_J={float(mj):+.1f}')
-                if v is not None:
-                    tot += float(abs(am) ** 2) * v
-            ac[i] = tot
-        else:
-            m = float(s.get('m', s.get('mj', 0.0)))
-            ac[i] = lut.get(f'm_J={m:+.1f}', 0.0)
-    return ac
-
-
 # ---------------- 能级 ----------------
 
 
-def _sublevel_row(s):
+def sublevel_row(s):
     """states → core.dipole_amplitude 的子能级行（mJ/F 混合耦合矩阵元）。"""
     return dict(n=s['n'], l=s['l'], j=s['j'], kind=s['kind'],
                 mj=s.get('mj'), mF=s.get('mF'), amps=s.get('amps'))
@@ -81,7 +47,7 @@ def _sublevel_row(s):
 # ---------------- 光场 ----------------
 
 
-def _field_geometry(states, f):
+def field_geometry(states, f):
     """解析光场 → dict(A, g_idx, e_idx, omega0_mhz, omega_L_mhz, waveform)。
 
     （ip4 族场格式的归一化与场构造同源。）
@@ -130,7 +96,7 @@ def _field_geometry(states, f):
         for ia, i in enumerate(g_idx):
             for ib, j in enumerate(e_idx):
                 M[ia, ib] = abs(core.dipole_amplitude(
-                    cache, _sublevel_row(states[i]), _sublevel_row(states[j]),
+                    cache, sublevel_row(states[i]), sublevel_row(states[j]),
                     q))
         mx = M.max()
         if mx > 0:
@@ -185,9 +151,9 @@ def build_fields_exact(cache, states, waves):
         E0_sq = core.field_e0_sq(float(w.intensity_mwcm2))
         A = np.zeros((N, N))
         for i in range(N):
-            ri = _sublevel_row(states[i])
+            ri = sublevel_row(states[i])
             for j in range(i + 1, N):
-                rj = _sublevel_row(states[j])
+                rj = sublevel_row(states[j])
                 d = 0.0 + 0.0j
                 for _q, _c in _qs:
                     if abs(_c) > 1e-12:
@@ -204,6 +170,94 @@ def build_fields_exact(cache, states, waves):
                     'intensity_mwcm2': float(w.intensity_mwcm2),
                     'pol': w.pol, 'elliptical': ell})
     return out
+
+
+# =====================================================================
+# 场致损耗装配（占被删 real_field 的 scatter 位；修正旧 F3 取反）
+# =====================================================================
+def _state_gamma_leaving_mhz(cache, s):
+    """态的**总**离开基组率（MHz）= ARC 1/τ（对全部下能级求和）。
+
+    τ 查不到 / 无限（基态）→ 0（无散射损失可引）。与 auto_decays 同一换算。
+    """
+    try:
+        tau = cache.atom.getStateLifetime(int(s['n']), int(s['l']), float(s['j']))
+    except Exception:                              # noqa: BLE001
+        return 0.0
+    if tau is None or not np.isfinite(float(tau)) or float(tau) <= 0.0:
+        return 0.0
+    return 1e-6 / float(tau)                       # s⁻¹ → MHz
+
+
+def build_field_loss(cache, states, fields, decays, spec):
+    """远失谐光 → 逐波 env²×逐态时变损耗（`FieldLossConfig`）。opt-in：无 spec → None。
+
+    自动逐 far-detuned 对 (i,j)（由 `fields` 的耦合矩阵 A 与载频推 Ω/Δ）：
+      • 近共振剔除：|Δ| < near_cutoff → 走相干动力学，`add_scatter_pair` 整对跳过；
+      • 双计规则：伙伴已在 `decays` 中配了自发辐射通道 ⇒ 其 out 记 0
+        （该流失已由相干 + 伙伴衰变承担），否则取 ARC 1/τ；
+      • 可选光电离：`spec['photoion'] = {'sigma_mb_by_idx': {i: σ}, 'lam_m': ...}`。
+
+    返回 `FieldLossConfig`（无有效通道 → None）。`spec['trap']` 由调用方自行
+    交给 `field_loss.TrapModel`（加热逃逸，引擎侧 H3 才消费）。
+    """
+    if not spec:
+        return None
+    spec = dict(spec)
+    near = float(spec.get('near_cutoff_mhz', 5000.0))
+    N = len(states)
+    cfg = FieldLossConfig(N)
+    dec_from = {int(resolve_state_idx(states, d['from']))
+                for d in (decays or []) if d.get('to') is None}
+
+    def out_rate(k):                              # 伙伴离基组率（双计后）
+        return 0.0 if k in dec_from else _state_gamma_leaving_mhz(cache, states[k])
+
+    for f in (fields or []):
+        A = np.asarray(f.get('A'), float)
+        if A.shape != (N, N):
+            continue
+        wL = float(f.get('omega_L_mhz', 0.0))
+        env = f.get('waveform')
+        if env is None:
+            continue
+        for i in range(N):
+            for j in range(i + 1, N):
+                Om = abs(float(A[i, j]))
+                if Om <= 0.0:
+                    continue
+                det = abs(float(states[j]['E_mhz'])
+                          - float(states[i]['E_mhz'])) - wL
+                add_scatter_pair(cfg, i, j, Om_mhz=Om, det_mhz=det,
+                                 gam_out_i_mhz=out_rate(i),
+                                 gam_out_j_mhz=out_rate(j),
+                                 env_fn=env, near_cutoff_mhz=near)
+    pi = spec.get('photoion')
+    if pi:
+        lam = float(pi.get('lam_m', 1064e-9))
+        by_idx = pi.get('sigma_mb_by_idx') or {}
+        for f in (fields or []):
+            I = float(f.get('intensity_mwcm2', 0.0))
+            env = f.get('waveform')
+            if env is None or I <= 0.0:
+                continue
+            for k, sigma in by_idx.items():
+                rate = photoion_rate_mhz(I, lam, float(sigma))
+                if rate > 0.0:
+                    cfg.add_photoion(int(k), env, rate)
+    if cfg.is_empty():
+        return None
+    tp = spec.get('trap')
+    if tp:
+        dk = tp.get('depth_K')
+        cfg.trap = TrapModel(
+            float(tp.get('lam_m', 1013.8e-9)),
+            None if dk is None else float(dk),
+            kappa_geo=float(tp.get('kappa_geo', 2.0)),
+            T0_K=float(tp.get('T0_K', 0.0)),
+            cool_rate_ns=float(tp.get('cool_rate_ns', 0.0)),
+            mode=str(tp.get('mode', 'budget')))
+    return cfg
 
 
 def arb_applicability(cache, states, wave, t_end_ns=None):
@@ -226,8 +280,8 @@ def arb_applicability(cache, states, wave, t_end_ns=None):
     n = len(states)
     for i in range(n):
         for j in range(i + 1, n):
-            d = core.dipole_amplitude(cache, _sublevel_row(states[i]),
-                                      _sublevel_row(states[j]), q)
+            d = core.dipole_amplitude(cache, sublevel_row(states[i]),
+                                      sublevel_row(states[j]), q)
             if abs(d) > 1e-12:
                 nus.append(abs(float(states[j]['E_mhz'])
                                - float(states[i]['E_mhz'])))
@@ -243,7 +297,7 @@ def arb_applicability(cache, states, wave, t_end_ns=None):
             f'{nu_min:.3g} MHz → 驱动不到任何跃迁（效果为零）。'
             '若这份文件其实是"光强形状"，请按「光强包络」导入'
             '（保留载频，sambe/mixed/hard 全支持）。')
-    if nu_max > _P.get('MW_MAX_MHZ'):
+    if nu_max > MW_MAX_MHZ:
         warns.append(
             f'基组含光学流形（最高偶极跃迁 {nu_max / 1e6:.1f} THz）：'
             '任意波形不参与光场旋转 → 积分器会被 THz 相位钉死'
@@ -260,8 +314,8 @@ def _validate_fields(fields):
         if (f or {}).get('kind') != 'exact':
             raise ValueError(
                 "method='exact' 要求场为 kind='exact'（由 "
-                'waveforms.build_fields_exact 构造）——不消费 real_field/'
-                'multi 场（其近/远分流与静态 AC 注入与第一性模型冲突）。')
+                'build_fields_exact 构造）——不消费 multi 场（其近/远分流'
+                '与静态 AC 注入与第一性模型冲突）。')
         A = np.asarray(f['A'], float)
         if N is None:
             N = A.shape[0]
@@ -270,7 +324,7 @@ def _validate_fields(fields):
     return N
 
 
-def _group_by_freq(fields):
+def group_by_freq(fields):
     """相异载频分组（相对差 ≤1e-9 视为同频，共享一个光子维）。"""
     groups = []
     for f in fields:
@@ -292,148 +346,17 @@ def _group_by_freq(fields):
 def field(g, e, omega0_mhz=1.0, waveform=None, detune_mhz=0.0):
     """单对驱动（最灵活）：g/e 为 states 索引，A 为 0/1 单耦合。
 
+    **这是 `evolve_rwa`（ip4）与 `evolve_floquet`（封存权威）的输入格式**：
+    产品路径（`runspec` → `build_fields_exact`）不用它，但**判据用它构造参考输入**
+    ——不是死代码。`sambe` 的 exact 路径要求 `kind="exact"` 是**那个引擎的入参要求**，
+    与这里的 `kind="pair"` 是两种并列的场表示。
+
     omega0_mhz：峰值 Rabi（MHz）；waveform：t→[0,1] 包络（缺省方波全程）。
     detune_mhz：失谐（相对 E_e−E_g，正=蓝）。
     """
     return dict(kind='pair', g=int(g), e=int(e), omega0_mhz=float(omega0_mhz),
                 waveform=waveform or square(0.0, 1e12),
                 detune_mhz=float(detune_mhz))
-
-
-
-
-def group_field(cache, states, group_a, group_b, pol='π', omega0_mhz=1.0,
-                waveform=None, detune_mhz=0.0):
-    """组驱动：复用 core 偶极矩阵元构造耦合（选择定则 + 相对 Rabi 强度）。
-
-    group_a/group_b: dict(n,l,j)。A 各 (m_g,m_e) 耦合 = |dme|/max|dme|，
-    即最强耦合处 Rabi=Ω0（相对强度来自 core 跃迁矩阵元，与静态无关）。
-    """
-    return dict(kind='group', cache=cache, states=states,
-                group_a=dict(group_a), group_b=dict(group_b), pol=pol,
-                omega0_mhz=float(omega0_mhz),
-                waveform=waveform or square(0.0, 1e12),
-                detune_mhz=float(detune_mhz))
-
-
-
-
-def real_field(cache, states, freq_mhz, intensity_mwcm2, pol='π',
-               waveform=None, near_cutoff_mhz=None, return_scatter=False,
-               B_gauss=None, n_photon=None, sos_n_window=None):
-    """真实光场（频率+光强+偏振）→ (field_dict 或 None, ac_shift_mhz)。
-
-    以单个能级为单位遍历基组内所有态对，按自适应失谐判据分流：
-      - 近共振（|Δ| < max(near_cutoff, Ω)）→ 合并进**单个多对
-        驱动场**（A 直接含各对真实 Rabi Ω_ij，统一 ω_L = 光频 f；
-        RWA 下等价于多个 pair，但 H 组装一次完成，性能快 ~N_对 倍）；
-      - 远失谐 →（仅 B_gauss=None 的回退路径）SOS 二阶 AC 位移
-        （加进 H0 对角），驱动对绝不重复计 AC。
-    失谐基准 = 裸能级差（超精细+Zeeman，不含 AC），无歧义。
-
-    **AC 位移后端（B_gauss 提供时）**：统一由 core.direct_ac_stark_shifts
-    （Floquet 直接对角化，含全部偶极伙伴基组、近共振 dressed 与远失谐
-    反旋项、n_photon 阶光子块）计算，**不分近/远**（优于 far_sos 逐对求和——
-    后者受基组范围剧烈影响）。F 态（低激发超精细）
-    位移 = 按 mJ 分量 |amps|² 加权投影。近共振 Rabi 驱动 A 矩阵仍按
-    near_cutoff 筛选（RK4 步长的 RWA 硬约束，与位移无关）。
-
-    near_cutoff_mhz：近/远分流边界（MHz），缺省 = params.AC_NEAR_CUTOFF_MHZ
-    （5 GHz 保守地板：覆盖超精细/精细结构流形，宁多算相干）。协议场景
-    （如 STIRAP 想只相干驱动目标对、把 ~150 MHz 外的流形其余态作远失谐
-    AC 处理）可显式调小（如 25 MHz）；边界仍随 Rabi 走 max(cutoff, Ω)。
-
-    **统一场算符**（Pulser 范式）：M = A + diag(ac_shift) 一个矩阵——
-    Rabi 耦合元与对角位移元同属该场的效应，H(t) += env(t)·M。
-    返回 (field, ac_shift_mhz[N])：field['M'] 为统一算符，
-    field['A']/field['ac_shift'] 保留元数据（诊断/ip4 稀疏优化用）；
-    无近共振对时 field=None（ac 仍返回，由调用方包装成纯位移场）。
-
-    **远失谐散射损失**（return_scatter=True 时第 3 返回 scatter[N]，MHz）：
-    失谐光虽远仍以散射率 σ=Ω²Γ_up/(4Δ²) 把源态布居打到上态，上态
-    （短寿命低激发态如 6P）自发辐射"回不来"→ 源态 depump/loss；
-    Γ_up=1/τ（ARC 寿命，缓存）。演化引擎在 loss 输出中按
-    ∫σ(t)·env²(t)·P_source(t)dt 计入（见 pair_evolve）。
-    field['scatter'] 亦随场返回（无近共振时同样有效）。
-    """
-    from . import static_atom as _c
-    q = {'π': 0, 'σ+': 1, 'σ-': -1}.get(pol, 0)
-    N = len(states)
-    E0_sq = _c.field_e0_sq(intensity_mwcm2)
-    omega_rad = 2.0 * np.pi * freq_mhz * 1e6
-    _env_sample = waveform if waveform is not None else square(0.0, 1e12)
-    A = np.zeros((N, N))
-    g_idx, e_idx = [], []
-    ac = np.zeros(N)
-    scatter = np.zeros(N)      # 远失谐光散射损失率（MHz，源态）
-    lifetime_cache = _lifetime_cache
-    for i in range(N):
-        for j in range(i + 1, N):
-            d = _c.dipole_amplitude(
-                cache, _sublevel_row(states[i]), _sublevel_row(states[j]), q)
-            if abs(d) < 1e-12:
-                continue
-            lo, hi = (i, j) if states[i]['E_mhz'] <= states[j]['E_mhz'] \
-                else (j, i)
-            nu_mhz = states[hi]['E_mhz'] - states[lo]['E_mhz']   # 裸差
-            Delta = freq_mhz - nu_mhz
-            Om = _c.rabi_mhz(abs(d), E0_sq)
-            if abs(Delta) < max(near_cutoff_mhz or _P.get('AC_NEAR_CUTOFF_MHZ'), Om):
-                # 近共振 → 多对驱动（A 存真实 Rabi，ω_L = 光频）
-                A[lo, hi] = A[hi, lo] = Om
-                g_idx.append(lo); e_idx.append(hi)
-            else:
-                # 远失谐：B_gauss is None（旧回退）→ SOS 累加进 ac；
-                # 否则 ac 由循环后的 Floquet 统一计算（不分近/远）。
-                if B_gauss is None:
-                    nu_rad = 2.0 * np.pi * nu_mhz * 1e6
-                    ac[lo] += _c.far_sos_shift_mhz(
-                        d, E0_sq, omega_rad, nu_rad)
-                    ac[hi] += _c.far_sos_shift_mhz(
-                        d, E0_sq, omega_rad, -nu_rad)
-                # 补充：**off-resonant 散射损失**（用户报 exchange depump 缺失）。
-                # 失谐光虽远，仍以散射率 σ=Ω²Γ_up/(4Δ²) 把源态布居打到上态，
-                # 上态（如 6P）短寿命自发辐射"回不来"→ 源态 depump/loss。
-                # Γ_up = 1/τ（ARC 寿命，MHz）；仅 Δ≫Γ 的洛伦兹尾（这里 Ω²/Δ² 可控）。
-                keyh = (int(states[hi]['n']), int(states[hi]['l']),
-                        float(states[hi]['j']))
-                gam = lifetime_cache.get(keyh)
-                if gam is None:
-                    try:
-                        tau = cache.atom.getStateLifetime(
-                            keyh[0], keyh[1], keyh[2], temperature=0.0)
-                        gam = (1e-6 / float(tau)) if tau else 0.0
-                    except Exception:
-                        gam = 0.0
-                    lifetime_cache[keyh] = gam
-                if gam > 0.0:
-                    scatter[lo] += (Om * Om * gam
-                                    / (4.0 * max(Delta * Delta, 1e-6)))
-    # ---- AC 位移：统一 Floquet 后端（B_gauss 提供时，不分近/远）----
-    if B_gauss is not None:
-        try:
-            ac = np.asarray(_floquet_ac_static(
-                cache, states, freq_mhz, float(intensity_mwcm2), pol,
-                float(B_gauss), n_photon=n_photon,
-                sos_n_window=sos_n_window), float)
-        except Exception:
-            # Floquet 失败 → 回退 far_sos 路径（递归 B=None，保稳健）
-            _, ac = real_field(cache, states, freq_mhz, intensity_mwcm2,
-                               pol, waveform, near_cutoff_mhz) or (None, ac)
-            ac = np.asarray(ac or np.zeros(len(states)), float)
-    if not g_idx:
-        if return_scatter:
-            return None, ac, scatter
-        return None, ac
-    M = A + np.diag(ac)
-    fld = {'kind': 'multi', 'M': M, 'A': A, 'ac_shift': ac,
-           'g_idx': g_idx, 'e_idx': e_idx,
-           'omega0_mhz': 1.0, 'omega_L_mhz': freq_mhz, 'waveform': _env_sample,
-           'scatter': scatter}
-    if return_scatter:
-        return fld, ac, scatter
-    return fld, ac
-
 
 
 

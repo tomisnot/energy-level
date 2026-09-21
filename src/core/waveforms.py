@@ -26,8 +26,9 @@
 import numpy as np
 
 
-from .field_build import (build_fields_exact, real_field)  # noqa: F401
-from . import params as _P
+from .field_build import build_fields_exact  # noqa: F401
+
+from .hard import _TAB_N
 
 # 与旧 pulse.py 一致的包络形状（数据类抽离 UI，纯计算）
 POLS = ['σ+', 'π', 'σ-', '椭圆偏']
@@ -49,7 +50,7 @@ def _f_max_mhz(dt_min_ns, t_end_ns=None):
     """
     fn = 0.0 if dt_min_ns <= 0 else 0.5e3 / float(dt_min_ns)
     if t_end_ns and float(t_end_ns) > 0 and fn > 0.0:
-        fn = min(fn, 0.5e3 * (_P.get('_TAB_N') - 1) / float(t_end_ns))
+        fn = min(fn, 0.5e3 * (_TAB_N - 1) / float(t_end_ns))
     return fn
 
 
@@ -234,7 +235,7 @@ class ArbitraryWave:
     kind = 'arb'
 
     def __init__(self, name, t_ns, amp, pol='π', intensity_mwcm2=100.0,
-                 offset_ns=0.0):
+                 offset_ns=0.0, elliptical=None):
         assert pol in POLS, f'偏振须为 {POLS}'
         t = np.asarray(t_ns, float)
         a = np.asarray(amp, float)
@@ -251,6 +252,9 @@ class ArbitraryWave:
         self.pol = pol
         self.intensity_mwcm2 = float(intensity_mwcm2)
         self.offset_ns = float(offset_ns)
+        # 椭偏参数（与 Wave 对称）：serialize_waves 会写 'elliptical'、restore_waves 会回传，
+        # 缺了这个形参 arb 波**无法往返**（潜在 bug，建场层 arb 支持暴露后补上）。
+        self.elliptical = elliptical
         self.drive = None                 # 无单频 → 辅助定参不适用
 
     # ---- 兼容层（预览/标题/存档共用）----

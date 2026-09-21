@@ -19,7 +19,7 @@
   3. 冻结段传播 + 缺陷修正（与 evolve_exact 同构）：K(t) = K_static + Σ c_opt(t)·(A_opt⊗I_P)
      + Σ c_mw(t)·Kc_mw；只有微波光子偏移参与求积振荡（≤216 rad/ns）。
 
-单位与约定：与 evolve_exact 完全一致（MHz/ns，_CONV=2π×1e-3，Rabi 周频，
+单位与约定：与 evolve_exact 完全一致（MHz/ns，CONV=2π×1e-3，Rabi 周频，
 kind='exact' 场 A 为峰值 Rabi 矩阵）。返回 dict(t, pops, states, om_mhz,
 method='two_field', backend, loss, error_report)。
 
@@ -29,13 +29,24 @@ import numpy as np
 import scipy.sparse as sp
 
 from . import static_atom as core
-from .evolve_util import _as_vector
+from .evolve_util import as_vector
 from .tensor import (_pair_loss_vectors, _as_product_psi, _reduce_A,
                      _reduce_B)
-from .sambe import _CONV, _gl_nodes, _GL_CACHE, setup_P
+from .sambe import (CONV, _gl_nodes, _GL_CACHE, setup_P, _pops_of,
+                    embed, reconstruct_psi)
 from .coupling import mw_candidate_mask, mw_cap_mhz
-from .sambe import env_at
-from . import params as _P
+from .evolve_util import env_at
+
+from .static_atom import MW_MAX_MHZ
+from .sambe import M_EST_BW_MHZ
+from .sambe import _M_MAX
+from .param import Param   # 就地参数声明（值+元数据同处；mecha.registry 扫出全表）
+
+
+# ==== 本模块的参数（就地定义；Param 声明值+元数据同处，透明子类读点免改）====
+FRAME_TOL_REL = Param(1e-6, '旋转系有效性（相对）', tier='internal')
+OPT_NRES_BW_MHZ = Param(2e3, '光场对近共振窗（两场）', unit='MHz', tier='run')
+_TF_DENSE_MAX = Param(3000, '两场两体稠密上限', tier='internal')
 
 # ---- 场分类 ----
 
@@ -84,7 +95,7 @@ def arbitrary_mw_group(cache, states, wave):
     # 若全收会把**光学对**一起拉进来（THz 相位钉死积分器 + 与光场光子块
     # 双重计入），故必须按信号带宽筛。常数频率信号下带宽塌缩为单频，
     # 与旧 `|dE|-w` 判据一致。
-    f_inst = np.gradient(phi_h, ts) / _CONV if ts.size > 1 else np.zeros(1)
+    f_inst = np.gradient(phi_h, ts) / CONV if ts.size > 1 else np.zeros(1)
     band = (float(np.min(f_inst)), float(np.max(f_inst)))
     return dict(omega_mhz=0.0, As=[A],
                 envs=[lambda tv: np.interp(np.asarray(tv, float), ts, env_h,
@@ -142,7 +153,7 @@ def adaptive_split_threshold(states, default_mhz=None):
     （DOP853 载波可行性安全带）。鲁棒性：无清晰两簇（单簇/退化）或
     孤立离群点（某侧间隙占比 < 5%）时回退 default_mhz。
     """
-    default_mhz = _P.get('MW_MAX_MHZ') if default_mhz is None else default_mhz
+    default_mhz = MW_MAX_MHZ if default_mhz is None else default_mhz
     E = np.array([s['E_mhz'] for s in states], float)
     if E.size < 2:
         return default_mhz
@@ -171,7 +182,7 @@ def split_by_freq(waves, states=None):
     否则回退固定 MW_MAX_MHZ（向后兼容）。
     """
     thr = (adaptive_split_threshold(states)
-           if states is not None else _P.get('MW_MAX_MHZ'))
+           if states is not None else MW_MAX_MHZ)
     opt, mw = [], []
     for w in waves:
         if w.freq_mhz > thr:
@@ -188,7 +199,7 @@ def build_two_field(cache, states, waves, mw_M=2, t_end_ns=None,
     返回 dict:
       E_rot      : 旋转后对角能（MHz）——6P 等被光场耦合的低能流形 +ω_opt
       opt_terms  : [(A_opt(N×N), waveform, omega_opt)] 光场（不占光子块）
-      mw_groups  : _group_by_freq 格式的微波组（每载频一个，As 为其驱动矩阵）
+      mw_groups  : group_by_freq 格式的微波组（每载频一个，As 为其驱动矩阵）
       N          : 物理态数
 
     t_end_ns : 演化窗口（ns），**仅影响微波对的保留筛选**（t79/t80）。
@@ -213,7 +224,7 @@ def build_two_field(cache, states, waves, mw_M=2, t_end_ns=None,
     for w in opt_w:
         # 近共振对（旋转前，以跃迁频率 ≈ ω 判）
         def _sel(i, j, E, w=w):
-            return abs(abs(E[i] - E[j]) - w.freq_mhz) < _P.get('OPT_NRES_BW_MHZ')
+            return abs(abs(E[i] - E[j]) - w.freq_mhz) < OPT_NRES_BW_MHZ
         A = _build_A(cache, states, w.freq_mhz, w.intensity_mwcm2, w.pol,
                      _sel)
         if not np.any(A):
@@ -283,8 +294,8 @@ def build_two_field(cache, states, waves, mw_M=2, t_end_ns=None,
     #      —— 「付不付得起」（无量纲 PHASE_BUDGET）
     #   ② 逐对 Θ = C·T·Ω²/max(Δ,Ω) ≥ PHASE_TOL —— 「重不重要」（精度）
     # 无 T（脚本直调）时只有 ①，且退化为绝对上界。
-    mw_cap_hz = (min(mw_cap_mhz(float(t_end_ns), phase_budget), _P.get('MW_MAX_MHZ'))
-                 if t_end_ns is not None else _P.get('MW_MAX_MHZ'))
+    mw_cap_hz = (min(mw_cap_mhz(float(t_end_ns), phase_budget), MW_MAX_MHZ)
+                 if t_end_ns is not None else MW_MAX_MHZ)
     dE_mat = np.abs(E[:, None] - E[None, :])
     mw_groups = []
     for w in mw_w:
@@ -319,10 +330,16 @@ class _TwoFieldSetup:
 
     扩展基 |i⟩⊗|n⟩（n=0..2M_mw），索引 idx = i + N·n。
     微波 M_mw 统一（多微波载频各自光子维 → 混合进制，与本类一致）。
+
+    与 `SambeSetup` 共用**扩展空间协议**：`N` / `n_phys` / `N2`（三者同值）+
+    `P` / `p_center` / `dim` / `nphase` —— `sambe.embed` / `reconstruct_psi`
+    同时吃两种 setup，靠的就是这组名字一致。
     """
 
     def __init__(self, E_rot, N, mw_groups, M, opt_terms):
         self.N = N
+        self.n_phys = N          # 与 SambeSetup 同协议（embed/reconstruct_psi 用）
+        self.N2 = N
         self.E_rot = np.asarray(E_rot, float)
         self.mw_groups = mw_groups
         self.M = M
@@ -354,7 +371,7 @@ class _TwoFieldSetup:
         self.diag = np.tile(self.E_rot, P) + np.repeat(base, N)
         nphase = np.zeros(P)
         for nvec, g in zip(self.nvecs, mw_groups):
-            nphase = nphase + nvec * (_CONV * g['omega_mhz'])
+            nphase = nphase + nvec * (CONV * g['omega_mhz'])
         self.nphase = nphase
         self.p_center = sum(Mg * st for Mg, st in zip(self.Ms, self.strides))
         # 微波光子邻接耦合结构（k=±1..±M 显式 = 多光子保留）
@@ -453,22 +470,6 @@ class _TwoFieldSetup:
             '两场引擎稀疏路径待实现（当前维度应走稠密）')
 
 
-def _pops_of(ps):
-    return np.abs(ps) ** 2
-
-
-def _embed(psi, setup):
-    X = np.zeros(setup.dim, complex)
-    off = setup.N * setup.p_center
-    X[off:off + setup.N] = psi
-    return X
-
-
-def _reconstruct(setup, X, tq):
-    Xm = np.asarray(X, complex).reshape(setup.P, setup.N)
-    return np.exp(-1j * setup.nphase * float(tq)) @ Xm
-
-
 def evolve_two_field(states, fields_meta, psi0, t_grid, tol=1e-6,
                      progress_arr=None, log=None, record_amp=False):
     """两场引擎主入口（method='two_field'）。
@@ -483,7 +484,7 @@ def evolve_two_field(states, fields_meta, psi0, t_grid, tol=1e-6,
     E_rot = fields_meta['E_rot']
     opt_terms = fields_meta['opt_terms']
     mw_groups = fields_meta['mw_groups']
-    psi0v = _as_vector(states, psi0)
+    psi0v = as_vector(states, psi0)
     T = float(t[-1])
     tol = float(tol)
     # 多光场拍频防护：Sambe 冻结段只能承载段内慢变项，而第 2+ 光场相对共享
@@ -511,7 +512,7 @@ def evolve_two_field(states, fields_meta, psi0, t_grid, tol=1e-6,
             if rows.size == 0:
                 continue
             det = np.abs((E[rows] - E[cols]) - g['omega_mhz'])
-            m = det < _P.get('M_EST_BW_MHZ')
+            m = det < M_EST_BW_MHZ
             if m.any():
                 vmax = max(vmax, float(np.abs(A[rows[m], cols[m]]).max()))
         return vmax / max(abs(g['omega_mhz']), 1e-9)
@@ -521,7 +522,7 @@ def evolve_two_field(states, fields_meta, psi0, t_grid, tol=1e-6,
         r = _peak_r(g)
         # 多光子显式：M ≥ 2（k=±2）；若 r 大到需要更高阶则升
         M = 2
-        while (r / 4.0) ** (2 * (M - 1)) > tol and M < _P.get('_M_MAX'):
+        while (r / 4.0) ** (2 * (M - 1)) > tol and M < _M_MAX:
             M += 1
         Ms.append(M)
     log(f'[two_field] 微波光子块 M={Ms}（扇区 {setup_P(Ms)}'
@@ -560,7 +561,7 @@ def evolve_two_field(states, fields_meta, psi0, t_grid, tol=1e-6,
         _, (evals, evecs), c_mw, c_opt = dec
         a0 = evecs.conj().T @ X
         Psi = (evecs @ (a0[:, None] * np.exp(
-            -1j * _CONV * np.outer(evals, nodes - ta)))).T   # (n, dim)
+            -1j * CONV * np.outer(evals, nodes - ta)))).T   # (n, dim)
         V = np.zeros_like(Psi)
         mid = 0.5 * (ta + tb)
         # 微波包络差（逐波配对）
@@ -584,16 +585,16 @@ def evolve_two_field(states, fields_meta, psi0, t_grid, tol=1e-6,
             if np.max(np.abs(dc)) > 1e-14:
                 V = V + dc[:, None] * (Psi @ Ke.T)
         G = V @ evecs.conj()
-        Ph = np.exp(1j * _CONV * np.outer(evals, nodes))
+        Ph = np.exp(1j * CONV * np.outer(evals, nodes))
         Csum = np.cumsum(Ph * (G * ws[:, None]).T, axis=1)
         S = Csum[:, -1]
         return S
 
     def defect_at(S, evals, evecs, tq):
-        return evecs @ (-1j * _CONV
-                        * np.exp(-1j * _CONV * evals * tq) * S)
+        return evecs @ (-1j * CONV
+                        * np.exp(-1j * CONV * evals * tq) * S)
 
-    X = _embed(psi0v, setup)
+    X = embed(psi0v, setup)
     tprev = 0.0
     if progress_arr is not None and len(progress_arr) > 2:
         progress_arr[2] = 1.0                # 阶段 1：传播（逐输出区间写 t/T）
@@ -609,10 +610,10 @@ def evolve_two_field(states, fields_meta, psi0, t_grid, tol=1e-6,
             dec = seg_decomp(ta, tb)
             if dec[0] == 'diag':
                 report['n_segments'] += 1
-                return X * np.exp(-1j * _CONV * (tb - ta) * setup.diag)
+                return X * np.exp(-1j * CONV * (tb - ta) * setup.diag)
             evals, evecs = dec[1]
             a0 = evecs.conj().T @ X
-            psi_frozen = evecs @ (a0 * np.exp(-1j * _CONV * (tb - ta) * evals))
+            psi_frozen = evecs @ (a0 * np.exp(-1j * CONV * (tb - ta) * evals))
             est = 0.0
             psi_out = psi_frozen
             prev = None
@@ -642,7 +643,7 @@ def evolve_two_field(states, fields_meta, psi0, t_grid, tol=1e-6,
             return psi_out
 
         X = _propagate_seg(tprev, tb, X)
-        ps = _reconstruct(setup, X, tb)
+        ps = reconstruct_psi(setup, X, tb)
         p = _pops_of(ps)
         pops[iout] = p
         report['max_norm_dev'] = max(report['max_norm_dev'],
@@ -661,7 +662,7 @@ def evolve_two_field(states, fields_meta, psi0, t_grid, tol=1e-6,
                backend='tf-sambe-dense' if setup.dense else 'tf-sambe-sparse',
                loss=np.zeros(len(t)), error_report=report)
     if record_amp:
-        out['psi_amp'] = _reconstruct(setup, X, T)
+        out['psi_amp'] = reconstruct_psi(setup, X, T)
     return out
 
 
@@ -679,8 +680,8 @@ def _evolve_opt_only(states, fields_meta, psi0v, t, tol, log):
             c = float(np.asarray(t_[1](np.atleast_1d(tv))).flat[0])
             if c != 0.0:
                 V = V + c * t_[0]
-        u = np.exp(1j * _CONV * E_rot * tv)
-        return -1j * _CONV * (u * (V @ (np.conj(u) * y)))
+        u = np.exp(1j * CONV * E_rot * tv)
+        return -1j * CONV * (u * (V @ (np.conj(u) * y)))
 
     sol = solve_ivp(_rhs_twofield, (0.0, float(t[-1])), psi0v, method='DOP853',
                     t_eval=t, rtol=1e-9, atol=1e-11)
@@ -694,143 +695,6 @@ def _evolve_opt_only(states, fields_meta, psi0v, t, tol, log):
                 om_mhz=[float(np.abs(A_opt).max()) for A_opt, *_ in opt_terms],
                 method='two_field', backend='tf-optonly-dop853',
                 loss=np.zeros(len(t)), error_report=report)
-
-
-def evolve_hard(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
-                progress_arr=None, log=None, record_amp=False, numba=False,
-                decays=None):
-    """微波硬算 + 光场旋转系（第一性原理，**零微波近似**）——method='hard'。
-
-    numba=True 时委托 hard_numba.evolve_hard_fast（同数学、同 DOP853、
-    同返回契约，620ns 22 态 173s → ~4s；包络查表误差 ~3e-10 ≪ rtol）。
-
-    核心思想（用户提议，2026-08-29）：
-    - **光场**：旋转系解析吸收载波（6P 流形 ref=ω_opt，耦合对停在失谐），
-      光学项为常数矩阵 c(t)·A_opt——唯一近似是光学 RWA（反旋项全场
-      Bloch–Siegert 相位 4.4e-5 rad ≪ tol，可忽略；光学多光子即电离无落点）。
-    - **微波**：**不做任何变换**。H(t) 保留完整 cos(ω_mw·t) 载波，
-      solve_ivp DOP853 自适应硬积分：
-        H(t) = diag(E_rot) + Σ_opt c(t)·A_opt + Σ_mw c(t)·cos(C·ω_mw·t)·A_mw
-      → 微波多光子、Bloch–Siegert、任意谐波**天然全含**，零近似零截断；
-      → 步长由 17 GHz 载波（周期 58 ps）决定：1500 ns ≈ 2.6 万周期 × ~15 步
-        ≈ 4×10⁵ 步 × 22 维 ≈ 10⁹ flop → 秒级；两体 484 维 ~10¹¹ flop → 分钟级；
-      → **支持任意波动的微波场**（不只包络：任意时域信号、多频、啁啾都行，
-        因为 RHS 直接逐个时刻求值，无周期结构假设）。
-    - 误差：DOP853 自适应（rtol/atol 显式）；RHS 厄米 → 范数机器精度守恒
-      （对比 Sambe 路径的重构相位 bug——两种变换拼合容易出错，硬算从结构上免疫）。
-
-    返回与 evolve_exact 同构 dict（method='hard'）。
-    """
-    if numba:
-        from .hard import evolve_hard_fast
-        return evolve_hard_fast(states, fields_meta, psi0, t_grid,
-                                rtol=rtol, atol=atol,
-                                progress_arr=progress_arr, log=log,
-                                record_amp=record_amp, decays=decays)
-    from scipy.integrate import solve_ivp
-    log = log or (lambda *a: None)
-    t = np.asarray(t_grid, float)
-    N = fields_meta['N']
-    E_rot = np.asarray(fields_meta['E_rot'], float)
-    opt_terms = fields_meta['opt_terms']
-    mw_groups = fields_meta['mw_groups']
-    psi0v = _as_vector(states, psi0)
-    T = float(t[-1])
-    # t24：耗散（落点=丢失）——Gamma_ns（/ns），RHS 加 −Γ/2·y
-    has_decay = bool(decays)
-    if has_decay:
-        from .hard import _single_loss_rates
-        Gamma_ns = _single_loss_rates(states, decays)
-    else:
-        Gamma_ns = None
-
-    E = E_rot - float(E_rot.min())          # 公共偏移=全局相位（精确等价）
-
-    # 微波：A 与 (ω, env, 相位函数) 列表；t18 统一 cos(φ_f(t)) 任意相位——
-    # 定频 φ=C·ω·t（默认），变频/任意相位由 mw_groups['phase_fn'] 提供。
-    mw_terms = []
-    for g in mw_groups:
-        w = float(g['omega_mhz'])
-        ph_fn = g.get('phase_fn')
-        for A, wf in zip(g['As'], g['envs']):
-            mw_terms.append((np.asarray(A, float), w, wf, ph_fn))
-
-    def coupling_at(tv):
-        """旋转系相互作用绘景：H0=diag(E) 精确，Ṽ = u·(光+微波 cos(φ))·u†。
-
-        光场拍频（§2.3/§8）：第 2+ 光场相对共享参考失谐 δ=ω_f−ω_ref，
-        耦合项乘 exp(i·C·δ·t·(m[i]−m[k]))（m=旋转流形掩码；t10 验证：
-        exp 拍频正确、cos 错误）。首场 δ=0 → 乘 1，逐位退化为旧行为。
-        微波（t18）：cos(φ_f(t))，φ 任意（定频=chirp 特例）。
-        """
-        V = np.zeros((N, N), complex)
-        for tup in opt_terms:
-            A_opt, wf = tup[0], tup[1]
-            omega_f = float(tup[2])
-            omega_ref = float(tup[4]) if len(tup) > 4 else omega_f
-            m = tup[5] if len(tup) > 5 else None
-            c = env_at(wf, tv)
-            if c != 0.0:
-                d = omega_f - omega_ref
-                if d != 0.0 and m is not None:
-                    ph = np.exp(1j * _CONV * d * tv
-                                * (m[:, None] - m[None, :]))
-                    V = V + c * ph * A_opt
-                else:
-                    V = V + c * A_opt
-        for A, wL, wf, ph_fn in mw_terms:
-            env = env_at(wf, tv)
-            if env != 0.0:
-                ph = (ph_fn(tv) if ph_fn is not None
-                      else _CONV * wL * tv)
-                V = V + env * np.cos(float(np.asarray(ph).flat[0])) * A
-        u = np.exp(1j * _CONV * E * tv)
-        return u[:, None] * V * np.conj(u)[None, :]
-
-    def _rhs_twofield(tv, y):
-        out = -1j * _CONV * (coupling_at(tv) @ y)
-        if Gamma_ns is not None:                 # 落点=丢失 NonHermitian
-            out = out - 0.5 * Gamma_ns * y
-        return out
-
-    if progress_arr is not None:
-        if len(progress_arr) > 2:
-            progress_arr[2] = 1.0            # 阶段 1：积分（scipy 无内部钩子）
-        progress_arr[0] = 0.0
-    sol = solve_ivp(_rhs_twofield, (0.0, T), psi0v, method='DOP853',
-                    t_eval=t, rtol=rtol, atol=atol)
-    if not sol.success:
-        raise RuntimeError(f'hard 积分失败: {sol.message}')
-    pops = np.abs(sol.y).T ** 2
-    if progress_arr is not None:
-        if len(progress_arr) > 2:
-            progress_arr[2] = 2.0
-        progress_arr[0] = 1.0
-    nfev = getattr(sol, 'nfev', None)
-    log(f'[hard] DOP853 完成：{len(t)} 输出点'
-        + (f'，{nfev} 次 RHS 求值' if nfev else '')
-        + f'（微波载波 {max((abs(w) for _, w, _, _ in mw_terms), default=0):.4g} MHz'
-        f' 硬积分，零微波近似）')
-    report = dict(n_segments=1, max_richardson_diff=0.0, dt_min_hit=False,
-                  max_norm_dev=float(np.max(np.abs(pops.sum(axis=1) - 1.0))))
-    if has_decay:
-        from .hard import _loss_and_norm
-        loss, norm_dev = _loss_and_norm(pops, Gamma_ns, t)
-        report['max_norm_dev'] = norm_dev
-    else:
-        loss = np.zeros(len(t))
-    if report['max_norm_dev'] > 1e-6:
-        log(f'[hard] ⚠ 范数偏差 {report["max_norm_dev"]:.2e}'
-            '（DOP853 容差不足或 RHS 非厄米）')
-    out = dict(t=t, pops=pops, states=states,
-               om_mhz=[float(np.abs(A).max()) for A, _, _, _ in mw_terms]
-               + [float(np.abs(A_opt).max()) for A_opt, *_ in opt_terms],
-               method='hard', backend='hard-dop853',
-               loss=loss, error_report=report)
-    if record_amp:
-        uT = np.exp(1j * _CONV * E * T)
-        out['psi_amp'] = np.conj(uT) * sol.y[:, -1]
-    return out
 
 
 # ---- 函数级改名兼容别名（旧名 = 新名，外部零改动）----
@@ -920,7 +784,7 @@ def vdd_rot_filter(V, E_pair_rot, E_pair_lab, log=None,
     返回 (V_filtered, info)；info 记录丢弃元素的数量 / max|V| / 净效应上界
     （|V|²/Δ，Δ 取丢弃元素的实验室系失谐）——供调用方日志与自检核对。
     """
-    tol_rel = _P.get('FRAME_TOL_REL') if tol_rel is None else tol_rel
+    tol_rel = FRAME_TOL_REL if tol_rel is None else tol_rel
     info = dict(n_keep=0, n_drop=0, max_v_drop=0.0, max_effect_mhz=0.0)
     if V is None:
         return None, info
@@ -957,8 +821,8 @@ def _pair_mw_Ms(E_pair, groups, tol, bw=None, m_min=2,
     近共振峰值 r = max|A_近共振| / ω；M 取满足 (r/4)^{2(M−1)} ≤ tol 的最小值，
     下限 m_min=2（多光子显式保留）。
     """
-    bw = _P.get('M_EST_BW_MHZ') if bw is None else bw
-    m_max = _P.get('_M_MAX') if m_max is None else int(m_max)
+    bw = M_EST_BW_MHZ if bw is None else bw
+    m_max = _M_MAX if m_max is None else int(m_max)
     Ms = []
     for g in groups:
         r = 0.0
@@ -1040,12 +904,12 @@ def evolve_two_field_pair(states, fields_meta_A, fields_meta_B, psi0_A,
     if has_decay:
         GammaA, GammaB, _ = _pair_loss_vectors(
             states, decays_A, decays_B, N, N2)
-        gamma_pair = (GammaA + GammaB) / _CONV
+        gamma_pair = (GammaA + GammaB) / CONV
         log('[two_field_pair] 两体耗散：NonHermitian 寿命通道（落点=丢失）')
 
     # ---- 初态 ----
-    psi0_A_vec = _as_vector(states, psi0_A)
-    psi0_B_vec = _as_vector(states, psi0_B)
+    psi0_A_vec = as_vector(states, psi0_A)
+    psi0_B_vec = as_vector(states, psi0_B)
     psi0_2d = _as_product_psi(psi0_A_vec, psi0_B_vec, N)
 
     if progress_arr is None:
@@ -1071,7 +935,7 @@ def evolve_two_field_pair(states, fields_meta_A, fields_meta_B, psi0_A,
     pops_2d, X_final, report, setup = _pair_propagate(
         E_pair_rot, N, groups, opt_terms, V, gamma_pair, psi0_2d, t, tol,
         Ms, progress_arr, log,
-        _P.get('_TF_DENSE_MAX') if dense_max is None else dense_max, frozen_h_ns)
+        _TF_DENSE_MAX if dense_max is None else dense_max, frozen_h_ns)
 
     # ---- loss 曲线（NonHermitian 速率积分）----
     loss_A = np.zeros(len(t))
@@ -1104,12 +968,12 @@ def evolve_two_field_pair(states, fields_meta_A, fields_meta_B, psi0_A,
 
     out = dict(
         t=t,
-        pops_2d=pops_2d,
+        pops=pops_2d,
         pops_A=pops_A,
         pops_B=pops_B,
         loss_A=loss_A,
         loss_B=loss_B,
-        states_2d=[{
+        states=[{
             'label': f"({states[i]['label']}) x ({states[j]['label']})",
             'E_mhz': E_pair_lab[i * N + j],
             'ket_i': i,

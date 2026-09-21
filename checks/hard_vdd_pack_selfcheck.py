@@ -7,7 +7,7 @@
 keep 都会产出，属必踩。修复 = 一律从同一个 `tocoo()` 取。
 
 背景②（t78）：V_dd 丢弃判据统一为累积相位 Θ = C·T·|V|²/max(|ΔE|,|V|)
-≥ POP_PHASE_TOL（与 mixed 共用），取代原幅度阈值 `_VDD_MIN_FRAC`。
+≥ PHASE_TOL（与 mixed 共用），取代原幅度阈值 `_VDD_MIN_FRAC`。
 
 覆盖：
   1. 判据语义：共振强对留 / 共振极弱剔 / 34.6 GHz 双翻转留 / 591 THz 远失谐剔；
@@ -34,12 +34,12 @@ from src.core.atomic_levels import make_levels             # noqa: E402
 from src.core.static_pair import vdd_sparse                # noqa: E402
 from src.core.waveforms import Wave, GaussianEnv           # noqa: E402
 from src.core.hard import build_two_field, _pack_pair_hard  # noqa: E402
-from src.core.params import POP_PHASE_TOL                  # noqa: E402
-from src.core.evolve_util import _CONV                     # noqa: E402
+from src.core.coupling import PHASE_TOL                  # noqa: E402
+from src.core.evolve_util import CONV                     # noqa: E402
 from src.core.coupling import static_phase_keep            # noqa: E402
 
 C = Checker('hard_vdd_pack')
-Cv = _CONV
+Cv = CONV
 _T = 200.0                        # 与 packed() 的演化窗口一致
 cache = core.ArcCache(Rubidium87())
 states = make_levels(cache, [dict(n=60, l=0, j=0.5, kind='mJ', m=+0.5),
@@ -69,7 +69,7 @@ def ref_keep(Vin, T=_T):
     den = np.maximum(dE, v)
     th = np.zeros(v.shape, float)
     np.divide((Cv * T) * v * v, den, out=th, where=(den > 0.0))
-    m = (d != 0) & (th >= POP_PHASE_TOL)
+    m = (d != 0) & (th >= PHASE_TOL)
     return {(int(r), int(c)) for r, c in zip(co.row[m], co.col[m])}
 
 
@@ -82,7 +82,7 @@ _dE = np.array([0.0, 0.0, 34570.0, 5.91e8])
 _k, _i = static_phase_keep(_v, _dE, _T)
 C.check('Θ 判据：共振强留 / 共振极弱剔 / 34.6GHz 双翻转留 / 591THz 远失谐剔',
         bool(_k[0]) and (not _k[1]) and bool(_k[2]) and (not _k[3]),
-        f'keep={_k.tolist()}（θ_tol={POP_PHASE_TOL:.0e}）')
+        f'keep={_k.tolist()}（θ_tol={PHASE_TOL:.0e}）')
 C.check('info 字段完整', {'n_keep', 'n_drop', 'max_v_drop',
                           'max_theta_drop', 'max_rate_keep'} <= set(_i))
 

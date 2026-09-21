@@ -21,24 +21,22 @@ V_dd 在旋转系下做缓变近似（secular RWA）：仅保留旋转系振荡�
   - RWA 场步长只计旋转系失谐 |ΔE|；非 RWA 场加载波 ω_L；ω_L=0 常数场
     （V_dd secular）计 |ΔE|（保留项振荡必须被步长解析）
   - 全 RWA + 常数包络 + 无振荡非 RWA 场 → 一次对角化精确解
-  - 旁观态 E_rot 归零、耦合态减公共参考（同 _e_rot，防相位爆炸）
+  - 旁观态 E_rot 归零、耦合态减公共参考（同 reference_e_rot，防相位爆炸）
 
 单位：与 evolve.py 一致（MHz, ns, rad/ns）。
 """
 import numpy as np
 import scipy.sparse as sp
 
-from src.core.atomic_levels import gaussian, square, step
-from src.core.evolve_util import _as_vector, _decay_ops, _resolve_state_idx
-from src.core.sambe import env_at
-from src.core.field_build import _env_samples
-from src.core.evolve_rwa import (_evolve_rwa, _rwa_reference, _e_rot,
-                                 _assign_reference, _field_geometry)
-from src.core.params import RWA_TOL
-from src.core import static_atom as core
+from src.core.atomic_levels import square
+from src.core.evolve_util import as_vector
+from src.core.evolve_util import env_at
+from src.core.field_build import env_samples
+from src.core.evolve_rwa import reference_rwa
+from src.core.evolve_rwa import RWA_TOL
 from src.core import tensor as _tensor  # noqa: E402  （t14张量化调度层搬移）
 
-_CONV = 2 * np.pi * 1e-3  # MHz·ns → rad
+from src.core.evolve_util import CONV
 
 # numba JIT（可选）：并行化 RK4 主循环（CSR matvec 行并行 + 消除 Python/numpy
 # 调度开销）。无 numba 时自动回退纯 Python 路径（功能等价，仅慢）。
@@ -168,16 +166,16 @@ def vdd_secular(cache, single, R_um, theta_deg, phi_deg, ref_A, ref_B, N,
 # ============================================================
 
 def pair_rotate_frame(states, fields_A, fields_B):
-    """分别为原子 A/B 计算旋转参考（复用 _rwa_reference）。
+    """分别为原子 A/B 计算旋转参考（复用 reference_rwa）。
 
     返回 ref_A, ref_B（各 N 元数组）。
     """
     if fields_A:
-        ref_A, _, _ = _rwa_reference(states, fields_A)
+        ref_A, _, _ = reference_rwa(states, fields_A)
     else:
         ref_A = np.zeros(len(states))
     if fields_B:
-        ref_B, _, _ = _rwa_reference(states, fields_B)
+        ref_B, _, _ = reference_rwa(states, fields_B)
     else:
         ref_B = np.zeros(len(states))
     return ref_A, ref_B
@@ -210,7 +208,7 @@ def _pack_pair_terms(fields_2d, N2, G, dt, t_end):
     data_all, idx_all, ptr2d_rows, offs = [], [], [], []
     tgrid = np.linspace(0.0, float(t_end), G)
 
-    def _env_samples(wf):
+    def env_samples(wf):
         """包络在 tgrid 上一次向量化采样（各 Env 的 __call__ 均支持数组）。"""
         return np.asarray(wf(tgrid), float).copy()
 
@@ -220,7 +218,7 @@ def _pack_pair_terms(fields_2d, N2, G, dt, t_end):
         ratio = (f.get('real_omega0_mhz', f['omega0_mhz'])
                  / max(wL, 1e-9))
         is_rwa = wL > 0 and ratio < RWA_TOL
-        env_arr = _env_samples(f['waveform'])
+        env_arr = env_samples(f['waveform'])
 
         def _push(csr, tt, coef, omg, env):
             nonlocal data_off
@@ -268,7 +266,7 @@ if _HAS_NUMBA:
     def _pair_ht(ps, uu, ts, Ec, DATA, IDX, PTR2D, OFF, NT, COEF, OMG,
                  ENV, dt, gam, out):
         """out[i] = Σ_k coef_k(ts)·uu_i·Σ_j M_k[i,j]·(conj(uu_j)·ps_j)
-        − 0.5i·(gam[i]/_CONV)·ps[i]（两体寿命耗散，落点=丢失）。"""
+        − 0.5i·(gam[i]/CONV)·ps[i]（两体寿命耗散，落点=丢失）。"""
         N2 = Ec.shape[0]
         n_terms = NT.shape[0]
         G = ENV.shape[1]
@@ -288,7 +286,7 @@ if _HAS_NUMBA:
                 if tt == 0:
                     cf = COEF[k] * e
                 elif tt == 1:
-                    cf = COEF[k] * e * np.cos(_CONV * OMG[k] * ts)
+                    cf = COEF[k] * e * np.cos(CONV * OMG[k] * ts)
                 else:
                     cf = COEF[k] * e
                 if cf == 0.0:
@@ -301,7 +299,7 @@ if _HAS_NUMBA:
                     s += DATA[p] * (np.conj(uu[j]) * ps[j])
                 a += cf * ui * s
             if gam[i] != 0.0:
-                a -= 0.5j * (gam[i] / _CONV) * ps[i]
+                a -= 0.5j * (gam[i] / CONV) * ps[i]
             out[i] = a
 
     @njit(cache=True, nogil=True, parallel=True)
@@ -328,7 +326,7 @@ if _HAS_NUMBA:
                 if tt == 0:
                     cf = COEF[k] * e
                 elif tt == 1:
-                    cf = COEF[k] * e * np.cos(_CONV * OMG[k] * ts)
+                    cf = COEF[k] * e * np.cos(CONV * OMG[k] * ts)
                 else:
                     cf = COEF[k] * e
                 if cf == 0.0:
@@ -341,7 +339,7 @@ if _HAS_NUMBA:
                     s += DATA[p] * (np.conj(uu[j]) * ps[j])
                 a += cf * ui * s
             if gam[i] != 0.0:
-                a -= 0.5j * (gam[i] / _CONV) * ps[i]
+                a -= 0.5j * (gam[i] / CONV) * ps[i]
             out[i] = a
         return out
 
@@ -383,31 +381,31 @@ if _HAS_NUMBA:
             ub = u * w05
             uc = u * w1
             if use_par:
-                k1 = -1j * _CONV * _pair_ht_par(
+                k1 = -1j * CONV * _pair_ht_par(
                     psi, u, tm, Ec, DATA, IDX, PTR2D, OFF, NT, COEF, OMG,
                     ENV, dt, gam)
-                k2 = -1j * _CONV * _pair_ht_par(
+                k2 = -1j * CONV * _pair_ht_par(
                     psi + 0.5 * dt * k1, ub, tm + dh, Ec, DATA, IDX,
                     PTR2D, OFF, NT, COEF, OMG, ENV, dt, gam)
-                k3 = -1j * _CONV * _pair_ht_par(
+                k3 = -1j * CONV * _pair_ht_par(
                     psi + 0.5 * dt * k2, ub, tm + dh, Ec, DATA, IDX,
                     PTR2D, OFF, NT, COEF, OMG, ENV, dt, gam)
-                k4 = -1j * _CONV * _pair_ht_par(
+                k4 = -1j * CONV * _pair_ht_par(
                     psi + dt * k3, uc, tm + dt, Ec, DATA, IDX, PTR2D,
                     OFF, NT, COEF, OMG, ENV, dt, gam)
             else:
                 _pair_ht(psi, u, tm, Ec, DATA, IDX, PTR2D, OFF, NT, COEF,
                          OMG, ENV, dt, gam, b1)
-                k1 = -1j * _CONV * b1
+                k1 = -1j * CONV * b1
                 _pair_ht(psi + 0.5 * dt * k1, ub, tm + dh, Ec, DATA, IDX,
                          PTR2D, OFF, NT, COEF, OMG, ENV, dt, gam, b2)
-                k2 = -1j * _CONV * b2
+                k2 = -1j * CONV * b2
                 _pair_ht(psi + 0.5 * dt * k2, ub, tm + dh, Ec, DATA, IDX,
                          PTR2D, OFF, NT, COEF, OMG, ENV, dt, gam, b3)
-                k3 = -1j * _CONV * b3
+                k3 = -1j * CONV * b3
                 _pair_ht(psi + dt * k3, uc, tm + dt, Ec, DATA, IDX,
                          PTR2D, OFF, NT, COEF, OMG, ENV, dt, gam, b4)
-                k4 = -1j * _CONV * b4
+                k4 = -1j * CONV * b4
             full = psi + (dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
             t1 = min(tm + dt, T)
             while rec < n_out and t_out[rec] <= t1 + eps:
@@ -421,36 +419,36 @@ if _HAS_NUMBA:
                     uhc = u * w1h
                     s0 = psi
                     if use_par:
-                        kk1 = -1j * _CONV * _pair_ht_par(
+                        kk1 = -1j * CONV * _pair_ht_par(
                             s0, u, tm, Ec, DATA, IDX, PTR2D, OFF, NT,
                             COEF, OMG, ENV, dt, gam)
-                        kk2 = -1j * _CONV * _pair_ht_par(
+                        kk2 = -1j * CONV * _pair_ht_par(
                             s0 + 0.5 * h * kk1, uhb, tm + 0.5 * h, Ec,
                             DATA, IDX, PTR2D, OFF, NT, COEF, OMG, ENV,
                             dt, gam)
-                        kk3 = -1j * _CONV * _pair_ht_par(
+                        kk3 = -1j * CONV * _pair_ht_par(
                             s0 + 0.5 * h * kk2, uhb, tm + 0.5 * h, Ec,
                             DATA, IDX, PTR2D, OFF, NT, COEF, OMG, ENV,
                             dt, gam)
-                        kk4 = -1j * _CONV * _pair_ht_par(
+                        kk4 = -1j * CONV * _pair_ht_par(
                             s0 + h * kk3, uhc, tm + h, Ec, DATA, IDX,
                             PTR2D, OFF, NT, COEF, OMG, ENV, dt, gam)
                     else:
                         _pair_ht(s0, u, tm, Ec, DATA, IDX, PTR2D, OFF,
                                  NT, COEF, OMG, ENV, dt, gam, b1)
-                        kk1 = -1j * _CONV * b1
+                        kk1 = -1j * CONV * b1
                         _pair_ht(s0 + 0.5 * h * kk1, uhb, tm + 0.5 * h,
                                  Ec, DATA, IDX, PTR2D, OFF, NT, COEF,
                                  OMG, ENV, dt, gam, b2)
-                        kk2 = -1j * _CONV * b2
+                        kk2 = -1j * CONV * b2
                         _pair_ht(s0 + 0.5 * h * kk2, uhb, tm + 0.5 * h,
                                  Ec, DATA, IDX, PTR2D, OFF, NT, COEF,
                                  OMG, ENV, dt, gam, b3)
-                        kk3 = -1j * _CONV * b3
+                        kk3 = -1j * CONV * b3
                         _pair_ht(s0 + h * kk3, uhc, tm + h, Ec, DATA,
                                  IDX, PTR2D, OFF, NT, COEF, OMG, ENV,
                                  dt, gam, b4)
-                        kk4 = -1j * _CONV * b4
+                        kk4 = -1j * CONV * b4
                     sample = s0 + (h / 6.0) * (kk1 + 2.0 * kk2
                                                + 2.0 * kk3 + kk4)
                 pops[rec] = np.abs(sample) ** 2
@@ -491,7 +489,7 @@ def _pair_rwa_jit(E_rot_2d, fields_2d, psi0, t_out, dt, M_steps,
     基组极大的场景调参。
     """
     N2 = len(E_rot_2d)
-    Ec = _CONV * E_rot_2d
+    Ec = CONV * E_rot_2d
     G = 2 * M_steps + 3
     DATA, IDX, PTR2D, OFF, NT, COEF, OMG, ENV = _pack_pair_terms(
         fields_2d, N2, G, dt, t_out[-1])
@@ -547,7 +545,7 @@ def _pair_rwa(E_rot_2d, fields_2d, psi0, t, frac=20.0,
         gam = gam + np.asarray(gamma_B, float)
 
     # 旋转系能量相位（与 V_dd 对角位移、旁观态归一后的 E_rot_2d 自洽）
-    Ec = _CONV * E_rot_2d
+    Ec = CONV * E_rot_2d
 
     # ---- 每场 RWA 分类（步长估计与项组装共用同一判据） ----
     def _is_rwa(f):
@@ -561,7 +559,7 @@ def _pair_rwa(E_rot_2d, fields_2d, psi0, t, frac=20.0,
     # ---- 全 RWA 且包络恒常且无振荡非 RWA 场 → 对角化精确解 ----
     # 非 RWA 场（微波）即使包络恒常也含 cos(ω_L t) 载波，哈密顿量时变，
     # 不能走对角化路径。
-    all_const = all(_env_samples(f['waveform'], t_out[-1])[1]
+    all_const = all(env_samples(f['waveform'], t_out[-1])[1]
                     for f in fields_2d)
     has_osc = any(f['omega_L_mhz'] > 0 and not _is_rwa(f)
                   for f in fields_2d)
@@ -572,7 +570,7 @@ def _pair_rwa(E_rot_2d, fields_2d, psi0, t, frac=20.0,
         H0 = np.diag(E_rot_2d).astype(complex)
         for f in fields_2d:
             if _is_rwa(f):
-                c_val, _ = _env_samples(f['waveform'], t[-1])
+                c_val, _ = env_samples(f['waveform'], t[-1])
                 H0 += (f['omega0_mhz'] / 2.0 * c_val) * f['A']
                 ac = np.asarray(f.get('ac_shift', np.zeros(N2)), float)
                 if np.any(ac != 0.0):
@@ -582,7 +580,7 @@ def _pair_rwa(E_rot_2d, fields_2d, psi0, t, frac=20.0,
                 H0 = H0 + f['omega0_mhz'] * (M.toarray() if sp.issparse(M) else M)
         evals, evecs = np.linalg.eigh(H0)
         coef = evecs.T.conj() @ psi0
-        ph = np.exp(-1j * _CONV * evals[:, None] * t_out[None, :])
+        ph = np.exp(-1j * CONV * evals[:, None] * t_out[None, :])
         psi_t = evecs @ (coef[:, None] * ph)
         pops = np.abs(psi_t).T ** 2
         return t_out, pops, psi_t[:, -1]
@@ -603,20 +601,20 @@ def _pair_rwa(E_rot_2d, fields_2d, psi0, t, frac=20.0,
             coo = M.tocoo()
             for i, j, a in zip(coo.row, coo.col, coo.data):
                 if i < j and abs(a) > 1e-12:
-                    w_max = max(w_max, abs(Ec[i] - Ec[j]) / _CONV + wL)
+                    w_max = max(w_max, abs(Ec[i] - Ec[j]) / CONV + wL)
         else:
             A_abs = np.abs(M)
             for i in range(N2):
                 for j in range(i + 1, N2):
                     if A_abs[i, j] > 1e-12:
-                        w_max = max(w_max, abs(Ec[i] - Ec[j]) / _CONV + wL)
+                        w_max = max(w_max, abs(Ec[i] - Ec[j]) / CONV + wL)
 
     if w_max > 0:
-        dt_carrier = 2.0 * np.pi / (_CONV * w_max) / frac
+        dt_carrier = 2.0 * np.pi / (CONV * w_max) / frac
     else:
         dt_carrier = t_out[-1] / 500.0 if t_out[-1] > 0 else 0.01
-    dt_acc = 0.06 / (_CONV * max(cmax, 1e-6))
-    dt_stab = 2.0 / (_CONV * max(cmax, 1e-6))
+    dt_acc = 0.06 / (CONV * max(cmax, 1e-6))
+    dt_stab = 2.0 / (CONV * max(cmax, 1e-6))
     dt_res = t_out[-1] / 500.0 if t_out[-1] > 0 else 0.05
     dt = min(dt_carrier, dt_acc, dt_stab, dt_res, 0.05)
     if dt <= 0 or not np.isfinite(dt):
@@ -665,13 +663,13 @@ def _pair_rwa(E_rot_2d, fields_2d, psi0, t, frac=20.0,
                           field['omega0_mhz']
                           * float(np.asarray(field['waveform'](
                               np.atleast_1d(tt))).flat[0])
-                          * np.cos(_CONV * field['omega_L_mhz'] * tt)))
+                          * np.cos(CONV * field['omega_L_mhz'] * tt)))
     if has_decay:
         # 两体寿命耗散（落点=丢失）：H 对角加 −i·Γ/2（/ns，折回 MHz）
-        terms.append((sp.diags(-0.5j * gam / _CONV).astype(complex),
+        terms.append((sp.diags(-0.5j * gam / CONV).astype(complex),
                       lambda tt: 1.0))
 
-    c = -1j * _CONV
+    c = -1j * CONV
 
     # ---- u 相位增量：全步只做向量逐元乘，不再每阶段现算 exp ----
     # u(t) = e^{iEc·t}；步进 u0 *= w1_full；RK4 阶段时刻的 u 由
@@ -775,7 +773,7 @@ _reduce_B = _tensor._reduce_B
 def _scatter_loss_curve(fields, pops_atom, t, N):
     """远失谐光的 off-resonant 散射损失曲线（report-only 后处理）。
 
-    对每束光：散射率 σ（MHz，源态 i）由 real_field 给出（≈Ω²Γ_up/(4Δ²)），
+    对每束光：散射率 σ（MHz，源态 i）≈Ω²Γ_up/(4Δ²)，
     源布居随时间被散射到短寿命上态 → depump/loss：
         loss_i(t) = ∫₀ᵗ σ_i·1e-3·env(t')²·P_atom[i](t') dt'
     P_atom = 该原子约化布居（n_t, N，输出网格）。不反馈演化（弱散射二阶小）。
@@ -966,7 +964,7 @@ def pair_evolve(states, fields_A, fields_B, psi0_A, psi0_B,
         }
         fields_2d.append(V_field)
 
-    # ---- 旁观态归一（同单原子 _e_rot）：避免光频量级 E_rot 使
+    # ---- 旁观态归一（同单原子 reference_e_rot）：避免光频量级 E_rot 使
     # u(t)=e^{iE_rot t} 相位爆炸、步长估计被旁观态污染 ----
     # 动力学相关集合 = 驱动场耦合态 ∪ V_dd 耦合态。
     coupled = set()
@@ -984,8 +982,8 @@ def pair_evolve(states, fields_A, fields_B, psi0_A, psi0_B,
             E_rot_2d[k] = 0.0
 
     # ---- 两体初态 ----
-    psi0_A_vec = _as_vector(states, psi0_A)
-    psi0_B_vec = _as_vector(states, psi0_B)
+    psi0_A_vec = as_vector(states, psi0_A)
+    psi0_B_vec = as_vector(states, psi0_B)
     psi0_2d = _as_product_psi(psi0_A_vec, psi0_B_vec, N)
 
     if progress_arr is None:
@@ -1025,12 +1023,12 @@ def pair_evolve(states, fields_A, fields_B, psi0_A, psi0_B,
 
     return dict(
         t=t_out,
-        pops_2d=pops_2d,
+        pops=pops_2d,
         pops_A=pops_A,
         pops_B=pops_B,
         loss_A=loss_A,
         loss_B=loss_B,
-        states_2d=[{
+        states=[{
             'label': f"({states[i]['label']}) x ({states[j]['label']})",
             'E_mhz': E_rot_2d[i * N + j],
             'ket_i': i,

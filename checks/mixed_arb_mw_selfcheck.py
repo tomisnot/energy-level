@@ -31,11 +31,11 @@ from arc import Rubidium87                                     # noqa: E402
 from src.core import static_atom as core                       # noqa: E402
 from src.core.atomic_levels import make_levels                 # noqa: E402
 from src.core.coupling import pack_rhs, rhs_phi_pairs          # noqa: E402
-from src.core.evolve_engine import evolve_engine               # noqa: E402
+from src.core.evolve_mixed import evolve_mixed                 # noqa: E402
 from src.core.evolve_twofield import arbitrary_mw_group        # noqa: E402
-from src.core.evolve_util import _CONV                         # noqa: E402
+from src.core.evolve_util import CONV                         # noqa: E402
 from src.core.field_build import build_fields_exact            # noqa: E402
-from src.core.hard import build_two_field                      # noqa: E402
+from src.core.hard import build_two_field, evolve_hard         # noqa: E402
 from src.core.waveforms import ArbitraryWave                   # noqa: E402
 
 B = 21.7
@@ -106,7 +106,7 @@ POL = 'σ-'
 def _arb(tag, chirp_mhz_per_ns=0.0, T=600.0, dt=0.5, I=1.2e-3):
     """造一条任意微波波形：载波 NU + 线性啁啾 + 平滑包络。"""
     tn = np.arange(0.0, T + 1e-9, dt)
-    ph = _CONV * (NU * tn + 0.5 * chirp_mhz_per_ns * tn ** 2)
+    ph = CONV * (NU * tn + 0.5 * chirp_mhz_per_ns * tn ** 2)
     amp = np.sin(np.pi * tn / T) ** 2 * np.cos(ph)
     return ArbitraryWave(tag, tn, amp, pol=POL, intensity_mwcm2=I,
                          offset_ns=0.0)
@@ -119,7 +119,7 @@ def _rhs_probe(use_table):
     ts = np.linspace(0.0, t_end, ntab)
     p = [(0, 1, 5.0 + 0j, NU, 1, NU, env)]
     if use_table:
-        phl = _CONV * NU * ts
+        phl = CONV * NU * ts
         p = [(0, 1, 5.0 + 0j, NU, 1, NU, env,
               lambda t: np.interp(np.asarray(t, float), ts, phl))]
     pk = pack_rhs(p, t_end, n_tab=ntab)
@@ -129,7 +129,7 @@ def _rhs_probe(use_table):
         return rhs_phi_pairs(tv, phi, pk['iis'], pk['jjs'], pk['vals'],
                              pk['dDs'], pk['is_mw'], pk['wcos'],
                              pk['n_pairs_w'], pk['env_tab'], pk['env_dt'],
-                             pk['has_ph'], pk['ph_tab'], _CONV)
+                             pk['has_ph'], pk['ph_tab'], CONV)
     return np.array([rhs(tv) for tv in (0.137, 7.3, 23.71, 49.93)])
 
 
@@ -149,12 +149,10 @@ for tag, chirp in (('常数载频', 0.0), ('啁啾 0.01 MHz/ns', 0.01)):
 
     meta = build_two_field(cache, s2, [])
     meta['mw_groups'].append(grp)
-    r_h = evolve_engine('hard', s2, fields=meta, psi0=0, t_grid=tg, n_body=1,
-                        rtol=1e-10, atol=1e-12)
+    r_h = evolve_hard(s2, meta, 0, tg, rtol=1e-10, atol=1e-12)
 
     fields_m = build_fields_exact(cache, s2, [])       # 无普通波
-    r_m = evolve_engine('mixed', s2, fields=fields_m, psi0=0, t_grid=tg,
-                        n_body=1, mw_arb=[grp], tol=1e-10)
+    r_m = evolve_mixed(s2, fields_m, 0, tg, mw_arb=[grp], tol=1e-10)
 
     amp_m = float(np.ptp(r_m['pops'][:, 1]))
     check(f'{tag}：确有动力学', amp_m > 0.05, f'60P 摆幅 {amp_m:.3f}')
@@ -169,10 +167,9 @@ for tag, chirp in (('常数载频', 0.0), ('啁啾 0.01 MHz/ns', 0.01)):
 from src.core.waveforms import Wave, GaussianEnv                  # noqa: E402
 wv = [Wave('普通微波', NU, GaussianEnv(150, 40), pol=POL,
            intensity_mwcm2=1.2e-3)]
-r_om = evolve_engine('mixed', s2, fields=build_fields_exact(cache, s2, wv),
-                     psi0=0, t_grid=tg, n_body=1, tol=1e-10)
-r_oh = evolve_engine('hard', s2, fields=build_two_field(cache, s2, wv),
-                     psi0=0, t_grid=tg, n_body=1, rtol=1e-10, atol=1e-12)
+r_om = evolve_mixed(s2, build_fields_exact(cache, s2, wv), 0, tg, tol=1e-10)
+r_oh = evolve_hard(s2, build_two_field(cache, s2, wv), 0, tg,
+                   rtol=1e-10, atol=1e-12)
 group('C 回归：普通（单一载频）微波仍 mixed ≡ hard')
 check('③ 回归组确有动力学（防空洞对照）',
         float(np.ptp(r_om['pops'][:, 1])) > 0.05,

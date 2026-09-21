@@ -33,12 +33,9 @@ from arc import Rubidium87
 from src.core import core, waveforms
 # t74：evolve shim 已删——按新家直连
 from src.core.atomic_levels import gaussian, square, make_levels
-from src.core.field_build import (field, real_field, group_field,
-                                  _field_geometry, _sublevel_row)
-from src.core.evolve_util import (decay, auto_decays, _as_vector,
-                                  _CONV)
-from src.core.evolve_rwa import (evolve, _e_rot, _evolve_full,
-                                 _evolve_full_hybrid, _ip4_reference)
+from src.core.field_build import field
+from src.core.evolve_util import decay, auto_decays, CONV
+from src.core.evolve_rwa import evolve, reference_e_rot, reference_rwa
 
 from src import pair_core as pc
 from checklib import Checker
@@ -52,16 +49,16 @@ def states_sp(cache, B):
     """60S m=−0.5 / 60P1/2 m=−0.5（真实能量，60S↔60P 微波跃迁）。"""
     return make_levels(cache, [
         dict(n=60, l=0, j=0.5, m=-0.5,
-             E_mhz=core._sublevel_energy(cache, 60, 0, 0.5, -0.5, B)),
+             E_mhz=core.sublevel_energy(cache, 60, 0, 0.5, -0.5, B)),
         dict(n=60, l=1, j=0.5, m=-0.5,
-             E_mhz=core._sublevel_energy(cache, 60, 1, 0.5, -0.5, B))])
+             E_mhz=core.sublevel_energy(cache, 60, 1, 0.5, -0.5, B))])
 
 
 def solve_me(H_mhz, Llist, rho0, t_ns):
     """常数 Lindblad 精确解（Liouvillian 本征分解；temp-sim solve_me 同款）。
-    单位：H MHz → ×_CONV（rad/ns）；L 矩阵元已含 √(Γ×1e-3)。"""
+    单位：H MHz → ×CONV（rad/ns）；L 矩阵元已含 √(Γ×1e-3)。"""
     d = H_mhz.shape[0]
-    Hh = np.asarray(H_mhz, complex) * _CONV
+    Hh = np.asarray(H_mhz, complex) * CONV
     I = np.eye(d)
     Lv = -1j * (np.kron(I, Hh) - np.kron(Hh.conj().T, I))
     for L in Llist:
@@ -99,8 +96,8 @@ p2 = []                                    # D2（2）+ D3（1）+ D4（2）= 5
 G2 = 4.0
 fld2 = field(0, 1, omega0_mhz=0.5, waveform=square(0, 1e9))
 decs2 = [decay(1, G2)]                     # 60P → loss
-ref_arr2, rwa_g2, _ = _ip4_reference(states, [fld2])
-E_rot2 = _e_rot(np.array([s['E_mhz'] for s in states]), ref_arr2,
+ref_arr2, rwa_g2, _ = reference_rwa(states, [fld2])
+E_rot2 = reference_e_rot(np.array([s['E_mhz'] for s in states]), ref_arr2,
                        states, rwa_g2, [])
 d2 = 3
 H2 = np.zeros((d2, d2), complex)
@@ -119,8 +116,8 @@ G3 = 15.0
 fld3 = field(0, 1, omega0_mhz=0.5,
                     waveform=gaussian(500.0, 150.0))
 decs3 = [decay(1, G3, 0)]                  # 60P → 60S（显式落点）
-ref_arr3, rwa_g3, non_g3 = _ip4_reference(states, [fld3])
-E_rot3 = _e_rot(np.array([s['E_mhz'] for s in states]), ref_arr3,
+ref_arr3, rwa_g3, non_g3 = reference_rwa(states, [fld3])
+E_rot3 = reference_e_rot(np.array([s['E_mhz'] for s in states]), ref_arr3,
                        states, rwa_g3, non_g3)
 N3 = 2
 
@@ -134,7 +131,7 @@ def H3_at(tv):
 def rhs3(tv, rho_v):
     rho = rho_v.reshape((N3, N3), order='F')
     H = H3_at(tv)
-    d = -1j * _CONV * (H @ rho - rho @ H)
+    d = -1j * CONV * (H @ rho - rho @ H)
     g = G3 * 1e-3
     d[0, 0] += g * rho[1, 1].real
     d[1, :] -= 0.5 * g * rho[1, :]
@@ -158,9 +155,9 @@ groups4 = [dict(n=60, l=0, j=0.5), dict(n=60, l=1, j=0.5)]
 V_ex = pc.exchange_coupling(cache, groups4, R_um=30.0)
 states4 = make_levels(cache, [
     dict(n=60, l=0, j=0.5, m=0.5,
-         E_mhz=core._sublevel_energy(cache, 60, 0, 0.5, 0.5, B)),
+         E_mhz=core.sublevel_energy(cache, 60, 0, 0.5, 0.5, B)),
     dict(n=60, l=1, j=0.5, m=0.5,
-         E_mhz=core._sublevel_energy(cache, 60, 1, 0.5, 0.5, B))])
+         E_mhz=core.sublevel_energy(cache, 60, 1, 0.5, 0.5, B))])
 G4 = 4.0
 fld4 = field(0, 1, omega0_mhz=2.0 * abs(V_ex),
                     waveform=square(0, 1e9))
@@ -198,7 +195,7 @@ ac5 = {'kind': 'multi', 'M': np.diag(acv5), 'A': np.zeros((N5, N5)),
        'ac_shift': acv5, 'g_idx': [], 'e_idx': [],
        'omega0_mhz': 1.0, 'omega_L_mhz': 295723987.476, 'waveform': opt5}
 fields5 = [mw5, ac5]
-ref_arr5, rwa_g5, non_g5 = _ip4_reference(states5, fields5)
+ref_arr5, rwa_g5, non_g5 = reference_rwa(states5, fields5)
 E5 = np.array([s['E_mhz'] for s in states5])
 E_rot5 = E5 - ref_arr5
 coupled5 = set()
@@ -223,11 +220,11 @@ def H5_at(tv):
     for g in non_g5:
         env = float(np.asarray(g['waveform'](np.atleast_1d(tv))).flat[0])
         H = H + (g['omega0_mhz'] * env
-                 * np.cos(_CONV * g['omega_L_mhz'] * tv)) * g['A']
+                 * np.cos(CONV * g['omega_L_mhz'] * tv)) * g['A']
     return H
 
 def rhs5(tv, y):
-    return -1j * _CONV * (H5_at(tv) @ y)
+    return -1j * CONV * (H5_at(tv) @ y)
 
 v05 = np.zeros(N5, complex); v05[0] = 1.0
 sol5 = solve_ivp(rhs5, (t5[0], t5[-1]), v05, t_eval=t5, rtol=1e-8, atol=1e-11)
@@ -285,10 +282,10 @@ p5 = []                                    # D10（2）
 # 基组：6P3/2 四个 mJ + 60S（里德堡，τ~230 µs 应被排除）
 states10 = make_levels(cache, [
     dict(n=6, l=1, j=1.5, m=float(m),
-         E_mhz=core._sublevel_energy(cache, 6, 1, 1.5, float(m), B))
+         E_mhz=core.sublevel_energy(cache, 6, 1, 1.5, float(m), B))
     for m in (-1.5, -0.5, 0.5, 1.5)] + [
     dict(n=60, l=0, j=0.5, m=0.5,
-         E_mhz=core._sublevel_energy(cache, 60, 0, 0.5, 0.5, B))])
+         E_mhz=core.sublevel_energy(cache, 60, 0, 0.5, 0.5, B))])
 auto = auto_decays(cache, states10)
 i6p = [i for i, s in enumerate(states10) if s['n'] == 6]
 tau_6p = cache.atom.getStateLifetime(6, 1, 1.5, temperature=0.0)

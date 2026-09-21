@@ -216,14 +216,14 @@ def t9():
     B = 21.7
     groups = [dict(n=6, l=1, j=1.5, label='6P_{3/2}', color='r'),
               dict(n=60, l=0, j=0.5, label='60S_{1/2}', color='b')]
-    b63 = next(r for r in core._group_sublevel_rows(cache, 6, 1, 1.5, B)
+    b63 = next(r for r in core.base_sublevels(cache, [dict(n=6, l=1, j=1.5)], B)
                if r['qstr'] == 'F=3.0, m_F=+3.0')
-    a60 = next(r for r in core._group_sublevel_rows(cache, 60, 0, 0.5, B)
+    a60 = next(r for r in core.base_sublevels(cache, [dict(n=60, l=0, j=0.5)], B)
                if r['qstr'] == 'm_J=+0.5')
     cfg = {'enabled': True, 'intensity': 10000.0,
            'frequency_hz': (a60['E_mhz'] - b63['E_mhz']) * 1e6, 'polarization': 'σ-'}
     rows = core.build_level_rows(cache, B, groups, cfg, groups)
-    r63 = next(r for r in rows if r['label'] == '6P_{3/2}'
+    r63 = next(r for r in rows if r['group_label'] == '6P_{3/2}'
                and r['qstr'] == 'F=3.0, m_F=+3.0')
     subs.append(('共振位移 > 100 kHz（≈Ω/2，非 kHz 微扰）', abs(r63['ac']) > 0.1))
     p = min(core.collect_transitions(cache, groups, cfg, B), key=lambda x: abs(x[4]))
@@ -239,8 +239,8 @@ def t10():
     print('T10 F↔mJ 矩阵元 vs ARC（合法 + 禁忌）')
     subs = []
     cache = core.ArcCache(Rubidium87())
-    rows_6p = core._group_sublevel_rows(cache, 6, 1, 1.5, 0.0)
-    rows_60s = core._group_sublevel_rows(cache, 60, 0, 0.5, 0.0)
+    rows_6p = core.base_sublevels(cache, [dict(n=6, l=1, j=1.5)], 0.0)
+    rows_60s = core.base_sublevels(cache, [dict(n=60, l=0, j=0.5)], 0.0)
     for qs_a, qs_b, q in (('F=3.0, m_F=+3.0', 'm_J=+0.5', -1),   # σ- 合法
                           ('F=3.0, m_F=-1.0', 'm_J=+0.5', -1)):  # σ- 禁忌
         a = next(r for r in rows_6p if r['qstr'] == qs_a)

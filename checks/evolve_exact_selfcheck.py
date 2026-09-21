@@ -27,11 +27,8 @@ import numpy as np
 from src.core.sambe import evolve_sambe as ex_ev
 from src.core.evolve_reference import evolve_reference as ex_ref
 # t74：evolve shim 已删——按新家直连
-from src.core.atomic_levels import gaussian, square, make_levels
-from src.core.field_build import field, real_field, _field_geometry, _sublevel_row
-from src.core.evolve_util import decay, auto_decays, _as_vector
-from src.core.evolve_rwa import (evolve, _CONV, _e_rot, _evolve_full,
-                                 _evolve_full_hybrid)
+from src.core.field_build import field
+from src.core.evolve_util import decay
 
 from checklib import Checker
 

@@ -31,24 +31,30 @@ GUI 面板跑同一配置，逐位对拍 states/fields/psi/decays。
 """
 import copy
 import hashlib
+import inspect
 
 import numpy as np
 
 from . import static_atom as core
 from .atomic_levels import make_levels, find_state_index, state_key
 from . import waveforms as _wf
-from .field_build import build_fields_exact
+from .field_build import build_fields_exact, build_field_loss
 from .evolve_twofield import build_two_field, arbitrary_mw_group
 from .evolve_util import decay, auto_decays
 from . import static_pair as pair_core
 
+from .evolve_mixed import DEFAULT_ATOL
+from .evolve_mixed import DEFAULT_RTOL
+
 SPEC_VERSION = 1
 
-_WAVE_ATOMS = ('single', 'A', 'B')
-
-# solve.* → 下游 kwarg。**必须与 pm_setup._SOLVE_SPECS 的最后一列一致**
-# （那是 GUI 侧的定义点；本表是无 Qt 侧的镜像，改一处要改两处——下面
-# `checks/sweep_spec_selfcheck.py` 有断言把两边钉在一起）。
+# solve.* → 下游 kwarg。**本表是唯一声明点**——GUI 侧
+# （`pm_setup._SOLVE_SPECS` 的最后一列）应当**从本表派生**，不要再手抄一份。
+#
+# ⚠ 现状：产品侧仍是手抄（源仓的 `checks/sweep_spec_selfcheck.py` 把两边钉着），
+#   而**那个判据不在本沙盒**（依赖 `src.sweep`/`pm_setup`）⇒
+#   "两处必须一致"这条不变式在沙盒内**无人在守**。
+#   迁移项见 `docs/引擎重构总览与调用说明书.md` §三。
 SOLVE_KWARG = {
     'MAX_STEP': 'max_step',
     'MAX_STEP_HARD': 'max_step_hard',
@@ -57,15 +63,40 @@ SOLVE_KWARG = {
     'COST_BUDGET': 'phase_budget',
 }
 
-# 各引擎**实际收**的运行级 kwarg 白名单（照签名抄）。
-# 为什么要显式白名单：登记册里 solve.* 的**读回值**（GUI 控件当前值）会一起
-# 进 kwargs，而它们并不都是每个引擎认得的形参——例如 `frozen_h_ns` 是 sambe
-# 两体的旋钮，`evolve_mixed`/`evolve_mixed_pair` 的签名里**没有**它。
-# 不筛就会 `TypeError: unexpected keyword argument`（实测过这条）。GUI 侧靠
-# "只传用户显式改过的键"绕开了，runner 传的是登记册全量 ⇒ 必须显式筛。
-_MIXED_PAIR_KW = ('tol', 'max_step', 'max_step_hard', 'r_crit', 'diag',
-                  'bw_opt', 'mw_cap', 'mw_max', 'phase_budget')
-_MIXED_SINGLE_KW = _MIXED_PAIR_KW + ('per_freq_M',)
+def _required(p, key):
+    """快照里的**必填**登记册键；缺失/为 None → 报错（**不静默兜底**）。
+
+    与 `resolve_psi` 的"绝不静默回落"同一纪律：`p.get(key) or 默认` 会把
+    "键不存在"和"值就是默认"混成一件事——键名打错就静默跑一个空演化。
+    """
+    if not isinstance(p, dict) or p.get(key) is None:
+        raise ValueError(
+            '快照缺少必填键 %r（登记册路径；不静默兜底）——'
+            '若这是旧存档，请先补齐该字段' % key)
+    return p[key]
+
+
+# (method, two_body) → 引擎函数。**唯一分派表**：`build_run` 按它的**签名**筛参数，
+# `evolve_run` 按它调用——"哪个 method 走哪个函数"只有这一个事实源。
+_ENGINE_TABLE = {
+    ('mixed', False): ('.evolve_mixed', 'evolve_mixed'),
+    ('mixed', True): ('.evolve_mixed', 'evolve_mixed_pair'),
+    ('sambe', False): ('.sambe', 'evolve_sambe'),
+    ('sambe', True): ('.sambe', 'evolve_sambe_pair'),
+    ('hard', False): ('.hard', 'evolve_hard'),
+    ('hard', True): ('.hard', 'evolve_hard_pair'),
+}
+
+
+def engine_fn(method, two_body):
+    """(method, two_body) → 引擎函数（唯一分派表的查询口，惰性 import）。"""
+    key = (str(method), bool(two_body))
+    if key not in _ENGINE_TABLE:
+        raise ValueError('未知引擎 method=%r two_body=%s；合法：%s'
+                         % (method, two_body, sorted(_ENGINE_TABLE)))
+    mod, name = _ENGINE_TABLE[key]
+    import importlib
+    return getattr(importlib.import_module(mod, __package__), name)
 
 
 # =====================================================================
@@ -77,48 +108,29 @@ def groups_from_params(p):
 
 
 def build_states(cache, groups, B_gauss=0.0, E_vpcm=0.0, pump=None):
-    """动态基组（= `ui_dynamic._current_states` 的同源实现）。
+    """登记册里的能级组 → 动态基组（`make_levels` 的 states）。
 
-    低激发态展开超精细 F/m_F（用场面板磁场 B），里德堡态保持 mJ；
-    能量 = 组中心 + Zeeman(B) + DC-Stark(E)，与静态页/两体页同基准。
-    逐子能级裁剪（组条目的 ms / Fs）与静态页共用 `static_atom` 判据。
+    枚举、能量、逐子能级裁剪**全部走 `static_atom.base_sublevels`**——
+    与静态页同一实现，两页的能级基准不会漂移。这里只把它投影成
+    `make_levels` 要的 specs，并**把 `base_sublevels` 算出的 `label` 显式传下去**
+    （不让 `make_levels` 自己再拼一次）⇒ 两页的态名**同源同字**。
+    `E_hf` 留 0，因为行里的 `E_mhz` 已含超精细项。
 
     pump：可选 callable(frac)——每个能级组完成后上报。
     """
     B = float(B_gauss or 0.0)
-    E_vpcm = float(E_vpcm or 0.0)
+    Ev = float(E_vpcm or 0.0)
     specs = []
-    n_groups = max(len(groups), 1)
-    for gi, g in enumerate(groups):
-        n, l, j = int(g['n']), int(g['l']), float(g['j'])
-        _ms, _Fs = core.trim_of(g)
-        _keep = core.sublevel_trim(_ms, _Fs)
-        hf = core.get_hyperfine_levels(cache, n, l, j, B)
-        if hf is None:
-            for m in np.arange(-j, j + 1e-9, 1.0):
-                if _keep is not None and not _keep(
-                        dict(kind='mJ', mj=float(m))):
-                    continue
-                E = core._sublevel_energy(cache, n, l, j, m, B)
-                if abs(E_vpcm) > 1e-9:
-                    E += core.dc_stark_shift_mhz(
-                        cache, n, l, j, m, groups, E_vpcm, B)
-                specs.append(dict(n=n, l=l, j=j, kind='mJ', m=float(m),
-                                  E_mhz=float(E)))
+    for r in core.base_sublevels(cache, groups, B, Ev, pump=pump):
+        if r['kind'] == 'F':
+            specs.append(dict(n=r['n'], l=r['l'], j=r['j'], kind='F',
+                              F=r['F'], mF=r['mF'], E_hf=0.0,
+                              E_mhz=r['E_mhz'], amps=r['amps'],
+                              label=r['label']))
         else:
-            for F, mF, e_hf, _w, amps in hf:
-                if _keep is not None and not _keep(
-                        dict(kind='F', F=float(F), mF=float(mF))):
-                    continue
-                E0 = cache.E_mhz(n, l, j)
-                if abs(E_vpcm) > 1e-9:
-                    E0 += core.dc_stark_shift_mhz(
-                        cache, n, l, j, mF, groups, E_vpcm, B)
-                specs.append(dict(n=n, l=l, j=j, kind='F', F=F, mF=mF,
-                                  E_hf=float(e_hf), E_mhz=float(E0),
-                                  amps=amps))
-        if pump is not None:
-            pump((gi + 1) / n_groups)
+            specs.append(dict(n=r['n'], l=r['l'], j=r['j'], kind='mJ',
+                              m=float(r['mj']), E_mhz=r['E_mhz'],
+                              label=r['label']))
     return make_levels(cache, specs)
 
 
@@ -174,13 +186,15 @@ def resolve_decays(cache, states, decay_index, decay_cfgs, two_body=False):
     两体 v1 只支持「丢失」落点（GUI 同约束，此处同样**显式报错**不静默）。
     """
     mode = int(decay_index or 0)
+    if mode not in (0, 1, 2):
+        raise ValueError(
+            'dynamic.decay_index 只认 0（自动）/ 1（禁用）/ 2（自定义），'
+            '得到 %r——不静默当成"无衰变"' % decay_index)
     if mode == 1:
         return []
-    labels = [s['label'] for s in states]
     if mode == 0:
         return auto_decays(cache, states)
-    if mode != 2:
-        return []
+    labels = [s['label'] for s in states]
     out = []
     for c in (decay_cfgs or []):
         frm = c.get('from')
@@ -204,24 +218,19 @@ def resolve_decays(cache, states, decay_index, decay_cfgs, two_body=False):
 # 引擎参数覆写（engine.* / solve.*）
 # =====================================================================
 def god_kwargs_from_params(p, pair=False, diag=False):
-    """登记册快照里的 `engine.*` / `solve.*` → 引擎 kwargs。
+    """登记册快照里的 `solve.*` → 引擎 kwargs。
 
-    与 `pm_setup.god_split(MainWindow.engine_overrides)` **行为等价**：
-    登记册的 engine./solve. 读回值就是"覆写优先"的当前生效值，故这里用
-    全部生效值做覆写，结果与 GUI 逐位一致（且顺带把默认值冻结进扫描存档，
-    可复现性更好）。
+    ⚠ **`engine.*`（引擎参数）本阶段不接线**：参数已就地定义在各引擎模块里
+    （全局注册表已删除），运行级覆写还没有"映射到引擎形参"的通道。
+    快照里若带 `engine.*` 键，`build_run` 会**明确写进 warnings**——不静默。
 
     pair=True：剔除 `per_freq_M`（两体 P 固定，GUI 也把它走独立形参）。
     """
-    po, ek = {}, {}
+    ek = {}
     for k, v in (p or {}).items():
         if not isinstance(k, str) or v is None:
             continue
-        if k.startswith('engine.'):
-            name = k.split('.', 1)[1]
-            if name in _ENGINE_NAMES:
-                po[name] = v
-        elif k.startswith('solve.'):
+        if k.startswith('solve.'):
             kw = SOLVE_KWARG.get(k.split('.', 1)[1])
             if kw is not None:
                 ek[kw] = v
@@ -229,29 +238,34 @@ def god_kwargs_from_params(p, pair=False, diag=False):
         ek.pop('per_freq_M', None)
     if diag:
         ek['diag'] = True
-    out = {}
-    if po:
-        out['param_overrides'] = po
-    out.update(ek)
-    return out
+    return ek
 
 
-def _filter_kw(d, allow):
-    """kwargs → (只留 allow 里的, 被丢掉的键集合)。"""
-    keep = {k: v for k, v in (d or {}).items() if k in allow}
-    drop = {k for k in (d or {}) if k not in allow}
+def _engine_accepts(fn, key):
+    """引擎签名是否收该 kwarg。
+
+    六个引擎都没有 `**kwargs`，所以就是查形参名。登记册里 `solve.*` 的**读回值**
+    （GUI 控件当前值）会一起进 kwargs，而它们不都是每个引擎认得的形参
+    （`frozen_h_ns` 是 sambe 的旋钮，`evolve_mixed*` 签名里没有它）；不筛就会
+    `TypeError: unexpected keyword argument`。
+    """
+    return key in inspect.signature(fn).parameters
+
+
+def _filter_kw(fn, d):
+    """kwargs → (只留**引擎签名**收的, 被丢掉的键集合)。
+
+    白名单 = 签名本身，不是手抄表——引擎改签名，筛子自动跟。
+    """
+    keep, drop = {}, set()
+    for k, v in (d or {}).items():
+        if _engine_accepts(fn, k):
+            keep[k] = v
+        else:
+            drop.add(k)
     return keep, drop
 
 
-def _engine_names():
-    try:
-        from . import params as _P
-        return set(_P.SPEC_BY_NAME)
-    except Exception:                              # noqa: BLE001
-        return set()
-
-
-_ENGINE_NAMES = _engine_names()
 
 
 def parse_per_freq_m(v):
@@ -410,6 +424,44 @@ def vdd_matrix(cache, states, R_um, theta_deg=0.0, phi_deg=0.0, progress=None,
 # =====================================================================
 # 总入口
 # =====================================================================
+def _time_grid(p, t_grid):
+    """时间网格 → `(t_max, npts, t)`。
+
+    `dynamic.t_max` / `dynamic.npts` 是**必填**（`_required`）：
+    `p.get(k) or 默认` 会把"键不存在"和"值就是默认"混成一件事——
+    键名打错就静默跑一个 0 ns 的空演化，而且 `check_run` 抓不到。
+    """
+    t_max = float(_required(p, 'dynamic.t_max'))
+    npts = int(_required(p, 'dynamic.npts'))
+    if t_grid is None and t_max <= 0.0:
+        raise ValueError(
+            'dynamic.t_max 必须 > 0：0 ns 演化没有意义（得到 %r）' % t_max)
+    if npts < 2:
+        raise ValueError('dynamic.npts 必须 >= 2（得到 %r）' % npts)
+    t = (np.asarray(t_grid, float) if t_grid is not None
+         else np.linspace(0.0, t_max, npts))
+    return t_max, npts, t
+
+
+def _engine_kwargs(p, meth, is_pair, diag, warnings):
+    """运行级 kwargs：按**引擎签名**筛（白名单 = 签名，不是手抄表）。
+
+    被丢掉的键写进 `warnings`——不许"以为生效了"（核查报告 B1 的口径）。
+    """
+    ek_all = god_kwargs_from_params(p, pair=False, diag=diag)
+    ek, dropped = _filter_kw(engine_fn(meth, is_pair), ek_all)
+    if dropped:
+        warnings.append('[引擎参数] %s%s不接收这些键，已忽略：%s'
+                        % (meth, ' 两体' if is_pair else '',
+                           ', '.join(sorted(dropped))))
+    return ek
+
+
+def _f0(v):
+    """None → 0.0，否则 float(v)（两体几何的缺省）。"""
+    return 0.0 if v is None else float(v)
+
+
 def build_run(cache, params, *, pump=None, vdd=True, method=None, diag=False,
               t_grid=None, two_body=None):
     """登记册快照 + cache → RunSpec（纯容器，可 pickle 跨进程）。
@@ -421,7 +473,9 @@ def build_run(cache, params, *, pump=None, vdd=True, method=None, diag=False,
       diag    是否让引擎采集运行诊断
       t_grid  显式时间网格（None = 由 t_max/npts 生成）
 
-    返回 dict，键见模块 docstring 与本函数末尾的 `spec` 组装。
+    结构：**公共四步**（基组 → 波形/方法 → 时间网格 → 引擎参数）
+    然后按单体/两体各自组装。两体的差异只在
+    `fields_A/B`、`psi0_A/B/psi0_pair`、`vdd_matrix`、`pair`、`frozen_h_ns`。
     """
     p = params or {}
     mode = int(p.get('dynamic.mode') or 0)
@@ -436,52 +490,42 @@ def build_run(cache, params, *, pump=None, vdd=True, method=None, diag=False,
     if not states:
         raise ValueError('基组为空：能级组解析后没有任何子能级')
 
+    # ---- 公共 ①：波形 + 实际方法（改道规则）----
     meth_in = method or (p.get('dynamic.method') or 'mixed')
+    wl = [waves_for(p, a) for a in (('A', 'B') if is_pair else ('single',))]
+    meth, note = effective_method(meth_in, wl)
+    if note:
+        warnings.append(note)
+
+    # ---- 公共 ②：时间网格 ----
+    t_max, npts, t = _time_grid(p, t_grid)
+
+    # ---- 公共 ③：场（体相关）----
     if is_pair:
-        waves_A = waves_for(p, 'A')
-        waves_B = waves_for(p, 'B')
-        meth, note = effective_method(meth_in, [waves_A, waves_B])
-        if note:
-            warnings.append(note)
-        t_max = float(p.get('dynamic.t_max') or 0.0)
-        npts = int(p.get('dynamic.npts') or 0)
-        t = (np.asarray(t_grid, float) if t_grid is not None
-             else np.linspace(0.0, t_max, max(npts, 2)))
         fA, fB, ek_extra, notes = build_fields_pair(
-            cache, meth, states, waves_A, waves_B, float(t[-1]))
-        psi0_A = resolve_psi(states, p.get('dynamic.psi_A'), 'A')
-        psi0_B = resolve_psi(states, p.get('dynamic.psi_B'), 'B')
-        psi0_pair = resolve_pair_psi(p.get('dynamic.psi_pair'))
-        dcfg = p.get('dynamic.decays') or []
-        d_index = p.get('dynamic.decay_index')
-        decays_A = resolve_decays(cache, states, d_index, dcfg, two_body=True)
-        decays_B = decays_A
-        R = p.get('dynamic.pair.R_um')
-        TH = p.get('dynamic.pair.theta_deg')
-        PH = p.get('dynamic.pair.phi_deg')
-        R = 0.0 if R is None else float(R)
-        TH = 0.0 if TH is None else float(TH)
-        PH = 0.0 if PH is None else float(PH)
-        vdd_m = None
-        if vdd:
-            vdd_m = vdd_matrix(cache, states, R, TH, PH)
-        # 引擎参数：与 `_collect_god_kwargs(pair=True)` + `_run_two_body` 同源
-        # ——非 mixed 的运行级 kwargs **静默无效**，所以这里明确报出来
-        # （核查报告 B1 的口径：不许"以为生效了"）。
-        ek_all = god_kwargs_from_params(p, pair=False, diag=diag)
-        pk = ek_all.pop('param_overrides', None)
-        ek = {}
-        if meth == 'mixed':
-            ek, dropped = _filter_kw(ek_all, _MIXED_PAIR_KW)
-            if dropped:
-                warnings.append('[引擎参数] mixed 两体不接收这些键，已忽略：%s'
-                                % ', '.join(sorted(dropped)))
-        elif ek_all:
-            warnings.append('[引擎参数] 两体 method=%s 不接收这些运行级参数，'
-                            '已忽略：%s（仅 mixed 生效）'
-                            % (meth, ', '.join(sorted(ek_all))))
-        if pk:
-            ek['param_overrides'] = pk
+            cache, meth, states, wl[0], wl[1], float(t[-1]))
+    else:
+        fields, ek_extra, notes = build_fields_single(
+            cache, meth, states, wl[0], float(t[-1]))
+
+    # ---- 公共 ④：引擎参数（按签名筛）+ 返回骨架 ----
+    ek = _engine_kwargs(p, meth, is_pair, diag, warnings)
+    ek.update(ek_extra)
+    run = {
+        'version': SPEC_VERSION, 'two_body': is_pair, 'method': meth,
+        'method_in': meth_in, 't': t, 't_max': t_max, 'npts': npts,
+        'states': states, 'labels': [s['label'] for s in states],
+        'engine_kwargs': ek, 'warnings': warnings + notes,
+    }
+
+    # ---- 体相关组装 ----
+    d_index = p.get('dynamic.decay_index')
+    dcfgs = p.get('dynamic.decays') or []
+    if is_pair:
+        decays_A = resolve_decays(cache, states, d_index, dcfgs, two_body=True)
+        R = _f0(p.get('dynamic.pair.R_um'))
+        TH = _f0(p.get('dynamic.pair.theta_deg'))
+        PH = _f0(p.get('dynamic.pair.phi_deg'))
         frozen_h = per_M = None
         if meth == 'sambe':
             fh = p.get('solve.FROZEN_H_NS')
@@ -489,61 +533,36 @@ def build_run(cache, params, *, pump=None, vdd=True, method=None, diag=False,
             per_M = parse_per_freq_m(p.get('solve.PER_FREQ_M'))
             ek.pop('frozen_h_ns', None)
             ek.pop('per_freq_M', None)
-        ek.update(ek_extra)
-        return {
-            'version': SPEC_VERSION, 'two_body': True, 'method': meth,
-            'method_in': meth_in, 't': t, 't_max': float(t_max), 'npts': npts,
-            'states': states, 'labels': [s['label'] for s in states],
+        run.update({
             'fields_A': fA, 'fields_B': fB,
-            'psi0_A': psi0_A, 'psi0_B': psi0_B, 'psi0_pair': psi0_pair,
-            'decays_A': decays_A, 'decays_B': decays_B,
-            'vdd_matrix': vdd_m,
+            'psi0_A': resolve_psi(states, p.get('dynamic.psi_A'), 'A'),
+            'psi0_B': resolve_psi(states, p.get('dynamic.psi_B'), 'B'),
+            'psi0_pair': resolve_pair_psi(p.get('dynamic.psi_pair')),
+            'decays_A': decays_A, 'decays_B': decays_A,
+            'vdd_matrix': (vdd_matrix(cache, states, R, TH, PH) if vdd
+                           else None),
             'pair': {'R_um': R, 'theta_deg': TH, 'phi_deg': PH},
             'frozen_h_ns': frozen_h, 'per_freq_M': per_M,
-            'n_waves': {'A': len(waves_A), 'B': len(waves_B)},
-            'engine_kwargs': ek, 'warnings': warnings + notes,
-        }
+            'n_waves': {'A': len(wl[0]), 'B': len(wl[1])},
+            'field_loss': None,               # 两体场致损耗 → H3b
+        })
+        return run
 
-    waves = waves_for(p, 'single')
-    meth, note = effective_method(meth_in, [waves])
-    if note:
-        warnings.append(note)
-    t_max = float(p.get('dynamic.t_max') or 0.0)
-    npts = int(p.get('dynamic.npts') or 0)
-    t = (np.asarray(t_grid, float) if t_grid is not None
-         else np.linspace(0.0, t_max, max(npts, 2)))
-    fields, ek_extra, notes = build_fields_single(
-        cache, meth, states, waves, float(t[-1]))
-    psi0 = resolve_psi(states, p.get('dynamic.psi_single'), 'single')
-    decays = resolve_decays(cache, states, p.get('dynamic.decay_index'),
-                            p.get('dynamic.decays') or [], two_body=False)
-    ek_all = god_kwargs_from_params(p, pair=False, diag=diag)
-    pk = ek_all.pop('param_overrides', None)
-    ek = {}
-    if meth == 'mixed':
-        ek, dropped = _filter_kw(ek_all, _MIXED_SINGLE_KW)
-        if dropped:
-            warnings.append('[引擎参数] mixed 不接收这些键，已忽略：%s'
-                            % ', '.join(sorted(dropped)))
-    elif ek_all:
-        warnings.append('[引擎参数] method=%s 不接收这些运行级参数，已忽略：%s'
-                        '（仅 mixed 生效；hard 的 max_step_hard 请经库 API '
-                        '直调 hard.evolve_hard）'
-                        % (meth, ', '.join(sorted(ek_all))))
-    if pk:
-        ek['param_overrides'] = pk
-    ek.update(ek_extra)
-    return {
-        'version': SPEC_VERSION, 'two_body': False, 'method': meth,
-        'method_in': meth_in, 't': t, 't_max': float(t_max), 'npts': npts,
-        'states': states, 'labels': [s['label'] for s in states],
+    decays = resolve_decays(cache, states, d_index, dcfgs, two_body=False)
+    run.update({
         'fields': fields,
-        'psi0': psi0, 'psi0_pair': None,
+        'psi0': resolve_psi(states, p.get('dynamic.psi_single'), 'single'),
+        'psi0_pair': None,
         'decays': decays,
         'vdd_matrix': None, 'pair': None,
-        'n_waves': {'single': len(waves)},
-        'engine_kwargs': ek, 'warnings': warnings + notes,
-    }
+        'n_waves': {'single': len(wl[0])},
+    })
+    # 场致加热与损失（opt-in）：登记册无 dynamic.field_loss → None（默认关，
+    # 引擎侧 H3 才消费）。此处只装配、不改变任何现有演化数值。
+    fl_spec = p.get('dynamic.field_loss')
+    run['field_loss'] = (build_field_loss(cache, states, fields, decays,
+                                          fl_spec) if fl_spec else None)
+    return run
 
 
 def summarize_run(run):
@@ -575,84 +594,82 @@ def summarize_run(run):
 
 
 # =====================================================================
-# 引擎调度（GUI worker 与并行 runner 的**同一条**引擎调用路径）
+# 引擎调度 —— **唯一分派点**
 # =====================================================================
 def evolve_run(run, progress_arr=None, log=None, cache=None):
     """RunSpec → 引擎结果 dict。
 
-    逐分支照抄 `src/ui/evolve_worker.py` 的 EvolveWorker / EvolveWorkerPair
-    （含 `params.override(param_overrides)` 的容差覆写、mixed 的 cache 透传、
-    sambe 单体的"仅显式覆写 DEFAULT_RTOL 才传 tol"）。GUI 与 runner 都调它，
-    所以"扫描"和"人点运行"走的是同一段引擎代码。
+    这是全仓**唯一**的 method×n_body 分派点（引擎函数由 `_ENGINE_TABLE` 给出）。
+    分支只负责"给这个引擎备料"（引擎函数来自唯一分派表 `engine_fn`）：
+    mixed 的 cache 透传、sambe 单体的"仅显式覆写 DEFAULT_RTOL 才传 tol"。
+    GUI 与并行 runner 都调它 ⇒ "扫描"与"人点运行"走的是同一段引擎代码。
 
     progress_arr：[阶段内进度, 取消标志, 阶段] 三元数组（可为共享内存视图，
                   并行时父进程据此显示进度、写 [1] 即取消）。
     """
-    from . import params as _P
     ek = dict(run.get('engine_kwargs') or {})
     ovr = dict(ek.pop('param_overrides', None) or {})
+    if ovr:
+        raise ValueError(
+            '运行级引擎参数覆写尚未接线（参数已就地定义在各引擎模块）：%s'
+            % ', '.join(sorted(ovr)))  # 早失败，不静默
     meth = run['method']
+    tb = bool(run['two_body'])
+    # 引擎函数来自**唯一分派表**；下面的分支只负责"给这个引擎备料"
+    # （mixed 的 cache 透传、sambe 单体的"仅显式覆写 DEFAULT_RTOL 才传 tol"等）。
+    fn = engine_fn(meth, tb)
     states = run['states']
     t = run['t']
-    with _P.override(ovr):
-        if run['two_body']:
-            if meth == 'hard':
-                from .hard import evolve_hard_pair
-                return evolve_hard_pair(
-                    states, run['fields_A'], run['fields_B'],
-                    run['psi0_A'], run['psi0_B'],
-                    t_grid=t, vdd_matrix=run['vdd_matrix'],
-                    decays_A=run.get('decays_A'), decays_B=run.get('decays_B'),
-                    progress_arr=progress_arr, psi0_pair=run.get('psi0_pair'),
-                    log=log)
-            if meth == 'sambe':
-                from .sambe import evolve_sambe_pair
-                return evolve_sambe_pair(
-                    states, run['fields_A'], run['fields_B'],
-                    run['psi0_A'], run['psi0_B'],
-                    t_grid=t, vdd_matrix=run['vdd_matrix'],
-                    decays_A=run.get('decays_A'), decays_B=run.get('decays_B'),
-                    progress_arr=progress_arr, log=log,
-                    frozen_h_ns=run.get('frozen_h_ns'),
-                    per_freq_M=run.get('per_freq_M'),
-                    psi0_pair=run.get('psi0_pair'))
-            if meth == 'mixed':
-                from .evolve_mixed import evolve_mixed_pair
-                _ek = dict(ek)
-                _ek.setdefault('tol', _P.get('DEFAULT_RTOL'))
-                if run.get('psi0_pair') is not None:
-                    _ek['psi0_pair'] = run['psi0_pair']
-                return evolve_mixed_pair(
-                    states, run['fields_A'], run['fields_B'],
-                    run['psi0_A'], run['psi0_B'],
-                    t_grid=t, vdd_matrix=run['vdd_matrix'],
-                    decays_A=run.get('decays_A'), decays_B=run.get('decays_B'),
-                    progress_arr=progress_arr, cache=cache, log=log, **_ek)
-            raise ValueError('两体未知引擎 %r' % meth)
+    if tb:
         if meth == 'hard':
-            from .evolve_twofield import evolve_hard
-            return evolve_hard(
-                states, run['fields'], run['psi0'], t,
-                rtol=_P.get('DEFAULT_RTOL'), atol=_P.get('DEFAULT_ATOL'),
-                numba=True, progress_arr=progress_arr, log=log,
-                decays=run.get('decays'))
-        if meth == 'mixed':
-            from .evolve_mixed import evolve_mixed
-            _ek = dict(ek)
-            _ek.setdefault('tol', _P.get('DEFAULT_RTOL'))
-            return evolve_mixed(
-                states, run['fields'], run['psi0'], t,
-                progress_arr=progress_arr, log=log,
-                decays=run.get('decays'), **_ek)
+            return fn(
+                states, run['fields_A'], run['fields_B'],
+                run['psi0_A'], run['psi0_B'],
+                t_grid=t, vdd_matrix=run['vdd_matrix'],
+                decays_A=run.get('decays_A'), decays_B=run.get('decays_B'),
+                progress_arr=progress_arr, psi0_pair=run.get('psi0_pair'),
+                max_step_hard=ek.get('max_step_hard'),
+                log=log)
         if meth == 'sambe':
-            from .sambe import evolve_sambe
-            _sk = {}
-            if 'DEFAULT_RTOL' in ovr:
-                _sk['tol'] = ovr['DEFAULT_RTOL']
-            return evolve_sambe(
-                states, run['fields'], run['psi0'], t,
+            return fn(
+                states, run['fields_A'], run['fields_B'],
+                run['psi0_A'], run['psi0_B'],
+                t_grid=t, vdd_matrix=run['vdd_matrix'],
+                decays_A=run.get('decays_A'), decays_B=run.get('decays_B'),
                 progress_arr=progress_arr, log=log,
-                decays=run.get('decays'), **_sk)
+                frozen_h_ns=run.get('frozen_h_ns'),
+                per_freq_M=run.get('per_freq_M'),
+                psi0_pair=run.get('psi0_pair'))
+        if meth == 'mixed':
+            _ek = dict(ek)
+            _ek.setdefault('tol', DEFAULT_RTOL)
+            if run.get('psi0_pair') is not None:
+                _ek['psi0_pair'] = run['psi0_pair']
+            return fn(
+                states, run['fields_A'], run['fields_B'],
+                run['psi0_A'], run['psi0_B'],
+                t_grid=t, vdd_matrix=run['vdd_matrix'],
+                decays_A=run.get('decays_A'), decays_B=run.get('decays_B'),
+                progress_arr=progress_arr, cache=cache, log=log, **_ek)
+    if meth == 'hard':
+        return fn(
+            states, run['fields'], run['psi0'], t,
+            rtol=DEFAULT_RTOL, atol=DEFAULT_ATOL,
+            numba=True, progress_arr=progress_arr, log=log,
+            decays=run.get('decays'),
+            max_step_hard=ek.get('max_step_hard'))
+    if meth == 'mixed':
+        _ek = dict(ek)
+        _ek.setdefault('tol', DEFAULT_RTOL)
+        return fn(
+            states, run['fields'], run['psi0'], t,
+            progress_arr=progress_arr, log=log,
+            decays=run.get('decays'), field_loss=run.get('field_loss'), **_ek)
+    if meth == 'sambe':
+        return fn(
+            states, run['fields'], run['psi0'], t,
+            progress_arr=progress_arr, log=log,
+            decays=run.get('decays'))
     raise ValueError('未知引擎 %r' % meth)
 
 
@@ -660,24 +677,22 @@ def evolve_run(run, progress_arr=None, log=None, cache=None):
 # 结果摘要（扫描的每点回执；与 server._res_summary 同口径）
 # =====================================================================
 def result_labels(run, res):
-    """结果布居的态标签（单体取基组标签；两体取成对标签）。
+    """结果布居的态标签。
 
-    两体**必须**用 `res['states_2d']`——直接照搬单体标签会把 N² 维布居
-    标错（server._res_labels 的 2026-09-10 教训）。
+    **统一契约**：所有引擎的 `res['states']` 就是 `res['pops']` 各列的身份
+    （单体 N 个、两体 N² 个），每个含 `label`。所以这里**不再按单体/两体分支**。
+
+    旧写法要特判 `res['states_2d']`，漏判就会把 N² 维布居标错
+    （`server._res_labels` 的 2026-09-10 教训）——契约统一后那个分支消失了。
     """
     if res is None:
         return []
-    pops2 = res.get('pops_2d')
-    if pops2 is not None:
-        s2 = res.get('states_2d')
-        if s2 is None:
-            return []
-        out = []
-        for x in np.asarray(s2).ravel():
-            out.append(str(x.get('label', '?')) if isinstance(x, dict)
-                       else str(x))
-        return out
-    return [s.get('label', '?') for s in (run.get('states') or [])]
+    st = res.get('states') or (run.get('states') or [])
+    out = []
+    for x in np.asarray(st).ravel():
+        out.append(str(x.get('label', '?')) if isinstance(x, dict)
+                   else str(x))
+    return out
 
 
 def result_summary(run, res, top_n=8, want_labels=None):
@@ -690,7 +705,7 @@ def result_summary(run, res, top_n=8, want_labels=None):
     labels = result_labels(run, res)
     arr = res.get('pops')
     if arr is None:
-        arr = res.get('pops_2d')
+        return {'ok': False, 'msg': '结果里没有 pops（引擎契约被破坏）'}
     arr = np.asarray(arr)
     if arr.ndim < 2:
         arr = arr.reshape(1, -1)

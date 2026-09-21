@@ -1,40 +1,34 @@
+# Python / numba 编译缓存（自动再生，不入库）
 *.pyc
+*.pyo
+*.nbc
+*.nbi
 __pycache__/
+
+# 大数据 / 运行时产物（本机产物，不入库）
 .arcdata/
 save_state/
+runtime/ai_results/
+runtime/sweeps/
+.mecha/
 scripts/tmp/
+
+# MCP 写通道端口发现文件（人运行的 launcher 写、harness attach 用）
+.mcp-port
+
+# 周边项目（不进主干）/ PyInstaller 构建产物 / 各工具运行时状态
 .dsh-vision-toolkit/
 microwave_pulse/
-
-# PyInstaller 构建产物与构建虚拟环境（不入库）
 build_venv/
 build/
 dist/
-
-# AgentTeams 运行时状态（不入库）
 .agent-teams/
-
-# WorkBuddy 会话数据（不入库）
 .workbuddy/
-
-# UI 设计检查的临时产物（可随时由 ui_design/*.py 重生成，不入库）
-ui_design/screenshots/
-
-# 研究配图的渲染产物（由 scripts/research/*.py 的 savefig 重生成，不入库）——
-# 与 ui_design/screenshots/ 同一先例：scripts/research/ 只入库 .py，不入库图片。
-# 若要归档某一版配图，用 `git add -f` 显式入库。
-scripts/research/figs_photon/
-
-# DSH 本机接线（实测是 **hardlink**：.dsh/skills/energy-level/SKILL.md ↔
-# skills/energy-level/SKILL.md，改一处两处都变；技能内容本身在 skills/ 内
-# 正常入库，.dsh/ 只是每台机器的挂载点，不入库）
-# ⚠ 复制仓库时 robocopy 会**把 hardlink 实体化**（两边变普通文件、不再联动），
-#   副本里需手工重建：cmd /c mklink /H <副本>\.dsh\skills\energy-level\SKILL.md
-#   <副本>\skills\energy-level\SKILL.md
 .dsh/
 
-# CodeAct（run_python）运行记录：result/stdout/代码，本机产物，不入库
-runtime/ai_results/
+# UI 设计检查的临时产物（可由 ui_design/*.py 重生成）
+ui_design/screenshots/
 
-# 并行扫描的作业目录（spec/status/points/npz/log）：本机产物，不入库
-runtime/sweeps/
+# 研究配图的渲染产物（由 scripts/research/*.py 的 savefig 重生成）
+# scripts/research/ 只入库 .py，不入库图片；如需归档某版本配图用 `git add -f`
+scripts/research/figs_photon/

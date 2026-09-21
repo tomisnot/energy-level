@@ -13,8 +13,8 @@
 """
 import numpy as np
 
-from .evolve_util import _resolve_state_idx  # t74 工具归位
-from .field_build import _field_geometry
+from .evolve_util import resolve_state_idx  # t74 工具归位
+from .field_build import field_geometry
 
 
 def tensor_states(states):
@@ -24,7 +24,7 @@ def tensor_states(states):
     product basis: |s_i⟩⊗|s_j⟩，k = i*N + j
 
     返回：
-    states_2d : list of dict，每个含 ket_i, ket_j, label, E_mhz, index
+    states : list of dict（N² 个），每个含 ket_i, ket_j, label, E_mhz, index
       N : 单体维度
     """
     N = len(states)
@@ -54,12 +54,12 @@ def _as_product_psi(psi0_A, psi0_B, N):
 def _tensor_field_atom(field_raw, states, N, atom='A'):
     """单体场 → 两体场（M_A⊗I_B 或 I_A⊗M_B）。
 
-    field_raw: evolve.field() / real_field() / group_field() 输出
+    field_raw: field() / build_fields_exact() 的输出
     atom='A'：场作用在原子 A 上
     atom='B'：场作用在原子 B 上
     """
     # 先归一化：pair/group 场 → multi 格式（含 M, A, ac_shift, g_idx, e_idx）
-    g = _field_geometry(states, field_raw)
+    g = field_geometry(states, field_raw)
     M = g['M']
     A = g['A']
     ac = g['ac_shift']
@@ -109,7 +109,7 @@ def tensor_fields(fields_A, fields_B, states, N):
     """两组单体场 → 两体场列表（A⊗I + I⊗B）。
 
     fields_A/B: 各自的 evolve field 列表
-    states: 单原子能级列表（供 _field_geometry 归一化）
+    states: 单原子能级列表（供 field_geometry 归一化）
     N: 单体维度
 
     返回两体场列表，直接喂给 pair_evolve。
@@ -151,21 +151,22 @@ def _pair_loss_vectors(states, decays_A, decays_B, N, K):
     - 仅支持落点=丢失（to=None，寿命/自发辐射场景）：布居离开建模空间，
       确定性 NonHermitian 演化（H 对应对角 -iΓ/2，ψ 幅度 e^{-Γt/2}），
       漏出累计为 lossA/lossB——严格 L=√Γ|loss⟩⟨from| 主方程在建模空间的解；
-    - 显式落点（to 在空间）/纯退相（from==to）的双原子版本暂不支持
-      （需密度矩阵回写/相干衰减，见 TODO）——显式拒绝并提示用单原子引擎。
+    - 显式落点（to 在空间）/纯退相（from==to）的双原子版本**暂不支持**：
+      两者都要密度矩阵回写（相干衰减），而本模块走的是确定性 NonHermitian
+      波函数演化 ⇒ 显式拒绝并提示改用单原子引擎（不静默降级）。
     """
     GammaA = np.zeros(K, float)
     GammaB = np.zeros(K, float)
     for decays, atom, target in ((decays_A or [], 'A', GammaA),
                                  (decays_B or [], 'B', GammaB)):
         for ch in decays:
-            g_idx = _resolve_state_idx(states, ch['from'])
+            g_idx = resolve_state_idx(states, ch['from'])
             if g_idx is None:
                 raise ValueError(
                     f'两体耗散：{atom} 通道 from 无法解析到基组 '
                     f'({ch["from"]!r})')
             to = ch.get('to')
-            if to is not None and _resolve_state_idx(states, to) \
+            if to is not None and resolve_state_idx(states, to) \
                     is not None:
                 raise NotImplementedError(
                     '两体 Lindblad v1 仅支持落点=丢失（寿命通道/auto_decays）；'

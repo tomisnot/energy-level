@@ -21,6 +21,9 @@
    对 DOP853 轨迹的影响远小于 rtol。）
 
 2026-08-30 harddev 首版。
+
+判据白盒接口（内部件，**不是**产品 API；改名/改签名要同步 checks/）：
+  · `_pack_pair_hard`    —— 两体打包（`hard_vdd_pack_selfcheck` 验显式零不崩）
 """
 
 # ============================================================
@@ -38,9 +41,9 @@ from .dop853 import _dop853_driver   # 驱动（系数已随驱动上收 dop853�
 from . import tensor as _tensor
 from . import static_atom as core
 from .evolve_util import (_single_loss_rates, _loss_and_norm,
-                          _as_vector, env_at, pair_psi0_vector, _CONV)
+                          as_vector, env_at, pair_psi0_vector, CONV)
 from .coupling import static_phase_keep  # t78：V_dd 统一判据（与 mixed 共用）
-from . import params as _P
+from .param import Param   # 就地参数声明（值+元数据同处；mecha.registry 扫出全表）
 
 # 包络查表点数（620ns → h≈0.0047ns；插值误差 ~3e-10）
 
@@ -89,7 +92,7 @@ def evolve_hard_fast(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
     driver='numba'（默认，dop853 核心层全编译主循环）| 'scipy'（对照）。
     backend='hard-numba-dop853'。
     """
-    n_tab = _P.get('_TAB_N') if n_tab is None else int(n_tab)
+    n_tab = _TAB_N if n_tab is None else int(n_tab)
     log = log or (lambda *a: None)
     from .coupling import stage_progress
     t = np.asarray(t_grid, float)
@@ -108,8 +111,8 @@ def evolve_hard_fast(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
     has_decay = bool(decays)
     Gamma_ns = (_single_loss_rates(states, decays) if has_decay
                 else np.zeros(N))
-    gamma = Gamma_ns / _CONV if has_decay else None
-    psi0v = _as_vector(states, psi0)
+    gamma = Gamma_ns / CONV if has_decay else None
+    psi0v = as_vector(states, psi0)
     psi0_2d = np.kron(psi0v, np.ones(1, complex))   # 旁观振幅 1
 
     if driver == 'numba':
@@ -165,7 +168,7 @@ def evolve_hard_fast(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
                method='hard', backend='hard-numba-dop853',
                loss=loss, error_report=report)
     if record_amp:
-        uT = np.exp(1j * _CONV * E * T)
+        uT = np.exp(1j * CONV * E * T)
         out['psi_amp'] = np.conj(uT) * y_out[-1]
     return out
 
@@ -283,7 +286,7 @@ def _pack_pair_hard(fields_meta_A, fields_meta_B, T, vdd_sp, n_tab,
                 fld_env_l.append(_env_tab(wf, T, n_tab))
                 if ph_fn is None:
                     ts = np.linspace(0.0, float(T), n_tab)
-                    fld_phase_l.append(_CONV * w * ts)   # 定频 φ=C·ω·t
+                    fld_phase_l.append(CONV * w * ts)   # 定频 φ=C·ω·t
                 else:
                     fld_phase_l.append(_env_tab(ph_fn, T, n_tab))
                 fld_delta_l.append(0.0)
@@ -359,11 +362,11 @@ def _pack_pair_hard(fields_meta_A, fields_meta_B, T, vdd_sp, n_tab,
             vdd_vals = vals
     t0 = 0.0
     dt = float(T) / (n_tab - 1) if n_tab > 1 else 1.0
-    CONV = float(_CONV)
     return (E_A, E_B, fld_rows, fld_cols, fld_vals, fld_envs,
             fld_phase_tabs, ptr,
             fld_deltas, fld_sgns,
-            vdd_rows, vdd_cols, vdd_vals, grp_start, grp_dE, t0, dt, CONV)
+            vdd_rows, vdd_cols, vdd_vals, grp_start, grp_dE, t0, dt,
+            float(CONV))
 
 
 # ============================================================
@@ -473,11 +476,11 @@ def evolve_hard_pair(states, fields_meta_A, fields_meta_B, psi0_A, psi0_B,
     psi0_pair: **两体纠缠初态** spec（['pair_sup', […]]）——非 None 时取代
     psi0_A/psi0_B 的逐原子直积（交换后的结果是纠缠态）。
 
-    返回契约与 evolve_exact_pair 同键：t, pops_2d, pops_A, pops_B,
-    loss_A, loss_B, states_2d, method='hard', backend='hard-numba-pair',
+    返回契约与 evolve_exact_pair 同键：t, pops, pops_A, pops_B,
+    loss_A, loss_B, states, method='hard', backend='hard-numba-pair',
     error_report。
     """
-    n_tab = _P.get('_TAB_N') if n_tab is None else int(n_tab)
+    n_tab = _TAB_N if n_tab is None else int(n_tab)
     from . import pair_core as _pc
     log = log or (lambda *a: None)
     t = np.asarray(t_grid, float)
@@ -506,7 +509,7 @@ def evolve_hard_pair(states, fields_meta_A, fields_meta_B, psi0_A, psi0_B,
     gamma_MHz = np.zeros(N2)
     if has_decay:
         gamma_MHz = (np.asarray(GammaA, float)
-                     + np.asarray(GammaB, float)) / _CONV
+                     + np.asarray(GammaB, float)) / CONV
 
     # ---- 初态（psi0_pair 优先：两体纠缠/任意两体叠加） ----
     psi0_2d = pair_psi0_vector(states, psi0_A, psi0_B, psi0_pair)
@@ -580,9 +583,9 @@ def evolve_hard_pair(states, fields_meta_A, fields_meta_B, psi0_A, psi0_B,
     log(f'[hard-pair] DOP853 完成：{len(t)} 输出点，{nfev} 次 RHS 求值'
         f'（N²={N2} 维，硬积分零微波近似）')
     out = dict(
-        t=t, pops_2d=pops_2d, pops_A=pops_A, pops_B=pops_B,
+        t=t, pops=pops_2d, pops_A=pops_A, pops_B=pops_B,
         loss_A=loss_A, loss_B=loss_B,
-        states_2d=[{
+        states=[{
             'label': f"({states[i]['label']}) x ({states[j]['label']})",
             'E_mhz': E_pair[i * N + j],
             'ket_i': i, 'ket_j': j,
@@ -590,7 +593,7 @@ def evolve_hard_pair(states, fields_meta_A, fields_meta_B, psi0_A, psi0_B,
         method='hard', backend='hard-numba-pair',
         error_report=report)
     if record_amp:
-        uT = np.exp(1j * _CONV * (E_A[:, None] + E_B[None, :]).ravel() * T)
+        uT = np.exp(1j * CONV * (E_A[:, None] + E_B[None, :]).ravel() * T)
         out['psi_amp'] = np.conj(uT) * y_out[-1]
     return out
 
@@ -609,6 +612,10 @@ def evolve_hard_pair(states, fields_meta_A, fields_meta_B, psi0_A, psi0_B,
 from .evolve_twofield import (build_two_field, arbitrary_mw_group,  # noqa: E402,F401
                               split_by_freq, _build_A,
                               adaptive_split_threshold)
+
+
+# ==== 本模块的参数（就地定义；Param 声明值+元数据同处，透明子类读点免改）====
+_TAB_N = Param(2 ** 17, 'hard 包络表点数（接口契约：承诺的驱动带宽）', tier='internal')
 
 
 def evolve_hard(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
@@ -650,7 +657,7 @@ def evolve_hard(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
     E_rot = np.asarray(fields_meta['E_rot'], float)
     opt_terms = fields_meta['opt_terms']
     mw_groups = fields_meta['mw_groups']
-    psi0v = _as_vector(states, psi0)
+    psi0v = as_vector(states, psi0)
     T = float(t[-1])
     # t24：耗散（落点=丢失）——Gamma_ns（/ns），RHS 加 −Γ/2·y
     has_decay = bool(decays)
@@ -688,7 +695,7 @@ def evolve_hard(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
             if c != 0.0:
                 d = omega_f - omega_ref
                 if d != 0.0 and m is not None:
-                    ph = np.exp(1j * _CONV * d * tv
+                    ph = np.exp(1j * CONV * d * tv
                                 * (m[:, None] - m[None, :]))
                     V = V + c * ph * A_opt
                 else:
@@ -697,13 +704,13 @@ def evolve_hard(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
             env = env_at(wf, tv)
             if env != 0.0:
                 ph = (ph_fn(tv) if ph_fn is not None
-                      else _CONV * wL * tv)
+                      else CONV * wL * tv)
                 V = V + env * np.cos(float(np.asarray(ph).flat[0])) * A
-        u = np.exp(1j * _CONV * E * tv)
+        u = np.exp(1j * CONV * E * tv)
         return u[:, None] * V * np.conj(u)[None, :]
 
     def _rhs_twofield(tv, y):
-        out = -1j * _CONV * (coupling_at(tv) @ y)
+        out = -1j * CONV * (coupling_at(tv) @ y)
         if Gamma_ns is not None:                 # 落点=丢失 NonHermitian
             out = out - 0.5 * Gamma_ns * y
         return out
@@ -743,7 +750,7 @@ def evolve_hard(states, fields_meta, psi0, t_grid, rtol=1e-9, atol=1e-11,
                method='hard', backend='hard-dop853',
                loss=loss, error_report=report)
     if record_amp:
-        uT = np.exp(1j * _CONV * E * T)
+        uT = np.exp(1j * CONV * E * T)
         out['psi_amp'] = np.conj(uT) * sol.y[:, -1]
     return out
 

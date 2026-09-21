@@ -189,8 +189,8 @@ ek = RS.god_kwargs_from_params(PARAMS, diag=False)
 ekd = RS.god_kwargs_from_params(PARAMS, diag=True)
 ekp = RS.god_kwargs_from_params(PARAMS, pair=True)
 C.group('F runspec 纯函数', [
-    ('engine.* → param_overrides',
-     ek.get('param_overrides', {}).get('PHASE_TOL') == 1e-4),
+    ('engine.* 只读、不再映射 param_overrides（点1：运行级覆写已删）',
+     'param_overrides' not in ek),
     ('solve.MAX_STEP（None）被过滤', 'max_step' not in ek),
     ('solve.PER_FREQ_M → per_freq_M', ek.get('per_freq_M') == [1]),
     ('solve.FROZEN_H_NS=0.0 保留', ek.get('frozen_h_ns') == 0.0),
@@ -276,12 +276,9 @@ try:
     gui_kw = _solve_kwarg_from_source(os.path.join(ROOT, 'src', 'pm_setup.py'))
     gui_how = '源码 AST（无需导入）'
 except Exception as _e1:                           # noqa: BLE001
-    try:
-        import src.pm_setup as pm
-        gui_kw = dict(pm._SOLVE_KWARG)
-        gui_how = '导入 pm_setup（AST 兜底失败：%s）' % str(_e1)[:40]
-    except Exception as _e2:                       # noqa: BLE001
-        _err = '%s / %s' % (str(_e1)[:40], str(_e2)[:60])
+    # Re0：pm_setup 已废（单一真值源，无 GUI 侧 _SOLVE_KWARG 镜像）→ 本镜像守卫
+    # 已 obsolete；AST 取不到即优雅 SKIP。Phase E 清洗时整组移除。
+    _err = str(_e1)[:80]
 if gui_kw is None:
     C.skip('H SOLVE_KWARG 镜像一致性',
            '源码与导入都取不到（%s）' % _err)

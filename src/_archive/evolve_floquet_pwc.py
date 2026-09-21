@@ -25,11 +25,11 @@ pwc（RWA 分段常数，最快预览）同样不用于日常分析。为减少 
 import numpy as np
 
 from ..core.evolve_rwa import _assign_reference
-from ..core.evolve_util import _as_vector, _decay_ops
+from ..core.evolve_util import as_vector, decay_ops
 from ..core.evolve_rwa import RWA_TOL  # t80: 原 IP4_RWA_THRESH 更名
-from ..core.field_build import _env_samples, _field_geometry
+from ..core.field_build import env_samples, field_geometry
 
-_CONV = 2 * np.pi * 1e-3          # MHz·ns → rad
+CONV = 2 * np.pi * 1e-3          # MHz·ns → rad
 
 
 # ============================================================
@@ -55,9 +55,9 @@ def _pick_backend(backend):
 # ============================================================
 def _evolve_floquet(E, mats, omega_mhz, psi0, t, n_sub=2000, record_amp=False,
                     progress_arr=None):
-    """H(t) = diag(E) + cos(_CONV·ω·t)·Σ_k mats_k（单频 ω、常数包络）。
+    """H(t) = diag(E) + cos(CONV·ω·t)·Σ_k mats_k（单频 ω、常数包络）。
 
-    精确积分一个周期 T=2π/(_CONV·ω)（中点法 n_sub 步，存 U(τ) 网格）
+    精确积分一个周期 T=2π/(CONV·ω)（中点法 n_sub 步，存 U(τ) 网格）
     → U(T) 本征分解（准能量 ε_k = −arg(λ_k)/T）
     → 任意 t = nT + τ：ψ(t) = U(τ)·W·diag(e^{−iεnT})·W†·ψ0。
 
@@ -66,7 +66,7 @@ def _evolve_floquet(E, mats, omega_mhz, psi0, t, n_sub=2000, record_amp=False,
     一次对角化 + 每输出时刻 O(N²)，**不随模拟时长增长**。
     progress_arr（可选）：np.float64[2]，[0]=进度 0..1，[1]≠0 请求取消。
     """
-    w = _CONV * omega_mhz
+    w = CONV * omega_mhz
     T = 2.0 * np.pi / w
     N = len(psi0)
     # 内存自适应：n_sub 过大时降档（(n_sub+1)·N²·16B ≤ ~256 MB）
@@ -82,7 +82,7 @@ def _evolve_floquet(E, mats, omega_mhz, psi0, t, n_sub=2000, record_amp=False,
     for j in range(n_sub):
         H = H0 + cw[j] * Asum
         e, Ue = np.linalg.eigh(H)
-        D = np.exp(-1j * _CONV * dt * e)
+        D = np.exp(-1j * CONV * dt * e)
         U = Ue @ (D[:, None] * (Ue.T @ U))
         Us[j + 1] = U
         if progress_arr is not None and (j & 127) == 0:
@@ -122,7 +122,7 @@ def evolve_floquet(states, fields, psi0, t_grid, ac_shift_mhz=None,
     loss, [psi_amp])，与 evolve.evolve 同构。
     """
     t = np.asarray(t_grid, float)
-    psi0v = _as_vector(states, psi0)
+    psi0v = as_vector(states, psi0)
     E = np.array([s['E_mhz'] for s in states])
     fields = list(fields)
     if ac_shift_mhz is not None:
@@ -135,13 +135,13 @@ def evolve_floquet(states, fields, psi0, t_grid, ac_shift_mhz=None,
     if progress_arr is None:
         progress_arr = np.zeros(2)
 
-    geoms = [_field_geometry(states, f) for f in fields]
+    geoms = [field_geometry(states, f) for f in fields]
     if not geoms:
         raise ValueError('evolve_floquet 需要至少一个光场（常数包络 + 单频）。')
     w0 = geoms[0]['omega_L_mhz']
     ok_freq = all(abs(g['omega_L_mhz'] - w0)
                   <= 1e-6 * max(abs(w0), 1.0) for g in geoms)
-    ok_env = all(_env_samples(g['waveform'], t[-1])[1] for g in geoms)
+    ok_env = all(env_samples(g['waveform'], t[-1])[1] for g in geoms)
     if not (ok_freq and ok_env):
         raise ValueError(
             'evolve_floquet 要求全部光场常数包络且单一频率'
@@ -150,7 +150,7 @@ def evolve_floquet(states, fields, psi0, t_grid, ac_shift_mhz=None,
     mats = []
     E_f = np.array(E, float)
     for g in geoms:
-        c = _env_samples(g['waveform'], t[-1])[0]
+        c = env_samples(g['waveform'], t[-1])[0]
         mats.append(g['omega0_mhz'] * c * g['A'])
         a = g.get('ac_shift')
         if a is not None and np.any(np.asarray(a, float) != 0.0):
@@ -216,7 +216,7 @@ def _evolve_pwc(H0, geoms, psi0, t, use_torch, record_amp, progress_arr=None):
         pops_t[0] = psit.abs() ** 2
         for m in range(M):
             _tick(m)
-            ph = torch.exp(-1j * _CONV * dts[m] * ev[m])
+            ph = torch.exp(-1j * CONV * dts[m] * ev[m])
             psit = U[m] @ (ph * (U[m].conj().T @ psit))
             pops_t[m + 1] = psit.abs() ** 2
         pops = pops_t.numpy()               # 仅一次 GPU→CPU 同步
@@ -227,7 +227,7 @@ def _evolve_pwc(H0, geoms, psi0, t, use_torch, record_amp, progress_arr=None):
         for m in range(M):
             _tick(m)
             e, U = np.linalg.eigh(Hm[m])
-            ph = np.exp(-1j * _CONV * dt[m] * e)
+            ph = np.exp(-1j * CONV * dt[m] * e)
             psi = U @ (ph * (U.T @ psi))
             pops[m + 1] = np.abs(psi) ** 2
     progress_arr[0] = 1.0
@@ -244,7 +244,7 @@ def evolve_pwc(states, fields, psi0, t_grid, ac_shift_mhz=None,
     om_mhz, method='pwc', backend='torch'|'numpy', loss, [psi_amp])。
     """
     t = np.asarray(t_grid, float)
-    psi0v = _as_vector(states, psi0)
+    psi0v = as_vector(states, psi0)
     E = np.array([s['E_mhz'] for s in states])
     fields = list(fields)
     if ac_shift_mhz is not None:
@@ -258,7 +258,7 @@ def evolve_pwc(states, fields, psi0, t_grid, ac_shift_mhz=None,
         progress_arr = np.zeros(2)
     ref, deltas = _assign_reference(states, fields)
     H0 = np.diag(E - ref).astype(float)
-    geoms = [_field_geometry(states, f) for f in fields]
+    geoms = [field_geometry(states, f) for f in fields]
     for g, d in zip(geoms, deltas):
         wL = g['omega_L_mhz']
         g['residual_mhz'] = d

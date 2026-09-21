@@ -28,7 +28,7 @@ from checklib import Checker
 
 ck = Checker('two_field_pair_selfcheck')
 
-_CONV = 2 * np.pi * 1e-3
+from src.core.evolve_util import CONV
 
 
 def _mJ_state(n, l, j, m, E, label):
@@ -70,7 +70,7 @@ def tp1():
     M_ex = (next(iter(pb.values())) - 1) // 2
     r_tf = evolve_two_field_pair(states, meta_A, meta_B, 0, 0, t,
                                  vdd_matrix=V, tol=1e-7, mw_M=M_ex)
-    d = float(np.max(np.abs(r_tf['pops_2d'] - r_ex['pops_2d'])))
+    d = float(np.max(np.abs(r_tf['pops'] - r_ex['pops'])))
     ck.check(f'TP1 无光场退化 ≡ evolve_sambe_pair（M={M_ex}，'
              f'Δ={d:.2e} ≤ 1e-9）', d <= 1e-9, f'Δ={d}')
     ck.check('TP1b 契约：method/backend',
@@ -174,9 +174,9 @@ def tp3():
 
     def rhs(tt, y):
         H = np.diag(E_pair) + Vd \
-            + env_opt(tt) * np.cos(_CONV * (W_OPT + DET) * tt) * A_opt_2d \
-            + env_mw(tt) * np.cos(_CONV * W_MW * tt) * A_mw_2d
-        return -1j * _CONV * (H @ y)
+            + env_opt(tt) * np.cos(CONV * (W_OPT + DET) * tt) * A_opt_2d \
+            + env_mw(tt) * np.cos(CONV * W_MW * tt) * A_mw_2d
+        return -1j * CONV * (H @ y)
 
     # t79 计时优化：参考容差 1e-10/1e-13 → 1e-8/1e-11。本项的差异由**光学
     # RWA 反旋项**主导（见下注释 ~1e-3），不是参考积分精度；参考只需准到
@@ -189,11 +189,11 @@ def tp3():
                     t_eval=t, rtol=1e-8, atol=1e-11)
     assert sol.success, sol.message
     ref = np.abs(sol.y).T ** 2
-    d = float(np.max(np.abs(r['pops_2d'] - ref)))
+    d = float(np.max(np.abs(r['pops'] - ref)))
     # 残差来源：光学 RWA 反旋项（Bloch–Siegert ~ Ω²/4ω·C·t ~ 1e-3）+ Sambe tol
     ck.check(f'TP3b 两场 ≡ 实验室系第一性参考（Δ={d:.2e} ≤ 5e-3）',
              d <= 5e-3, f'Δ={d}')
-    nd = float(np.max(np.abs(r['pops_2d'].sum(axis=1) - 1.0)))
+    nd = float(np.max(np.abs(r['pops'].sum(axis=1) - 1.0)))
     # 范数偏差 ~ tol×段数量级累积（缺陷单级修正），非物理错误
     # （TP3b 对第一性参考 2.3e-4 已证物理正确）
     ck.check(f'TP3c 幺正范数（|Σp−1|={nd:.2e} ≤ 1e-4）', nd <= 1e-4,
@@ -259,7 +259,7 @@ def tp5(states, meta_A, meta_B):
                               decays_A=[decay(1, G)])
     exp_dec = np.exp(-G * 1e-3 * t)
     ddec = float(np.max(np.abs(r['pops_A'][:, 1] - exp_dec)))
-    cons = float(np.max(np.abs(r['pops_2d'].sum(axis=1)
+    cons = float(np.max(np.abs(r['pops'].sum(axis=1)
                                + r['loss_A'] + r['loss_B'] - 1.0)))
     ck.check(f'TP5a 寿命衰变 ≡ e^{{−Γt}}（Δ={ddec:.2e} ≤ 1e-6）',
              ddec <= 1e-6, f'Δ={ddec}')

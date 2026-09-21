@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Re0 机甲驾驶舱 · 只读投影</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header id="top">
+    <div class="brand">
+      <span class="logo">◈</span>
+      <div>
+        <h1>机甲驾驶舱</h1>
+        <p class="sub">只读投影 · 读事件总线（不镜像 MCP 流量）· 黑匣子独立于机身</p>
+      </div>
+    </div>
+    <div class="hud-lights">
+      <div id="light-alert" class="light ok" title="告警灯（例外驱动）">
+        <span class="dot"></span><span class="lbl">平静</span>
+      </div>
+      <div id="light-conn" class="light ok" title="连接/存活">
+        <span class="dot"></span><span class="lbl">连接中</span>
+      </div>
+    </div>
+    <div class="seqbox">
+      <div>as of seq <b id="last-seq">0</b></div>
+      <div class="muted" id="n-events">0 事件</div>
+    </div>
+  </header>
+
+  <main>
+    <!-- HUD：环境感知（平静常态） -->
+    <section id="hud" class="panel">
+      <h2>HUD · 当前状态</h2>
+      <div class="kv"><span>后端</span><b id="hud-backend">—</b></div>
+      <div class="kv"><span>引擎 method</span><b id="hud-method">—</b></div>
+      <div class="kv"><span>在跑什么</span><b id="hud-running">—</b></div>
+      <div class="kv"><span>运行次数</span><b id="hud-nruns">0</b></div>
+      <h3>配置摘要</h3>
+      <table id="hud-config" class="mini"><tbody></tbody></table>
+    </section>
+
+    <!-- 配置态结构树（需求②：AI 模式的 web 配置全展示；schema join 现值） -->
+    <section id="config-tree" class="panel wide">
+      <h2>配置态 · 结构树
+        <span class="controls">
+          <input id="tree-filter" type="search" placeholder="过滤键/说明…" />
+          <label><input id="tree-show-engine" type="checkbox" /> 显示 engine（只读常量）</label>
+          <button id="tree-reload">重读</button>
+        </span>
+      </h2>
+      <div id="tree-meta" class="muted"></div>
+      <div id="tree-body"></div>
+    </section>
+
+    <!-- 告警灯：例外驱动，只在需要人判断时拉走注意力 -->
+    <section id="alerts" class="panel">
+      <h2>告警 <span id="alert-count" class="badge">0</span></h2>
+      <ul id="alert-list" class="alerts"></ul>
+      <p class="muted" id="alerts-empty">默认平静——无异常。</p>
+    </section>
+
+    <!-- 飞行记录仪：按需深挖（查询 / 回放） -->
+    <section id="recorder" class="panel wide">
+      <h2>飞行记录仪
+        <span class="controls">
+          <input id="filter" type="search" placeholder="过滤 actor/kind/target/reason…" />
+          <label><input id="ai-only" type="checkbox" /> 只看 AI 改动</label>
+          <button id="reload">重读全史</button>
+        </span>
+      </h2>
+      <table id="events" class="recorder">
+        <thead>
+          <tr><th>seq</th><th>actor</th><th>kind</th><th>target</th>
+              <th>before → after</th><th>reason</th><th>可逆</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+  </main>
+
+  <footer class="muted">
+    驾驶舱是<b>只读</b>投影：无写回项目的通道（I2）。远程访问须鉴权；写端点（MCP）
+    永不出本机（T6）。数据源 = append-only journal，项目崩溃后仍显示死前全貌（T5）。
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

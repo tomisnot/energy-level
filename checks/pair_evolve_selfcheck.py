@@ -37,13 +37,10 @@ sys.path.insert(0, _ROOT)
 import src  # noqa: F401
 from src.core import core, pair_core
 # t74：evolve shim 已删——按新家直连
-from src.core.atomic_levels import gaussian, square, make_levels
-from src.core.field_build import (field, real_field, group_field,
-                                  _field_geometry, _sublevel_row)
-from src.core.evolve_util import (decay, auto_decays, _as_vector,
-                                  _CONV)
-from src.core.evolve_rwa import (evolve, _e_rot, _evolve_full,
-                                 _evolve_full_hybrid)
+from src.core.atomic_levels import square, make_levels
+from src.core.field_build import field
+from src.core.evolve_util import CONV
+from src.core.evolve_rwa import evolve
 
 from arc import Rubidium87
 
@@ -56,7 +53,7 @@ except Exception:
     _HAS_PI = False
 
 # MHz·ns → rad（与 pair_evolve/evolve 同一约定）
-_CONV = 2 * np.pi * 1e-3
+from src.core.evolve_util import CONV
 
 _n_pass = _n_fail = 0
 
@@ -223,20 +220,20 @@ def t3():
         states, [], [], psi0_A, psi0_B, vdd_matrix=V_pi,
         t_grid=t, method='ip4', progress_arr=np.zeros(2))
 
-    # 精确参考：ψ(t) = expm(−i·_CONV·H_pair·t)·ψ0
+    # 精确参考：ψ(t) = expm(−i·CONV·H_pair·t)·ψ0
     psi0_2d = np.kron(psi0_A, psi0_B)
     pops_ref = np.zeros((len(t), N * N))
     for m, tm in enumerate(t):
-        U = expm(-1j * _CONV * H_pi * tm)
+        U = expm(-1j * CONV * H_pi * tm)
         pops_ref[m] = np.abs(U @ psi0_2d) ** 2
-    err = np.max(np.abs(res['pops_2d'] - pops_ref))
+    err = np.max(np.abs(res['pops'] - pops_ref))
     _check('pops 与精确演化逐点一致（< 1e-5）', err < 1e-5,
            f'max err={err:.2e}')
 
-    # 交换拍频：|SP⟩↔|PS⟩ 的 sin² 振荡，首峰时刻 T/4 = π/(2·_CONV·|V_ex|)
+    # 交换拍频：|SP⟩↔|PS⟩ 的 sin² 振荡，首峰时刻 T/4 = π/(2·CONV·|V_ex|)
     V_ex = float(np.real(H_pi[1, 2]))
-    t_first_peak = np.pi / (2.0 * _CONV * abs(V_ex))
-    p_ps = res['pops_2d'][:, 2]
+    t_first_peak = np.pi / (2.0 * CONV * abs(V_ex))
+    p_ps = res['pops'][:, 2]
     # 多个等高峰时 argmax 会取最后一个 → 取首次越过 0.99 的时刻
     k_first = int(np.argmax(p_ps > 0.99))
     _check('|PS⟩ 首峰时刻 ≈ π/(2|V_ex|)（< 2 ns）',

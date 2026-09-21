@@ -5,21 +5,22 @@
 第一性原理权威参照（rtol/atol 显式、可选双容差 verify）。
 - 幺正（decays 空）：DOP853；
 - 耗散：同绘景密度矩阵 + BDF（Lindblad 跳变算符在相互作用绘景下
-  时不变，与实验室系严格等价）；显式落点/纯退相经 _decay_ops 支持。
+  时不变，与实验室系严格等价）；显式落点/纯退相经 decay_ops 支持。
 """
 import numpy as np
 from scipy.integrate import solve_ivp
 
-from .sambe import _CONV
+from .sambe import CONV
 from .evolve_util import env_at
-from .evolve_util import _as_vector, _decay_ops
+from .evolve_util import as_vector, decay_ops
 from .field_build import _validate_fields
-from .evolve_util import _as_vector, _decay_ops
+from .evolve_util import as_vector, decay_ops
 
 
 def evolve_reference(states, fields, psi0, t_grid, decays=None,
                      rtol=1e-9, atol=1e-11, verify=False,
-                     progress_arr=None, record_amp=False, log=None):
+                     progress_arr=None, record_amp=False, log=None,
+                     E_shift=None):
     """实验室系第一性原理参考积分器（零模型近似 + 显式容差）。
 
     - 幺正（decays 空）：H0 相互作用绘景 + DOP853（自适应、嵌入式误差控制）；
@@ -36,9 +37,11 @@ def evolve_reference(states, fields, psi0, t_grid, decays=None,
     t = np.asarray(t_grid, float)
     T = float(t[-1])
     _validate_fields(fields)
-    psi0v = _as_vector(states, psi0)
+    psi0v = as_vector(states, psi0)
     N = len(states)
     E = np.array([s['E_mhz'] for s in states], float)
+    if E_shift is not None:                  # C1：远失谐 AC 位移，与 sambe 同序
+        E = E + np.asarray(E_shift, float)
     E = E - float(E.min())
     terms = [(np.asarray(f['A'], float), float(f['omega_L_mhz']),
               f['waveform']) for f in fields]
@@ -48,34 +51,39 @@ def evolve_reference(states, fields, psi0, t_grid, decays=None,
         for A, wL, wf in terms:
             env = env_at(wf, tv)
             if env != 0.0:
-                V = V + (env * np.cos(_CONV * wL * tv)) * A
+                V = V + (env * np.cos(CONV * wL * tv)) * A
         return V
 
     def _run_unitary(rtl, atl):
         def _rhs_sambe(tv, y):
-            u = np.exp(1j * _CONV * E * tv)
-            return -1j * _CONV * (u * (coupling_at(tv) @ (np.conj(u) * y)))
+            u = np.exp(1j * CONV * E * tv)
+            return -1j * CONV * (u * (coupling_at(tv) @ (np.conj(u) * y)))
         sol = solve_ivp(_rhs_sambe, (0.0, T), psi0v, method='DOP853',
                         t_eval=t, rtol=rtl, atol=atl)
         if not sol.success:
             raise RuntimeError(f'reference 积分失败: {sol.message}')
-        return sol.y                            # 相互作用绘景振幅
+        return sol                              # 相互作用绘景振幅（.y / .nfev）
 
     decays = list(decays or [])
     if not decays:
         from .coupling import stage_progress
         stage_progress(progress_arr, 1, 0.0)  # 阶段 1：参考积分（无内部钩子）
-        yI = _run_unitary(rtol, atol)
+        sol1 = _run_unitary(rtol, atol)
+        yI = sol1.y
         pops = np.abs(yI).T ** 2
         out = dict(t=t, pops=pops, states=states,
                    om_mhz=[float(np.abs(A).max()) for A, _, _ in terms],
                    method='exact', backend='reference-dop853',
-                   loss=np.zeros(len(t)))
+                   loss=np.zeros(len(t)),
+                   error_report=dict(backend='reference-dop853',
+                                     solver='DOP853', nfev=int(sol1.nfev),
+                                     max_norm_dev=float(np.max(np.abs(
+                                         pops.sum(axis=1) - 1.0)))))
         if record_amp:
-            uT = np.exp(1j * _CONV * E * T)     # 实验室系末态振幅
+            uT = np.exp(1j * CONV * E * T)     # 实验室系末态振幅
             out['psi_amp'] = np.conj(uT) * yI[:, -1]
         if verify:
-            y2 = _run_unitary(rtol / 10.0, atol / 10.0)
+            y2 = _run_unitary(rtol / 10.0, atol / 10.0).y
             out['verify_diff'] = float(np.max(
                 np.abs(np.abs(y2).T ** 2 - pops)))
             log(f'[reference] 双容差验证：Δpops={out["verify_diff"]:.2e}'
@@ -84,17 +92,17 @@ def evolve_reference(states, fields, psi0, t_grid, decays=None,
         return out
 
     # ---- Lindblad（同绘景密度矩阵；L 时不变） ----
-    Ls, N_eff = _decay_ops(decays, states)
+    Ls, N_eff = decay_ops(decays, states)
     rho0 = np.zeros((N_eff, N_eff), complex)
     rho0[:N, :N] = np.outer(psi0v, psi0v.conj())
 
     def rhs_me(tv, rv):
         rho = rv.reshape((N_eff, N_eff), order='F')
-        u = np.exp(1j * _CONV * E * tv)
+        u = np.exp(1j * CONV * E * tv)
         V = coupling_at(tv)
         H = np.zeros((N_eff, N_eff), complex)
         H[:N, :N] = (u[:, None] * V) * np.conj(u)[None, :]
-        d = -1j * _CONV * (H @ rho - rho @ H)
+        d = -1j * CONV * (H @ rho - rho @ H)
         for L in Ls:
             LdL = L.conj().T @ L
             d = d + (L @ rho @ L.conj().T
@@ -107,11 +115,12 @@ def evolve_reference(states, fields, psi0, t_grid, decays=None,
                         method='BDF', t_eval=t, rtol=rtl, atol=atl)
         if not sol.success:
             raise RuntimeError(f'reference(Lindblad) 积分失败: {sol.message}')
-        return sol.y
+        return sol
 
     from .coupling import stage_progress
     stage_progress(progress_arr, 1, 0.0)      # 阶段 1：主方程积分
-    rv = _run_mastereq(rtol, atol)
+    sol1 = _run_mastereq(rtol, atol)
+    rv = sol1.y
     pops = np.zeros((len(t), N))
     loss = np.zeros(len(t))
     for k in range(len(t)):
@@ -122,11 +131,15 @@ def evolve_reference(states, fields, psi0, t_grid, decays=None,
             loss[k] = dg[N]
     out = dict(t=t, pops=np.clip(pops, 0.0, None), states=states,
                om_mhz=[float(np.abs(A).max()) for A, _, _ in terms],
-               method='exact', backend='reference-bdf', loss=loss)
+               method='exact', backend='reference-bdf', loss=loss,
+               error_report=dict(backend='reference-bdf', solver='BDF',
+                                 nfev=int(sol1.nfev),
+                                 max_norm_dev=float(np.max(np.abs(
+                                     pops.sum(axis=1) + loss - 1.0)))))
     if record_amp:
         out['rho'] = rv[:, -1].reshape((N_eff, N_eff), order='F')
     if verify:
-        rv2 = _run_mastereq(rtol / 10.0, atol / 10.0)
+        rv2 = _run_mastereq(rtol / 10.0, atol / 10.0).y
         pops2 = np.zeros_like(pops)
         for k in range(len(t)):
             pops2[k] = np.real(np.diag(

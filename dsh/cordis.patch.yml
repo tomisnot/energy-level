@@ -1,0 +1,5 @@
+# 交付期 overlay：加载构建产物（先 `npm run bundle` 生成 lib/，再跑）。
+#   dsh web --patch ./dsh/cordis.patch.yml
+- insert:
+    - id: re0-mecha
+      name: './lib/index.mjs'
