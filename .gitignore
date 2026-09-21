@@ -36,3 +36,4 @@ scripts/research/figs_photon/
 # 迁移 staging（Re0重构/）——已覆盖进父仓主干（commit 25ff146），此目录冗余、可手动删；
 # 忽略它防 `git add -A` 误纳其 dsh/node_modules。删除目录后可移除此行。
 Re0重构/
+.human-token
