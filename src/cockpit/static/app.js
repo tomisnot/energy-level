@@ -142,16 +142,14 @@
         if (r.readonly) tr.className += ' ro';
         tr.innerHTML =
           '<td class="k" title="' + esc(r.name) + '">' + esc(r.name) + '</td>' +
-          '<td class="v" title="' + esc(fmtVal(r.value)) + '">' + esc(fmtVal(r.value)) +
-            (r.unit ? ' <span class="u">' + esc(r.unit) + '</span>' : '') + '</td>' +
-          '<td class="t">' + esc(r.type || '') +
-            (r.enum ? ' ∈ ' + esc(r.enum.join('|')) : '') + '</td>' +
-          '<td class="d" title="' + esc(r.desc || '') + '">' + esc(r.desc || '') + '</td>' +
-          '<td class="by" title="' +
-            esc(set ? set.actor + ' · ' + set.reason + ' · #' + set.seq : '未设') + '">' +
-            (set
-              ? esc(set.actor) + ' · ' + esc(set.reason) + ' · #' + set.seq
-              : '<span class="muted">未设</span>') + '</td>';
+          '<td class="v" title="' +
+            esc(fmtVal(r.value) +
+              (r.unit ? ' ' + r.unit : '') +
+              (r.type ? ' · ' + r.type : '') +
+              (r.desc ? ' · ' + r.desc : '') +
+              (set ? ' · ' + set.actor + ' · ' + set.reason + ' · #' + set.seq : '')) +
+            '">' + esc(fmtVal(r.value)) +
+            (r.unit ? ' <span class="u">' + esc(r.unit) + '</span>' : '') + '</td>';
         tbl.appendChild(tr);
       }
       group.appendChild(tbl);
@@ -245,6 +243,17 @@
   $('alert-badge').addEventListener('click', () => {
     const pop = $('alert-pop');
     pop.hidden = !pop.hidden;
+  });
+  // 两页签切换：飞行记录仪 / 配置态
+  document.querySelectorAll('#cockpit-tabs .tab').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const target = btn.getAttribute('data-tab');
+      document.querySelectorAll('#cockpit-tabs .tab').forEach((b) => {
+        b.classList.toggle('active', b === btn);
+      });
+      $('recorder').classList.toggle('active', target === 'recorder');
+      $('config-tree').classList.toggle('active', target === 'config');
+    });
   });
 
   // ---------------- 启动 ----------------

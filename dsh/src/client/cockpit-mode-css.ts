@@ -1,45 +1,17 @@
 /**
  * 驾驶舱主界面模式的注入 CSS（字符串，由 index.ts 塞进 <style data-plugin-css>）。
  *
- * 所有规则都限定在 `html[data-re0-cockpit="on"]` 下——默认（原版 dsh）零影响。几何用 CSS
- * 变量，live 调只改这里。依赖的 dsh 稳定锚点：`[data-shell-overlay]`（覆盖层，AppFrame 里
- * position:absolute;inset:0;z-index:20;pointer-events:none，子元素 auto）、以及 mode-store
- * 运行时打上的 `[data-re0-sidebar]`/`[data-re0-center]`（左栏列 / 中栏=聊天列）。
+ * 设计：驾驶舱 = dsh **右侧栏**。iframe 由 index.ts 挂进右栏列 `[data-rightbar-col]`，
+ * 这里隐藏右栏原有 dock 内容、让 iframe 填满右栏列。对话回中栏全高（不 dock），
+ * 仅精简其 chrome（隐藏 crumbs/tabs/utilities/corner/底部统计 + 头部压到按钮高）。
+ * 全部限定在 `html[data-re0-cockpit="on"]` 下，默认（原版 dsh）零影响。
  */
 export const COCKPIT_MODE_CSS = `
-html[data-re0-cockpit="on"] {
-  --re0-chat-w: 44vw;   /* 右上角聊天块宽 */
-  --re0-chat-h: 50vh;   /* 右上角聊天块高（w×h≈1/4 屏） */
-  --re0-chat-z: 21;     /* 必须 > overlayLayer 的 z-index:20，聊天才浮在驾驶舱上 */
-}
-
-/* 隐藏左侧栏列（会话/工作区/设置） */
-html[data-re0-cockpit="on"] [data-re0-sidebar] {
+/* 右栏=驾驶舱：隐藏右栏原有 dock 内容，只留 cockpit iframe 填满右栏列 */
+html[data-re0-cockpit="on"] [data-rightbar-col] > *:not(.re0-cockpit-frame) {
   display: none !important;
 }
-
-/* 中栏（main→conversation，即 AI 对话）收到右上角一块，浮在驾驶舱之上 */
-html[data-re0-cockpit="on"] [data-re0-center] {
-  position: fixed !important;
-  top: 0 !important;
-  right: 0 !important;
-  width: var(--re0-chat-w) !important;
-  height: var(--re0-chat-h) !important;
-  z-index: var(--re0-chat-z) !important;
-  background: var(--dsw-alias-bg-base, #0d1117);
-  border-left: 1px solid #30363d;
-  border-bottom: 1px solid #30363d;
-  border-bottom-left-radius: 10px;
-  box-shadow: 0 10px 40px rgba(0, 0, 0, .55);
-  overflow: hidden;
-}
-
-/* 驾驶舱 iframe 填满覆盖层（overlayLayer 已 inset:0）；聊天块浮在其右上角之上。
-   用后代选择器（非 >）：dsh slot 渲染器会在组件外套容器，iframe 不是直接子元素。
-   （主尺寸由 CockpitOverlay 的内联包裹层保证，这里兼作兜底。） */
-html[data-re0-cockpit="on"] [data-shell-overlay] .re0-cockpit-frame {
-  position: absolute;
-  inset: 0;
+html[data-re0-cockpit="on"] [data-rightbar-col] > .re0-cockpit-frame {
   width: 100%;
   height: 100%;
   border: 0;
@@ -47,20 +19,13 @@ html[data-re0-cockpit="on"] [data-shell-overlay] .re0-cockpit-frame {
   background: #0d1117;
 }
 
-/* ---- 驾驶舱模式：精简对话 chrome，把腾出的空间让给消息区 ----
-   稳定锚点（已对 dsh 源码 ui-conversation/ConversationSession.tsx + ui-chat/StatsPills.tsx 核对）：
-   header=<header> 语义标签；标签行(对话/轨迹)=[role=tablist]；右角=[data-conversation-header-corner]；
-   左簇(标准模式/费用/标题)=<nav>(crumbs)；utilities=titleRow(header 第1子)的第2子；
-   底部统计(N轮M步/tok·缓存)=[data-composer-stats]。保留 headerActions（◈退出驾驶舱 按钮）。
-   这些是 flex 列里的行，display:none 后空间自动回流给消息滚动区。 */
+/* 对话 chrome 精简：隐藏 crumbs(标题/模式/费用)/tabs(对话/轨迹)/utilities/corner/底部统计 */
 html[data-re0-cockpit="on"] [data-re0-center] header [role="tablist"] { display: none !important; }
 html[data-re0-cockpit="on"] [data-re0-center] [data-conversation-header-corner] { display: none !important; }
 html[data-re0-cockpit="on"] [data-re0-center] header nav { display: none !important; }
 html[data-re0-cockpit="on"] [data-re0-center] header > :first-child > :nth-child(2) { display: none !important; }
 html[data-re0-cockpit="on"] [data-re0-center] [data-composer-stats] { display: none !important; }
-
-/* 驾驶舱模式：聊天头部只留“放得下按钮”的高度——隐藏 crumbs/tabs/utilities 后
-   原头部仍带着两行布局的 min-height/padding，会剩一行空白；这里压到内容高。 */
+/* 头部压到“放得下按钮”的高度（隐藏两行 chrome 后去掉空白） */
 html[data-re0-cockpit="on"] [data-re0-center] header {
   min-height: 0 !important;
   height: auto !important;

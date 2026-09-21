@@ -62,6 +62,12 @@ declare module '@deepseek-ai/cordis' {
     readonly tools: ToolRuntime
     readonly slots: SlotsRuntime
     readonly logger: Logger
+    /** 布局控制（ui-layout 提供）：左栏开关 + 右栏(details)开关。 */
+    readonly layout: {
+      toggleSidebar(): void
+      openDetails(): void
+      closeDetails(): void
+    }
     /** 注册可逆副作用：setup 返回 disposer；await 之。 */
     effect(setup: () => unknown | Promise<unknown>, label?: string): Promise<void>
     /** 监听类型化事件，返回取消监听的 disposer。 */

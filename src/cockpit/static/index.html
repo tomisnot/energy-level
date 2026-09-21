@@ -28,27 +28,31 @@
   </header>
 
   <main>
-    <!-- 配置态结构树：值列固定宽 + hover 看全量，所有列一页放得下 -->
-    <section id="config-tree" class="panel wide">
-      <h2>配置态 · 结构树</h2>
+    <!-- 两页签：飞行记录仪(默认) / 配置态 -->
+    <nav class="tabs" id="cockpit-tabs">
+      <button class="tab active" data-tab="recorder">飞行记录仪</button>
+      <button class="tab" data-tab="config">配置态</button>
+    </nav>
+
+    <!-- 飞行记录仪（核心，默认页）：全宽 + 逐行折叠；折叠=概括，展开=全量多行 -->
+    <section id="recorder" class="panel wide tab-page active">
       <div class="controls">
-        <input id="tree-filter" type="search" placeholder="过滤键/说明…" />
-        <label><input id="tree-show-engine" type="checkbox" /> 显示 engine</label>
+        <input id="filter" type="search" placeholder="过滤 actor/kind/reason…" />
+        <label><input id="ai-only" type="checkbox" /> 只看 AI</label>
+        <button id="reload">重读</button>
+      </div>
+      <div id="events" class="recorder-list"></div>
+    </section>
+
+    <!-- 配置态结构树：窄名称栏 + 值列(hover 看全量)，省略解释列 -->
+    <section id="config-tree" class="panel wide tab-page">
+      <div class="controls">
+        <input id="tree-filter" type="search" placeholder="过滤键…" />
+        <label><input id="tree-show-engine" type="checkbox" /> engine</label>
         <button id="tree-reload">重读</button>
         <span id="tree-meta" class="muted"></span>
       </div>
       <div id="tree-body"></div>
-    </section>
-
-    <!-- 飞行记录仪（核心）：全宽 + 逐行折叠；折叠=概括，展开=全量多行 -->
-    <section id="recorder" class="panel wide">
-      <h2>飞行记录仪</h2>
-      <div class="controls">
-        <input id="filter" type="search" placeholder="过滤 actor/kind/target/reason…" />
-        <label><input id="ai-only" type="checkbox" /> 只看 AI 改动</label>
-        <button id="reload">重读全史</button>
-      </div>
-      <div id="events" class="recorder-list"></div>
     </section>
   </main>
 

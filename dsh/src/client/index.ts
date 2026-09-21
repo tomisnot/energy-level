@@ -1,24 +1,22 @@
 /**
  * re0-mecha dsh 插件 —— **CLIENT 入口**（浏览器侧 Cordis 插件）。
  *
- * 贡献两处 UI + 注入一段 CSS：
- * 1. `conversation.session.header.actions`（single/list, session）：◈驾驶舱 **切换按钮**（CockpitPanel）。
- * 2. `shell.overlay`（list, root）：驾驶舱 **iframe 覆盖层**（CockpitOverlay），模式 ON 时填满。
- * 3. `<style data-plugin-css>`：驾驶舱模式 CSS——隐藏左侧栏、把中栏（AI 对话）fixed 到右上角
- *    约 1/4、驾驶舱铺满覆盖层。全部限定在 `html[data-re0-cockpit="on"]` 下，默认原版布局零影响。
+ * 驾驶舱主界面 = dsh **右侧栏**：点 ◈驾驶舱 → `ctx.layout.openDetails()` 打开右栏 +
+ * 把 cockpit iframe 挂进右栏列（`[data-rightbar-col]`）+ 自动关左栏；对话回中栏全高
+ * （宽度随右栏打开自动收窄）。再点 → closeDetails + 复原左栏 + 移除 iframe。
  *
- * 跨 scope 的模式状态由模块级 mode-store 桥接（按钮 session、覆盖层 root）。注册与 DOM 副作用
- * 都经 `ctx.effect` 可逆：插件卸载即移除按钮/覆盖层/<style>，并复位模式（清 html 属性、断观察器）。
+ * 贡献：① 头部切换按钮（`conversation.session.header.actions`）；② 注入 CSS
+ * （`<style data-plugin-css>`，仅 `html[data-re0-cockpit="on"]` 生效）。
+ * 跨 scope 的模式状态由模块级 mode-store 桥接；注册与副作用都经 `ctx.effect` 可逆。
  *
- * ⚠ client 半经 tsdown 打成 CJS + `__ModuleLoader__.load` 包装（见 tsdown.config.ts）；改本目录
- * 源码后须 `npm run bundle` 重新生成 lib/client.js 才在 dsh 里生效。ESM 顶层 import/export 会毒化
- * dsh 的合并包（整站崩），故 react / @deepseek-ai/cordis 等按 platform external 处理。
+ * ⚠ client 半经 tsdown 打成 CJS + `__ModuleLoader__.load` 包装；改本目录源码后须
+ * `npm run bundle` 并重启 dsh 才生效。
  */
 import type { Context } from '@deepseek-ai/cordis'
 import { CockpitPanel } from './CockpitPanel.tsx'
-import { CockpitOverlay } from './CockpitOverlay.tsx'
 import { COCKPIT_MODE_CSS } from './cockpit-mode-css.ts'
-import { setCockpitMode } from './mode-store.ts'
+import { getCockpitMode, subscribeCockpitMode } from './mode-store.ts'
+import { readBootstrap } from './bootstrap.ts'
 
 /** Cordis 插件名（与 host 半一致）。 */
 export const name = 're0-mecha'
@@ -41,18 +39,47 @@ export async function apply(ctx: Context): Promise<void> {
         CockpitPanel,
       ))
 
-    // 壳级覆盖层：驾驶舱 iframe（list 槽，ON 时渲染，OFF 时组件返回 null）
-    const disposeOverlay = ctx.slots.inject('shell.overlay', () =>
-      ctx.slots.register(
-        { name: 'shell.overlay', id: 're0-cockpit', order: 100 },
-        CockpitOverlay,
-      ))
+    // ---- 模式副作用：右栏=驾驶舱 + 左栏自动关 + iframe 挂右栏列 ----
+    let frame: HTMLIFrameElement | null = null
+    let weClosedSidebar = false
+
+    const mountFrame = (): void => {
+      const host = document.querySelector('[data-rightbar-col]')
+      if (!host || frame) return
+      frame = document.createElement('iframe')
+      frame.className = 're0-cockpit-frame'
+      const url = readBootstrap()?.cockpitUrl
+      if (url) frame.src = url
+      frame.title = 'Re0 机甲驾驶舱（只读）'
+      host.appendChild(frame)
+    }
+    const unmountFrame = (): void => {
+      if (frame) { frame.remove(); frame = null }
+    }
+
+    const unsub = subscribeCockpitMode(() => {
+      if (getCockpitMode()) {
+        ctx.layout.openDetails()
+        // 左栏若开着则关掉（记住是我们关的，OFF 时复原）
+        const fr = document.querySelector('[data-re0-frame]')
+        if (fr && !fr.hasAttribute('data-sidebar-collapsed')) {
+          ctx.layout.toggleSidebar()
+          weClosedSidebar = true
+        }
+        mountFrame()
+      } else {
+        ctx.layout.closeDetails()
+        if (weClosedSidebar) { ctx.layout.toggleSidebar(); weClosedSidebar = false }
+        unmountFrame()
+      }
+    })
 
     return () => {
+      unsub()
+      unmountFrame()
       try { disposeBtn?.() } catch { /* ignore */ }
-      try { disposeOverlay?.() } catch { /* ignore */ }
-      setCockpitMode(false)                 // 清 html 属性 + 断开列标记观察器
       style.remove()
+      document.documentElement.removeAttribute('data-re0-cockpit')
     }
   }, 're0-mecha: cockpit mode')
 }
