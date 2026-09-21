@@ -41,8 +41,9 @@ save_state/     全部转到新格式
   `adapter`（唯一同时 import core+mecha 的胶水，实现 mecha 的 `EngineProtocol`，含建场层 fields）；
   `mecha`（纯框架、零领域 import，`mecha_purity` 提炼守卫看守）；`ui / cockpit / sweep / dsh插件 → mecha`
   （经注入的 adapter 拿领域）。
-- **人类投影，一条真值（【2026-09-20 修正】GUI 角色收窄）**：**GUI = 人工操控面 + 接管目标**
-  （人工模式可写；AI 模式可关，若开则只读+暗色+横幅"AI 控制中"+「接管」按钮）。**AI 模式的配置态
+- **人类投影，一条真值（【2026-09-20 修正】GUI 角色收窄；【2026-09-21 再修正】AI 模式 GUI 关闭）**：**GUI = 人工操控面**
+  （人工模式可写；**AI 模式 GUI 直接关闭/不启动，不挂只读界面**——要接管就切回 GUI 模式连 Hub 夺权，
+  而非挂一个啥也不能动的只读窗）。**AI 模式的配置态
   监督面移到 web cockpit 的配置态结构树**（不再看 GUI 参数）。cockpit = 独立进程黑匣子/飞行记录仪
   + 远程只读看板 + **配置态结构树**（schema join 现值，`/api/config-tree`）。三者都是 `mecha` 语义
   状态的投影，共写同一 choke point / 同一事件总线（I2/I5）。
@@ -61,7 +62,7 @@ save_state/     全部转到新格式
 
 | 模式 | 写权 | MCP 写通道 | GUI | 人的位置 |
 |---|---|---|---|---|
-| **AI 监工** | AI | **live**（经 dsh 插件的自愈 MCP 桥） | 可关；若开则**只读+暗色**+横幅"AI 控制中，配置态见 web 驾驶舱"+「接管」按钮 | 主要看 **web cockpit 配置态结构树**（+事件流+告警）；随时点「接管」夺权 |
+| **AI 监工** | AI | **live**（经 dsh 插件的自愈 MCP 桥） | **关闭/不启动**（不挂只读界面）；监督看 web cockpit；要接管=切回 GUI 模式 | 主要看 **web cockpit 配置态结构树**（+事件流+告警）；要夺权就切回 GUI 模式 |
 | **自己干** | 人 | **门控**（AI 写→可教学报错"人工模式，AI 无写权"） | 正常操作，经 choke point 写 | 在 GUI 里开车 |
 
 - **交接协议**（原子 + 记账 + 静默 + 重定位）：切换发一条 `authority_switch` 事件（actor/reason）；
@@ -69,8 +70,9 @@ save_state/     全部转到新格式
   **定位包 / diff-since-seq** 重新站定（R1 orientation 原语）。
 - **【2026-09-20 修正】AI 模式监督面 = web cockpit 配置态树，不再是 GUI**：用户明确"AI 模式下不看
   GUI 参数，看 web 上自动生成的结构树"。故 cockpit **新增**配置态结构树（schema join 现值，
-  `/api/config-tree`，已实现+判据绿）作为 AI 模式主监督面；GUI 退回**纯人工操控 + 接管目标**
-  （AI 模式只读+暗色+「接管」按钮）。GUI 仍去掉旧框架耦合（`pm_setup`/`engine_overrides`/`set_god_mode`）。
+  `/api/config-tree`，已实现+判据绿）作为 AI 模式主监督面；GUI 退回**纯人工操控**；
+  **【2026-09-21 再修正】AI 模式下 GUI 关闭**（不挂只读/暗色界面），要接管=切回 GUI 模式连 Hub 夺权。
+  GUI 仍去掉旧框架耦合（`pm_setup`/`engine_overrides`/`set_god_mode`）。
 - **cockpit 职责**：① 黑匣子/飞行记录仪（独立进程读 journal，T5）、② 远程只读看板（Web/鉴权，T6）、
   ③ 独立告警、④ **配置态结构树**（AI 模式主监督面）。数据源仍是 journal（Hub 落 `registry_schema`
   事件 + set 事件；cockpit 只读、不 import mecha，黑匣子纯净）。
