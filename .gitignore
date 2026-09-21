@@ -32,3 +32,7 @@ ui_design/screenshots/
 # 研究配图的渲染产物（由 scripts/research/*.py 的 savefig 重生成）
 # scripts/research/ 只入库 .py，不入库图片；如需归档某版本配图用 `git add -f`
 scripts/research/figs_photon/
+
+# 迁移 staging（Re0重构/）——已覆盖进父仓主干（commit 25ff146），此目录冗余、可手动删；
+# 忽略它防 `git add -A` 误纳其 dsh/node_modules。删除目录后可移除此行。
+Re0重构/
