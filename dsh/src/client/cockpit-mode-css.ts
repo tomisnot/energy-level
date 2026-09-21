@@ -46,4 +46,16 @@ html[data-re0-cockpit="on"] [data-shell-overlay] .re0-cockpit-frame {
   display: block;
   background: #0d1117;
 }
+
+/* ---- 驾驶舱模式：精简对话 chrome，把腾出的空间让给消息区 ----
+   稳定锚点（已对 dsh 源码 ui-conversation/ConversationSession.tsx + ui-chat/StatsPills.tsx 核对）：
+   header=<header> 语义标签；标签行(对话/轨迹)=[role=tablist]；右角=[data-conversation-header-corner]；
+   左簇(标准模式/费用/标题)=<nav>(crumbs)；utilities=titleRow(header 第1子)的第2子；
+   底部统计(N轮M步/tok·缓存)=[data-composer-stats]。保留 headerActions（◈退出驾驶舱 按钮）。
+   这些是 flex 列里的行，display:none 后空间自动回流给消息滚动区。 */
+html[data-re0-cockpit="on"] [data-re0-center] header [role="tablist"] { display: none !important; }
+html[data-re0-cockpit="on"] [data-re0-center] [data-conversation-header-corner] { display: none !important; }
+html[data-re0-cockpit="on"] [data-re0-center] header nav { display: none !important; }
+html[data-re0-cockpit="on"] [data-re0-center] header > :first-child > :nth-child(2) { display: none !important; }
+html[data-re0-cockpit="on"] [data-re0-center] [data-composer-stats] { display: none !important; }
 `
