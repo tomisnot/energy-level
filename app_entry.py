@@ -396,43 +396,30 @@ def run_gui(app):
 
 
 def run_ai():
-    """AI 模式：起 Hub（MCP 写通道·权威·前台阻塞）+ 驾驶舱（web 监控·后台）+ dsh harness。
+    """AI 模式：后台起 Hub(:8765)+驾驶舱服务(:8766)，**前台跑 dsh**（AI harness）。
 
-    ⚠ 驾驶舱与 dsh 都是 **web 服务器**（不是会弹的原生窗）：各在独立控制台窗里跑、
-    打印自己的 URL，用**浏览器**打开那个 URL 才是“界面”。本函数会自动用浏览器打开
-    驾驶舱(:8766)；dsh 的端口是它自选的 → 看 dsh 控制台窗里打印的 URL。Hub 前台阻塞
-    （T4：人启动=权威；Ctrl+C 停全部，退出时收尾子进程）。
+    为何这样分：驾驶舱是 **dsh 插件**（dsh 网页头部「◈ 驾驶舱」按钮 iframe :8766），
+    所以**不单独开浏览器**——AI 界面和监控都在 dsh 网页里，你只需面对 dsh 一个。Hub/
+    驾驶舱是 dsh 背后的服务，后台起（各自独立窗、可最小化）。dsh 启动慢 → 放**前台**，
+    它的启动输出/进度直接进本控制台，你能看着它起来。dsh 退出或 Ctrl+C → 收尾后台服务。
     """
     import atexit
     import shutil
     import subprocess
-    import threading
-    import webbrowser
+    import time
     here = os.path.dirname(os.path.abspath(__file__))
     py = sys.executable
     flags = getattr(subprocess, 'CREATE_NEW_CONSOLE', 0) if os.name == 'nt' else 0
     procs = []
 
-    def _spawn(name, args, **kw):
+    def _spawn(name, args):
         try:
-            procs.append((name, subprocess.Popen(args, cwd=here,
-                                                 creationflags=flags, **kw)))
-            return True
+            p = subprocess.Popen(args, cwd=here, creationflags=flags)
+            procs.append((name, p))
+            return p
         except Exception as e:                          # noqa: BLE001
-            print('[launcher] %s 自动启动失败：%s' % (name, e))
-            return False
-
-    # 驾驶舱（web 监控面，:8766）
-    _spawn('cockpit', [py, '-m', 'src.cockpit.server'])
-    # dsh harness（AI 的手）——先用 which 拿绝对路径，免子进程 PATH 找不到；.cmd 走 shell
-    dsh_cmd = 'dsh web --patch ./dsh/cordis.source.patch.yml'
-    dsh_exe = shutil.which('dsh')
-    if dsh_exe:
-        _spawn('dsh', '"%s" web --patch ./dsh/cordis.source.patch.yml' % dsh_exe,
-               shell=True)
-    else:
-        print('[launcher] ⚠ 没在 PATH 找到 dsh——请在你平时跑 dsh 的终端里手动运行：%s'
-              % dsh_cmd)
+            print('[launcher] %s 启动失败：%s' % (name, e))
+            return None
 
     def _cleanup():
         for _n, p in procs:
@@ -443,23 +430,45 @@ def run_ai():
                 pass
     atexit.register(_cleanup)
 
-    # 驾驶舱起需一两秒 → 延迟自动开浏览器
-    threading.Timer(2.5, lambda: webbrowser.open('http://127.0.0.1:8766/')).start()
+    # 后台服务：Hub（权威·MCP 写通道 :8765）+ 驾驶舱（:8766，dsh 插件 iframe 它）
+    _spawn('Hub', [py, '-m', 'src.adapter.serve'])
+    _spawn('驾驶舱', [py, '-m', 'src.cockpit.server'])
 
+    # 等 Hub 写好 .mcp-port（dsh 插件据此发现并连 Hub）——带进度点
+    pf = os.path.join(here, '.mcp-port')
+    print('[launcher] 等 Hub 就绪（.mcp-port）', end='', flush=True)
+    ready = False
+    for _ in range(80):                                  # 最多 ~20s
+        try:
+            if os.path.exists(pf) and open(pf, encoding='utf-8').read().strip():
+                ready = True
+                break
+        except OSError:
+            pass
+        time.sleep(0.25)
+        print('.', end='', flush=True)
+    print(' 就绪' if ready else ' 超时（dsh 会退回默认 :8765）')
+
+    dsh_exe = shutil.which('dsh')
+    dsh_args = 'web --patch ./dsh/cordis.source.patch.yml'
     print('=' * 70)
-    print('  AI 模式（三个都是服务、不是弹窗；界面在浏览器里）')
-    print('  · Hub（MCP 写通道·权威）: http://127.0.0.1:8765/mcp  ← 本进程前台，Ctrl+C 停全部')
-    print('  · 驾驶舱（web 监控）    : http://127.0.0.1:8766/  ← 已自动开浏览器')
-    print('  · dsh harness          : 看它自己那个控制台窗打印的 URL，用浏览器打开')
-    print('    （dsh 端口它自选；若那个窗一闪就没了 = dsh 未起，手动：%s）' % dsh_cmd)
-    print('  AI 在 dsh 网页里读 re0-mecha SKILL → 16 个 MCP 工具驱动引擎。')
+    print('  AI 模式：Hub(:8765)+驾驶舱(:8766) 已后台起（各自独立窗、可最小化）')
+    print('  下面**前台启动 dsh**（较慢，启动输出直接显示在本窗，请等它起来）：')
+    print('  · dsh 起来后，浏览器打开它打印的 URL = AI 界面')
+    print('  · 驾驶舱不用单独开——它是 dsh 插件，在 dsh 网页头部「◈ 驾驶舱」按钮里')
+    print('  · 停：本窗 Ctrl+C（一并收尾 Hub/驾驶舱）')
     print('=' * 70, flush=True)
 
-    from src.adapter.serve import main as serve_main
     try:
-        serve_main([])                                  # 前台跑 Hub（阻塞）
+        if dsh_exe:
+            # 前台跑 dsh：输出继承本控制台（启动进度/URL 可见），阻塞到 dsh 退出
+            subprocess.run('"%s" %s' % (dsh_exe, dsh_args), shell=True, cwd=here)
+        else:
+            print('[launcher] ⚠ 没在 PATH 找到 dsh——请手动运行：dsh %s' % dsh_args)
+            print('[launcher] Hub/驾驶舱保持后台运行；本窗回车结束（并收尾后台服务）…')
+            input()
     except KeyboardInterrupt:
-        print('\n[launcher] Hub 停止（Ctrl+C），收尾驾驶舱/dsh…')
+        print('\n[launcher] Ctrl+C —— 收尾 Hub/驾驶舱…')
     finally:
         _cleanup()
     return 0
