@@ -34,8 +34,10 @@ html[data-re0-cockpit="on"] [data-re0-center] {
   overflow: hidden;
 }
 
-/* 驾驶舱 iframe 填满覆盖层（overlayLayer 已 inset:0）；聊天块浮在其右上角之上 */
-html[data-re0-cockpit="on"] [data-shell-overlay] > .re0-cockpit-frame {
+/* 驾驶舱 iframe 填满覆盖层（overlayLayer 已 inset:0）；聊天块浮在其右上角之上。
+   用后代选择器（非 >）：dsh slot 渲染器会在组件外套容器，iframe 不是直接子元素。
+   （主尺寸由 CockpitOverlay 的内联包裹层保证，这里兼作兜底。） */
+html[data-re0-cockpit="on"] [data-shell-overlay] .re0-cockpit-frame {
   position: absolute;
   inset: 0;
   width: 100%;

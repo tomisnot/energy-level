@@ -3,8 +3,12 @@
  *
  * shell.overlay 是 `{kind:'list', scope:'root'}`（见 ui-layout/src/client/index.ts 的 SlotMap），
  * 可与其它 overlay 并存。overlayLayer 自身 position:absolute;inset:0;z-index:20;pointer-events:none，
- * 且 `.overlayLayer > *{pointer-events:auto}`——故 iframe 作直接子元素即全屏且可交互。数据不在
- * 这里取：iframe 直接加载 cockpit-server（读 journal 的只读黑匣子）。OFF 时返回 null。
+ * 且 `.overlayLayer > *{pointer-events:auto}`。数据不在这里取：iframe 直接加载 cockpit-server
+ * （读 journal 的只读黑匣子）。OFF 时返回 null。
+ *
+ * ⚠ dsh 的 slot 渲染器会在注册的组件外套一层容器，iframe 并非 [data-shell-overlay] 的
+ * 直接子元素——靠 CSS 直接子选择器选不中（曾缩成默认 300×150 贴左上）。故这里用内联样式
+ * 让组件根容器对 overlayLayer（position:absolute）inset:0 铺满，iframe 再 100% 填充。
  */
 import { useSyncExternalStore, type CSSProperties } from 'react'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
@@ -32,5 +36,15 @@ export function CockpitOverlay(_props: Props) {
       </div>
     )
   }
-  return <iframe className="re0-cockpit-frame" src={url} title="Re0 机甲驾驶舱（只读）" />
+  // 满尺寸绝对定位包裹层：对 overlayLayer（position:absolute）inset:0 铺满，不受 slot 外套容器影响
+  return (
+    <div style={{ position: 'absolute', inset: 0 }}>
+      <iframe
+        className="re0-cockpit-frame"
+        src={url}
+        title="Re0 机甲驾驶舱（只读）"
+        style={{ width: '100%', height: '100%', border: 0, display: 'block', background: '#0d1117' }}
+      />
+    </div>
+  )
 }
