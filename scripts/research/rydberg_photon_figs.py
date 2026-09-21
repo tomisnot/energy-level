@@ -27,11 +27,7 @@ import numpy as np
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-
-plt.rcParams.update({'font.size': 10, 'figure.dpi': 150,
-                     'font.family': ['Microsoft YaHei'],
-                     'axes.unicode_minus': False,
-                     'axes.spines.top': False, 'axes.spines.right': False})
+from matplotlib import font_manager as _fm
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.dirname(os.path.abspath(__file__)))))
@@ -40,6 +36,20 @@ from arc import Rubidium87
 from src.core import core
 from src.manybody.model import ManyBodyModel
 from src.manybody import assemble as asm
+
+# ⚠ arc 包 import 时会把 font.family 改成 serif（无中文字形）——必须在其后设置
+for _fp in (r'C:\Windows\Fonts\msyh.ttc', r'C:\Windows\Fonts\simhei.ttf',
+            r'C:\Windows\Fonts\simsun.ttc'):
+    if os.path.exists(_fp):
+        _fm.fontManager.addfont(_fp)
+_CJK = next((f.name for f in _fm.fontManager.ttflist
+             if f.name in ('Microsoft YaHei', 'SimHei', 'SimSun')),
+            'DejaVu Sans')
+plt.rcParams.update({'font.size': 10, 'figure.dpi': 150,
+                     'font.family': 'sans-serif',
+                     'font.sans-serif': [_CJK, 'DejaVu Sans'],
+                     'axes.unicode_minus': False,
+                     'axes.spines.top': False, 'axes.spines.right': False})
 
 G = (60, 0, 0.5, 0.5)           # 60S_1/2 m=+1/2 (g)
 R1 = (60, 1, 1.5, 1.5)          # 60P_3/2 m=+3/2 (r)，Δm=+1
@@ -95,11 +105,11 @@ say(f'  Δm=+1 ∝P₂ 残差 {r_p1:.1e} (sc={sp1:.4g}) | '
 fig, ax = plt.subplots(figsize=(7.0, 4.8))
 ax.axhline(0, color='gray', lw=0.6)
 ax.plot(th, J_p1, 'o', ms=5, color='tab:red',
-        label='引擎 Δm=+1（60S m=½ ↔ 60P$_{3/2}$ m=3/2）')
+        label='引擎 Δm=+1（60S m=1/2 → 60P$_{3/2}$ m=3/2）')
 ax.plot(th, sp1 * P2(ct), '-', lw=1.5, color='tab:red', alpha=0.55,
         label=rf'拟合 $\propto +P_2(\cos\theta)$（残差 {r_p1:.0e}）')
 ax.plot(th, J_0, 's', ms=5, color='tab:blue',
-        label='引擎 Δm=0（60S m=½ ↔ 60P$_{3/2}$ m=½）')
+        label='引擎 Δm=0（60S m=1/2 → 60P$_{3/2}$ m=1/2）')
 ax.plot(th, s0 * (1 - 3 * ct ** 2), '-', lw=1.5, color='tab:blue',
         alpha=0.55,
         label=rf'文档公式 $(1-3\cos^2\theta)$（残差 {r_0:.0e}）')
@@ -111,7 +121,7 @@ ax.set_xlabel('键相对量子化轴 z（=场方向）θ [deg]')
 ax.set_ylabel(r'$J_{ij}=\langle rg|V_{\rm dd}|gr\rangle$ [MHz]')
 ax.set_title('图 A：偶极交换角结构（引擎实算）——Δm=0 逐位符合文档公式；\n'
              'Δm=+1 与文档**反号**（球基 Condon-Shortley 相位）\n'
-             '⇒ 换 m 通道 = 翻转 FM/AFM 归属，是免费的实验设计旋钮',
+             r'$\Rightarrow$ 换 m 通道 = 翻转 FM/AFM 归属，是免费的实验设计旋钮',
              fontsize=10.5)
 ax.legend(fontsize=7.5, loc='lower left')
 
@@ -126,7 +136,7 @@ axin.set_xscale('log')
 axin.set_xlabel('R/a', fontsize=7)
 axin.set_ylabel(r'$J\cdot R^3$ [MHz·µm³]', fontsize=7)
 axin.tick_params(labelsize=7)
-axin.set_title(r'$1/R^3$ 律 ✓', fontsize=8)
+axin.set_title(r'$1/R^3$ 律 OK', fontsize=8)
 fig.tight_layout()
 fig.savefig(os.path.join(OUT, 'figA_angular_structure.png'))
 plt.close(fig)
@@ -173,7 +183,7 @@ for ci, (rk, cname) in enumerate([(R0, 'Δm=0（文档公式通道）'),
         nn = [p for p in cal['pairs']
               if abs(np.linalg.norm(pos[p['i']] - pos[p['j']]) - A_UM) < 1e-6]
         npos = sum(p['raw_J'].real > 0 for p in nn)
-        state = ('均匀 AFM → Néel ✓（线性模）' if npos == len(nn) else
+        state = ('均匀 AFM → Néel 成立（线性模）' if npos == len(nn) else
                  '均匀 FM（J<0）' if npos == 0 else '正负混合 → 阻挫!')
         ax.set_title(f'{cname} · 场与面法线夹角 tilt={tilt:.0f}°\n'
                      f'NN：{npos} 正(J>0,AFM) / {len(nn)-npos} 负(J<0,FM)'
@@ -181,7 +191,7 @@ for ci, (rk, cname) in enumerate([(R0, 'Δm=0（文档公式通道）'),
         ax.set_aspect('equal')
         ax.axis('off')
 fig.suptitle('图 B：键符号（红 J>0=AFM，蓝 J<0=FM，线粗 ∝|J|；约定 '
-             'H=ΣJ(S⁺S⁻+h.c.)）\n干净 Néel = Δm=0 + 场⊥面（tilt=0）；'
+             r'H=$\sum$J(S$^+$S$^-$+h.c.)）\n干净 Néel = Δm=0 + 场⊥面（tilt=0）；'
              'tilt=90 两通道都阻挫 —— 文档 A.0 的 FM/AFM 标签与其 A.2 '
              '路径积分自洽约定相反，2D 推荐方向应互换', fontsize=10)
 fig.tight_layout()
@@ -215,7 +225,7 @@ Jg2[MZ_] = C3_0 * (1 - 3 * (GZ[MZ_] * A_UM / RR[MZ_]) ** 2) / RR[MZ_] ** 3
 fig, axes = plt.subplots(1, 2, figsize=(11.6, 5.1))
 for ax, (Jk, ttl, ylab) in zip(
         axes,
-        [(jk_of(Jg1), 'Δm=0 · tilt=0（场⊥面）\nargmin 在 (±π,±π) → Néel 序 ✓',
+        [(jk_of(Jg1), 'Δm=0 · tilt=0（场⊥面）\nargmin 在 (±π,±π) → Néel 序成立',
           r'$k_y a$'),
          (jk_of(Jg2), 'Δm=0 · tilt=90（场∥面）\n键符号混合 → 序波矢移向有限 Q（阻挫候选）',
           r'$k_z a$')]):
@@ -233,7 +243,7 @@ for ax, (Jk, ttl, ylab) in zip(
         f'{kx[imin[0]]*A_UM/np.pi:+.2f})·π')
     fig.colorbar(im, ax=ax, shrink=0.85,
                  label=r'$\tilde J(k)-\min$ [MHz]')
-fig.suptitle('图 C：$\tilde J(k)$（MHz，无限格点求和，C₃ 来自引擎标定）——'
+fig.suptitle(r'图 C：$\tilde J(k)$（MHz，无限格点求和，$C_3$ 来自引擎标定）——'
              '硬核玻色序波矢 = argmin $\tilde J$（青色 +）；\n'
              '沿不同轴等值线形状不同 = 刚度张量各向异性 = 各向异性"光速"'
              '（判据③）', fontsize=10.5)
@@ -246,6 +256,10 @@ say('figC 完成')
 # D. 软化指纹：FM@Γ vs AFM@Q*（直接格点求和）
 # =====================================================================
 say('figD: 小-q 标度…')
+# 系数 = 引擎直接标定值（tilt=0 面内所有键皆 ⊥z ⇒ 均匀 K/R³）
+K_p1 = calib_JR(R1, A_UM, 90.0) * A_UM ** 3      # Δm=+1 @θ=90：<0 ⇒ tilt=0 FM
+K_0 = C3_0                                        # Δm=0  @θ=90：>0 ⇒ tilt=0 AFM
+say(f'  K(Δm=+1,θ=90)={K_p1:.4g}（FM 侧）  K(Δm=0,θ=90)={K_0:.4g}（AFM 侧）')
 M = 1200
 mm = np.arange(-M, M + 1)
 MX, MZ = np.meshgrid(mm, mm, indexing='xy')
@@ -257,17 +271,18 @@ par = (-1.0) ** (MX + MZ)
 
 
 def soft_fm(q):
-    """FM@Γ（Δm=+1, tilt=0，J=−C₃/(2R³)）：ω=J̃(q)−J̃(0)
-    = (C₃/2)Σ(1−cos q·R)/R³ ∝ |q|（2D 偶极非解析）。"""
-    return 0.5 * C3_0 * np.sum((1.0 - np.cos(q[0] * MX * A_UM
-                                             + q[1] * MZ * A_UM))
-                               * inv3 * okm)
+    """FM@Γ（Δm=+1, tilt=0，J=K_p1/R³<0）：ω=J̃(q)−J̃(0)
+    = −K_p1·Σ(1−cos q·R)/R³ ∝ |q|（2D 偶极 1/R³ 非解析 ⇒ 磁振子抬成线性，
+    文档表"FM→k²"只对短程成立）。"""
+    return -K_p1 * np.sum((1.0 - np.cos(q[0] * MX * A_UM
+                                        + q[1] * MZ * A_UM))
+                          * inv3 * okm)
 
 
 def soft_afm(q):
-    """AFM@Q*=(π,π)（Δm=0, tilt=0，J=+C₃/R³）：
-    J̃(Q*)−J̃(Q*+q) = C₃Σ(−1)^{m+n}(1−cos q·R)/R³ —— 交错 ⇒ 解析 ∝q²。"""
-    return C3_0 * np.sum(par * (1.0 - np.cos(q[0] * MX * A_UM
+    """AFM@Q*=(π,π)（Δm=0, tilt=0，J=K_0/R³>0）：J̃(Q*+q)−J̃(Q*)
+    = −K_0·Σ(−1)^{m+n}(1−cos q·R)/R³ —— 交错 ⇒ 绝对收敛 ⇒ 解析 ∝q²。"""
+    return -K_0 * np.sum(par * (1.0 - np.cos(q[0] * MX * A_UM
                                              + q[1] * MZ * A_UM))
                          * inv3 * okm)
 
@@ -280,7 +295,7 @@ for ax, fn, ttl in [
          '（文档表"FM→k²"只对短程成立）'),
         (axes[1], soft_afm,
          'AFM @ Q*=(π,π)（Δm=0, tilt=0）\nα≈2：交错因子使求和解析\n'
-         '⇒ |q| 软化不在 Q*（文档 §4.2 需修正）')]:
+         '故 |q| 软化不在 Q*（文档 §4.2 需修正）')]:
     for (dxy, lab) in [((1, 0), r'$q\parallel x$'),
                        ((1, 1), r'$q\parallel[11]$')]:
         d = np.array(dxy, float) / np.linalg.norm(dxy)
@@ -308,47 +323,49 @@ plt.close(fig)
 say('figD 完成')
 
 # =====================================================================
-# E. 有限团簇 vs 无限格点（同通道 Δm=+1 tilt=90，沿 k_x）
+# E. 有限尺寸 vs 无限（同一 Δm=+1 模型：截断到 12×12 vs 求到 M）
 # =====================================================================
-say('figE: 有限尺寸对照（L=12 标定较慢）…')
-pos = lattice(12, 90.0)[0]
-m = ManyBodyModel(terms=('I2',), n_window=1)
-for p in pos:
-    m.add_atom(G, R1, p)
-cal = asm.calibrate(cache, m, second_order=False)
-J0c = sum(2 * p['raw_J'].real for p in cal['pairs'])
-ks_f = np.array([2 * np.pi / 12 * n for n in (1, 2, 3)])
-rows_f = np.array([
-    J0c - sum(2 * p['raw_J'].real * np.cos(ka / A_UM
-                                           * (pos[p['i']] - pos[p['j']])[0])
-              for p in cal['pairs']) for ka in ks_f])
+say('figE: 有限尺寸对照（同模型截断 vs 无限）…')
 
 
-def soft_t90(qx):
-    """tilt=90（面=x–z）沿 k_x：J̃(0)−J̃(q) = −C₃ΣP₂(n_z)(1−cos qx·x)/R³
-    （Δm=+1 通道 J=+C₃P₂/R³）。"""
-    return -C3_0 * np.sum(P2(np.where(Rm > 0, MZ * A_UM / Rm, 0.0))
-                          * (1.0 - np.cos(qx * MX * A_UM)) * inv3 * okm)
+def soft_t90(qx, Mcut=None):
+    """tilt=90（面=x–z）沿 k_x：J̃(0)−J̃(q) = −2K_p1·Σ P₂(n_z)(1−cos)/R³。
+    Mcut≠None 时把求和限制在 |m|,|n|≤Mcut（模拟 L=2·Mcut 有限团簇）。"""
+    with np.errstate(divide='ignore', invalid='ignore'):
+        pz = np.where(Rm > 0, MZ * A_UM / Rm, 0.0)
+    sel = okm if Mcut is None else (okm & (np.abs(MX) <= Mcut)
+                                    & (np.abs(MZ) <= Mcut))
+    return -2.0 * K_p1 * np.sum(P2(pz) * (1.0 - np.cos(qx * MX * A_UM))
+                                * inv3 * sel)
 
 
-fig, ax = plt.subplots(figsize=(6.4, 4.7))
+ks = np.logspace(-2.0, np.log10(0.9), 16)
 inf90 = np.maximum(np.abs([soft_t90(k / A_UM) for k in ks]), 1e-30)
-ax.loglog(ks, inf90, color='tab:blue', lw=1.4,
-          label='无限格点求和（Δm=+1, tilt=90, 沿 $k_x$）')
-ax.loglog(ks_f, np.abs(rows_f), 'D', ms=9, color='k',
-          label='有限 L=12 团簇（上一轮演示）→ α≈1.85')
+# L=12 团簇：半宽 6 格；可分辨最小 k·a=2π/12≈0.52
+fin90 = np.maximum(np.abs([soft_t90(k / A_UM, Mcut=6) for k in ks]), 1e-30)
+win_f = (ks > 0.4) & (ks < 0.95)
+a_f = np.polyfit(np.log(ks[win_f]), np.log(fin90[win_f]), 1)[0]
+a_i = np.polyfit(np.log(ks[(ks > 0.015) & (ks < 0.5)]),
+                 np.log(inf90[(ks > 0.015) & (ks < 0.5)]), 1)[0]
+
+fig, ax = plt.subplots(figsize=(6.6, 4.8))
+ax.loglog(ks, inf90, color='tab:blue', lw=1.6,
+          label=rf'无限格点（Δm=+1, tilt=90）→ α≈{a_i:.2f}')
+ax.loglog(ks, fin90, 'D-', ms=5, lw=1.2, color='tab:orange',
+          label=rf'12×12 截断求和 → 窗口内 α≈{a_f:.2f}')
 mid = ks[len(ks) // 2]
-ax.loglog(ks, inf90[len(ks) // 2] / mid * ks, 'k:', lw=0.7, alpha=0.5,
-          label=r'$|q|$ 参考')
-ax.loglog(ks, inf90[len(ks) // 2] / mid ** 2 * ks ** 2, 'gray:', lw=0.8,
-          alpha=0.6, label=r'$q^2$ 参考')
-ax.axvspan(ks_f.min() * 0.85, ks_f.max() * 1.15, color='orange', alpha=0.13)
-ax.text(0.5, 1e0, '有限团簇可分辨窗口\n(最小 k·a=2π/12≈0.52)', fontsize=8,
-        color='darkorange')
+ax.loglog(ks, inf90[len(ks) // 2] / mid * ks, ':', lw=0.7, alpha=0.5,
+          color='k', label=r'$|q|$ 参考')
+ax.loglog(ks, inf90[len(ks) // 2] / mid ** 2 * ks ** 2, ':', lw=0.8,
+          alpha=0.6, color='gray', label=r'$q^2$ 参考')
+ax.axvspan(0.5, 0.9, color='orange', alpha=0.13)
+ax.text(0.055, 3e-3, '有限团簇可分辨窗口\n(最小 k·a=2π/12≈0.52)\n'
+        '截断和未收敛：整体抬高、斜率畸变', fontsize=8, color='darkorange')
 ax.set_xlabel(r'$|q|\cdot a$')
 ax.set_ylabel(r'$|\tilde J(0)-\tilde J(q)|$ [MHz]')
-ax.set_title('图 E：α≈1.85 是有限尺寸伪影 —— 12×12 够不到 |q| 窗口\n'
-             '（测软化需 N≳10² 团簇或解析格点求和）', fontsize=10.5)
+ax.set_title('图 E：有限尺寸为何测不到真 |q| —— 12×12 截断和在小-k 抬高且畸变\n'
+             '（真 |q| 只在无限求和显现；上一轮引擎标定 12×12 求和 α≈1.85 '
+             '即此类未收敛伪影）', fontsize=10.5)
 ax.legend(fontsize=8); ax.grid(alpha=0.25, which='both')
 fig.tight_layout()
 fig.savefig(os.path.join(OUT, 'figE_finite_size.png'))
@@ -356,5 +373,5 @@ plt.close(fig)
 
 np.savez(os.path.join(OUT, 'photon_data.npz'),
          th=th, J_p1=J_p1, J_0=J_0, C3_0=C3_0, Rs=Rs, Js0=Js0, ks=ks,
-         inf90=inf90, ks_f=ks_f, rows_f=rows_f)
+         inf90=inf90, fin90=fin90)
 say(f'全部完成 → {OUT}')
