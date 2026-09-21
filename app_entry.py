@@ -78,10 +78,21 @@ class MainWindow(QMainWindow):
             app.setStyleSheet(ui_theme.QSS)
         self.statusBar().showMessage('就绪', 3000)
 
-        # mecha 门面（本地 sim 档：GUI 进程内托管内核）——注入领域引擎 + 装配
-        # Bus/Authority/Session/Ops/Jobs；cache 由引擎建。AI 模式的 Hub 是另一进程
-        # （adapter/serve），GUI 是其客户端（迁移计划 §44 修正：Hub 独立）。
-        self.app_bridge = AppBridge(engine=EngineAdapter(), mode='human')
+        # mecha 门面：若已有 Hub 在跑（.mcp-port）→ GUI 作 **Hub 客户端**（与 AI 同 session，
+        # Phase 1 GUI Hub 客户端化）；否则 in-process 自托管内核（人工模式默认）。
+        # 连接失败 graceful 回落 in-process，不让 GUI 起不来。
+        from src.mecha.hub_client import discover_hub
+        from src.mecha.hub_bridge import HubBridge
+        self._hub_connected = False
+        hub_url = discover_hub()
+        if hub_url:
+            try:
+                self.app_bridge = HubBridge(hub_url)
+                self._hub_connected = True
+            except Exception:                              # noqa: BLE001
+                self.app_bridge = AppBridge(engine=EngineAdapter(), mode='human')
+        else:
+            self.app_bridge = AppBridge(engine=EngineAdapter(), mode='human')
         self.cache = self.app_bridge.cache
         self.binder = _mecha_bind.Binder(self.app_bridge)   # 面板控件 ↔ session
         self.groups = []

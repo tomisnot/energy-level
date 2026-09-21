@@ -31,6 +31,27 @@ class HubBridge:
         self.client.initialize()
         self._stop = threading.Event()
 
+    # ---------------- 与 AppBridge 对齐的附加属性（GUI 无感切换 transport） ----------------
+    @property
+    def cache(self):
+        """引擎缓存在 Hub 侧；GUI 经 list_levels/get_state 取态，本地无 cache。"""
+        return None
+
+    @property
+    def fields(self):
+        """建场层经 MCP（set_drive/get_waves）；本地无 fields 对象。"""
+        return None
+
+    @property
+    def session(self):
+        """无本地 session；单一真值源在 Hub。"""
+        return None
+
+    @property
+    def ops(self):
+        """run/estimate/preview 已在本门面；prepare/execute 不适用（Hub 侧 run）。"""
+        return self
+
     # ---------------- 只读投影 ----------------
     def _state(self):
         return self.client.call('get_state') or {}
