@@ -21,8 +21,10 @@ import { readBootstrap } from './bootstrap.ts'
 /** Cordis 插件名（与 host 半一致）。 */
 export const name = 're0-mecha'
 
-/** 需要 web client 的 slots 服务。 */
-export const inject = ['slots']
+/** 需要 web client 的服务：slots（挂按钮）+ layout（开/关右栏、关左栏）。
+ *  Cordis ctx 是代理：未在 inject 声明的服务一访问就抛
+ *  "cannot get property X without inject"，故 layout 必须在此声明。 */
+export const inject = ['slots', 'layout']
 
 export async function apply(ctx: Context): Promise<void> {
   await ctx.effect(() => {
