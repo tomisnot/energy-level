@@ -87,14 +87,6 @@
     $('hud-method').textContent = (o.config_head &&
       o.config_head['dynamic.method']) || o.method || '—';
     $('hud-backend').textContent = 'sim（数字孪生）';
-    const tb = $('hud-config').querySelector('tbody');
-    tb.innerHTML = '';
-    const cfg = o.config_head || {};
-    for (const k of Object.keys(cfg)) {
-      const tr = document.createElement('tr');
-      tr.innerHTML = '<td>' + esc(k) + '</td><td>' + esc(fmtVal(cfg[k])) + '</td>';
-      tb.appendChild(tr);
-    }
   }
 
   function addEvent(ev) {

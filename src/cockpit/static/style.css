@@ -50,11 +50,6 @@ main {
 .kv { display: flex; justify-content: space-between; padding: 4px 0;
   border-bottom: 1px dashed var(--line); }
 .kv span { color: var(--muted); }
-table.mini { width: 100%; font-size: 12px; border-collapse: collapse; }
-table.mini td { padding: 2px 4px; border-bottom: 1px solid var(--line);
-  word-break: break-all; }
-table.mini td:first-child { color: var(--muted); width: 55%; }
-
 ul.alerts { list-style: none; margin: 0; padding: 0; }
 ul.alerts li { padding: 8px 10px; border-radius: 6px; margin-bottom: 6px;
   border-left: 3px solid var(--muted); background: #0d1117; font-size: 12px; }

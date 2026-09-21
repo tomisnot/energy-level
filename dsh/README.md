@@ -86,7 +86,9 @@ npm test                            # node --test：自愈重连桥单测（含 
 1. ✅ `dsh web --patch ./dsh/cordis.source.patch.yml` 加载插件（host 日志 `[re0-mecha] 连接 Hub MCP` → `已连上`）。
 2. ✅ 起 Hub（`python -m src.adapter.serve`）→ dsh 里 AI 能调 `mcp__re0-mecha__*` 工具。
 3. ✅ **杀掉 Hub 再重启（不重启 dsh）→ 工具自动恢复**（头号验收；对照报告 §2.3 的永久卡死）。
-4. ✅ 会话头部出现「◈ 驾驶舱」按钮 → iframe 显示配置态树/事件/告警（client 半 out-of-tree 加载成功）。
+4. ✅ 会话头部出现「◈ 驾驶舱」按钮（client 半 out-of-tree 加载成功）。**【2026-09-21 改】**
+   按钮从“点开全屏模态”改为**布局切换开关**：点一下主界面切成驾驶舱（`shell.overlay` 铺满）、
+   AI 对话经注入 CSS 收到右上角约 1/4、隐藏左侧栏；再点切回原版 dsh。此新交互待浏览器活体复验。
 
 **活体踩过、已修的两个加载格式坑**（out-of-tree 插件专属，务必记住）：
 - **host = Node 原生 strip-types（strip-only）**：只擦类型、不生成代码。TS **参数属性**
@@ -119,9 +121,13 @@ npm test                            # node --test：自愈重连桥单测（含 
 
 **已写 + 本地验证**（tsc 零错、单测 6/6、tsdown 产出 lib/index.mjs + lib/client.js 且语法校验通过）：
 - host 半：自愈 MCP 桥 + 工具原生注册 + 断联信号 + `webserver/index-inject` 注入 cockpitUrl。
-- client 半：`src/client/*` —— `ctx.slots` 挂"◈ 驾驶舱"头部动作，iframe 嵌 cockpit-server
-  （配置态树/事件/告警）。数据层在 Python 侧：`src/cockpit` 的 `/api/config-tree`（判据
-  `cockpit_config_tree` 5/19 绿；全量基线 32/0）。
+- client 半：`src/client/*` —— `index.ts` 注册两处 + 注入一段 CSS：① `conversation.session.header.actions`
+  挂“◈ 驾驶舱”**布局切换按钮**（`CockpitPanel.tsx`）；② `shell.overlay`（list/root）挂驾驶舱 iframe
+  覆盖层（`CockpitOverlay.tsx`，铺满 `inset:0` 的 overlayLayer）；③ `<style data-plugin-css>`
+  （`cockpit-mode-css.ts`）在 `html[data-re0-cockpit=on]` 下隐藏左栏、把中栏（对话）`fixed` 到右上 1/4。
+  跨 scope（按钮 session / 覆盖层 root）的模式状态由模块级 `mode-store.ts` 桥接，并按稳定锚点
+  （`[data-shell-overlay]`/`[data-rightbar-col]`）运行时给 hash 类名的列打 `data-re0-*` 标记。
+  数据层在 Python 侧：`src/cockpit` 的 `/api/config-tree`。
 - 构建：`npm run bundle` → `lib/index.mjs`（host，@deepseek-ai/* 与 sdk 外置）+ `lib/client.js`
   （react 外置）。
 
