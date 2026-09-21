@@ -58,4 +58,17 @@ html[data-re0-cockpit="on"] [data-re0-center] [data-conversation-header-corner] 
 html[data-re0-cockpit="on"] [data-re0-center] header nav { display: none !important; }
 html[data-re0-cockpit="on"] [data-re0-center] header > :first-child > :nth-child(2) { display: none !important; }
 html[data-re0-cockpit="on"] [data-re0-center] [data-composer-stats] { display: none !important; }
+
+/* 驾驶舱模式：聊天头部只留“放得下按钮”的高度——隐藏 crumbs/tabs/utilities 后
+   原头部仍带着两行布局的 min-height/padding，会剩一行空白；这里压到内容高。 */
+html[data-re0-cockpit="on"] [data-re0-center] header {
+  min-height: 0 !important;
+  height: auto !important;
+  padding: 2px 8px !important;
+}
+html[data-re0-cockpit="on"] [data-re0-center] header > :first-child {
+  min-height: 0 !important;
+  height: auto !important;
+  padding: 0 !important;
+}
 `

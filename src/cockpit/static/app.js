@@ -32,8 +32,8 @@
   function renderRecorder() {
     const filter = $('filter').value.trim().toLowerCase();
     const aiOnly = $('ai-only').checked;
-    const tb = $('events').querySelector('tbody');
-    tb.innerHTML = '';
+    const list = $('events');
+    list.innerHTML = '';
     const rows = events.slice().reverse();   // 最新在上
     for (const ev of rows) {
       const isAI = /ai|agent|harness/i.test(ev.actor || '');
@@ -43,20 +43,30 @@
           fmtVal(ev.before), fmtVal(ev.after)].join(' ').toLowerCase();
         if (!hay.includes(filter)) continue;
       }
-      const tr = document.createElement('tr');
-      if (isAI) tr.className += ' ai';
-      if (ev.kind === 'run') tr.className += ' run';
-      if (alertSeqs.has(ev.seq)) tr.className += ' alerted';
-      tr.innerHTML =
-        '<td>' + ev.seq + '</td>' +
-        '<td class="actor">' + esc(ev.actor) + '</td>' +
-        '<td><span class="tag ' + esc(ev.kind) + '">' + esc(ev.kind) + '</span></td>' +
-        '<td>' + esc(ev.target) + '</td>' +
-        '<td class="ba">' + esc(fmtVal(ev.before)) +
-          '<span class="arrow">→</span>' + esc(fmtVal(ev.after)) + '</td>' +
-        '<td>' + esc(ev.reason) + '</td>' +
-        '<td>' + esc(ev.reversibility || '') + '</td>';
-      tb.appendChild(tr);
+      // 逐行折叠：summary=概括(seq/actor/kind/reason)，展开=全量多行
+      const d = document.createElement('details');
+      d.className = 'ev' + (isAI ? ' ai' : '') +
+        (ev.kind === 'run' ? ' run' : '') +
+        (alertSeqs.has(ev.seq) ? ' alerted' : '');
+      const sum = document.createElement('summary');
+      sum.innerHTML =
+        '<span class="seq">#' + ev.seq + '</span>' +
+        '<span class="actor">' + esc(ev.actor) + '</span>' +
+        '<span class="tag ' + esc(ev.kind) + '">' + esc(ev.kind) + '</span>' +
+        '<span class="reason" title="' + esc(ev.reason || '') + '">' +
+          esc(ev.reason || '') + '</span>';
+      const body = document.createElement('div');
+      body.className = 'ev-body';
+      body.innerHTML =
+        '<div class="kv"><span>target</span><b>' + esc(ev.target) + '</b></div>' +
+        '<div class="kv"><span>before → after</span><b class="ba">' +
+          esc(fmtVal(ev.before)) + '<span class="arrow">→</span>' +
+          esc(fmtVal(ev.after)) + '</b></div>' +
+        '<div class="kv"><span>reason</span><b>' + esc(ev.reason || '') + '</b></div>' +
+        '<div class="kv"><span>可逆</span><b>' + esc(ev.reversibility || '') + '</b></div>';
+      d.appendChild(sum);
+      d.appendChild(body);
+      list.appendChild(d);
     }
     $('n-events').textContent = events.length + ' 事件';
   }
@@ -73,6 +83,7 @@
       ul.appendChild(li);
     }
     $('alert-count').textContent = (alerts || []).length;
+    $('alert-badge').className = 'alert-badge ' + (level || 'ok');
     $('alerts-empty').style.display = (alerts || []).length ? 'none' : '';
     const light = $('light-alert');
     light.className = 'light ' + (level || 'ok');
@@ -86,7 +97,6 @@
     $('hud-running').textContent = o.last_run || '空闲';
     $('hud-method').textContent = (o.config_head &&
       o.config_head['dynamic.method']) || o.method || '—';
-    $('hud-backend').textContent = 'sim（数字孪生）';
   }
 
   function addEvent(ev) {
@@ -131,15 +141,17 @@
         if (set) tr.className += ' set';
         if (r.readonly) tr.className += ' ro';
         tr.innerHTML =
-          '<td class="k">' + esc(r.name) + '</td>' +
-          '<td class="v">' + esc(fmtVal(r.value)) +
+          '<td class="k" title="' + esc(r.name) + '">' + esc(r.name) + '</td>' +
+          '<td class="v" title="' + esc(fmtVal(r.value)) + '">' + esc(fmtVal(r.value)) +
             (r.unit ? ' <span class="u">' + esc(r.unit) + '</span>' : '') + '</td>' +
           '<td class="t">' + esc(r.type || '') +
             (r.enum ? ' ∈ ' + esc(r.enum.join('|')) : '') + '</td>' +
-          '<td class="d">' + esc(r.desc || '') + '</td>' +
-          '<td class="by">' + (set
-            ? esc(set.actor) + ' · ' + esc(set.reason) + ' · #' + set.seq
-            : '<span class="muted">未设</span>') + '</td>';
+          '<td class="d" title="' + esc(r.desc || '') + '">' + esc(r.desc || '') + '</td>' +
+          '<td class="by" title="' +
+            esc(set ? set.actor + ' · ' + set.reason + ' · #' + set.seq : '未设') + '">' +
+            (set
+              ? esc(set.actor) + ' · ' + esc(set.reason) + ' · #' + set.seq
+              : '<span class="muted">未设</span>') + '</td>';
         tbl.appendChild(tr);
       }
       group.appendChild(tbl);
@@ -229,6 +241,11 @@
   $('tree-filter').addEventListener('input', renderConfigTree);
   $('tree-show-engine').addEventListener('change', renderConfigTree);
   $('tree-reload').addEventListener('click', refreshConfigTree);
+  // 告警角落徽标：点击展开/收起弹层
+  $('alert-badge').addEventListener('click', () => {
+    const pop = $('alert-pop');
+    pop.hidden = !pop.hidden;
+  });
 
   // ---------------- 启动 ----------------
   bootstrap().then((since) => connectStream(since)).catch(() => {
