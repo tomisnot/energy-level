@@ -50,7 +50,9 @@ description: 通过 MCP 语义层驱动 Re0 里德堡原子物理引擎时使用
 | `preview_behavior` | 行为预览：驱动哪些跃迁/各多强/**基组够不够** | — |
 | `run_compute` | 跑演化；`mode=auto` 超阈值(30s)自动转 async | `reason, mode("auto"/"sync"/"async"), diag` |
 | `submit_job`/`job_status`/`cancel_job`/`list_jobs` | 长任务异步面（**断线可按 job_id 找回**） | `reason` / `job_id` |
-| `codeact` → **`mecha_script`** | **多步编排**：一段脚本（循环/批量/条件），命名空间只有语义层门面 + `math` | `script`（把产物赋给 `result`） |
+| `codeact` → **`mecha_script`** | **多步编排**：一段脚本（循环/批量/条件），命名空间只有语义层门面 + `math` + `json` + `archives` | `script`（把产物赋给 `result`） |
+| `list_archives` | 列出可读存档（save_state/*.json；**只读**，写归人/GUI） | — |
+| `read_archive` | 读一个存档的参数快照（只读、不 apply；复原经 set_many） | `name` |
 
 ## 配置键（`set_param` 的 key）
 - `groups.list`（必填）：`[{"n":60,"l":0,"j":0.5}, …]` 能级组
@@ -73,6 +75,10 @@ description: 通过 MCP 语义层驱动 Re0 里德堡原子物理引擎时使用
 - **两体/长演化别同步等**：`run_compute` 自动转 async 回 `job_id`，用 `job_status` 轮询。
 - **journal 只记成功的状态变更**：失败的写入（打错键/非法值）**当场抛错、不进事件总线**——
   驾驶舱流水因此保持干净；你的“试错痕迹”在 harness transcript（另一层），不污染领域记录。
+- **存档只读**：AI 经 `list_archives`/`read_archive`（或 mecha_script `archives.list/read`）读档；
+  **写档归人/GUI**（AppBridge.save，有意设计：存档属人管）。复原 = read_archive 拿 params → set_many。
+- **顺序约束**：`registry.list_params()` 须在 `runtime.set_engine(...)` **之后**（schema 从注入的 engine 收）；
+  判据/离线脚本开头先 set_engine，否则 `engine()` 抛“引擎未注入”（非静默空表）。
 
 ## 多步编排（`mecha_script`）
 需要循环/批量/条件（如扫 N 个失谐、STIRAP/Ramsey 序列）时用 `mecha_script(script=…)`：
@@ -83,6 +89,10 @@ description: 通过 MCP 语义层驱动 Re0 里德堡原子物理引擎时使用
   ；按 kind：square→`start_ns/edge_ns/height/fall_start_ns`；gauss→`center_ns/sigma_ns/peak`；file/arb→`t_ns/amp`。
   **打错键当场报错并给建议**（不静默用默认）。
 - 扫描模板：`fields.clear_waves('single')` → 逐点 `fields.set_drive(..., name='sweep')`（同名替换）→ `ops.run(...)`。
+- **批量写签名**：`session.set_many(patch, reason)`——patch 是 `{key:value}` dict，可作第一位置参或
+  `patch=`/`items=`/`values=` 关键字；reason 第二位置参或关键字；actor 可传但被忽略（归因固定 codeact）。
+- **读存档接着做**：`archives.list()` → `archives.read(name)['params']` → `session.set_many(params, reason)`。
+  `json` 可解析/序列化；`open` 仍禁（文件系统逃逸口）。
 
 > 边界（够不到的重要名字）：`runspec/build_run/evolve_run/static_atom/sambe/numpy/waveforms/Wave`
 > 等裸引擎与裸波形类**都不在**命名空间——建场走 `fields`，跑演化走 `ops.run`/`run_compute`。

@@ -36,7 +36,8 @@ __all__ = ['TOOL_NAMES', 'create_server', 'find_free_port', 'write_port_file',
 TOOL_NAMES = ['list_params', 'set_param', 'get_state', 'list_levels',
               'get_activity', 'undo', 'estimate_cost', 'preview_behavior',
               'run_compute', 'submit_job', 'job_status', 'cancel_job',
-              'list_jobs', 'set_drive', 'get_waves', 'mecha_script']
+              'list_jobs', 'set_drive', 'get_waves', 'mecha_script',
+              'list_archives', 'read_archive']
 
 # run_compute 的 auto 档：预估耗时 > 本阈值 → 自动转 async job（不阻塞写通道线程）。
 # 两体演化动辄分钟级——这正是旧项目“不适清单”里“长任务必须 async”的教训。
@@ -247,12 +248,28 @@ def create_server(session, ops, jobs=None, fields=None, actor='ai', log_level='I
 
     @srv.tool(name='mecha_script',
               description='多步编排（表达自由拉满）：在受限命名空间跑一段脚本，只暴露 '
-                          'registry/session/ops/fields/jobs 门面 + math（够不到裸引擎，改状态只能经 '
-                          'session.set、自动记事件）。脚本把产物赋给 result；print 被捕获。'
+                          'registry/session/ops/fields/jobs/archives 门面 + math + json（够不到裸引擎，'
+                          '改状态只能经 session.set、自动记事件）。脚本把产物赋给 result；print 被捕获。'
                           '（名 mecha_script 而非 codeact，避与 harness 自带 codeact 重名）')
     def mecha_script(script: str) -> str:
         from .codeact import run_codeact
         return _safe(lambda: run_codeact(script, session, ops, jobs, fields))
+
+    @srv.tool(name='list_archives',
+              description='列出可读存档（save_state/*.json，mecha-session-v1 快照）→ '
+                          'name/n_keys/mode。存档**只读**：写档归人/GUI（AppBridge.save），'
+                          'AI 读档后经 set_param/set_many 复原。')
+    def list_archives() -> str:
+        from . import archives as _archives
+        return _safe(lambda: _archives.list_archives())
+
+    @srv.tool(name='read_archive',
+              description='读一个存档的参数快照（只读、不 apply）。name 如 freeze 或 freeze.json。'
+                          '复原接着做实验：read_archive 拿 params → set_param 或 mecha_script 的 '
+                          'session.set_many(params, reason) 写入。')
+    def read_archive(name: str) -> str:
+        from . import archives as _archives
+        return _safe(lambda: _archives.read_archive(name))
 
     tools = {'list_params': list_params, 'set_param': set_param,
              'get_state': get_state, 'list_levels': list_levels,
@@ -262,7 +279,8 @@ def create_server(session, ops, jobs=None, fields=None, actor='ai', log_level='I
              'submit_job': submit_job, 'job_status': job_status,
              'cancel_job': cancel_job, 'list_jobs': list_jobs,
              'set_drive': set_drive, 'get_waves': get_waves,
-             'mecha_script': mecha_script}
+             'mecha_script': mecha_script,
+             'list_archives': list_archives, 'read_archive': read_archive}
     return srv, tools
 
 

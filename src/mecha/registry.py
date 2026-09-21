@@ -62,6 +62,9 @@ def list_params(prefix=None, tier=None, include_internal=False, family=None,
     - `include_internal=False`（默认）→ 隐藏 tier='internal' **与整个 engine.* 只读族**
       （引擎参数不是 AI 调用重点、别干扰使用者；要看用 include_internal=True 或 family='engine'）。
     - `prefix` / `family` / `tier` 过滤；`page` 分页。截断时**明确告知截了多少 + 怎么拿全量**（I4）。
+    - **顺序约束**：schema 全从注入的 engine 收 → 必须先 `runtime.set_engine(...)`
+      （app_entry / adapter.serve 启动时做；判据与离线脚本在**开头**做），否则 `engine()`
+      抛“引擎未注入”（是可教学报错，不是静默空表）。
     """
     items = list(families().values())
     if not include_internal:

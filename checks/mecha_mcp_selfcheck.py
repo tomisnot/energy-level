@@ -63,8 +63,8 @@ def call(name, **kw):
 
 # ---------------- A. 工具面 ----------------
 _names = sorted(k for k in tools if not k.startswith('_'))
-C.group('A MCP 工具面 = 16 个薄封装（能力清单）', [
-    ('create_server 返回 16 个工具（实际 %d）' % len(_names), len(_names) == 16),
+C.group('A MCP 工具面 = 18 个薄封装（能力清单）', [
+    ('create_server 返回 18 个工具（实际 %d）' % len(_names), len(_names) == 18),
     ('工具名与 TOOL_NAMES 一致', set(_names) == set(SVR.TOOL_NAMES)),
     ('含 async 作业面 + preview_behavior + 建场 set_drive/get_waves + list_levels + mecha_script',
      {'submit_job', 'job_status', 'cancel_job', 'list_jobs', 'preview_behavior',

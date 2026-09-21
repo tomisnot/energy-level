@@ -15,6 +15,7 @@
 """
 import builtins as _builtins
 import io
+import json                      # 解析/序列化（纯数据）；open 仍禁（文件系统逃逸口）
 import math                      # 纯函数数学（无副作用），科学编排必备（sin/cos/pi…）
 
 from .errors import MechaError
@@ -79,14 +80,28 @@ def namespace(session, ops, jobs=None, fields=None, printer=None):
 
     门面只转发公开方法；私有实现（session._snapshot/_write、ops.session）够不着。
     jobs 给了就暴露异步作业面；fields 给了就暴露建场层（写方法注入 actor='codeact'）。
+    另暴露 `json`（解析/序列化）与 `archives`（只读存档面：list/read）；`open` 仍禁。
     """
     from . import registry as _reg
+    from . import archives as _arc
+
+    def _set_many(patch=None, reason='', *, items=None, values=None, actor=None):
+        """批量写 {key:value}。dict 可作第一位置参或 patch=/items=/values= 关键字；
+        reason 第二位置参或关键字。actor 可传但**被忽略**（归因固定 'codeact'，M1）。"""
+        d = patch if isinstance(patch, dict) else (
+            items if isinstance(items, dict) else values)
+        if not isinstance(d, dict):
+            raise MechaError(
+                'session.set_many(patch, reason)：patch 是 {key:value} dict——可作第一位置参，'
+                '或 patch=/items=/values= 关键字；reason 第二位置参或关键字。'
+                'actor 可传但被忽略（归因固定 codeact）。')
+        return session.set_many(d, actor='codeact',
+                                reason=reason or 'codeact set_many')
 
     sess = _Facade('session', {
         'set': lambda key, value, reason: session.set(
             key, value, actor='codeact', reason=reason),
-        'set_many': lambda patch, reason: session.set_many(
-            patch, actor='codeact', reason=reason),
+        'set_many': _set_many,
         'get': session.get,
         'effective': session.effective,
         'undo': lambda reason='undo': session.undo(actor='codeact', reason=reason),
@@ -117,6 +132,9 @@ def namespace(session, ops, jobs=None, fields=None, printer=None):
         '__name__': 'codeact',
         'registry': regf, 'session': sess, 'ops': opsf,
         'math': math,                    # 纯数学（sin/cos/sqrt/pi…），无副作用故安全
+        'json': json,                    # 解析/序列化（纯数据）；open 仍禁（文件系统逃逸口）
+        'archives': _Facade('archives', {
+            'list': _arc.list_archives, 'read': _arc.read_archive}),
         'NOT_EXPOSED': list(NOT_EXPOSED),
         'result': None,
     }
