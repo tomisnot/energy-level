@@ -388,11 +388,101 @@ class MainWindow(QMainWindow):
         self.refresh_plot()
 
 
-def main():
-    app = QApplication(sys.argv)
+def run_gui(app):
+    """GUI 模式：本地操控面板（进程内自托管 mecha 内核），人自己开车。"""
     window = MainWindow()
     window.showMaximized()
     return app.exec_()
+
+
+def run_ai():
+    """AI 模式：起 Hub（MCP 写通道·权威·前台阻塞）+ 驾驶舱（web 监控·后台）+ dsh harness。
+
+    Hub 是前台进程（T4：人启动=权威；Ctrl+C 停，退出时收尾后台子进程）。驾驶舱/dsh
+    各开独立控制台窗（Windows CREATE_NEW_CONSOLE）；dsh 起不来时把命令打出来供手动运行。
+    """
+    import atexit
+    import subprocess
+    here = os.path.dirname(os.path.abspath(__file__))
+    py = sys.executable
+    flags = getattr(subprocess, 'CREATE_NEW_CONSOLE', 0) if os.name == 'nt' else 0
+    procs = []
+
+    def _spawn(name, args, **kw):
+        try:
+            procs.append((name, subprocess.Popen(args, cwd=here,
+                                                 creationflags=flags, **kw)))
+        except Exception as e:                          # noqa: BLE001
+            print('[launcher] %s 自动启动失败：%s' % (name, e))
+
+    _spawn('cockpit', [py, '-m', 'src.cockpit.server'])
+    dsh_cmd = 'dsh web --patch ./dsh/cordis.source.patch.yml'
+    _spawn('dsh', dsh_cmd, shell=True)
+
+    def _cleanup():
+        for _n, p in procs:
+            try:
+                if p.poll() is None:
+                    p.terminate()
+            except Exception:                          # noqa: BLE001
+                pass
+    atexit.register(_cleanup)
+
+    print('=' * 66)
+    print('  AI 模式')
+    print('  · Hub（MCP 写通道·权威）: http://127.0.0.1:8765/mcp   ← 本进程，Ctrl+C 停')
+    print('  · 驾驶舱（web 监控）    : http://127.0.0.1:8766/')
+    print('  · dsh harness          : %s' % dsh_cmd)
+    print('    （若没自动弹出独立窗口，请另开终端手动运行上面这条）')
+    print('  AI 在 dsh 里读 re0-mecha SKILL → 16 个 MCP 工具驱动引擎；你在驾驶舱监控。')
+    print('=' * 66, flush=True)
+
+    from src.adapter.serve import main as serve_main
+    try:
+        serve_main([])                                  # 前台跑 Hub（阻塞）
+    except KeyboardInterrupt:
+        print('\n[launcher] Hub 停止（Ctrl+C），收尾驾驶舱/dsh…')
+    finally:
+        _cleanup()
+    return 0
+
+
+def _choose_mode():
+    """弹窗选启动模式 → 'ai' / 'gui' / None（取消/关窗）。"""
+    box = QMessageBox()
+    box.setWindowTitle('Rb-87 能级计算 · 选择启动模式')
+    box.setIcon(QMessageBox.Question)
+    box.setText('请选择本次启动的模式：')
+    box.setInformativeText(
+        'AI 模式：起 Hub（MCP 写通道 :8765）+ 驾驶舱（web 监控 :8766）+ dsh harness，'
+        'AI 在 dsh 里驱动引擎、你在浏览器监控（可随时夺权）。\n\n'
+        'GUI 模式：本地操控面板（进程内自托管内核），人自己开车。')
+    b_ai = box.addButton('AI 模式', QMessageBox.AcceptRole)
+    b_gui = box.addButton('GUI 模式', QMessageBox.ActionRole)
+    box.addButton('取消', QMessageBox.RejectRole)
+    box.setDefaultButton(b_gui)
+    box.exec_()
+    c = box.clickedButton()
+    if c is b_ai:
+        return 'ai'
+    if c is b_gui:
+        return 'gui'
+    return None
+
+
+def main():
+    """入口：弹窗选 AI 模式 / GUI 模式，自动运行对应的。"""
+    app = QApplication.instance() or QApplication(sys.argv)
+    try:
+        app.setStyleSheet(ui_theme.QSS)
+    except Exception:                                      # noqa: BLE001
+        pass
+    mode = _choose_mode()
+    if mode == 'gui':
+        return run_gui(app)
+    if mode == 'ai':
+        return run_ai()
+    return 0
 
 
 if __name__ == '__main__':
