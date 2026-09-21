@@ -855,6 +855,17 @@ class DynamicPanel(QWidget):
             self._sync_run_config()
             self._run_states = states
             ops = self.main.app_bridge.ops
+            if getattr(self.main.app_bridge, 'client', None) is not None:
+                # Hub 模式（GUI 作 Hub 客户端）：run 在 Hub 侧（run_compute auto async）；
+                # 本地不 prepare/execute（无本地 cache/RunSpec），也不 load 本地 artifact。
+                from .evolve_worker import HubRunWorker
+                self._hub_run = True
+                self._prep('Hub 模式：演化在 Hub 侧', 1.0)
+                self._worker = HubRunWorker(self.main.app_bridge, 'GUI 运行演化')
+                self._worker.done.connect(self._on_evolve_done)
+                self._worker.log_msg.connect(self.main.log)
+                self._worker.start()
+                return
             self._prep('构建 RunSpec（基组/场/V_dd/寿命）', 0.85)
             prepared = ops.prepare(actor='gui', reason='GUI 运行演化',
                                    diag=bool(self._god_mode))
@@ -1404,6 +1415,16 @@ class DynamicPanel(QWidget):
         大载荷（pops/t 数组）落 artifact（I3）→ 这里 load_artifact 取回绘图，与 AI
         跑出的产物同一份（人机同产物）。单/两体统一走这里（_is_two_body 分流绘图）。
         """
+        if getattr(self, '_hub_run', False):
+            # Hub 模式：产物在 Hub 侧，本地不 load artifact；只报 summary。
+            self._hub_run = False
+            if error:
+                self.main.log('Hub 运行失败：%s' % error)
+                self._finish_run_ui()
+                return
+            self.main.log('Hub 运行完成：%s' % ((result or {}).get('summary') or result))
+            self._finish_run_ui()
+            return
         self._finish_run_ui()
         if error == 'cancelled':
             return                                  # 静默（用户主动取消）

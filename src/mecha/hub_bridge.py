@@ -134,9 +134,24 @@ class HubBridge:
         return sum(1 for j in jobs if j.get('status') == 'running')
 
     def switch_mode(self, new_mode, reason, actor='human'):
-        raise HubError(
-            'switch_mode 不经 MCP（AI 不能给自己授权）。人工夺权请走人工控制端点'
-            '（Phase 1 后续）或以人工模式重启 GUI 连 Hub。')
+        """人工夺权：走 Hub 的人工控制端点（token 鉴权，**非 MCP**——AI 不能自授权）。"""
+        import urllib.request
+        try:
+            with open('.human-token', encoding='utf-8') as f:
+                token = f.read().strip()
+        except OSError:
+            raise HubError('找不到 .human-token（Hub 未起人工控制端点）')
+        base = self.client.url.replace('/mcp', '')
+        url = base.rsplit(':', 1)[0] + ':8767/switch_mode'   # 人工端点固定 8767
+        req = urllib.request.Request(
+            url, data=json.dumps({'token': token, 'mode': new_mode,
+                                  'reason': reason}).encode('utf-8'),
+            headers={'Content-Type': 'application/json'}, method='POST')
+        with urllib.request.urlopen(req, timeout=self.client.timeout) as r:
+            body = json.loads(r.read().decode('utf-8'))
+        if not body.get('ok'):
+            raise HubError('switch_mode 失败：%s' % body.get('error'))
+        return body
 
     # ---------------- 存档（本地文件 ↔ Hub session） ----------------
     def save(self, path, reason='save'):

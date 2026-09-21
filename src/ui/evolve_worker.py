@@ -55,3 +55,27 @@ class RunWorker(QThread):
             self.done.emit(None, str(e))
 
 
+class HubRunWorker(QThread):
+    """Hub 模式后台线程：run 在 **Hub 侧**（run_compute，auto async），本地不 prepare/execute。
+
+    GUI 作 Hub 客户端（Phase 1）时的运行路径：单一真值源在 Hub，本地无 cache/RunSpec。
+    结果 result dict 回传；artifact 在 Hub 侧，GUI 不 load 本地 artifact（hub 模式绘图
+    降级为只报 summary）。done/log_msg 信号同 RunWorker。
+    """
+
+    done = pyqtSignal(object, object)
+    log_msg = pyqtSignal(str)
+
+    def __init__(self, bridge, reason='GUI 运行', parent=None):
+        super().__init__(parent)
+        self.bridge = bridge
+        self.reason = reason
+
+    def run(self):
+        try:
+            res = self.bridge.run(reason=self.reason)
+            self.done.emit(res, None)
+        except Exception as e:                              # noqa: BLE001
+            self.done.emit(None, str(e))
+
+
