@@ -8,6 +8,16 @@
 > （`lib/index.js` 790 行）、`@modelcontextprotocol/sdk@1.30.0`。
 > 日期：2026-09-19。所有结论都给了文件/行号，可直接复核。
 
+> **【2026-09-21 现状更新】**：本项目已定为 **DSH out-of-tree 插件**（re0-mecha）。
+> 驾驶舱界面经三次迭代定为**右栏方案**：点 ◈驾驶舱 → `ctx.layout.openRightbar(true,false)`
+> 开右栏 + cockpit iframe 挂进 `[data-rightbar-col]` + 自动关左栏，对话回中栏全高；
+> 驾驶舱内 = 顶状态条 + 两页签（飞行记录仪/配置态）。**两个必踩坑**：① 运行版 dsh
+> (0.1.5-rc.2) 的 `ctx.layout` 是 `openRightbar/closeRightbar`（**非** D 盘新源码的
+> openDetails/closeDetails）——写前务必查运行版全局包 lib，别信源码 checkout；② Cordis ctx
+> 是代理，用 `ctx.layout` 必须在插件 `export const inject` 里声明 `'layout'`（否则一点按钮就抛
+> "cannot get property layout without inject" 打崩整站）。MCP 工具面 18 个（含只读存档
+> `list_archives`/`read_archive`；写档归人/GUI）。界面三版演进见 `历史-任务报告汇编.md` 〇节。
+
 ---
 
 ## 0. 一句话结论

@@ -11,6 +11,24 @@
 
 ---
 
+## 〇、已解决（2026-09-21 本轮 MCP 意见）
+
+> 下面是 2026-09-21 一轮“AI 侧用户意见”的落实记录（与正文 2026-09-16 清单独立）。
+> 正文各条若与现状不符，以本段 + 代码为准。
+
+- **存档够不到** → 补**只读**存档面：MCP 工具 `list_archives`/`read_archive` + mecha_script
+  `archives.list/read`（读 `save_state/*.json`）。**写档仍归人/GUI**（AppBridge.save，有意设计）。
+  复原链路：`read_archive(name)['params']` → `session.set_many(params, reason)`。
+- **mecha_script 没有 json/open** → 命名空间加 `json`（解析/序列化）+ `archives`；`open` 仍禁
+  （文件系统逃逸口）。
+- **set_many 签名不可自省/不吃常见关键字** → 改 `set_many(patch, reason, *, items=, values=, actor=)`：
+  dict 可位置参或 `patch=/items=/values=`；actor 可传但被忽略（归因固定 codeact）；命名 def +
+  docstring（help 可见签名）。
+- **list_params 须在 set_engine 之后** → 已写入 `registry.list_params` docstring + `SKILL.md`
+  契约节（否则 `engine()` 抛“引擎未注入”，是可教学报错非静默空表）。
+
+---
+
 ## 一、让我直接卡住的
 
 ### #1 「我要曲线」这件事，脚本里做不到
