@@ -711,9 +711,9 @@ class DynamicPanel(QWidget):
             self.wave_data = waveforms.waveforms_to_env(wp.waves, t)
         self._draw_top(self.wave_data)
 
-    # ---------- 状态管理：登记即存档（v3，见 src/pm_setup.py + src/archive.py）
-    # 本面板不再持有 serialize_state/restore_state 平行清单；
-    # 存档 = archive.snapshot(win.param_reg)，恢复 = archive.restore(...)。
+    # ---------- 状态管理：单一真值源 = mecha session ----------
+    # 本面板不再持有 serialize_state/restore_state 平行清单；控件经 _mecha_bind
+    # 直接读写 session。存档 = app_bridge.save（session 快照），恢复 = app_bridge.load。
     def _psi_key_for(self, combo):
         """组合框当前选中态的身份键（JSON 友好 list）；无可用时返回 None。"""
         i = combo.currentIndex()

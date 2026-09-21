@@ -431,10 +431,10 @@ class SolverInspector(QDialog):
         self._refresh_solver()
         self._refresh_sectors()
 
-    # ---------- Tab 引擎参数（params.py 注册表驱动） ----------
-    # 本页是**控制引擎参数的正式入口**：内容由 params.SPECS 生成，新增/改名
-    # 参数只需改 params.py，本页自动跟随。覆写经 params.override() 以
-    # "每次运行一个快照"生效（线程本地栈 → 线程安全、退出即还原）。
+    # ---------- Tab 引擎参数（mecha registry 驱动） ----------
+    # 内容由 registry（app_bridge.params）生成：engine.* 只读展示（点1，引擎内核
+    # 常量不开放运行级覆写）、solve.* 可写（经 choke point 落 session）。新增/改名
+    # 参数只需改 core 各引擎模块的就地声明，registry 扫出、本页自动跟随。
     def _param_records(self):
         """registry 参数记录列表（含 engine.* 内部常量）；win/app_bridge 不可用→空表。
         list_params 返回 {'params': [...]}，取其 'params'（防御式兼容 dict/list）。"""

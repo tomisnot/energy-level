@@ -12,5 +12,5 @@
 - app_state.py      共享状态层（LevelGroupStore / FieldState）
 - pages/            组件页面目录（保留通用布局结构）
 
-存档序列化已迁至 src/pm_setup.py（登记）+ src/archive.py（v3 快照/迁移）。
+存档序列化 = mecha session 快照（app_bridge.save/load）；控件经 _mecha_bind 绑定。
 """

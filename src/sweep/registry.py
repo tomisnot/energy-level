@@ -145,7 +145,7 @@ def submit(root, params, *, axes=None, points=None, workers=None, tag=None,
            options=None, basis_n=None, two_body=None, python=None, log=None):
     """提交一次并行扫描，**立即返回**（不等结果）。
 
-    params  = 登记册快照（`sim_state.to_dict()['params']` / 存档同构）
+    params  = 配置快照（session.effective() 的扁平键 / 存档同构）
     axes    = {'登记册路径': 取值列表|{'linspace':…}}（见 spec.py）
     points  = [{路径: 取值}, …]（显式逐点；与 axes 同时给则 axes 在前）
     workers = None ⇒ 自动（见 plan_workers）
