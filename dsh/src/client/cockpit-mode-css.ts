@@ -8,8 +8,8 @@
  */
 export const COCKPIT_MODE_CSS = `
 html[data-re0-cockpit="on"] {
-  --re0-chat-w: 38vw;   /* 右上角聊天块宽 */
-  --re0-chat-h: 60vh;   /* 右上角聊天块高（w×h≈1/4 屏） */
+  --re0-chat-w: 44vw;   /* 右上角聊天块宽 */
+  --re0-chat-h: 50vh;   /* 右上角聊天块高（w×h≈1/4 屏） */
   --re0-chat-z: 21;     /* 必须 > overlayLayer 的 z-index:20，聊天才浮在驾驶舱上 */
 }
 
