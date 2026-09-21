@@ -398,11 +398,16 @@ def run_gui(app):
 def run_ai():
     """AI 模式：起 Hub（MCP 写通道·权威·前台阻塞）+ 驾驶舱（web 监控·后台）+ dsh harness。
 
-    Hub 是前台进程（T4：人启动=权威；Ctrl+C 停，退出时收尾后台子进程）。驾驶舱/dsh
-    各开独立控制台窗（Windows CREATE_NEW_CONSOLE）；dsh 起不来时把命令打出来供手动运行。
+    ⚠ 驾驶舱与 dsh 都是 **web 服务器**（不是会弹的原生窗）：各在独立控制台窗里跑、
+    打印自己的 URL，用**浏览器**打开那个 URL 才是“界面”。本函数会自动用浏览器打开
+    驾驶舱(:8766)；dsh 的端口是它自选的 → 看 dsh 控制台窗里打印的 URL。Hub 前台阻塞
+    （T4：人启动=权威；Ctrl+C 停全部，退出时收尾子进程）。
     """
     import atexit
+    import shutil
     import subprocess
+    import threading
+    import webbrowser
     here = os.path.dirname(os.path.abspath(__file__))
     py = sys.executable
     flags = getattr(subprocess, 'CREATE_NEW_CONSOLE', 0) if os.name == 'nt' else 0
@@ -412,12 +417,22 @@ def run_ai():
         try:
             procs.append((name, subprocess.Popen(args, cwd=here,
                                                  creationflags=flags, **kw)))
+            return True
         except Exception as e:                          # noqa: BLE001
             print('[launcher] %s 自动启动失败：%s' % (name, e))
+            return False
 
+    # 驾驶舱（web 监控面，:8766）
     _spawn('cockpit', [py, '-m', 'src.cockpit.server'])
+    # dsh harness（AI 的手）——先用 which 拿绝对路径，免子进程 PATH 找不到；.cmd 走 shell
     dsh_cmd = 'dsh web --patch ./dsh/cordis.source.patch.yml'
-    _spawn('dsh', dsh_cmd, shell=True)
+    dsh_exe = shutil.which('dsh')
+    if dsh_exe:
+        _spawn('dsh', '"%s" web --patch ./dsh/cordis.source.patch.yml' % dsh_exe,
+               shell=True)
+    else:
+        print('[launcher] ⚠ 没在 PATH 找到 dsh——请在你平时跑 dsh 的终端里手动运行：%s'
+              % dsh_cmd)
 
     def _cleanup():
         for _n, p in procs:
@@ -428,14 +443,17 @@ def run_ai():
                 pass
     atexit.register(_cleanup)
 
-    print('=' * 66)
-    print('  AI 模式')
-    print('  · Hub（MCP 写通道·权威）: http://127.0.0.1:8765/mcp   ← 本进程，Ctrl+C 停')
-    print('  · 驾驶舱（web 监控）    : http://127.0.0.1:8766/')
-    print('  · dsh harness          : %s' % dsh_cmd)
-    print('    （若没自动弹出独立窗口，请另开终端手动运行上面这条）')
-    print('  AI 在 dsh 里读 re0-mecha SKILL → 16 个 MCP 工具驱动引擎；你在驾驶舱监控。')
-    print('=' * 66, flush=True)
+    # 驾驶舱起需一两秒 → 延迟自动开浏览器
+    threading.Timer(2.5, lambda: webbrowser.open('http://127.0.0.1:8766/')).start()
+
+    print('=' * 70)
+    print('  AI 模式（三个都是服务、不是弹窗；界面在浏览器里）')
+    print('  · Hub（MCP 写通道·权威）: http://127.0.0.1:8765/mcp  ← 本进程前台，Ctrl+C 停全部')
+    print('  · 驾驶舱（web 监控）    : http://127.0.0.1:8766/  ← 已自动开浏览器')
+    print('  · dsh harness          : 看它自己那个控制台窗打印的 URL，用浏览器打开')
+    print('    （dsh 端口它自选；若那个窗一闪就没了 = dsh 未起，手动：%s）' % dsh_cmd)
+    print('  AI 在 dsh 网页里读 re0-mecha SKILL → 16 个 MCP 工具驱动引擎。')
+    print('=' * 70, flush=True)
 
     from src.adapter.serve import main as serve_main
     try:
