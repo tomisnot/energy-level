@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+# Phase 3-P1：把"承载纪律的机器"（mecha 内核 + cockpit 黑匣子）做成**可安装库**。
+# strangler：源码仍在 src/mecha + src/cockpit（Energy Level 就地 import src.mecha 不红），
+# 本 pyproject 只把它们打包成独立分发 `mecha-sdk`；P1-full（物理迁出独立仓库）另行立项。
+[project]
+name = "mecha-sdk"
+version = "0.1.0"
+description = "AI-mecha discipline machine: typed registry + choke point + append-only bus + MCP server + blackbox cockpit. Domain-agnostic (EngineProtocol seam)."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+mcp = ["mcp>=1.0"]
+cockpit = ["fastapi", "uvicorn"]
+
+[tool.setuptools]
+packages = ["src.mecha", "src.cockpit"]

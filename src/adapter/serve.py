@@ -78,6 +78,8 @@ def main(argv=None):
     ap.add_argument('--atom', default='Rubidium87')
     ap.add_argument('--stdio', action='store_true',
                     help='用 stdio 传输（默认 streamable-http + 端口文件）')
+    ap.add_argument('--allow-remote-write', action='store_true',
+                    help='远程写（绑 0.0.0.0 + token；仅仿真 L2；硬件 L3 仍需本地互锁+人确认）')
     a = ap.parse_args(argv)
 
     if os.environ.get('RE0_MECHA_NO_SERVER'):
@@ -109,11 +111,18 @@ def main(argv=None):
     port = find_free_port(a.port)
     pf = write_port_file(port)
     atexit.register(lambda: os.path.exists(pf) and os.remove(pf))
-    print('MCP 写通道：http://%s:%d/mcp（端口文件 %s）' % (a.host, port, pf),
+    host = '0.0.0.0' if a.allow_remote_write else a.host
+    if a.allow_remote_write:
+        tok = secrets.token_urlsafe(16)
+        with open('.mcp-token', 'w', encoding='utf-8') as f:
+            f.write(tok)
+        print('⚠ 远程写已开（绑 0.0.0.0，token 在 .mcp-token）。仅仿真 L2 可远程；'
+              '硬件 L3 仍需本地互锁+人确认（铁律二）。', flush=True)
+    print('MCP 写通道：http://%s:%d/mcp（端口文件 %s）' % (host, port, pf),
           flush=True)
     print('写通道仅 localhost（T6）；驾驶舱只读订阅端点另起。', flush=True)
     try:
-        asyncio.run(run_streamable_http(srv, a.host, port))
+        asyncio.run(run_streamable_http(srv, host, port))
     except KeyboardInterrupt:
         pass
     return 0
