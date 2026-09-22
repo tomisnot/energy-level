@@ -15,11 +15,11 @@ import secrets
 import sys
 import threading
 
-from ..mecha import registry, runtime
-from ..mecha.ops import Ops
-from ..mecha.server import (create_server, find_free_port, run_streamable_http,
+from mecha import registry, runtime
+from mecha.ops import Ops
+from mecha.server import (create_server, find_free_port, run_streamable_http,
                             write_port_file)
-from ..mecha.session import Session
+from mecha.session import Session
 from . import EngineAdapter
 
 __all__ = ['main']

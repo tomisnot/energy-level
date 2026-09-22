@@ -33,13 +33,13 @@ for _n in ('uvicorn', 'uvicorn.error', 'uvicorn.access', 'asyncio'):
     logging.getLogger(_n).setLevel(logging.ERROR)
 
 from checks.checklib import Checker                        # noqa: E402
-from src.mecha.bus import Bus                             # noqa: E402
-from src.cockpit import backend                           # noqa: E402
-from src.cockpit import server as CSVR                    # noqa: E402
+from mecha.bus import Bus                             # noqa: E402
+from cockpit import backend                           # noqa: E402
+from cockpit import server as CSVR                    # noqa: E402
 
 C = Checker('cockpit')
-_COCKPIT = os.path.join(os.path.dirname(os.path.dirname(
-    os.path.abspath(__file__))), 'src', 'cockpit')
+import cockpit as _cockpit_pkg        # 独立库 mecha-sdk（editable 安装）
+_COCKPIT = os.path.dirname(os.path.abspath(_cockpit_pkg.__file__))
 
 # ---- 建一个有事件的 journal，然后"杀掉项目"（丢弃 Bus 对象）----
 _TMP = tempfile.mkdtemp(prefix='cockpit_chk_')
@@ -159,7 +159,7 @@ for fn in sorted(os.listdir(_COCKPIT)):
             viol.append('%s:%s:%d(%s)' % (fn, h[0], h[1], h[2]))
 # 致死性：三段裸写片段都必须被检出（否则守卫是永不触发的哑守卫）
 _ROGUE = [
-    "from src.mecha.session import Session\nSession().set('x', 1, actor='a', reason='r')\n",
+    "from mecha.session import Session\nSession().set('x', 1, actor='a', reason='r')\n",
     "def f(p):\n    open(p, 'a').write('x')\n",
     "import os\ndef g(p):\n    os.remove(p)\n",
 ]

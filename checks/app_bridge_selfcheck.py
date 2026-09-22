@@ -21,9 +21,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 from checks.checklib import Checker                        # noqa: E402
-from src.mecha.app_bridge import AppBridge                 # noqa: E402
-from src.mecha.authority import AuthorityError             # noqa: E402
-from src.mecha import runtime                              # noqa: E402
+from mecha.app_bridge import AppBridge                 # noqa: E402
+from mecha.authority import AuthorityError             # noqa: E402
+from mecha import runtime                              # noqa: E402
 from src.adapter import EngineAdapter                      # noqa: E402
 
 runtime.set_engine(EngineAdapter())   # 注入领域引擎（mecha 零领域 import）

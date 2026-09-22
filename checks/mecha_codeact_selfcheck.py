@@ -26,11 +26,11 @@ from src.core.static_atom import ArcCache                  # noqa: E402
 from src.core import runspec as RS                         # noqa: E402
 from src.core import waveforms as WF                       # noqa: E402
 from src.core.atomic_levels import state_key               # noqa: E402
-from src.mecha.session import Session                      # noqa: E402
-from src.mecha.ops import Ops, load_artifact, artifact_dir  # noqa: E402
-from src.mecha.jobs import JobRunner                       # noqa: E402
-from src.mecha import codeact as CA                        # noqa: E402
-from src.mecha import runtime                              # noqa: E402
+from mecha.session import Session                      # noqa: E402
+from mecha.ops import Ops, load_artifact, artifact_dir  # noqa: E402
+from mecha.jobs import JobRunner                       # noqa: E402
+from mecha import codeact as CA                        # noqa: E402
+from mecha import runtime                              # noqa: E402
 from src.adapter import EngineAdapter                      # noqa: E402
 
 runtime.set_engine(EngineAdapter())   # 注入领域引擎（mecha 零领域 import）

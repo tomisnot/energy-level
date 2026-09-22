@@ -48,7 +48,7 @@ from src.ui import ui_theme
 from src.ui import _mecha_bind
 from src.ui.ui_group import EnergyGroupPanel
 from src.ui.ui_spectrum import LevelAnalysisPanel
-from src.mecha.app_bridge import AppBridge
+from mecha.app_bridge import AppBridge
 from src.adapter import EngineAdapter
 
 matplotlib.rcParams['font.family'] = 'sans-serif'
@@ -81,8 +81,8 @@ class MainWindow(QMainWindow):
         # mecha 门面：若已有 Hub 在跑（.mcp-port）→ GUI 作 **Hub 客户端**（与 AI 同 session，
         # Phase 1 GUI Hub 客户端化）；否则 in-process 自托管内核（人工模式默认）。
         # 连接失败 graceful 回落 in-process，不让 GUI 起不来。
-        from src.mecha.hub_client import discover_hub
-        from src.mecha.hub_bridge import HubBridge
+        from mecha.hub_client import discover_hub
+        from mecha.hub_bridge import HubBridge
         self._hub_connected = False
         hub_url = discover_hub()
         if hub_url:
@@ -443,7 +443,7 @@ def run_ai():
 
     # 后台服务：Hub（权威·MCP 写通道 :8765）+ 驾驶舱（:8766，dsh 插件 iframe 它）
     _spawn('Hub', [py, '-m', 'src.adapter.serve'])
-    _spawn('驾驶舱', [py, '-m', 'src.cockpit.server'])
+    _spawn('驾驶舱', [py, '-m', 'cockpit.server'])
 
     # 等 Hub 写好 .mcp-port（dsh 插件据此发现并连 Hub）——带进度点
     pf = os.path.join(here, '.mcp-port')

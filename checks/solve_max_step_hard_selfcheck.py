@@ -132,8 +132,8 @@ check('C2 更紧的硬上限（0.02 ns）也一致（< 1e-4）',
 
 print('D) 接线：solve.MAX_STEP_HARD 在册 + 映射 + 入参')
 from src.core import runspec as _rs                             # noqa: E402
-from src.mecha import registry as _reg                          # noqa: E402
-from src.mecha import runtime as _rt                            # noqa: E402
+from mecha import registry as _reg                          # noqa: E402
+from mecha import runtime as _rt                            # noqa: E402
 from src.adapter import EngineAdapter as _EA                     # noqa: E402
 _rt.set_engine(_EA())      # registry.solve_schema/describe 需引擎（config_schema 来自 engine）
 from src.core.evolve_mixed import evolve_mixed_pair as _emp      # noqa: E402

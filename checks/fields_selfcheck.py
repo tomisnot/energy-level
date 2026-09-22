@@ -33,11 +33,11 @@ from src.core import runspec as RS                         # noqa: E402
 from src.core import waveforms as WF                       # noqa: E402
 from src.core import static_atom as SA                     # noqa: E402
 from src.core.atomic_levels import state_key               # noqa: E402
-from src.mecha.session import Session                      # noqa: E402
-from src.mecha.ops import Ops                              # noqa: E402
+from mecha.session import Session                      # noqa: E402
+from mecha.ops import Ops                              # noqa: E402
 from src.adapter.fields import Fields, pi_ns, pi2_ns       # noqa: E402
-from src.mecha.errors import InvalidValue                  # noqa: E402
-from src.mecha import runtime                              # noqa: E402
+from mecha.errors import InvalidValue                  # noqa: E402
+from mecha import runtime                              # noqa: E402
 from src.adapter import EngineAdapter                      # noqa: E402
 
 runtime.set_engine(EngineAdapter())   # 注入领域引擎（mecha 零领域 import）
@@ -239,8 +239,8 @@ C.group('I arb 改道 hard：回执主动提示，与 runspec.effective_method �
 
 # ---------------- J. AI 面接线（MCP 工具 + CodeAct 门面） ----------------
 import json                                                 # noqa: E402
-from src.mecha import server as SVR                          # noqa: E402
-from src.mecha import codeact as CA                          # noqa: E402
+from mecha import server as SVR                          # noqa: E402
+from mecha import codeact as CA                          # noqa: E402
 
 _sj = _mk_session(); _fj = Fields(_sj); _oj = Ops(_sj)
 _srv, _tools = SVR.create_server(_sj, _oj, fields=_fj, actor='ai-test',

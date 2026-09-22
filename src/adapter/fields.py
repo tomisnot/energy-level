@@ -25,7 +25,7 @@ restore 的物理量。这才是 I3 的真关切（"数组永不内联进事件�
 """
 import numpy as np
 
-from ..mecha.errors import MechaError, InvalidValue, did_you_mean
+from mecha.errors import MechaError, InvalidValue, did_you_mean
 
 __all__ = ['Fields', 'pi_ns', 'pi2_ns']
 

@@ -35,11 +35,11 @@ for _n in ('uvicorn', 'uvicorn.error', 'uvicorn.access', 'mcp',
     logging.getLogger(_n).setLevel(logging.ERROR)
 
 from checks.checklib import Checker                        # noqa: E402
-from src.mecha.session import Session                      # noqa: E402
-from src.mecha.ops import Ops                             # noqa: E402
-from src.mecha import server as SVR                       # noqa: E402
-from src.mecha.bus import gate_value                       # noqa: E402
-from src.mecha import runtime                              # noqa: E402
+from mecha.session import Session                      # noqa: E402
+from mecha.ops import Ops                             # noqa: E402
+from mecha import server as SVR                       # noqa: E402
+from mecha.bus import gate_value                       # noqa: E402
+from mecha import runtime                              # noqa: E402
 from src.adapter import EngineAdapter                      # noqa: E402
 
 runtime.set_engine(EngineAdapter())   # 注入领域引擎（mecha 零领域 import）

@@ -11,9 +11,9 @@ import urllib.request
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from checklib import Checker                              # noqa: E402
-from src.mecha.authority import Authority                # noqa: E402
-from src.mecha.bus import Bus                            # noqa: E402
-from src.mecha.session import Session                    # noqa: E402
+from mecha.authority import Authority                # noqa: E402
+from mecha.bus import Bus                            # noqa: E402
+from mecha.session import Session                    # noqa: E402
 from src.adapter.serve import start_human_control        # noqa: E402
 
 C = Checker('human_control')

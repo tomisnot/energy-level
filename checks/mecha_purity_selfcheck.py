@@ -30,7 +30,8 @@ from checks.checklib import Checker                        # noqa: E402
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _SRC = os.path.join(_ROOT, 'src')
-_MECHA = os.path.join(_SRC, 'mecha')
+import mecha as _mecha_pkg            # 独立库 mecha-sdk（editable 安装）；本体已不在本仓
+_MECHA = os.path.dirname(os.path.abspath(_mecha_pkg.__file__))
 _CORE = os.path.join(_SRC, 'core')
 _ADAPTER = os.path.join(_SRC, 'adapter')
 
@@ -130,8 +131,8 @@ _ad_roots = _import_roots(ast.parse(_read(os.path.join(_ADAPTER, '__init__.py'))
 ad_glue = ('core' in _ad_roots) and ('mecha' in _ad_roots)
 
 # ---------------- C. 提炼缝就位 ----------------
-from src.mecha import protocol as _MP                      # noqa: E402
-from src.mecha import runtime as _MRT                      # noqa: E402
+from mecha import protocol as _MP                      # noqa: E402
+from mecha import runtime as _MRT                      # noqa: E402
 _EProto = getattr(_MP, 'EngineProtocol', None)
 seam_proto = (isinstance(_EProto, type) and issubclass(_EProto, abc.ABC)
               and len(getattr(_EProto, '__abstractmethods__', frozenset())) > 0)

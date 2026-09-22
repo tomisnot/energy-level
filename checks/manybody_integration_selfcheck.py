@@ -25,14 +25,14 @@ sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 import numpy as np                                             # noqa: E402
 
 from checks.checklib import Checker                            # noqa: E402
-from src.mecha import runtime                                  # noqa: E402
+from mecha import runtime                                  # noqa: E402
 from src.adapter import EngineAdapter                          # noqa: E402
 
 runtime.set_engine(EngineAdapter())       # 注入领域引擎（判据在开头做）
 
-from src.mecha.session import Session                          # noqa: E402
-from src.mecha.ops import Ops                                  # noqa: E402
-from src.mecha import registry                                 # noqa: E402
+from mecha.session import Session                          # noqa: E402
+from mecha.ops import Ops                                  # noqa: E402
+from mecha import registry                                 # noqa: E402
 from src.core import protocol as CP                            # noqa: E402
 from src.core import runspec as RS                             # noqa: E402
 

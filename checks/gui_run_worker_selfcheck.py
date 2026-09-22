@@ -27,10 +27,10 @@ from src.core.static_atom import ArcCache                  # noqa: E402
 from src.core import runspec as RS                         # noqa: E402
 from src.core import waveforms as WF                       # noqa: E402
 from src.core.atomic_levels import state_key               # noqa: E402
-from src.mecha import runtime                              # noqa: E402
+from mecha import runtime                              # noqa: E402
 from src.adapter import EngineAdapter                      # noqa: E402
-from src.mecha.session import Session                      # noqa: E402
-from src.mecha.ops import Ops, load_artifact               # noqa: E402
+from mecha.session import Session                      # noqa: E402
+from mecha.ops import Ops, load_artifact               # noqa: E402
 from src.ui.evolve_worker import RunWorker                 # noqa: E402
 
 app = QApplication.instance() or QApplication(sys.argv)     # offscreen

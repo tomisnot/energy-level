@@ -22,8 +22,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 from checks.checklib import Checker                        # noqa: E402
-from src.mecha.bus import Bus                              # noqa: E402  (仅用于造 journal)
-from src.cockpit import backend                            # noqa: E402  (被测：只读 journal)
+from mecha.bus import Bus                              # noqa: E402  (仅用于造 journal)
+from cockpit import backend                            # noqa: E402  (被测：只读 journal)
 
 C = Checker('cockpit_config_tree')
 
@@ -91,10 +91,10 @@ C.group('D 致死性：无 registry_schema → has_schema=False + families 空�
 ])
 
 # ---- E 真路径：serve.py 的 registry_schema emit 表达式（真 registry schema）→ config_tree 读回 ----
-from src.mecha import runtime                              # noqa: E402
+from mecha import runtime                              # noqa: E402
 from src.adapter import EngineAdapter                      # noqa: E402
-from src.mecha import registry as REG                      # noqa: E402
-from src.mecha.session import Session as _Sess             # noqa: E402
+from mecha import registry as REG                      # noqa: E402
+from mecha.session import Session as _Sess             # noqa: E402
 
 runtime.set_engine(EngineAdapter())
 tmp3 = tempfile.mkdtemp(prefix='cfgtree3_')

@@ -1437,7 +1437,7 @@ class DynamicPanel(QWidget):
         # 从 artifact 取回演化数组（人机同产物；I3 大载荷不内联）
         res = None
         try:
-            from ..mecha.ops import load_artifact
+            from mecha.ops import load_artifact
             aid = (result or {}).get('artifact_id')
             _ops = self.main.app_bridge.ops
             loaded = load_artifact(_ops.root, aid) if aid else None

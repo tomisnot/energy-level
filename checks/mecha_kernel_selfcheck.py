@@ -27,19 +27,19 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 from checks.checklib import Checker                       # noqa: E402
-from src.mecha import registry as R                       # noqa: E402
-from src.mecha import session as SESS                     # noqa: E402
-from src.mecha.bus import Bus                             # noqa: E402
-from src.mecha.errors import InvalidValue, UnknownKey, MechaError  # noqa: E402
+from mecha import registry as R                       # noqa: E402
+from mecha import session as SESS                     # noqa: E402
+from mecha.bus import Bus                             # noqa: E402
+from mecha.errors import InvalidValue, UnknownKey, MechaError  # noqa: E402
 from src.core import runspec as RS                        # noqa: E402
 from src.core import protocol as CP                       # noqa: E402
-from src.mecha import runtime                             # noqa: E402
+from mecha import runtime                             # noqa: E402
 from src.adapter import EngineAdapter                     # noqa: E402
 
 runtime.set_engine(EngineAdapter())   # 注入领域引擎（mecha 零领域 import）
 C = Checker('mecha_kernel')
-_MECHA = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                      'src', 'mecha')
+import mecha as _mecha_pkg            # 独立库 mecha-sdk（editable 安装）
+_MECHA = os.path.dirname(os.path.abspath(_mecha_pkg.__file__))
 
 # 32 个引擎参数的 golden 值（逐位对拍：包 Param 后引擎读到的值不变）
 GOLDEN = {

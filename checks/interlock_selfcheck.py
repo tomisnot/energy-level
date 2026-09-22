@@ -6,7 +6,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from checklib import Checker                              # noqa: E402
-from src.mecha.interlock import HardwareInterlock, SimInterlock  # noqa: E402
+from mecha.interlock import HardwareInterlock, SimInterlock  # noqa: E402
 
 C = Checker('interlock')
 

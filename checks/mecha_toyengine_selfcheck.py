@@ -79,9 +79,9 @@ class ToyEngine:
 def main():
     C.check('import mecha 前领域未载入', not _DOMAIN_BEFORE, str(_DOMAIN_BEFORE))
 
-    from src.mecha import registry, runtime
-    from src.mecha.ops import Ops
-    from src.mecha.session import Session
+    from mecha import registry, runtime
+    from mecha.ops import Ops
+    from mecha.session import Session
 
     runtime.set_engine(ToyEngine())
     sess = Session(root=None)

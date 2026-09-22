@@ -20,7 +20,7 @@ from PyQt5.QtWidgets import QApplication                  # noqa: E402
 from checks.checklib import Checker                        # noqa: E402
 from src.core import waveforms as WF                       # noqa: E402
 from src.core.atomic_levels import state_key               # noqa: E402
-from src.mecha.ops import load_artifact                    # noqa: E402
+from mecha.ops import load_artifact                    # noqa: E402
 from src.ui.evolve_worker import RunWorker                 # noqa: E402
 
 app = QApplication.instance() or QApplication(sys.argv)

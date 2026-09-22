@@ -9,8 +9,8 @@ app/判据组装时注入：`mecha.runtime.set_engine(EngineAdapter())`；
 GUI 走 `AppBridge(engine=EngineAdapter())`（内部即 set_engine）。
 """
 from ..core import protocol as _cp
-from ..mecha.errors import InvalidValue
-from ..mecha.protocol import EngineProtocol
+from mecha.errors import InvalidValue
+from mecha.protocol import EngineProtocol
 
 __all__ = ['EngineAdapter']
 
