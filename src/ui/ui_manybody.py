@@ -43,9 +43,12 @@ from . import _mecha_bind as MB
 from ..core import protocol as _proto
 # 模板→预设相互作用项的唯一真源在 core（本页**不复制**这张表，守 I2）
 from ..core.manybody.model import TEMPLATE_TERMS
+# 观测量（M2）：只吃概率向量 ⇒ 可由 GUI 从联合 `pops` 重算，**不依赖 P1-8 的 artifact 边界**
+from ..core.manybody.observables import (bit_matrix as _bit_matrix,
+                                         corr_matrix as _corr_matrix)
 
-# M0 未做的能力（页面上显式说明，避免"以为有"）
-NOT_YET = ('点云画布交互编辑（点击/拖拽加原子）', '关联矩阵 C_ij 热图与纠缠熵 S 曲线',
+# M0/M1/M2 未做的能力（页面上显式说明，避免"以为有"）
+NOT_YET = ('纠缠熵 S 曲线（S 由 psi 算，需 P1-8 把 psi/S 落进 artifact）',
            '分段驱动 drive_segments 表', 'ψ0 叠加（sup）编辑器')
 
 # **已裁决不做**（2026-09-22 工单 P2-1 / 裁决⑤）——写明原因，避免后来人以为还悬着。
@@ -80,6 +83,7 @@ class ManyBodyPanel(QWidget):
         self.cache = main.cache
         self._atoms = []            # 本地点云缓存（真值 = session 的 manybody.atoms）
         self._last_res = None
+        self._run_n_atoms = 0       # **运行时刻**的原子数（结果图解析基序要用它，别用当前表）
         self._build_canvases()
         self.manybody_widget = self._build_controls()
         self._build_module()
@@ -90,11 +94,24 @@ class ManyBodyPanel(QWidget):
         self.cloud_fig = Figure(figsize=(7, 3.0), dpi=100)
         self.cloud_ax = self.cloud_fig.add_subplot(111)
         self.cloud_canvas = FigureCanvas(self.cloud_fig)
-        self.res_fig = Figure(figsize=(7, 3.4), dpi=100)
-        self.res_ax = self.res_fig.add_subplot(111)
+        # 结果图三格（M2）：产物态布居 | 逐原子 ⟨n_i⟩(t) | 关联 C_ij（末态）
+        self.res_fig = Figure(figsize=(10.5, 3.2), dpi=100)
+        self.res_ax = self.res_fig.add_subplot(131)
+        self.res_ax_atom = self.res_fig.add_subplot(132)
+        self.res_ax_corr = self.res_fig.add_subplot(133)
         self.res_canvas = FigureCanvas(self.res_fig)
-        for fig in (self.cloud_fig, self.res_fig):
-            fig.subplots_adjust(left=0.08, right=0.96, top=0.92, bottom=0.14)
+        self.cloud_fig.subplots_adjust(left=0.08, right=0.96, top=0.92, bottom=0.14)
+        self.res_fig.subplots_adjust(left=0.06, right=0.97, top=0.88, bottom=0.17,
+                                     wspace=0.34)
+        # M1：点云画布交互（左键空白=加原子；左键点中原子并拖动=移动，**松开才落账**）
+        self._drag_idx = None
+        self.cloud_canvas.mpl_connect('button_press_event', self._on_cloud_press)
+        self.cloud_canvas.mpl_connect('motion_notify_event', self._on_cloud_move)
+        self.cloud_canvas.mpl_connect('button_release_event', self._on_cloud_release)
+        self.cloud_canvas.setToolTip(
+            '左键点空白：在该位置加一个原子\n'
+            '左键点中原子并拖动：移动（松开时才写 session，避免事件风暴）\n'
+            '删除/改 Ω/δ/g/r：用上方表格与按钮')
         self._draw_cloud()
         self._draw_result(None)
 
@@ -587,6 +604,59 @@ class ManyBodyPanel(QWidget):
             txt += '\n⚠ ' + '；'.join(str(x) for x in warns)
         self.cost_label.setText(txt)
 
+    # ================= 点云画布交互（M1） =================
+    def _pick_atom(self, event):
+        """点中的原子下标（容差 = 坐标范围的 6%）；没点中 → -1。"""
+        if event.xdata is None or event.ydata is None or not self._atoms:
+            return -1
+        xs = np.array([float((a.get('pos') or [0, 0, 0])[0]) for a in self._atoms])
+        ys = np.array([float((a.get('pos') or [0, 0, 0])[1]) for a in self._atoms])
+        x0, x1 = self.cloud_ax.get_xlim()
+        y0, y1 = self.cloud_ax.get_ylim()
+        tol = 0.06 * max(abs(x1 - x0), abs(y1 - y0), 1e-9)
+        d = np.hypot(xs - float(event.xdata), ys - float(event.ydata))
+        i = int(np.argmin(d))
+        return i if d[i] <= tol else -1
+
+    def _on_cloud_press(self, event):
+        """左键空白 → 加原子（经 choke point）；左键点中原子 → 起拖。"""
+        if getattr(event, 'button', None) != 1 or event.xdata is None:
+            return
+        i = self._pick_atom(event)
+        if i >= 0:
+            self._drag_idx = i
+            if 0 <= i < self.table.rowCount():
+                self.table.selectRow(i)
+            return
+        g, r = self._default_gr()
+        self._atoms.append({'g': list(g), 'r': list(r),
+                            'pos': [float(event.xdata), float(event.ydata), 0.0],
+                            'Omega_mhz': 0.0, 'delta_mhz': 0.0})
+        self._write_atoms('多体页：画布点击添加原子')
+        self._rebuild_table()
+        self.refresh_cost()
+
+    def _on_cloud_move(self, event):
+        """拖动中**只重画、不写 session**——每次 mouse-move 都写会灌爆总线（事件风暴）。"""
+        if self._drag_idx is None or event.xdata is None or event.ydata is None:
+            return
+        if not (0 <= self._drag_idx < len(self._atoms)):
+            return
+        a = self._atoms[self._drag_idx]
+        pos = list(a.get('pos') or [0, 0, 0])
+        pos[0], pos[1] = float(event.xdata), float(event.ydata)
+        a['pos'] = pos
+        self._draw_cloud()
+
+    def _on_cloud_release(self, event):
+        """松开 → **落账一次**（choke point）+ 表/成本同步。"""
+        if self._drag_idx is None:
+            return
+        self._drag_idx = None
+        self._write_atoms('多体页：画布拖动移动原子')
+        self._rebuild_table()
+        self.refresh_cost()
+
     # ================= 绘制 =================
     def _draw_cloud(self):
         ax = self.cloud_ax
@@ -610,24 +680,41 @@ class ManyBodyPanel(QWidget):
         self.cloud_canvas.draw_idle()
 
     def _draw_result(self, res):
+        """结果三格（M2）：产物态布居 | 逐原子 ⟨n_i⟩(t) | 关联 C_ij（末态）。
+
+        ⟨n_i⟩/C_ij **从联合 `pops` 重算**（`observables.atom_pops/corr_matrix` 只吃概率
+        向量）——**不依赖 P1-8 的 artifact 边界**；只有当 `pops` 已退化为逐原子边缘
+        （dim 超全布居上限，`engine_ed.py:336-341`）时 C_ij 不可得，此时**明说原因**。
+        纠缠熵 S 需要 psi（不在 artifact 里）⇒ 若结果里带 S 就画，否则在标题写明来源。
+        """
         ax = self.res_ax
         ax.clear()
         ax.set_xlabel('t (ns)')
         ax.set_ylabel('布居')
         ax.grid(alpha=0.3)
+        for _a in (self.res_ax_atom, self.res_ax_corr):
+            _a.clear()
         if not res or 'pops' not in res or 't' not in res:
             ax.text(0.5, 0.5, '还没有结果（点「运行多体演化」）', ha='center',
                     va='center', transform=ax.transAxes, color='#9ca3af')
+            for _a in (self.res_ax_atom, self.res_ax_corr):
+                _a.text(0.5, 0.5, '—', ha='center', va='center',
+                        transform=_a.transAxes, color='#9ca3af')
             self.res_canvas.draw_idle()
             return
-        pops = np.asarray(res['pops'])
-        t = np.asarray(res['t'])
+        pops = np.asarray(res['pops'], dtype=float)
+        t = np.asarray(res['t'], dtype=float)
         labels = [s.get('label', str(i)) for i, s in
                   enumerate(res.get('states') or [])]
         if pops.ndim == 1:
             pops = pops[:, None]
+        n_atoms = int(getattr(self, '_run_n_atoms', 0) or 0)
+        dim_joint = (1 << n_atoms) if n_atoms else 0
+        joint = bool(n_atoms and pops.shape[1] == dim_joint)
         if len(labels) != pops.shape[1]:            # 退化：逐原子边缘（dim 超上限时）
-            labels = ['atom%d' % i for i in range(pops.shape[1])]
+            labels = (['atom%d' % i for i in range(pops.shape[1])]
+                      if not joint else ['#%d' % i for i in range(pops.shape[1])])
+        # ---- 左：产物态布居（按平均布居取前 N） ----
         avg = pops.mean(axis=0)
         order = np.argsort(avg)[::-1][:min(12, pops.shape[1])]
         for i in order:
@@ -638,8 +725,61 @@ class ManyBodyPanel(QWidget):
                     label='loss（离场）')
         ax.margins(x=0)
         ax.set_xlim(float(t[0]), float(t[-1]))
-        ax.legend(fontsize=7, ncol=1)
-        ax.set_title('产物态布居（按平均布居取前 %d）' % len(order), fontsize=9)
+        ax.legend(fontsize=6, ncol=1)
+        ax.set_title('产物态布居（前 %d）' % len(order), fontsize=9)
+        # ---- 中：逐原子 ⟨n_i⟩(t)（联合 → 重算；边缘 → 直接用） ----
+        axa = self.res_ax_atom
+        axa.set_xlabel('t (ns)')
+        axa.set_ylabel('⟨n_i⟩ 激发概率')
+        axa.grid(alpha=0.3)
+        try:
+            if joint:
+                bits = _bit_matrix(n_atoms, dim_joint)      # (n, dim)
+                atom_t = pops @ bits.T                      # (n_t, n)
+            else:
+                atom_t = pops                               # 已是逐原子边缘
+            for i in range(atom_t.shape[1]):
+                axa.plot(t, atom_t[:, i], lw=1.3, label='atom%d' % i)
+            axa.margins(x=0)
+            axa.set_xlim(float(t[0]), float(t[-1]))
+            axa.legend(fontsize=6, ncol=2)
+            _s = res.get('S')
+            if _s is not None and np.size(_s) == t.size:
+                axb = axa.twinx()
+                axb.plot(t, np.asarray(_s), lw=1.1, ls=':', color='#854F0B')
+                axb.set_ylabel('S (nat)', fontsize=8)
+            axa.set_title('逐原子 ⟨n_i⟩(t)%s'
+                          % ('（由联合 pops 重算）' if joint else '（边缘）'),
+                          fontsize=9)
+        except Exception as e:                              # noqa: BLE001
+            axa.text(0.5, 0.5, '⟨n_i⟩ 计算失败：%s' % e, ha='center', va='center',
+                     transform=axa.transAxes, color='#A32D2D', fontsize=8)
+        # ---- 右：关联 C_ij（末态，与引擎口径一致：engine_ed 用最后一步的 p） ----
+        axc = self.res_ax_corr
+        if joint and pops.shape[0]:
+            try:
+                C = _corr_matrix(_bit_matrix(n_atoms, dim_joint), pops[-1])
+                im = axc.imshow(C, cmap='RdBu_r', vmin=-max(abs(C).max(), 1e-12),
+                                vmax=max(abs(C).max(), 1e-12))
+                axc.set_xticks(range(n_atoms))
+                axc.set_yticks(range(n_atoms))
+                axc.set_xlabel('j')
+                axc.set_ylabel('i')
+                self.res_fig.colorbar(im, ax=axc, fraction=0.046, pad=0.04)
+                axc.set_title('关联 C_ij（末态，max|C|=%.3g）' % abs(C).max(),
+                              fontsize=9)
+            except Exception as e:                          # noqa: BLE001
+                axc.text(0.5, 0.5, 'C_ij 计算失败：%s' % e, ha='center', va='center',
+                         transform=axc.transAxes, color='#A32D2D', fontsize=8)
+        else:
+            axc.text(0.5, 0.5, 'C_ij 不可得：pops 已退化为逐原子边缘\n'
+                               '（dim=2^%d 超全布居上限，联合分布未物化）'
+                     % n_atoms if n_atoms else 'C_ij 不可得：未知原子数',
+                     ha='center', va='center', transform=axc.transAxes,
+                     color='#6b7280', fontsize=8)
+            axc.set_xticks([])
+            axc.set_yticks([])
+            axc.set_title('关联 C_ij', fontsize=9)
         self.res_canvas.draw_idle()
 
     # ================= 运行（借 DynamicPanel 的同一条运行流） =================
@@ -653,6 +793,7 @@ class ManyBodyPanel(QWidget):
             QMessageBox.information(self, '提示', '先摆原子（点「＋添加原子」）再运行。')
             return
         self.run_btn.setText('运行中（再点取消）')
+        self._run_n_atoms = len(self._atoms)     # 记**运行时刻**的 N（结果图解析基序用）
         d.set_nbody('many')                 # 声明演化族（唯一入口，I5）
         d._run(on_done=self._on_result)
 

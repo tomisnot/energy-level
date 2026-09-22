@@ -212,6 +212,93 @@ C.group('E 运行接线：同一条运行流 + 结果交回本页', [
      len(UMB.NOT_YET) >= 3 and not _mb.not_yet.isHidden()),
 ])
 
+# ---------------- F. M2 结果图：⟨n_i⟩ / C_ij 由**联合 pops 重算**（不依赖 P1-8） ----------------
+# 只吃概率向量 ⇒ GUI 侧可自算；且**必须与直接调用 core 观测量逐值一致**（防"自己造一套"）。
+import numpy as _np                                        # noqa: E402
+from src.core.manybody.observables import (                # noqa: E402
+    bit_matrix as _bits, corr_matrix as _corr)
+
+_N = 2
+_mb._run_n_atoms = _N
+_t = _np.linspace(0.0, 10.0, 5)
+_joint = _np.array([[1.0, 0, 0, 0], [0.5, 0.5, 0, 0], [0.25, 0.25, 0.25, 0.25],
+                    [0.1, 0.2, 0.3, 0.4], [0.0, 0.0, 0.5, 0.5]])
+_mb._draw_result({'t': _t, 'pops': _joint,
+                  'states': [{'label': '#%d' % i} for i in range(2 ** _N)]})
+_exp_atom = _joint @ _bits(_N, 2 ** _N).T
+_exp_corr = _corr(_bits(_N, 2 ** _N), _joint[-1])
+_got_atom = _np.array([ln.get_ydata() for ln in _mb.res_ax_atom.lines])
+_got_corr = (_mb.res_ax_corr.images[0].get_array()
+             if _mb.res_ax_corr.images else None)
+# 边缘退化（dim 超全布居上限时引擎只出逐原子边缘）→ C_ij 必须**明说不可得**
+_mb._draw_result({'t': _t, 'pops': _np.array([[0., 0.], [0.3, 0.1], [0.5, 0.2],
+                                              [0.6, 0.3], [0.4, 0.4]]),
+                  'states': [{'label': 'atom0'}, {'label': 'atom1'}]})
+_marg_text = ' '.join(x.get_text() for x in _mb.res_ax_corr.texts)
+C.group('F M2 结果图：⟨n_i⟩/C_ij 由联合 pops 重算（不依赖 P1-8）', [
+    ('联合情形：逐原子 ⟨n_i⟩ 画出 %d 条（=原子数）' % len(_mb.res_ax_atom.lines),
+     len(_got_atom) == _N),
+    ('⟨n_i⟩ 与直接调用 core.observables 逐值一致',
+     _got_atom.shape == _exp_atom.T.shape and _np.allclose(_got_atom, _exp_atom.T)),
+    ('联合情形：C_ij 热图已画且与直接调用一致',
+     _got_corr is not None and _np.allclose(_got_corr, _exp_corr)),
+    ('边缘退化：C_ij **不画**且明说原因（%s）' % _marg_text[:28],
+     not _mb.res_ax_corr.images and '不可得' in _marg_text),
+    ('边缘退化：⟨n_i⟩ 仍可用（%d 条线）' % len(_mb.res_ax_atom.lines),
+     len(_mb.res_ax_atom.lines) == _N),
+    ('未做项措辞已更新：C_ij 不再列为"未做"，S 曲线列为"未做（依赖 P1-8）"',
+     all('C_ij' not in x for x in UMB.NOT_YET)
+     and any('S' in x and 'P1-8' in x for x in UMB.NOT_YET)),
+])
+
+# ---------------- G. M1 点云画布交互（点击加原子 / 拖动移动，松开才落账） ----------------
+class _Ev:
+    """matplotlib 事件的鸭子替身（处理器只读 button/xdata/ydata）。"""
+
+    def __init__(self, x, y, button=1):
+        self.xdata, self.ydata, self.button = x, y, button
+
+
+def _n_atom_events():
+    return len([e for e in _w.app_bridge.activity(0)
+                if e.get('target') == 'manybody.atoms'])
+
+
+_mb._atoms = []
+_mb._write_atoms('判据：清空')
+_mb._rebuild_table()
+_n0 = _n_atom_events()
+# ① 左键点空白 → 在该位置加一个原子
+_mb._on_cloud_press(_Ev(12.5, -3.25))
+_a1 = _w.app_bridge.read('manybody.atoms') or []
+_added_at = (list(_a1[0]['pos']) if _a1 else None)
+_n_after_add = _n_atom_events()
+# ② 左键点中它 + 拖动 3 次 + 松开 → 位置更新，且**只落账一次**
+_mb._on_cloud_press(_Ev(12.5, -3.25))          # 命中已有原子 → 起拖
+for _x in (14.0, 15.0, 16.0):
+    _mb._on_cloud_move(_Ev(_x, -5.0))
+_n_during_drag = _n_atom_events()
+_mb._on_cloud_release(_Ev(16.0, -5.0))
+_a2 = _w.app_bridge.read('manybody.atoms') or []
+_n_after_drag = _n_atom_events()
+# ③ 拖动中不落账（事件数不变），松开后 +1
+C.group('G M1 点云画布交互（点击加原子 / 拖动移动；松开才落账）', [
+    ('空白点击 → 原子落在点击处（%s）' % (_added_at,),
+     len(_a1) == 1 and _added_at is not None
+     and abs(_added_at[0] - 12.5) < 1e-9 and abs(_added_at[1] + 3.25) < 1e-9),
+    ('点击加原子经 choke point 落 session（+%d 事件）' % (_n_after_add - _n0),
+     _n_after_add == _n0 + 1),
+    ('拖动 3 次**期间不写 session**（事件数不变：%d）' % _n_during_drag,
+     _n_during_drag == _n_after_add),
+    ('松开后落账一次（+%d）且位置=最后落点'
+     % (_n_after_drag - _n_after_add),
+     _n_after_drag == _n_after_add + 1 and len(_a2) == 1
+     and abs(_a2[0]['pos'][0] - 16.0) < 1e-9 and abs(_a2[0]['pos'][1] + 5.0) < 1e-9),
+    ('表与点云同步（行数=1）', _mb.table.rowCount() == 1),
+    ('未做项措辞已更新：点云交互不再列为"未做"',
+     all('画布交互' not in x for x in UMB.NOT_YET)),
+])
+
 _ok = C.summary()
 sys.stdout.flush()
 os._exit(0 if _ok else 1)
