@@ -121,21 +121,97 @@ C.group('B list_params 分页/tier 过滤 + did_you_mean（D-B/D2）', [
      'field.B_gauss' in sugg),
 ])
 
-# ---------------- C. I6：配置 schema ⊇ runspec 实读键 ----------------
+# ---------------- C. I6 **双向**：schema ⇄ 实读键（防漂；两个方向都守） ----------------
+# 原判据只守了一个方向（"runspec 读的键都在 schema 里"）。反方向——**schema 声明了却没人读**
+# ——此前无人守，这正是 manybody.template/seed 等"声明了但没接线"的键能溜过去的原因。
+# 现补反方向：每个 config 键要么**被消费**，要么在**显式白名单**里（带原因）。
 lit, dyn = CP.runspec_read_keys()
 fam = R.families()
+cfg = R.config_schema()
 lit_missing = [k for k in lit if k not in fam]
 # 动态键家族（dynamic.waves_%s）须在 schema 里显式声明其成员
-dyn_family_ok = all(k in R.config_schema()
+dyn_family_ok = all(k in cfg
                     for k in ('dynamic.waves_single', 'dynamic.waves_A',
                               'dynamic.waves_B'))
-C.group('C 配置 schema 完全覆盖 runspec 实读键（I6 AST 交叉）', [
-    ('runspec 字面读的键都在 schema（漏：%s）' % (lit_missing or '无'),
+
+# --- 反方向：全仓扫"谁在消费这些键"（不止 runspec —— 静态页走 br.read） ---
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _consumed_keys():
+    """AST 扫 src/**：`X.get('k')` / `X['k']` / `X.read('k')` 出现的键。
+
+    只收集**字面量**键（动态拼接的另由 dyn 家族覆盖）。覆盖快照读取与
+    GUI 桥读取两条真实消费路径。
+    """
+    out = set()
+    for dp, dns, fns in os.walk(os.path.join(_ROOT, 'src')):
+        dns[:] = [d for d in dns if d not in ('__pycache__', '_archive')]
+        for fn in fns:
+            if not fn.endswith('.py'):
+                continue
+            try:
+                tree = ast.parse(open(os.path.join(dp, fn), encoding='utf-8').read())
+            except (SyntaxError, OSError):
+                continue
+            for nd in ast.walk(tree):
+                if not isinstance(nd, ast.Call) or not nd.args:
+                    continue
+                f = nd.func
+                if (isinstance(f, ast.Attribute) and f.attr == 'get'
+                        and isinstance(nd.args[0], ast.Constant)
+                        and isinstance(nd.args[0].value, str)):
+                    out.add(nd.args[0].value)
+                if (isinstance(f, ast.Attribute) and f.attr == 'read'
+                        and isinstance(nd.args[0], ast.Constant)
+                        and isinstance(nd.args[0].value, str)):
+                    out.add(nd.args[0].value)          # br.read('field.window')
+                if isinstance(f, ast.Name) and f.id in ('_required', 'mb_get'):
+                    if (len(nd.args) >= 2 and isinstance(nd.args[1], ast.Constant)
+                            and isinstance(nd.args[1].value, str)):
+                        out.add(nd.args[1].value)
+            for nd in ast.walk(tree):                  # p['k'] 下标读
+                if isinstance(nd, ast.Subscript) and isinstance(nd.slice, ast.Constant) \
+                        and isinstance(nd.slice.value, str):
+                    out.add(nd.slice.value)
+    return out
+
+
+# 反方向白名单：**确属"声明了但本路径不消费"**的键，必须写明原因。
+# 判据要求"被豁免的键一旦真被消费 → 提示可从白名单移除"（防白名单腐烂）。
+_UNCONSUMED_OK = {
+    'dynamic.waves_single': '由 runspec 动态模式 p.get("dynamic.waves_%s"%atom) 覆盖',
+    'dynamic.waves_A':      '同上（动态家族成员）',
+    'dynamic.waves_B':      '同上（动态家族成员）',
+    'manybody.seed':        '**已知未接线**（P2-1）：声明了但消费端 add_atom 不吃 seed；'
+                            '要么实现、要么标无效——白名单只保证"被看见"，不表示已修',
+}
+_consumed = _consumed_keys()
+# 动态家族成员：字面量出现在 `'dynamic.waves_%s' % atom` 这种**动态模式**里，
+# 会被上面按字面量收进来。它们**不算"直接消费"**——正是要被豁免的那一族，
+# 由 `_dyn_covers` 单独断言"确由动态模式覆盖"。
+_dyn_members = {k for k in cfg if 'waves_' in k}
+_consumed_direct = _consumed - _dyn_members
+_unconsumed = sorted(k for k in cfg if k not in _consumed)
+_unconsumed_unlisted = [k for k in _unconsumed if k not in _UNCONSUMED_OK]
+# 白名单腐烂侦测：豁免的键若**被直接消费**了，说明豁免已无必要（应移除）
+_whitelist_stale = [k for k in _UNCONSUMED_OK if k in _consumed_direct]
+_dyn_covers = bool(dyn) and _dyn_members <= set(_UNCONSUMED_OK)
+
+C.group('C I6 **双向**：读的键都在 schema（正）+ 声明的键都被消费或显式豁免（反）', [
+    ('**正向**：runspec 字面读的键都在 schema（漏：%s）' % (lit_missing or '无'),
      not lit_missing),
     ('扫到动态键家族 %d 个（dynamic.waves_*）' % len(dyn), len(dyn) >= 1),
     ('动态键家族成员已显式声明（waves_single/A/B）', dyn_family_ok),
+    ('**反向**：config 键**无人消费且未豁免** → %s' % (_unconsumed_unlisted or '无'),
+     not _unconsumed_unlisted),
+    ('动态家族确由动态模式覆盖（%s）' % (dyn or '无'), _dyn_covers),
+    ('**漂移侦测**：已消费的键仍挂在豁免表（应移除）：%s'
+     % (_whitelist_stale or '无'), not _whitelist_stale),
+    ('反向扫描**被看见**的未消费键共 %d 个：%s' % (len(_unconsumed), _unconsumed),
+     True),
     ('schema 至少覆盖 groups/field/dynamic/solve 四族',
-     len(R.config_schema()) >= 15 and len(R.solve_schema()) == 5),
+     len(cfg) >= 15 and len(R.solve_schema()) == 5),
 ])
 
 # ---------------- D/E/F. session choke point（用临时 root） ----------------
