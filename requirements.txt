@@ -19,3 +19,10 @@ pyqtgraph==0.13.7
 # 注意：分发给无 AI 需求的用户打包 exe 时不要装（PyInstaller 会收集
 # pydantic/uvicorn/starlette/httpx 增大体积）；开发者/AI 协同环境安装：
 #   pip install "mcp>=2,<3" uvicorn
+
+# ── AI 机甲框架（mecha-sdk，独立库）────────────────────────────────
+# 之前**完全没声明**，纯靠 editable 安装 —— 换机器/打包即断（P0-3/P0-13）。
+# 库本体零重依赖；MCP 写通道与驾驶舱各是 extra。
+# 本仓用 [mcp,cockpit,numpy]：写通道 + 只读驾驶舱 + 数组产物落盘。
+# 路径按本机布局（两仓并列于 code/python/ 下）；换机器请改成本机实际路径。
+-e ../mecha-sdk[mcp,cockpit,numpy]

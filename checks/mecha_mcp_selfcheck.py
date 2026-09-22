@@ -287,4 +287,71 @@ C.group('K async 作业面（长任务不阻塞写通道）+ run_compute 超阈�
      isinstance(_final.get('progress'), list) and len(_final['progress']) == 3),
 ])
 
+# ---------------- L. P0-3/P0-4：numpy 惰性 + 无建场层不崩（含致死性） ----------------
+# P0-4：**鸭子类型**引擎（有引擎、无 make_fields 属性）—— 旧实现让 create_server 直接抛
+# AttributeError（except 只捕 NotImplementedError/RuntimeError）⇒ 整个 server 起不来。
+class _NoFieldsEngine:
+    """有引擎、**没有** make_fields 的鸭子引擎（P0-4 致死性构造）。"""
+    def engine_params(self): return {}
+    def _rec(self, n, f, d):
+        return {'name': n, 'type': 'float', 'unit': '', 'lo': None, 'hi': None,
+                'desc': 'd', 'default': d, 'family': f, 'readonly': False}
+    def config_schema(self): return {'x': self._rec('x', 'config', 0.0)}
+    def solve_schema(self): return {}
+    def solve_map(self): return {}
+    def settable_keys(self): return ['x']
+    def validate_wave_list(self, v): return v
+    def make_cache(self): return object()
+    def build_run(self, cache, snap, diag=False):
+        return {'method': 'nofields', 'two_body': False}
+    def check_run(self, run): return []
+    def evolve_run(self, run, progress_arr=None): return {'ok': True}
+    def result_summary(self, run, res, **kw): return {'ok': True}
+    def summarize_run(self, run): return 'nofields'
+    def estimate(self, cache, snap): return {'est_sec': 0.0}
+    def preview(self, cache, snap): return {'ok': True}
+    def list_levels(self, cache, snap): return []
+    def run_annotations(self, snap): return {'n_waves': 0, 'overlap_warning': None}
+
+
+_old_eng = runtime.engine()
+try:
+    runtime.set_engine(_NoFieldsEngine())
+    _nf_tmp = tempfile.mkdtemp(prefix='mecha_nofields_')
+    _nf_sess = Session(root=_nf_tmp)
+    try:
+        _nf_srv, _nf_tools = SVR.create_server(_nf_sess, Ops(_nf_sess),
+                                               log_level='ERROR')
+        _nf_crash = None
+    except Exception as e:                                # noqa: BLE001
+        _nf_crash = '%s: %s' % (type(e).__name__, e)
+        _nf_tools = {}
+    _sd = json.loads(_nf_tools['set_drive'](reason='r', src='a', tgt='b')) \
+        if 'set_drive' in _nf_tools else {}
+    _gw = json.loads(_nf_tools['get_waves']()) if 'get_waves' in _nf_tools else {}
+    _sd_err = _sd.get('error') or {}
+    _gw_err = _gw.get('error') or {}
+    # P0-3：numpy 必须**不在** import 期被拉起（jobs 曾模块级 import numpy）
+    import mecha.jobs as _mj
+    _jobs_src = open(_mj.__file__, encoding='utf-8').read()
+    _no_module_numpy = not any(
+        l.strip().startswith('import numpy') for l in _jobs_src.splitlines())
+finally:
+    runtime.set_engine(_old_eng)
+
+C.group('L P0-3/P0-4：numpy 惰性（不在 import 期）+ 无建场层不崩、回可教学错误', [
+    ('**致死性(P0-4)**：鸭子引擎（无 make_fields）→ create_server **不抛**（%s）'
+     % (_nf_crash or '未抛'),
+     _nf_crash is None),
+    ('工具面仍 18 个（不因缺建场层而少注册）', len(_nf_tools) == 18),
+    ('set_drive 回**可教学**错误（kind+hint+suggest 齐）',
+     _sd.get('ok') is False and bool(_sd_err.get('hint'))
+     and bool(_sd_err.get('suggest'))),
+    ('get_waves 同样可教学（不再是裸 AttributeError）',
+     _gw.get('ok') is False and _gw_err.get('kind') != 'AttributeError'
+     and bool(_gw_err.get('hint'))),
+    ('**致死性(P0-3)**：mecha/jobs.py 无模块级 `import numpy`',
+     _no_module_numpy),
+])
+
 sys.exit(0 if C.summary() else 1)
