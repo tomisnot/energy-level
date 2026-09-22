@@ -28,7 +28,7 @@ import json
 
 import numpy as np
 
-from PyQt5.QtCore import Qt, pyqtSignal, QRectF
+from PyQt5.QtCore import Qt, pyqtSignal, QRectF, QThread
 from PyQt5 import QtCore, QtGui
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                              QTabWidget, QCheckBox, QTableWidget,
@@ -44,6 +44,48 @@ from matplotlib.backends.backend_qt5agg import (
 import pyqtgraph as pg
 
 from . import ui_theme
+
+
+class _GcWorker(QThread):
+    """数据回收（P4-3）：在**工作线程**里跑 `mecha.gc.gc`（扫目录/读 journal 会卡住主线程）。
+
+    本仓教训：Qt 槽里抛异常 = `qFatal`/`0xc0000409` ⇒ 线程内一律 try/except，
+    结果经 `done(rep, err)` 回主线程；**删除逻辑全在库侧**，本类不碰文件系统。
+    """
+
+    done = pyqtSignal(object, object)          # (report | None, error_str | None)
+
+    def __init__(self, root, dry_run, bus=None, triggered_by=None,
+                 reason=None, parent=None):
+        super().__init__(parent)
+        self.root = root
+        self.dry_run = bool(dry_run)
+        self.bus = bus
+        self.triggered_by = triggered_by
+        self.reason = reason
+
+    def run(self):
+        try:
+            from mecha import gc as _gc
+            rep = _gc.gc(self.root, dry_run=self.dry_run, bus=self.bus,
+                         triggered_by=self.triggered_by,
+                         reason=self.reason or 'GUI 数据回收')
+            self.done.emit(rep, None)
+        except Exception as e:                              # noqa: BLE001
+            self.done.emit(None, '%s: %s' % (type(e).__name__, e))
+
+
+def _fmt_bytes(n):
+    """字节 → 人话（KB/MB/GB）。"""
+    try:
+        v = float(n or 0)
+    except (TypeError, ValueError):
+        return '?'
+    for unit in ('B', 'KB', 'MB', 'GB'):
+        if v < 1024.0 or unit == 'GB':
+            return ('%d %s' % (v, unit)) if unit == 'B' else ('%.1f %s' % (v, unit))
+        v /= 1024.0
+    return '%.1f GB' % v
 
 
 def _fmt_num(v):
@@ -304,12 +346,16 @@ class SolverInspector(QDialog):
         self._tab_s = self._make_tab_solver()
         self._tab_x = self._make_tab_sectors()
         self._tab_e = self._make_tab_params()
+        # P4-3：数据回收（存档/产物）——**新 tab 属"新元素进既有容器"**，
+        # 既有 6 页的控件位置/尺寸一行未动（M3）。
+        self._tab_gc = self._make_tab_gc()
         self.tabs.addTab(self._tab_l, '处理链')
         self.tabs.addTab(self._tab_h, '哈密顿量')
         self.tabs.addTab(self._tab_p, '耦合对')
         self.tabs.addTab(self._tab_s, '求解过程')
         self.tabs.addTab(self._tab_x, '扇区与重构')
         self.tabs.addTab(self._tab_e, '引擎参数')
+        self.tabs.addTab(self._tab_gc, '存档/产物')
         # P0-7：4 个"精度旋钮"接上（此前 `_bind_solver_knobs` **从未被调用** ⇒
         # 它们是可输入、无效果、也不报错的死控件）。现为只读回显 + 真实编辑入口提示。
         self._bind_solver_knobs()
@@ -717,6 +763,184 @@ class SolverInspector(QDialog):
             self._e_count.setText(
                 ('solve.* 已改 %d 项 / 共 %d 项可写' % (n, writable)) if n
                 else '当前无覆写（%d 项可写，全部用默认值）' % writable)
+
+    # ---------- Tab 存档/产物（P4-3：数据回收，删除逻辑全在库侧 mecha.gc） ----------
+    def _gc_root(self):
+        """本机数据根（`<repo>/.mecha`）。Hub 模式无本地根 → None（本机不做回收）。"""
+        br = getattr(getattr(self, 'win', None), 'app_bridge', None)
+        bus = getattr(br, 'bus', None)
+        return getattr(bus, 'root', None)
+
+    def _make_tab_gc(self):
+        """数据回收页：**只做"列出 + 勾选 + 触发 + 显示回执"**，不自己删任何文件。
+
+        边界（工单 P4-3 已定，且 `checks/cockpit_selfcheck.py` 把"不得 remove/unlink/rmtree"
+        钉成判据——同一纪律适用于 GUI）：**删除逻辑一律在库侧** `mecha.gc.gc`；
+        本页只调它、只显示它算出来的计划。
+        """
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(10, 8, 10, 8)
+        lay.setSpacing(6)
+        info = QLabel(
+            '数据回收（真值源 = `mecha.gc`）。<b>干跑优先</b>：先看"将删/将归档/保留"三份清单，'
+            '确认后再执行。<br>'
+            '· <b>删除</b>＝确定无引用（artifacts 未 pinned、超窗口、不在最新 N 个内；'
+            'payloads 三源均无引用；jobs 终态且超窗口）；<br>'
+            '· <b>归档</b>＝journal 轮转段**移动到 `archive/`（不删除）**——journal 是唯一真值日志；<br>'
+            '· <b>保留</b>＝pinned / 窗口内 / 最新 N 个 / running / 状态未知（拿不准就不删并报出来）。<br>'
+            '执行时库侧会<b>重算计划</b>（本页展示的是上次干跑结果），并落一条 '
+            '<code>kind="gc"</code> 事件留痕。')
+        info.setWordWrap(True)
+        lay.addWidget(info)
+
+        bar = QHBoxLayout()
+        bar.setSpacing(6)
+        self.gc_dry_btn = QPushButton('干跑（只看计划）')
+        self.gc_dry_btn.setToolTip('只算不删：列出将删/将归档/保留三份清单')
+        self.gc_dry_btn.clicked.connect(self._gc_start_dry)
+        bar.addWidget(self.gc_dry_btn)
+        self.gc_real_btn = QPushButton('执行回收…')
+        self.gc_real_btn.setToolTip('真删：需二次确认；删除逻辑全在库侧 mecha.gc')
+        self.gc_real_btn.setEnabled(False)          # 先干跑看过计划才允许真跑
+        self.gc_real_btn.clicked.connect(self._gc_start_real)
+        bar.addWidget(self.gc_real_btn)
+        bar.addStretch(1)
+        self.gc_sum = QLabel('（还没干跑）')
+        self.gc_sum.setStyleSheet('color:%s;' % ui_theme.COL_TEXT_DIM)
+        bar.addWidget(self.gc_sum)
+        lay.addLayout(bar)
+
+        self.gc_table = QTableWidget(0, 5)
+        self.gc_table.setHorizontalHeaderLabels(
+            ['动作', '区域', '对象', '字节', '依据 / 为什么'])
+        self.gc_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.gc_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.gc_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
+        for _c, _w in enumerate((92, 84, 210, 78)):
+            self.gc_table.setColumnWidth(_c, _w)
+        lay.addWidget(self.gc_table, 1)
+
+        self.gc_receipt = QLabel('')
+        self.gc_receipt.setWordWrap(True)
+        self.gc_receipt.setStyleSheet('color:%s; font-family:Consolas,monospace;'
+                                      % ui_theme.COL_TEXT_DIM)
+        lay.addWidget(self.gc_receipt)
+        return w
+
+    def _gc_start_dry(self):
+        self._gc_start(dry_run=True)
+
+    def _gc_start_real(self):
+        """真跑入口：**必须人的二次确认**（`_gc_confirm` 单独成方法，便于判据驱动）。"""
+        if not self._gc_confirm():
+            self.gc_receipt.setText('已取消：未执行回收（干跑计划仍在上表）。')
+            return
+        self._gc_start(dry_run=False)
+
+    def _gc_confirm(self):
+        """二次确认（模态，人触发）。→ True=执行。"""
+        box = QMessageBox(self)
+        box.setWindowTitle('确认执行数据回收')
+        box.setIcon(QMessageBox.Warning)
+        box.setText('将**永久删除**上表「删除」类的项（归档类只移动、不删）。')
+        box.setInformativeText(
+            '%s\n\n执行时库侧会**重算计划**（以上为上次干跑结果）；'
+            '执行后落一条 kind="gc" 事件留痕。' % self.gc_sum.text())
+        b_ok = box.addButton('执行回收（删除）', QMessageBox.DestructiveRole)
+        box.addButton('取消', QMessageBox.RejectRole)
+        box.setDefaultButton(box.buttons()[-1])          # 默认=取消（保守）
+        box.exec_()
+        return box.clickedButton() is b_ok
+
+    def _gc_start(self, dry_run):
+        root = self._gc_root()
+        if not root:
+            self.gc_receipt.setText(
+                'Hub 模式：数据根在 Hub 侧，本机不执行回收（请在人启动 Hub 的那台机上做，'
+                '或用 mecha.gc 直接跑）。')
+            return
+        br = getattr(getattr(self, 'win', None), 'app_bridge', None)
+        self.gc_dry_btn.setEnabled(False)
+        self.gc_real_btn.setEnabled(False)
+        self.gc_sum.setText('干跑中…' if dry_run else '执行中…')
+        self._gc_worker = _GcWorker(
+            root, dry_run, bus=getattr(br, 'bus', None),
+            triggered_by='human:gui', reason='GUI 数据回收（存档/产物页）', parent=self)
+        self._gc_worker.done.connect(
+            lambda rep, err, d=dry_run: self._gc_finish(rep, err, d))
+        self._gc_worker.start()
+
+    def _gc_finish(self, rep, err, dry_run):
+        """回收结果回主线程（**唯一收尾点**：按钮状态在此复位，槽里不抛）。"""
+        self.gc_dry_btn.setEnabled(True)
+        if err:
+            self.gc_sum.setText('失败')
+            self.gc_receipt.setText('回收失败：%s' % err)
+            return
+        self._gc_fill_table(rep)
+        self.gc_real_btn.setEnabled(bool(rep.get('plan')))     # 没有可删项就不给真跑
+        if dry_run:
+            self.gc_sum.setText('将删 %d 项 / %s　将归档 %d 项 / %s　保留 %d 项'
+                                % (len(rep.get('plan') or []),
+                                   _fmt_bytes(rep.get('freed_bytes')),
+                                   len(rep.get('archive') or []),
+                                   _fmt_bytes(rep.get('archived_bytes')),
+                                   len(rep.get('kept') or [])))
+            self.gc_receipt.setText(rep.get('note') or '')
+        else:
+            n = len(rep.get('removed') or [])
+            self.gc_sum.setText('已删 %d 项 / 释放 %s　已归档 %d 项'
+                                % (n, _fmt_bytes(rep.get('freed_bytes')),
+                                   len(rep.get('archive') or [])))
+            self.gc_receipt.setText(self._gc_receipt_text(n))
+
+    def _gc_receipt_text(self, n_removed):
+        """真跑后显示 `kind='gc'` 事件回执（审计链：谁触发、删了什么）。"""
+        br = getattr(getattr(self, 'win', None), 'app_bridge', None)
+        bus = getattr(br, 'bus', None)
+        if bus is None:
+            return '已删 %d 项（本机无总线可读回执）' % n_removed
+        try:
+            evs = [e for e in bus.since(0) if e.get('kind') == 'gc']
+        except Exception as e:                                  # noqa: BLE001
+            return '回执读取失败：%s' % e
+        if not evs:
+            return '已删 %d 项（未找到 kind="gc" 事件——回收应留痕，请核查）' % n_removed
+        ev = evs[-1]
+        aft = ev.get('after') or {}
+        return ('回执 seq=%s actor=%s：删除 %s 项 / 释放 %s；归档 %s 项；区域 %s\n'
+                'reason=%s' % (ev.get('seq'), ev.get('actor'),
+                               aft.get('n_removed'), _fmt_bytes(aft.get('freed_bytes')),
+                               aft.get('n_archived'), aft.get('areas'),
+                               ev.get('reason')))
+
+    def _gc_fill_table(self, rep):
+        """三份清单**同表分列**：动作列明确区分 删除 / 归档（移动，不删）/ 保留。"""
+        rows = []
+        for it in (rep.get('plan') or []):
+            rows.append(('删除', it.get('area', ''), self._gc_obj(it),
+                         _fmt_bytes(it.get('bytes')), it.get('reason', '')))
+        for it in (rep.get('archive') or []):
+            rows.append(('归档（移动，不删）', 'journal',
+                         '%s → %s' % (it.get('from'), it.get('to')),
+                         _fmt_bytes(it.get('bytes')), it.get('reason', '')))
+        for it in (rep.get('kept') or []):
+            rows.append(('保留', it.get('area', ''), self._gc_obj(it), '',
+                         it.get('why', '')))
+        tab = self.gc_table
+        tab.setRowCount(len(rows))
+        for r, cells in enumerate(rows):
+            for c, v in enumerate(cells):
+                tab.setItem(r, c, QTableWidgetItem(str(v)))
+
+    @staticmethod
+    def _gc_obj(it):
+        """计划/保留项的"对象"显示名（不同 area 的标识字段不同）。"""
+        for k in ('aid', 'file', 'id', 'path'):
+            if it.get(k):
+                return str(it[k])
+        return '—'
 
     # ---------- 诊断导出 ----------
     def export_diag(self):
