@@ -18,6 +18,10 @@ import argparse
 import os
 import re
 import subprocess
+
+# 判据一律 in-process GUI（不连活 Hub）：仓库 cwd 可能有活 Hub 写的 .mcp-port，
+# 若 GUI 判据连了活 Hub 会断言 in-process cache 非 None 失败。
+os.environ.setdefault('RE0_GUI_INPROC', '1')
 import sys
 import time
 

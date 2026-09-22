@@ -84,7 +84,8 @@ class MainWindow(QMainWindow):
         from mecha.hub_client import discover_hub
         from mecha.hub_bridge import HubBridge
         self._hub_connected = False
-        hub_url = discover_hub()
+        # RE0_GUI_INPROC=1 → 强制 in-process（判据/离线用）；否则有活 Hub（.mcp-port）就连它
+        hub_url = None if os.environ.get('RE0_GUI_INPROC') else discover_hub()
         if hub_url:
             try:
                 self.app_bridge = HubBridge(hub_url)
