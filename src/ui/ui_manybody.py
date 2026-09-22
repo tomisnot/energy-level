@@ -34,6 +34,7 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 
 from ..core import core
 from . import _mecha_bind as MB
+from ..core import protocol as _proto
 
 # M0 未做的能力（页面上显式说明，避免"以为有"）
 NOT_YET = ('点云画布交互编辑（点击/拖拽加原子）', '关联矩阵 C_ij 热图与纠缠熵 S 曲线',
@@ -405,14 +406,18 @@ class ManyBodyPanel(QWidget):
 
     # ================= 成本预估（纯查询） =================
     def refresh_cost(self):
-        """`core.estimate`（纯查询，不改状态）：dim/ED 可行性/预计秒数与内存。"""
+        """`protocol.estimate`（纯查询，不改状态）：dim/ED 可行性/预计秒数与内存。
+
+        ⚠ 用 `src.core.protocol.estimate(cache, snap)`——**不是** `core.estimate`：
+        `src.core.core` 是 `static_atom` 的别名模块，其上没有 estimate（实测踩到）。
+        """
         br = getattr(self.main, 'app_bridge', None)
         if br is None:
             return
         snap = dict(br.effective() or {})
         snap['dynamic.mode'] = 2                     # 多体分支（不写回 session）
         try:
-            est = core.estimate(self.cache, snap)
+            est = _proto.estimate(self.cache, snap)
         except Exception as e:                       # noqa: BLE001
             self.cost_label.setText('成本预估失败：%s' % e)
             return
