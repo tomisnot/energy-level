@@ -14,6 +14,8 @@ import ast
 import importlib
 import os
 
+import numpy as np          # 静态查询（P1-6）要回列数组（让库的体积闸无损转指针）
+
 from . import runspec as _runspec
 from .manybody import schema_mb as _mb_schema   # 多体配置契约（schema_mb 只 import param，无环）
 # P1-7（2026-09-22）：AC-Stark **静态**精度旋钮的引擎默认。CONFIG_SCHEMA 的
@@ -28,6 +30,7 @@ __all__ = ['CONFIG_SCHEMA', 'SOLVE_META', 'config_schema', 'solve_schema',
            'evolve_run', 'result_summary', 'summarize_run', 'make_cache',
            'estimate', 'preview', 'list_levels', 'count_waves',
            'wave_acfg', 'address_cfg_from_snapshot',
+           'static_spectrum', 'static_ac_sweep', 'static_pair',
            'runspec_read_keys']
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -682,6 +685,225 @@ def list_levels(cache, snap):
     res['cost_note'] = ('ac 列需一次 Floquet 对角化（实测 n_photon=4/window=3 时 '
                         '~13 s；window=5 更大）——故**只在显式请求时**算。')
     return res
+
+
+# =====================================================================
+# 4b. 静态查询（P1-6，2026-09-22）：谱线 / AC 光强扫描 / 两体静态
+#
+# 三条**纯查询**（不跑演化、不写状态、幂等），与 list_levels/preview/estimate 同类
+# ⇒ 走 `EngineProtocol`（引擎自报、库只搬运），**不在库里注册领域工具名**。
+#
+# ⚠ **关于"大数组走指针"**：`$pointer` 机制住在库里（`mecha/bus.py` 的
+# `payload_pointer` / `gate_value`），**core 拿不到 mecha root** ⇒ core **不产生
+# 指针**，只负责**把大结果做成 numpy 数组**（而不是大 list）——因为库的体积闸
+# 对**数组**是无损转指针（带 sha1 可校验），对**大 list/dict** 只会截断成
+# `$truncated` 头 512 字节（**会丢数据**）。这是本设计对"走指针"的准确说法。
+# =====================================================================
+def _static_rows(cache, snap, acfg):
+    """快照 → (rows, coeffs, note)：静态能级行（AC 唯一后端 direct）。"""
+    groups = _runspec.groups_from_params(snap)
+    if not groups:
+        raise ValueError('基组为空：先 set_param("groups.list", [{n,l,j}, ...])'
+                         '——静态量无从算起')
+    B = float((snap or {}).get('field.B_gauss') or 0.0)
+    Ev = float((snap or {}).get('field.E_vpcm') or 0.0)
+    n_ph = (snap or {}).get('field.n_photon')
+    win = (snap or {}).get('field.window')
+    cfg = acfg if acfg is not None else {'enabled': False}
+    rows = SA.build_level_rows_direct(cache, B, groups, cfg, groups, Ev,
+                                      n_ph, win)
+    coeffs = SA.address_pol_coeffs(cfg) if cfg.get('enabled') else None
+    note = None
+    if not cfg.get('enabled'):
+        note = '未配置寻址光 → 行内无 AC 位移（ac_on 对本结果无影响）'
+    return rows, coeffs, note
+
+
+def static_spectrum(cache, snap, top_n=50, full=False, ac_on=True):
+    """子能级间全部偶极允许跃迁的谱线（频率 Hz + 爱因斯坦 A + 两端身份 + 偏振）。
+
+    实现 = `static_atom.spectrum_lines`（与 GUI 静态页**同一函数**）。
+    `top_n`：按 A 降序取前 N 条（默认 50）。`full=True` 时**额外**回
+    `arrays`（numpy 列数组）——**大结果做成数组而非大 list**，这样库的体积闸
+    会无损转 `$pointer`（见上方 ⚠）。
+    """
+    acfg, ac_note = address_cfg_from_snapshot(snap)
+    rows, coeffs, note = _static_rows(cache, snap, acfg)
+    lines = SA.spectrum_lines(cache, rows, bool(ac_on), coeffs)
+    lines = sorted(lines, key=lambda t: -float(t[1]))
+    top = [{'freq_hz': float(nu), 'A_s1': float(A),
+            'label_a': la, 'label_b': lb, 'qstr_a': qa, 'qstr_b': qb,
+            'pol': pol}
+           for (nu, A, la, lb, qa, qb, _color, pol) in lines[:max(int(top_n), 0)]]
+    out = {'n_lines': len(lines), 'ac_on': bool(ac_on),
+           'n_rows': len(rows), 'top_n': int(top_n),
+           'truncated': len(lines) > len(top), 'lines': top}
+    notes = [n for n in (ac_note, note) if n]
+    if notes:
+        out['notes'] = notes
+    if full and lines:
+        out['arrays'] = {
+            'freq_hz': np.asarray([float(t[0]) for t in lines]),
+            'A_s1': np.asarray([float(t[1]) for t in lines]),
+            'label_a': np.asarray([t[2] for t in lines]),
+            'label_b': np.asarray([t[3] for t in lines]),
+            'qstr_a': np.asarray([t[4] for t in lines]),
+            'qstr_b': np.asarray([t[5] for t in lines]),
+            'pol': np.asarray([t[7] for t in lines]),
+        }
+        out['arrays_note'] = ('arrays 是**列数组**（不是 list）⇒ 库的体积闸可无损转 '
+                              '$pointer；大 list 只会被截断')
+    return out
+
+
+def static_ac_sweep(cache, snap, intensities_mwcm2):
+    """AC-Stark 位移 vs 光强（一次 Floquet 结构、批量对角化）。
+
+    实现 = `static_atom.direct_ac_stark_sweep`（与 GUI 静态页扫描**同一函数**）。
+    ⚠ **形状转换**：原函数回 `dict[tuple_key → ndarray]`，**tuple 键无法 JSON 化**
+    ⇒ 这里转成 `{keys: [{n,l,j,qstr,occ}], shifts_mhz: 2D 数组}`（行=态、列=光强）。
+    """
+    inten = [float(x) for x in (intensities_mwcm2 or [])]
+    if not inten:
+        raise ValueError('static_ac_sweep 需要 intensities_mwcm2（非空数值序列）')
+    acfg, ac_note = address_cfg_from_snapshot(snap)
+    if acfg is None:
+        return {'ok': False, 'n_states': 0, 'keys': [], 'intensities_mwcm2': inten,
+                'note': ac_note}
+    groups = _runspec.groups_from_params(snap)
+    if not groups:
+        raise ValueError('基组为空：先 set_param("groups.list", [{n,l,j}, ...])')
+    B = float((snap or {}).get('field.B_gauss') or 0.0)
+    n_ph = (snap or {}).get('field.n_photon')
+    win = (snap or {}).get('field.window')
+    keys, shifts = SA.direct_ac_stark_sweep(cache, groups, acfg, B, inten,
+                                            n_ph, win)
+    klist = [{'n': int(k[0]), 'l': int(k[1]), 'j': float(k[2]),
+              'qstr': k[3], 'occ': int(k[4])} for k in keys]
+    mat = (np.asarray([shifts[k] for k in keys], float)
+           if keys else np.zeros((0, len(inten))))
+    return {'ok': True, 'n_states': len(keys), 'n_intensities': len(inten),
+            'intensities_mwcm2': inten, 'keys': klist,
+            'shifts_mhz': mat,
+            'ac_precision': {'n_photon': n_ph, 'window': win},
+            'shape_note': 'shifts_mhz 形状 = (n_states, n_intensities)，'
+                          '行序与 keys 一一对应'}
+
+
+def static_pair(cache, snap, what='exchange', with_evecs=False, n_window=None,
+                R_grid=None, theta_grid=None, trans1=None, trans2=None):
+    """两体静态：本征能级 / vdW 位移 / 交换耦合 / 耦合强度雷达图。
+
+    `what` ∈ `{'exchange','evals','vdw','map','all'}`，**默认 `'exchange'`（唯一便宜档）**。
+    `evals`/`vdw`/`all` 都要稠密 `eigh`（矩阵 (N²)² ⇒ 内存 **∝ N⁴**）⇒ 受维度闸保护。
+    `evals` 只回**本征值**；`with_evecs=True` 才回本征矢（同尺寸 ⇒ N=126 时 ~4 GB）
+    ⇒ 做成数组让库转指针。**稠密 H 不暴露**。
+
+    ★ `n_window` **默认 1**（不是 `static_pair` 模块的 3）：实测 60S+60P 下
+      n_window=1 → N=54 / dim=2916 / 136 MB；**n_window=3 → N=126 / dim=15876 /
+      4.0 GB**（不可行）。而 `exchange` 在 nw=1 与 nw=3 给出**同一个值**
+      （-3.705294 MHz，实测——一阶矩阵元与伙伴态无关）⇒ AI 面默认取便宜档，
+      要 vdW 精度自己显式加 `n_window`。
+
+    ⚠ 顺带消掉两个**静默点**（设计 §1.4）：
+      · `coupling_strength_map` 对"非里德堡交换对"**静默返全零 Z** ⇒ 这里回
+        `exchange_valid=False` + `note`（物理上确实无交换，但**必须说**）；
+      · 对"基组缺源/目标态"**静默返 None** ⇒ 这里**明确报错**并点名。
+    """
+    from . import static_pair as _sp
+    groups = _runspec.groups_from_params(snap)
+    if not groups:
+        raise ValueError('基组为空：先 set_param("groups.list", [{n,l,j}, ...])')
+    B = float((snap or {}).get('field.B_gauss') or 0.0)
+    pair = (snap or {}).get('dynamic.pair') or {}
+    R = float(pair.get('R_um') or 0.0)
+    TH = float(pair.get('theta_deg') or 0.0)
+    PH = float(pair.get('phi_deg') or 0.0)
+    nw = int(1 if n_window is None else n_window)
+    out = {'R_um': R, 'theta_deg': TH, 'phi_deg': PH, 'B_gauss': B,
+           'n_window': nw,
+           'n_window_note': ('默认 1（便宜档）：exchange 与 n_window=3 同值，'
+                             '但 pair 维小得多；evals/vdw 要精度请显式加 n_window')}
+    if R <= 0.0:
+        raise ValueError('两体静态需要 dynamic.pair.R_um > 0（当前 %r）' % R)
+    # ---- 维度闸：eigh 路径（evals/vdw/all）先算 N² 再决定能不能做 ----
+    need_eig = what in ('all', 'evals', 'vdw')
+    if need_eig:
+        N = len(_sp.single_atom_basis(cache, groups, B, nw))
+        dim = N * N
+        cap = int(_sp.PAIR_EIGEN_MAX_DIM)
+        if dim > cap:
+            raise ValueError(
+                '两体静态本征分解**不可行**：n_window=%d 时单原子基 N=%d ⇒ '
+                'pair 维 N²=%d > 闸值 %d（稠密 eigh 矩阵 ≈ %.2f GB，还要同尺寸 '
+                'evecs）。请调小 n_window（实测 n_window=1 时 N 小得多）或减少'
+                '能级组；exchange 是**一阶矩阵元**，不需要本征分解，可直接用 '
+                'what="exchange"' % (nw, N, dim, cap, dim * dim * 16 / 1e9))
+        out['pair_dim'] = dim
+        out['eigh_matrix_mb'] = round(dim * dim * 16 / 1e6, 1)
+    if what in ('all', 'evals'):
+        res = _sp.pair_eigen(cache, groups, R, TH, PH, B_gauss=B, n_window=nw)
+        out['evals'] = {'evals_mhz': np.asarray(res['evals'], float),
+                        'n_pair_states': int(len(res['evals'])),
+                        'E_pair_mhz': np.asarray(res['E_pair'], float)}
+        if with_evecs:
+            out['evals']['evecs'] = np.asarray(res['evecs'])
+            out['evals']['evecs_note'] = (
+                'evecs 形状 (N²,N²)——体积 ∝ N⁴；做成数组以便库无损转指针')
+    if what in ('all', 'vdw'):
+        sh, e_ref = _sp.vdw_shift(cache, groups, R, TH, PH, B_gauss=B,
+                                  n_window=nw)
+        out['vdw'] = {'shift_mhz': float(sh), 'E_ref_pair_mhz': float(e_ref)}
+    if what in ('all', 'exchange'):
+        out['exchange'] = {'J_mhz': float(_sp.exchange_coupling(
+            cache, groups, R, TH, PH, B_gauss=B, n_window=nw))}
+    if what in ('all', 'map'):
+        if R_grid is None or theta_grid is None:
+            raise ValueError('what="map" 需要 R_grid 与 theta_grid')
+        # 先按设计**显式**检查"交换对是否在里德堡之间"，把静默全零变成明说
+        ok, why = _exchange_domain_ok(groups, trans1, trans2)
+        if not ok:
+            out['map'] = {'exchange_valid': False, 'note': why}
+        else:
+            m = _sp.coupling_strength_map(
+                cache, groups, R_grid, theta_grid, phi_deg=PH,
+                trans1=trans1, trans2=trans2, B_gauss=B, n_window=nw)
+            if m is None:
+                raise ValueError(
+                    '耦合强度雷达图：基组缺少指定的源/目标态'
+                    '（trans1=%r, trans2=%r）——请先加对应能级组，或改用 '
+                    'list_levels 的 label/qstr 指定' % (trans1, trans2))
+            Rg, Tg, Z = m
+            out['map'] = {'exchange_valid': True,
+                          'R_grid': np.asarray(Rg, float),
+                          'theta_grid': np.asarray(Tg, float),
+                          'Z_mhz': np.asarray(Z, float),
+                          'shape_note': 'Z_mhz 形状 = (len(R_grid), len(theta_grid))'}
+    return out
+
+
+def _exchange_domain_ok(groups, trans1, trans2):
+    """交换对是否在里德堡态之间（`static_pair` 的静默全零判据）。
+
+    返回 (ok, why)。**只做判据**——真正的"无交换"物理结论仍由
+    `coupling_strength_map` 给（它对非里德堡对返全零，`static_pair.py:411-414`）。
+    """
+    keys = []
+    for t in (trans1, trans2):
+        if not t:
+            continue
+        for k in t:
+            if isinstance(k, (list, tuple)) and len(k) == 4:
+                keys.append(k)
+    if not keys:
+        return True, None
+    low = [k for k in keys if float(k[0]) < float(SA.RYDBERG_N_MIN)]
+    if low:
+        return False, ('交换对涉及非里德堡态（n=%s < RYDBERG_N_MIN=%d）——'
+                       '交换耦合只在里德堡态之间才有物理意义，故 Z 恒 0；'
+                       '这不是"算不出来"，是**物理上不存在**'
+                       % ([int(k[0]) for k in low], int(SA.RYDBERG_N_MIN)))
+    return True, None
 
 
 # =====================================================================

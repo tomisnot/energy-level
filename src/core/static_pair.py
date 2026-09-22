@@ -34,6 +34,16 @@ import scipy.sparse as sp
 from . import static_atom as core
 
 from .static_atom import RYDBERG_N_MIN
+from .param import Param      # 就地参数声明（值+元数据同处；registry 扫出全表）
+
+# ==== 本模块的参数（就地定义；Param 声明值+元数据同处，透明子类读点免改）====
+# 两体静态本征分解的**维度闸**（2026-09-22，P1-6）：`pair_eigen`/`vdw_shift` 走
+# 稠密 `np.linalg.eigh`，矩阵是 (N²)² 复/实双精度 ⇒ **内存 ∝ N⁴**。实测
+# （60S+60P、B=21.7 G）：n_window=1 → N=54、dim=2916、矩阵 136 MB（可行）；
+# n_window=2 → N=90、dim=8100、**1.0 GB**；n_window=3 → N=126、dim=15876、
+# **4.0 GB**（再加同尺寸 evecs ⇒ ~8 GB，实际不可行）。
+# 故 AI 面（`protocol.static_pair`）默认取 n_window=1 并在此闸前早失败 + 点名代价。
+PAIR_EIGEN_MAX_DIM = Param(3000, '两体静态本征分解维度闸（pair 基 N²）；超过则 pair_eigen/vdw_shift 不可行（eigh 内存 ∝ N⁴）', tier='run')
 
 # ---------------- 单位换算 ----------------
 _HARTREE_HZ = pc['hartree-hertz relationship'][0]   # 6.5797e15 Hz
