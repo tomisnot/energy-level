@@ -53,9 +53,12 @@ class Binder:
     - `set_readonly(ro)`：两模式门控——AI 模式下 GUI 控件物理只读（can_write('gui')==False）。
     """
 
-    def __init__(self, bridge, reason_prefix='GUI'):
+    def __init__(self, bridge, reason_prefix='GUI', notify=None):
         self.bridge = bridge
         self.reason_prefix = reason_prefix
+        # notify(msg, timeout)：写权被拒等**必须让人看见**的反馈出口（主窗口状态栏）。
+        self._notify = notify
+        self._last_reject = None
         self._binds = []          # [(widget, key, setter)]
         self._ext = {}            # key -> (read_fn, write_fn, widget, apply_fn)
         self._updating = False    # 防回环：程序刷新 widget 时不再写回 bridge
@@ -67,9 +70,35 @@ class Binder:
         if self._updating:
             return
         if not self.bridge.can_write('gui'):
-            return                       # AI 模式：GUI 只读，吞掉（控件本已 setReadOnly）
+            self._reject(key)
+            return
         self.bridge.write(key, value, reason='%s 调 %s' % (self.reason_prefix, key),
                           actor='gui')
+
+    def _reject(self, key):
+        """写权被拒 → **不静默**（D5）：状态栏说明"为什么 + 怎么办"（D2 可教学）。
+
+        P2-4：原来是裸 `return` ⇒ 人点了控件"没反应、没提示、没原因"，是静默失效。
+        现在把原因与接管路径摆到状态栏；**同一原因只报一次**（连续拖滑块不刷屏），
+        原因变化（模式切换）后重新报。
+
+        **超时语义（已确认）**：Qt 的 `showMessage(msg, timeout)` 里 `timeout=0` 表示
+        **常驻**（直到 `clearMessage()` 或被下一条消息顶掉）。这里刻意用 **10 s**：
+        常驻会造成"看起来永久"的假象（它其实会被下一条日志顶掉），10 s 够人读完，
+        也不会让状态栏长期挂着过期信息。
+        """
+        mode = getattr(self.bridge, 'mode', '?')
+        msg = ('写权在 %s 侧（当前 %s 模式）：人对「%s」的修改被拒。'
+               '要接管：用人工控制端点切回人工模式（token 在 .human-token）'
+               % (mode, mode, key))
+        if msg == self._last_reject:
+            return
+        self._last_reject = msg
+        if self._notify is not None:
+            try:
+                self._notify(msg, 10000)
+            except Exception:                                # noqa: BLE001
+                pass
 
     # ---------------- bus 订阅：外部改动 → 刷新 + 归因高亮 ----------------
     def _on_event(self, ev):
@@ -236,6 +265,7 @@ class Binder:
         if self._updating:
             return
         if not self.bridge.can_write('gui'):
+            self._reject(key)
             return
         read_fn = self._ext[key][0]
         self.bridge.write(key, read_fn(), reason='%s 改 %s' % (self.reason_prefix, key),

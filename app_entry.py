@@ -127,7 +127,10 @@ class MainWindow(QMainWindow):
             self.app_bridge = AppBridge(root=_proj_root, engine=EngineAdapter(),
                                         mode='human')
         self.cache = self.app_bridge.cache
-        self.binder = _mecha_bind.Binder(self.app_bridge)   # 面板控件 ↔ session
+        # 面板控件 ↔ session。**notify=self.log**：写权被拒等"必须让人看见"的反馈
+        # 走状态栏（P2-4）——没有它，`Binder._reject` 就只是"声明了没人接"的空机制。
+        # `self.log(msg, timeout)` 与 `notify(msg, timeout)` 签名对齐（见 `_reject` 的超时语义）。
+        self.binder = _mecha_bind.Binder(self.app_bridge, notify=self.log)
         self.groups = []
         self.groups_store = None
         self.field_state = None
