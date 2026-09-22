@@ -321,7 +321,7 @@ try:
     _nf_sess = Session(root=_nf_tmp)
     try:
         _nf_srv, _nf_tools = SVR.create_server(_nf_sess, Ops(_nf_sess),
-                                               log_level='ERROR')
+                                               actor='ai', log_level='ERROR')
         _nf_crash = None
     except Exception as e:                                # noqa: BLE001
         _nf_crash = '%s: %s' % (type(e).__name__, e)
@@ -422,6 +422,50 @@ C.group('M 引擎自报告警 ⇄ 实落 alert 事件**逐项对拍**（P1-9c �
      'degradation' in {p[0] for p in _pairs}),
     ('**致死性构造**：若少落一条，数量断言必红（%d != %d）'
      % (len(_evs), len(_expect) - 1), len(_evs) != len(_expect) - 1),
+])
+
+# ---------------- N. est_sec：**"键缺失"与"0 秒"必须可区分**（P0-5 的静默退化守卫） ----------------
+# 旧写法 `estimate().get('est_sec') or 0.0` 把两者合并 ⇒ 引擎按别的键名给（或没给）时
+# auto→async **永不触发**、长任务静默同步阻塞写通道。这条必须钉住，否则下次重构
+# 又会退化回 `or 0.0`。
+class _NoEstEngine(_AlertEngine):
+    """estimate **不给** est_sec/sec 的引擎（模拟"键缺失"）。"""
+    def estimate(self, cache, snap): return {'backend': 'sim'}
+
+
+_old_e4 = runtime.engine()
+try:
+    runtime.set_engine(_NoEstEngine())
+    _ne_tmp = tempfile.mkdtemp(prefix='mecha_noest_')
+    _ne_sess = _Session2(root=_ne_tmp)
+    _ne_srv, _ne_tools = SVR.create_server(_ne_sess, _Ops2(_ne_sess),
+                                           actor='ai', log_level='ERROR')
+    _ne_r = json.loads(_ne_tools['run_compute'](reason='缺 est_sec',
+                                                mode='auto'))
+    # 对照：est_sec=0.0（**有键**，只是值为 0）且阈值压低 ⇒ 应能转 async
+    runtime.set_engine(_AlertEngine())
+    _z_tmp = tempfile.mkdtemp(prefix='mecha_zero_')
+    _z_sess = _Session2(root=_z_tmp)
+    _z_srv, _z_tools = SVR.create_server(_z_sess, _Ops2(_z_sess),
+                                         actor='ai', log_level='ERROR')
+    _old_th2 = SVR.ASYNC_THRESHOLD_SEC
+    SVR.ASYNC_THRESHOLD_SEC = -1.0
+    try:
+        _z_r = json.loads(_z_tools['run_compute'](reason='est_sec=0',
+                                                  mode='auto'))
+    finally:
+        SVR.ASYNC_THRESHOLD_SEC = _old_th2
+finally:
+    runtime.set_engine(_old_e4)
+
+C.group('N est_sec：**键缺失**与**0 秒**可区分（防 `or 0.0` 静默退化）', [
+    ('键缺失 → **不静默**：回执带 `estimate_note` 说明原因',
+     bool(_ne_r.get('estimate_note'))),
+    ('键缺失 → 未误判成 async（按同步执行）', not _ne_r.get('async', False)),
+    ('对照：est_sec=0.0（**有键**）且阈值压低 → **能**转 async',
+     _z_r.get('async') is True and bool(_z_r.get('job_id'))),
+    ('**致死性**：若退回 `or 0.0`，"键缺失"会被当成 0 而不再报 note（本断言必红）',
+     bool(_ne_r.get('estimate_note'))),
 ])
 
 sys.exit(0 if C.summary() else 1)

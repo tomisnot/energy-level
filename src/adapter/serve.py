@@ -26,26 +26,52 @@ __all__ = ['main']
 
 
 class _HumanControl(http.server.BaseHTTPRequestHandler):
-    """人工控制端点（非 MCP）：switch_mode 是**人的动作**（AI 不能自授权），故不经 MCP，
-    走独立 token 鉴权的 HTTP 端点。GUI 作 Hub 客户端时经此夺权。"""
+    """**人的面**（非 MCP）：人的动作不经 MCP，走独立 token 鉴权的 HTTP 端点。
+
+    为什么人的写不能走 MCP（P2-4，主代理裁定）：MCP 是 **AI 的面**；若给 MCP 工具加
+    `actor` 参数，AI 就能传 `actor='human'` —— **同时**伪造人类归因（破 M1/M4）
+    **并**绕过写权门（`authority.gate`）。与"AI 不能给自己授权"（switch_mode 不经 MCP）同源。
+
+    端点（`POST`，body 里带 `token`）：
+      · `/switch_mode`  —— 夺权/交权（actor 固定 `human`）
+      · `/write`        —— 写一个键（actor 固定 `human`），回执与 `session.set` 同形
+      · `/write_many`   —— 批量写（原子），回执为 set 回执列表
+      · `/undo`         —— 撤销最近一次写（actor 固定 `human`）
+    `actor` **由服务端固定为 `human`**，请求体里给什么都不认——这才堵得住伪造。
+    """
     session = None
     token = None
 
     def do_POST(self):
-        if self.path != '/switch_mode':
-            return self._json(404, {'ok': False, 'error': 'unknown endpoint'})
         n = int(self.headers.get('Content-Length') or 0)
-        body = json.loads(self.rfile.read(n) or b'{}')
+        try:
+            body = json.loads(self.rfile.read(n) or b'{}')
+        except ValueError:
+            return self._json(400, {'ok': False, 'error': 'bad json'})
         if body.get('token') != type(self).token:
             return self._json(403, {'ok': False, 'error': 'bad token'})
-        mode = body.get('mode')
-        reason = body.get('reason', 'human switch')
+        sess = type(self).session
+        reason = body.get('reason', 'human write')
         try:
-            type(self).session.authority.switch(
-                mode, actor='human', reason=reason, in_flight=0)
-            self._json(200, {'ok': True, 'mode': mode})
+            if self.path == '/switch_mode':
+                sess.authority.switch(body.get('mode'), actor='human',
+                                      reason=reason, in_flight=0)
+                return self._json(200, {'ok': True, 'mode': body.get('mode')})
+            if self.path == '/write':
+                rec = sess.set(body.get('key'), body.get('value'),
+                               actor='human', reason=reason)
+                return self._json(200, rec)
+            if self.path == '/write_many':
+                recs = sess.set_many(body.get('patch') or {}, actor='human',
+                                     reason=reason)
+                return self._json(200, {'ok': True, 'recs': recs})
+            if self.path == '/undo':
+                return self._json(200, sess.undo(actor='human', reason=reason))
+            return self._json(404, {'ok': False, 'error': 'unknown endpoint'})
         except Exception as e:                              # noqa: BLE001
-            self._json(400, {'ok': False, 'error': str(e)})
+            # 可教学错误体（与 MCP 面同形），让人在 GUI 里看得到原因
+            err = e.to_dict() if hasattr(e, 'to_dict') else {'message': str(e)}
+            return self._json(400, {'ok': False, 'error': err})
 
     def _json(self, code, obj):
         data = json.dumps(obj).encode('utf-8')
@@ -118,7 +144,7 @@ def main(argv=None):
     hc_port, _hc_token = start_human_control(session)
     print('人工控制端点：http://%s:%d/switch_mode（token 在 .human-token）'
           % (a.host, hc_port), flush=True)
-    srv, _ = create_server(session, ops)
+    srv, _ = create_server(session, ops, actor='ai')   # MCP 是 **AI 的面**（P2-4）
 
     if a.stdio:
         print('MCP 写通道：stdio 传输', flush=True)
