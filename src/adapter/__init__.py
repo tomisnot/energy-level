@@ -48,6 +48,33 @@ class EngineAdapter(EngineProtocol):
     def validate_atom_list(self, value):
         return _cp.validate_atom_list(value, err=InvalidValue)
 
+    # ---------- 领域私有政策（归还项目侧：mecha-sdk 库内零领域信息） ----------
+    def validate_custom(self, typ, value):
+        """registry 不认识的自定义类型的真契约（领域知识）在此。"""
+        if typ == 'wave_list':
+            return _cp.validate_wave_list(value, err=InvalidValue)
+        if typ == 'atom_list':
+            return _cp.validate_atom_list(value, err=InvalidValue)
+        return value
+
+    def codeact_not_exposed(self):
+        """CodeAct 额外屏蔽的 EL 私有名字（裸 core 模块/物理库/波形类）。"""
+        return ['static_atom', 'sambe', 'evolve_mixed', 'evolve_twofield', 'hard',
+                'coupling', 'field_build', 'atomic_levels', 'arc',
+                'waveforms', 'Wave', 'ArbitraryWave', 'GaussianEnv', 'SquareEnv',
+                'FileEnv', 'serialize_waves', 'restore_waves']
+
+    def codeact_fields_write(self):
+        """建场层里算写的动词（注入 actor='codeact' 归因）。"""
+        return ('set_drive', 'add_wave', 'edit_wave', 'remove_wave', 'clear_waves',
+                'set_sequence', 'set_waves', 'pi_pulse', 'pi2_pulse', 'square_mw',
+                'ramsey', 'stirap', 'arp')
+
+    def codeact_fields_read(self):
+        """建场层里算读的动词（直通）。"""
+        return ('get_waves', 'get_envelope', 'freq_for', 'intensity_for_rabi',
+                'rabi_of', 'describe_drive', 'suggest_freq')
+
     # ---------- cache ----------
     def make_cache(self):
         return _cp.make_cache(self.atom)
