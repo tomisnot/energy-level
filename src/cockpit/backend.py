@@ -212,6 +212,18 @@ def config_tree(root):
         node['set'] = ({'reason': st['reason'], 'actor': st['actor'], 'seq': st['seq']}
                        if st else None)
         fams.setdefault(rec.get('family') or 'other', []).append(node)
+    # 二级分类：族内再按键名首段（dynamic/pair/solve…）分组；显示名去前缀（short），
+    # 全名仍在 name（title 用）。看着更有层次且不重复前缀。
+    groups = {}
+    for fam, rows in fams.items():
+        byp = {}
+        for node in rows:
+            nm = node.get('name') or ''
+            head, _, rest = nm.partition('.')
+            prefix = head if rest else ''
+            byp.setdefault(prefix, []).append(
+                dict(node, prefix=prefix, short=(rest if rest else nm)))
+        groups[fam] = [{'prefix': p, 'rows': byp[p]} for p in sorted(byp)]
     known = {r.get('name') for r in (schema or [])}
     orphans = [{'name': k, 'value': v['value'],
                 'set': {'reason': v['reason'], 'actor': v['actor'], 'seq': v['seq']}}
@@ -219,6 +231,7 @@ def config_tree(root):
     return {
         'has_schema': schema is not None,
         'families': {k: fams[k] for k in sorted(fams)},
+        'groups': {k: groups[k] for k in sorted(groups)},
         'orphans': sorted(orphans, key=lambda r: r['name']),
         'n_keys': sum(len(v) for v in fams.values()),
         'last_seq': (int(evs[-1]['seq']) if evs else 0),

@@ -124,35 +124,49 @@
       Object.keys(fams).length + ' 族 · as of seq ' + treeData.last_seq;
     for (const fam of Object.keys(fams)) {
       if (fam === 'engine' && !showEngine) continue;   // engine.* 默认折叠（只读常量，别干扰）
-      const rows = fams[fam] || [];
+      const allRows = fams[fam] || [];
       const group = document.createElement('div');
       group.className = 'tree-fam';
       const h = document.createElement('h3');
-      h.innerHTML = esc(fam) + ' <span class="badge">' + rows.length + '</span>' +
+      h.innerHTML = esc(fam) + ' <span class="badge">' + allRows.length + '</span>' +
         (fam === 'engine' ? ' <span class="ro">只读常量</span>' : '');
       group.appendChild(h);
-      const tbl = document.createElement('table');
-      tbl.className = 'tree';
-      for (const r of rows) {
-        const hay = [r.name, r.desc, r.unit, fmtVal(r.value)].join(' ').toLowerCase();
-        if (filter && !hay.includes(filter)) continue;
-        const set = r.set;
-        const tr = document.createElement('tr');
-        if (set) tr.className += ' set';
-        if (r.readonly) tr.className += ' ro';
-        tr.innerHTML =
-          '<td class="k" title="' + esc(r.name) + '">' + esc(r.name) + '</td>' +
-          '<td class="v" title="' +
-            esc(fmtVal(r.value) +
-              (r.unit ? ' ' + r.unit : '') +
-              (r.type ? ' · ' + r.type : '') +
-              (r.desc ? ' · ' + r.desc : '') +
-              (set ? ' · ' + set.actor + ' · ' + set.reason + ' · #' + set.seq : '')) +
-            '">' + esc(fmtVal(r.value)) +
-            (r.unit ? ' <span class="u">' + esc(r.unit) + '</span>' : '') + '</td>';
-        tbl.appendChild(tr);
+      // 二级层次：族内按键名首段（dynamic/pair/solve…）再分组；显示名去前缀（short），
+      // 全名留 title。无 groups 时退化单组（兼容旧后端）。
+      const subGroups = (treeData.groups && treeData.groups[fam])
+        ? treeData.groups[fam] : [{ prefix: '', rows: allRows }];
+      for (const sg of subGroups) {
+        const details = document.createElement('details');
+        details.className = 'tree-sub';
+        details.open = true;
+        const sum = document.createElement('summary');
+        sum.innerHTML = esc(sg.prefix || '(top)') +
+          ' <span class="badge">' + (sg.rows || []).length + '</span>';
+        details.appendChild(sum);
+        const tbl = document.createElement('table');
+        tbl.className = 'tree';
+        for (const r of (sg.rows || [])) {
+          const hay = [r.name, r.desc, r.unit, fmtVal(r.value)].join(' ').toLowerCase();
+          if (filter && !hay.includes(filter)) continue;
+          const set = r.set;
+          const tr = document.createElement('tr');
+          if (set) tr.className += ' set';
+          if (r.readonly) tr.className += ' ro';
+          tr.innerHTML =
+            '<td class="k" title="' + esc(r.name) + '">' + esc(r.short || r.name) + '</td>' +
+            '<td class="v" title="' +
+              esc(fmtVal(r.value) +
+                (r.unit ? ' ' + r.unit : '') +
+                (r.type ? ' · ' + r.type : '') +
+                (r.desc ? ' · ' + r.desc : '') +
+                (set ? ' · ' + set.actor + ' · ' + set.reason + ' · #' + set.seq : '')) +
+              '">' + esc(fmtVal(r.value)) +
+              (r.unit ? ' <span class="u">' + esc(r.unit) + '</span>' : '') + '</td>';
+          tbl.appendChild(tr);
+        }
+        details.appendChild(tbl);
+        group.appendChild(details);
       }
-      group.appendChild(tbl);
       body.appendChild(group);
     }
     if ((treeData.orphans || []).length) {

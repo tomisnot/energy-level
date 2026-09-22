@@ -87,6 +87,16 @@ table.tree td.v .u { font-weight: 400; opacity: .6; font-size: 11px; }
 table.tree tr.ro td.k::after { content: ' \1F512'; font-size: 10px; }
 .tree-fam.orphan { opacity: .75; }
 .tree-fam.orphan ul { margin: 4px 0; padding-left: 18px; font-size: 12px; }
+/* 二级子组（dynamic/pair/solve…）：缩进+左边线+等宽 prefix 头，可折叠 */
+.tree-sub { margin: 2px 0 6px 10px; border-left: 2px solid var(--line); padding-left: 8px; }
+.tree-sub > summary {
+  cursor: pointer; font-size: 11px; color: var(--muted); list-style: none;
+  font-family: ui-monospace, Consolas, monospace;
+}
+.tree-sub > summary::-webkit-details-marker { display: none; }
+.tree-sub > summary::before { content: '▸ '; color: var(--ai); }
+.tree-sub[open] > summary::before { content: '▾ '; }
+.tree-sub > summary .badge { opacity: .7; }
 
 /* ---- 飞行记录仪（核心）：全宽 + 逐行折叠 ---- */
 .recorder-list { display: flex; flex-direction: column; gap: 4px; }
