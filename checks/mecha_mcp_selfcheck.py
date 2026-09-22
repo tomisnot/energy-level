@@ -484,4 +484,30 @@ C.group('N est_sec：**键缺失**与**0 秒**可区分（防 `or 0.0` 静默退
      bool(_ne_r.get('estimate_note'))),
 ])
 
+# ---------------- O. P1-9g：领域可选能力（list_levels 空结果可理解、不抛不伪造） ----------------
+class _NoLevelsEngine(_AlertEngine):
+    """**没有可寻址对象**的领域（list_levels 回空 list）。"""
+    def list_levels(self, cache, snap): return []
+
+
+_old_e5 = runtime.engine()
+try:
+    runtime.set_engine(_NoLevelsEngine())
+    _nl_tmp = tempfile.mkdtemp(prefix='mecha_nolevels_')
+    _nl_sess = _Session2(root=_nl_tmp)
+    _nl_srv, _nl_tools = SVR.create_server(_nl_sess, _Ops2(_nl_sess),
+                                           actor='ai', log_level='ERROR')
+    _nl = json.loads(_nl_tools['list_levels']())
+finally:
+    runtime.set_engine(_old_e5)
+
+C.group('O P1-9g 领域可选能力：list_levels 空结果**可理解**（不抛、不伪造）', [
+    ('无对象领域调 list_levels **不抛异常**', isinstance(_nl, dict)),
+    ('回空表 states=[] 且 n_states=0',
+     _nl.get('states') == [] and _nl.get('n_states') == 0),
+    ('带 `note` 说明原因（不是裸空、不伪造占位项）', bool(_nl.get('note'))),
+    ('note 指向修法（"若确有对象请实现 engine.list_levels"）',
+     'list_levels' in str(_nl.get('note') or '')),
+])
+
 sys.exit(0 if C.summary() else 1)

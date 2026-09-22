@@ -69,11 +69,9 @@ class EngineAdapter(EngineProtocol):
     def settable_keys(self):
         return _cp.settable_keys()
 
-    def validate_wave_list(self, value):
-        return _cp.validate_wave_list(value, err=InvalidValue)
-
-    def validate_atom_list(self, value):
-        return _cp.validate_atom_list(value, err=InvalidValue)
+    # P1-9g：`validate_wave_list`/`validate_atom_list` 两个**空壳**已删——它们只是
+    # 库 ABC 旧抽象方法的占位（库内零调用）。真契约走下面的 `custom_types()` +
+    # `validate_custom()`（`_cp.validate_wave_list`/`validate_atom_list` 在那里被调）。
 
     # ---------- 领域私有政策（归还项目侧：mecha-sdk 库内零领域信息） ----------
     def custom_types(self):
@@ -252,24 +250,20 @@ class EngineAdapter(EngineProtocol):
         return est
 
     def preview(self, cache, snapshot):
+        """行为预览 + 叠加建场层的**重叠检测**（领域知识，不进 core）。"""
         p = _cp.preview(cache, snapshot)
-        ann = self.run_annotations(snapshot)
-        p['overlap_warning'] = ann['overlap_warning']
-        if ann['overlap_warning']:
-            p.setdefault('notes', []).append(ann['overlap_warning']['warning'])
+        _ow = (self.annotations(snapshot) or {}).get('overlap_warning')
+        p['overlap_warning'] = _ow
+        if _ow:
+            p.setdefault('notes', []).append(_ow['warning'])
         return p
 
     def list_levels(self, cache, snapshot):
         return _cp.list_levels(cache, snapshot)
 
-    def run_annotations(self, snapshot):
-        """{n_waves, overlap_warning}——重叠检测复用建场层的 detect_wave_overlap（领域）。"""
-        allw = []
-        for atom in ('single', 'A', 'B'):
-            allw.extend(snapshot.get('dynamic.waves_%s' % atom) or [])
-        from .fields import detect_wave_overlap
-        return {'n_waves': len(allw),
-                'overlap_warning': detect_wave_overlap(allw)}
+    # P1-9g：`run_annotations` 已删——它是旧 ABC 的弃用方法（docstring 写死
+    # `{n_waves, overlap_warning}`）。旁注统一走上面的 `annotations()`（不透明 dict），
+    # 库不再硬读它的键。
 
     # ---------- 建场层（领域可选能力） ----------
     def make_fields(self, session):
