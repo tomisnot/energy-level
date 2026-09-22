@@ -191,6 +191,55 @@ C.group('F undo 可逆：恢复 before + 发反向事件', [
     ('undo 产生 kind=undo 的反向事件', und_ev['kind'] == 'undo'),
 ])
 
+# ---------------- F2. P1-9a/9b：报错文案零领域词 + 声明接管必须真校验 ----------------
+# P1-9a：engine 只读常量的报错**不得**再泄漏项目名/项目历史（原为"Re0 第11刀…"）
+_eng_rec = R.engine_params()
+try:
+    R.validate('R_CRIT', 1)
+    _ro_err = {}
+except Exception as e:                                        # noqa: BLE001
+    _ro_err = e.to_dict() if hasattr(e, 'to_dict') else {'message': str(e)}
+_LEAK = ('Re0', '第11刀', 'runspec', 'save_state', 'wave', 'rabi', 'two_body',
+         'n_waves', 'overlap')
+_ro_hit = [w for w in _LEAK if w.lower() in str(_ro_err).lower()]
+
+# P1-9b 加固：**声明接管某类型却不实现 validate_custom** → 必须明确报错（不静默放过）
+class _DeclaredNoImpl:
+    def engine_params(self): return {}
+    def config_schema(self):
+        return {'weird': {'name': 'weird', 'type': 'my_custom', 'desc': 'd',
+                          'family': 'config', 'readonly': False}}
+    def solve_schema(self): return {}
+    def solve_map(self): return {}
+    def settable_keys(self): return ['weird']
+    def custom_types(self): return ('my_custom',)
+
+
+_old_eng2 = runtime.engine()
+try:
+    runtime.set_engine(_DeclaredNoImpl())
+    try:
+        R.validate('weird', {'anything': 1})
+        _silent_pass = True
+    except Exception:                                         # noqa: BLE001
+        _silent_pass = False
+finally:
+    runtime.set_engine(_old_eng2)
+
+C.group('F2 P1-9a/9b：只读报错零领域词 + 声明接管必须真校验（含致死性）', [
+    ('只读常量报错可教学（kind+hint）',
+     _ro_err.get('kind') == 'invalid_value' and bool(_ro_err.get('hint'))),
+    ('**P1-9a**：报错文案零领域词（命中：%s）' % (_ro_hit or '无'), not _ro_hit),
+    ('只读提示按 schema 现算 solve.* 数（不写死具体键）',
+     'solve.*' in str(_ro_err.get('hint') or '')),
+    ('**致死性(P1-9b)**：声明接管却不实现 validate_custom → **不静默放过**',
+     _silent_pass is False),
+    ('P1-9b：库内零领域类型名（源码无 wave_list/atom_list 字面量）',
+     not any(s in open(os.path.join(_MECHA, 'registry.py'),
+                       encoding='utf-8').read()
+             for s in ("'wave_list'", "'atom_list'", '"wave_list"', '"atom_list"'))),
+])
+
 # ---------------- G. bus：指针 + 体积闸 + append-only ----------------
 b = Bus(root=tmp)
 arr = np.arange(2000).reshape(20, 100)
