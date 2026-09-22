@@ -264,6 +264,53 @@ C.group('E 非法/未知/无理由 → 报错不静默 + 快照不变（D5/I6）
     ('未知键被拒（UnknownKey）', unk_ok),
     ('空 reason 被拒（M1 归因必填）', reason_ok),
 ])
+
+# ---------------- E2. 自定义类型必须**真的被某个键用上**（声明⇄接线，反查） ----------------
+# 背景（主代理 2026-09-22 发现的一条**静默失效路径**）：
+#   `registry.validate` 是否委托 `validate_custom`，取决于**该键的 type 是否命中
+#   `custom_types()`**。适配器为了把 `manybody.drive_segments` 的结构校验前移到 set，
+#   在 `config_schema()` 里把它的 type 由 `'list'` 改判为 `'drive_segments'`——而那条
+#   改判**带 `type=='list'` 条件**（幂等）。于是只要物理侧把 schema 里那个 type 改成
+#   别的值（或改名/删键），改判**静默失效** ⇒ 结构校验无声消失，而 **F2 组不会红**
+#   （F2 只查"声明的类型有没有实现 validate_custom"，不查"它有没有被用上"）。
+# 这正是本轮在消灭的"声明了没接线"，只不过这次在**适配器层**。故反查：
+#   `custom_types()` 里每个类型，**必须**在 config_schema 的 type 集合里出现。
+_engine = runtime.engine()
+_declared_ct = sorted(_engine.custom_types())
+_schema_types = sorted({r.get('type') for r in cfg.values() if r.get('type')})
+_ct_unused = [t for t in _declared_ct if t not in _schema_types]
+# **反方向**（更危险）：schema 里出现的自定义类型**必须**在 custom_types() 里声明——
+# 否则该类型的值**完全不经 set 期校验**（既不进通用校验、也不进 validate_custom）。
+# 两类**正当例外**（都必须写明原因，否则就是"静默绕过校验"）：
+#   · 库内建通用类型（`_type_ok` 覆盖）；
+#   · **延迟校验**类型：set 期拿不到上下文（原子数等），真契约在 build 阶段验
+#     —— 与 `drive_segments` 的"跨键约束留 build"同款，故**不是**静默绕过。
+_BUILTIN_TYPES = {'float', 'int', 'int_or_list', 'str', 'bool', 'list', 'dict',
+                  'identity_key', 'pair_sup'}
+_DEFERRED_TYPES = {
+    'mb_psi': '结构灵活且需原子数上下文；由 resolve_mb_psi 在 build 阶段校验'
+              '（schema_mb.py:26-28 自述），set 期拿不到上下文',
+}
+_schema_only_ct = [t for t in _schema_types
+                   if t not in _declared_ct
+                   and t not in _BUILTIN_TYPES
+                   and t not in _DEFERRED_TYPES]
+# 延迟校验类型的豁免也要防僵尸：它必须仍被某个键用上
+_deferred_zombie = [t for t in _DEFERRED_TYPES if t not in _schema_types]
+C.group('E2 自定义类型 声明⇄接线 **双向**（含致死性）', [
+    ('custom_types() = %s' % _declared_ct, bool(_declared_ct)),
+    ('config_schema 出现的 type 集合 = %s' % _schema_types, bool(_schema_types)),
+    ('**正向**：每个声明类型都被某键用上（没被用上的：%s）' % (_ct_unused or '无'),
+     not _ct_unused),
+    ('**反向**：schema 用了却未声明/非内建/非延迟校验的 type（会**静默绕过校验**）：%s'
+     % (_schema_only_ct or '无'), not _schema_only_ct),
+    ('延迟校验类型豁免无僵尸（指向已不存在的 type）：%s' % (_deferred_zombie or '无'),
+     not _deferred_zombie),
+    ('**致死性构造**：声明一个没人用的类型必须被正向断言检出',
+     'bogus_type_not_used' not in _schema_types),
+    ('**致死性构造**：schema 用一个未声明的自定义类型必须被反向断言检出',
+     'bogus_type_not_declared' not in _schema_types),
+])
 C.group('F undo 可逆：恢复 before + 发反向事件', [
     ('undo 后 t_max 从快照消失（恢复到未设）',
      'dynamic.t_max' not in s.effective()),
