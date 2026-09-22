@@ -93,6 +93,9 @@ FAST_KNOWN_SEC = {
     'gui_inspector_selfcheck.py': 11.2,
     'manybody_integration_selfcheck.py': 11.3,
     'pair_evolve_selfcheck.py': 11.8,
+    # 新增判据请在此登记**实测**耗时（跑 scripts/check_profile.py 现测），否则它不会进
+    # --fast/--core 档——内循环就看不到它的红绿，只能等全档（数分钟）才发现。
+    'narrow_pulse_env_selfcheck.py': 5.1,
 }
 
 
