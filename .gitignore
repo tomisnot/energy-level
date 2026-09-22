@@ -10,6 +10,7 @@ __pycache__/
 save_state/
 runtime/ai_results/
 runtime/sweeps/
+runtime/_journal/
 .mecha/
 scripts/tmp/
 
