@@ -81,39 +81,71 @@ C.group('B ② diff-since-seq：连续读只回新事件，不重灌全量（R1�
      backend.read_events(_TMP, _LAST) == []),
 ])
 
-# ---------------- C ③ 告警致死性 ----------------
-deg = {'seq': 900, 'kind': 'run', 'actor': 'ai',
-       'provenance': {'runspec': {'warnings': ['sambe 不支持任意波形 → 改道 hard']}},
-       'after': {'ok': True}}
-clean = {'seq': 901, 'kind': 'run', 'actor': 'ai',
-         'provenance': {'runspec': {'warnings': []}}, 'after': {'ok': True}}
+# ---------------- C ③ 告警致死性（告警内容由适配器/ops 提供；cockpit 透传+兜底） ----------------
+deg_alert = {'seq': 900, 'kind': 'alert', 'actor': 'ai',
+             'provenance': {'level': 'warn'}, 'after': {'rule': 'degradation', 'n': 1},
+             'reason': '引擎改道：测试降级'}
+ovl_alert = {'seq': 904, 'kind': 'alert', 'actor': 'ai',
+             'provenance': {'level': 'warn'}, 'after': {'rule': 'overlap'},
+             'reason': '同一跃迁有 2 条时间重叠驱动——扫描忘了清空'}
+clean = {'seq': 901, 'kind': 'run', 'actor': 'ai', 'after': {'ok': True}}
 failed = {'seq': 902, 'kind': 'run', 'after': {'ok': False, 'msg': '引擎报错'}}
 err_ev = {'seq': 903, 'kind': 'error', 'reason': '契约违反', 'actor': 'engine'}
-ovl_run = {'seq': 904, 'kind': 'run', 'actor': 'ai',
-           'provenance': {'overlap_warning': {
-               'warning': '同一跃迁有 2 条时间重叠驱动——扫描忘了清空',
-               'n_waves': 2}},
-           'after': {'ok': True}}
-a_deg = backend.evaluate_alerts([deg])
+a_deg = backend.evaluate_alerts([deg_alert])
+a_ovl = backend.evaluate_alerts([ovl_alert])
 a_clean = backend.evaluate_alerts([clean])
 a_fail = backend.evaluate_alerts([failed])
 a_err = backend.evaluate_alerts([err_ev])
-a_ovl = backend.evaluate_alerts([ovl_run])
-C.group('C ③ 告警灯致死性：静默降级→亮；干净→不亮（防哑告警 D4）', [
-    ('**致死性**：构造静默降级（warnings 非空）→ 告警亮（rule=degradation）',
-     len(a_deg) >= 1 and a_deg[0]['rule'] == 'degradation'),
-    ('降级 → top_level=warn（升级注意力，M5）',
-     bool(a_deg) and backend.top_level(a_deg) == 'warn'),
-    ('干净运行（无 warnings）→ 不亮（不是永远亮的哑告警）',
+
+
+# 产出侧致死性：ops 见 check_run warnings 必落 kind='alert' 事件（领域判断→事件的桥）
+class _WarnEngine:
+    def engine_params(self): return {}
+    def _rec(self, n, f, d, lo, hi):
+        return {'name': n, 'type': 'float', 'unit': '', 'lo': lo, 'hi': hi,
+                'desc': 't', 'default': d, 'family': f, 'readonly': False}
+    def config_schema(self): return {'x': self._rec('x', 'config', 0.0, -1, 1)}
+    def solve_schema(self): return {}
+    def solve_map(self): return {}
+    def settable_keys(self): return ['x']
+    def validate_wave_list(self, v): return v
+    def make_cache(self): return object()
+    def build_run(self, cache, snap, diag=False):
+        return {'method': 'warn', 'two_body': False, 'spec': dict(snap)}
+    def check_run(self, run): return ['测试：静默降级警告']
+    def evolve_run(self, run, progress_arr=None): return {'ok': True}
+    def result_summary(self, run, res, **kw): return {'ok': True}
+    def summarize_run(self, run): return 'warn run'
+    def estimate(self, cache, snap): return {'sec': 0.0}
+    def preview(self, cache, snap): return {'ok': True}
+    def list_levels(self, cache, snap): return []
+    def run_annotations(self, snap): return {'n_waves': 0, 'overlap_warning': None}
+
+
+from mecha import runtime as _rt                     # noqa: E402
+from mecha.ops import Ops as _Ops                    # noqa: E402
+from mecha.session import Session as _Session        # noqa: E402
+_TMP2 = tempfile.mkdtemp(prefix='cockpit_warn_')
+_rt.set_engine(_WarnEngine())
+_wops = _Ops(_Session(root=_TMP2))
+_wops.run(actor='test', reason='warn run', land_artifact=False)
+a_ops = backend.evaluate_alerts(backend.read_events(_TMP2, 0))
+C.group('C ③ 告警灯致死性：适配器/ops 落 alert 事件→cockpit 透传亮；干净→不亮（防哑告警 D4）', [
+    ('**致死性(产出侧)**：ops 见 check_run warnings → 落 alert 事件 → 透传亮（rule=degradation）',
+     any(x['rule'] == 'degradation' for x in a_ops)),
+    ('透传：alert 事件(degradation) → 亮且 level=warn',
+     len(a_deg) >= 1 and a_deg[0]['rule'] == 'degradation'
+     and backend.top_level(a_deg) == 'warn'),
+    ('透传：overlap alert → warn',
+     any(x['rule'] == 'overlap' for x in a_ovl)
+     and backend.top_level(a_ovl) == 'warn'),
+    ('干净运行（无 alert 事件）→ 不亮（不是永远亮的哑告警）',
      a_clean == [] and backend.top_level(a_clean) == 'ok'),
-    ('run 失败（after.ok=False）→ error 告警',
+    ('run 失败（after.ok=False）→ error 兜底',
      any(x['rule'] == 'run_failed' for x in a_fail)
      and backend.top_level(a_fail) == 'error'),
-    ('error 事件 → error 告警',
+    ('error 事件 → error 兜底',
      any(x['rule'] == 'error_event' for x in a_err)),
-    ('**重叠驱动**（扫描忘清，静默给错答头号陷）→ overlap_drives warn',
-     any(x['rule'] == 'overlap_drives' for x in a_ovl)
-     and backend.top_level(a_ovl) == 'warn'),
 ])
 
 
