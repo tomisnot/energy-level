@@ -63,45 +63,22 @@ export async function apply(ctx: Context, config?: { cockpitNative?: boolean }):
         CockpitPanel,
       ))
 
-    // ---- 模式副作用：右栏=驾驶舱（occupant）+ 左栏自动关 ----
-    let disposeRightbar: (() => void) | null = null
-    let weClosedSidebar = false
+    // ---- 驾驶舱 = main 全局面板（keyed slot）----
+    // 右栏是 tab 体制（列宽由 sidebar-right store 驱动）：shadow 掉 rightbar.session 后
+    // 无激活 tab → 列宽塌 0、连空间都不出现。改用**可靠的 main keyed 面板**：注册一次，
+    // 模式 ON 用 selectPanel('re0-cockpit') 切到驾驶舱（主区整屏），OFF selectPanel(null) 回对话。
+    const disposePanel = ctx.slots.inject('main', () =>
+      ctx.slots.register({ name: 'main', key: 're0-cockpit' } as any, CockpitRightbar))
 
     const unsub = subscribeCockpitMode(() => {
-      if (getCockpitMode()) {
-        // 运行版 dsh 的 ctx.layout = openRightbar/closeRightbar；可选链降级防崩。
-        ctx.layout?.openRightbar?.(true, false)
-        // 左栏若开着则关掉（记住是我们关的，OFF 时复原）
-        const fr = document.querySelector('[data-re0-frame]')
-        if (fr && !fr.hasAttribute('data-sidebar-collapsed')) {
-          ctx.layout?.toggleSidebar?.()
-          weClosedSidebar = true
-        }
-        // 注册右栏 occupant：RightbarColumn 只在有 occupant 时渲染 [data-rightbar-col]；
-        // 驾驶舱内容由 occupant 组件自渲染（native 或 iframe）。
-        // rightbar.session 是 **single** slot 且 dsh 自带 occupant 在 priority 0；同 priority
-        // 再注册会抛错。按运行版规则“lowest renders”→ 用更低的 priority(-100) shadow 掉默认。
-        if (!disposeRightbar) {
-          disposeRightbar = ctx.slots.inject('rightbar.session', () =>
-            ctx.slots.register(
-              { name: 'rightbar.session', id: 're0-cockpit-rightbar',
-                order: 100, priority: -100 } as any,
-              CockpitRightbar,
-            ))
-        }
-      } else {
-        if (disposeRightbar) {
-          try { disposeRightbar() } catch { /* ignore */ }
-          disposeRightbar = null
-        }
-        ctx.layout?.closeRightbar?.()
-        if (weClosedSidebar) { ctx.layout?.toggleSidebar?.(); weClosedSidebar = false }
-      }
+      if (getCockpitMode()) ctx.layout?.selectPanel?.('re0-cockpit')
+      else ctx.layout?.selectPanel?.(null)
     })
 
     return () => {
       unsub()
-      if (disposeRightbar) { try { disposeRightbar() } catch { /* ignore */ } }
+      try { ctx.layout?.selectPanel?.(null) } catch { /* ignore */ }
+      try { disposePanel?.() } catch { /* ignore */ }
       try { disposeBtn?.() } catch { /* ignore */ }
       style.remove()
       document.documentElement.removeAttribute('data-re0-cockpit')
