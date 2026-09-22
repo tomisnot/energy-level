@@ -44,6 +44,7 @@ from PyQt5.QtWidgets import (QButtonGroup, QPushButton, QApplication, QMainWindo
 from src.core import core
 from src.ui import fields
 from src.ui import ui_dynamic
+from src.ui import ui_manybody
 from src.ui import ui_theme
 from src.ui import _mecha_bind
 from src.ui.ui_group import EnergyGroupPanel
@@ -64,6 +65,26 @@ _MODE_QSS = (
     'QPushButton:hover { background: #f3f5f9; }'
 )
 
+# 项目根（= 本文件所在目录）：运行时数据根 `<PROJ_ROOT>/.mecha` 的**唯一定义点**。
+# 三处消费，必须指向同一个 journal，否则"起得来但看不见"（假绿）：
+#   ① in-process `AppBridge(root=PROJ_ROOT)`（GUI 自己读写 session/artifact）；
+#   ② `run_ai()` 起 Hub（`--root PROJ_ROOT`）——Hub 落的 journal 是权威事件流；
+#   ③ `run_ai()` 起驾驶舱（`--root JOURNAL_ROOT`）——只读**同一个** journal（T5）。
+# P0-1 之后 mecha/cockpit 都**不再从 __file__ 倒推**，必须显式给（不猜路径）。
+PROJ_ROOT = os.path.dirname(os.path.abspath(__file__))
+
+# ⚠ 两个服务的 `--root` **语义不同**（实测 2026-09-22，勿"顺手统一"）：
+#   · `src/adapter/serve.py:95`  `root = a.root or MECHA_ROOT or cwd` → 再 `resolve_root`
+#     **拼 `.mecha`** ⇒ 传**项目根**；
+#   · `cockpit.server.create_app(root=…)`  `root = root or _default_root()` ——
+#     `--root` **原样使用、不拼 `.mecha`**（只有走 `MECHA_ROOT` 的 `_default_root`
+#     才拼）⇒ 必须传 **journal 目录本身**。
+#   实测证据：`--root <repo>` → `/api/history` 返回 **n_events=0**（起得来但看不见任何
+#   事件 = 假绿）；`--root <repo>/.mecha` → **n_events=246**（与盘上 journal 行数一致）。
+#   ⇒ 本常量就是驾驶舱该给的那个值。**若 cockpit 侧把 `--root` 归一成项目根
+#   （与 serve.py 一致），本处须改回 `PROJ_ROOT`**——已作为跨模块待办报给主代理。
+JOURNAL_ROOT = os.path.join(PROJ_ROOT, '.mecha')
+
 
 class MainWindow(QMainWindow):
     # 共用能级组增删事件（事件驱动，页面订阅刷新，不散布同步调用）
@@ -81,8 +102,17 @@ class MainWindow(QMainWindow):
         # mecha 门面：若已有 Hub 在跑（.mcp-port）→ GUI 作 **Hub 客户端**（与 AI 同 session，
         # Phase 1 GUI Hub 客户端化）；否则 in-process 自托管内核（人工模式默认）。
         # 连接失败 graceful 回落 in-process，不让 GUI 起不来。
+        #
+        # P0-1 配合（mecha 侧 `bus.resolve_root` 已改为**必须显式给根**，不再从
+        # __file__ 倒推）：in-process 分支必须注入本项目根，否则 `Bus(root=None)`
+        # 直接抛 MechaError ⇒ MainWindow 起不来。根 = 模块级 `PROJ_ROOT`
+        # （**唯一定义点**，与 `run_ai()` 给 Hub/驾驶舱的 `--root` 同源）；
+        # `resolve_root` 会拼成 `<repo>/.mecha`（正是 .gitignore 里那一项，
+        # 也修掉"产物落到库上级目录"的旧 bug）。
+        # ⚠ `.mcp-port`（下一行 discover_hub）属 P0-2，按主代理要求**本轮不动**。
         from mecha.hub_client import discover_hub
         from mecha.hub_bridge import HubBridge
+        _proj_root = PROJ_ROOT
         self._hub_connected = False
         # RE0_GUI_INPROC=1 → 强制 in-process（判据/离线用）；否则有活 Hub（.mcp-port）就连它
         hub_url = None if os.environ.get('RE0_GUI_INPROC') else discover_hub()
@@ -91,9 +121,11 @@ class MainWindow(QMainWindow):
                 self.app_bridge = HubBridge(hub_url)
                 self._hub_connected = True
             except Exception:                              # noqa: BLE001
-                self.app_bridge = AppBridge(engine=EngineAdapter(), mode='human')
+                self.app_bridge = AppBridge(root=_proj_root, engine=EngineAdapter(),
+                                            mode='human')
         else:
-            self.app_bridge = AppBridge(engine=EngineAdapter(), mode='human')
+            self.app_bridge = AppBridge(root=_proj_root, engine=EngineAdapter(),
+                                        mode='human')
         self.cache = self.app_bridge.cache
         self.binder = _mecha_bind.Binder(self.app_bridge)   # 面板控件 ↔ session
         self.groups = []
@@ -153,7 +185,11 @@ class MainWindow(QMainWindow):
         fs = self.field_state
         B = fs.B_gauss if fs is not None else 0.0
         ac = fs.address_cfg if fs is not None else {'enabled': False}
-        self._level_all = core.build_level_rows(self.cache, B, self.groups, ac, self.groups)
+        # P1-7：AC-Stark 精度（窗口/光子块）——静态页唯一来源 = 场面板 ac_kwargs()；
+        # 无场面板时 None=引擎默认（与接线前逐位一致）。
+        _ac_kw = self.field.ac_kwargs() if getattr(self, 'field', None) else None
+        self._level_all = core.build_level_rows(self.cache, B, self.groups, ac,
+                                                self.groups, **(_ac_kw or {}))
         self._level_by_key = {(r['n'], r['l'], r['j'], r['mj']): r for r in self._level_all if r['kind'] == 'mJ'}
         ref = min((r['E0'] for r in self._level_all), default=0.0)
         lowest = {}
@@ -193,6 +229,9 @@ class MainWindow(QMainWindow):
         self.group_panel = EnergyGroupPanel(self)
         self.analysis_panel = LevelAnalysisPanel(self)
         self.dynamic = ui_dynamic.DynamicPanel(self, self)
+        # 多体页（P3-1）：单独一页，自定版式（裁决③）。参数面板进 page_stack
+        # ⇒ 与动态页**互斥占位**，不与它抢右侧面板；既有页控件一行不动。
+        self.manybody = ui_manybody.ManyBodyPanel(self, self)
         self.analysis_panel.canvas.peakPicked.connect(self.analysis_panel.on_peak_picked)
         self.analysis_panel.canvas.peakFreqsChanged.connect(self.analysis_panel.update_peak_pair_label)
         self.groups_changed.connect(self.refresh)
@@ -239,6 +278,9 @@ class MainWindow(QMainWindow):
         self.modules = [
             ('静态', self.analysis_panel.canvas, self.analysis_panel, self.refresh, self.refresh, True, True),
             ('动态', self.dynamic, self.dynamic.dynamic_widget, self.dynamic.refresh_groups, self.dynamic.refresh_groups, True, False),
+            # 多体（P3-1）：场面板保留可见（manybody.B_gauss 缺省复用 field.B_gauss）；
+            # 光场表隐藏——多体的驱动来自 atoms 的 Ω/δ，不是场面板的光场表。
+            ('多体', self.manybody, self.manybody.manybody_widget, self.manybody.on_show, self.manybody.on_light, True, False),
         ]
         for name, tab_widget, panel_widget, on_show, on_light, use_field, field_lights in self.modules:
             self.canvas_tabs.addTab(tab_widget, name)
@@ -320,7 +362,13 @@ class MainWindow(QMainWindow):
 
     def apply_solve_params(self, values):
         """把 solve.* 运行级参数写进 session（经 choke point）；engine.* 只读忽略
-        （点1：引擎内核常量不开放覆写）。调用方：ui_dynamic 成本档、检视器 set_god_params。"""
+        （点1：引擎内核常量不开放覆写）。调用方：ui_dynamic 成本档
+        （`_preflight_cost` 选"剔除远失谐对"时写 solve.COST_BUDGET）。
+
+        **P0-7**：原来这里还挂着 `_on_engine_param_edited`（检视器改单个参数的第二个
+        写入口）——它全库无任何连接点，且与 `solver_inspector._on_param_edit`
+        （检视器参数页自己的写路径）重复。已删除：同一键只留**一个**人类写面。
+        """
         for k, v in (values or {}).items():
             if str(k).startswith('solve.'):
                 try:
@@ -328,18 +376,6 @@ class MainWindow(QMainWindow):
                                           actor='gui')
                 except Exception:                      # noqa: BLE001
                     pass
-
-    def _on_engine_param_edited(self, name, value):
-        """检视器改**某一个**参数：solve.* 可写（经 choke point 落 session，人机同路）；
-        engine.* 只读（点1：引擎内核常量不开放覆写）。value=None = 清该项（回默认）。"""
-        key = name if '.' in str(name) else ('solve.' + str(name))
-        if str(key).startswith('engine.'):
-            self.log('engine.* 为只读（引擎内核常量）：%s 未改' % key, 6000)
-            return
-        try:
-            self.app_bridge.write(key, value, reason='检视器改 %s' % key, actor='gui')
-        except Exception as e:                          # noqa: BLE001
-            self.log('写 %s 失败：%s' % (key, e), 6000)
 
     def _on_canvas_tab_changed(self, idx):
         self.page_stack.setCurrentIndex(idx)
@@ -442,9 +478,13 @@ def run_ai():
                 pass
     atexit.register(_cleanup)
 
-    # 后台服务：Hub（权威·MCP 写通道 :8765）+ 驾驶舱（:8766，dsh 插件 iframe 它）
-    _spawn('Hub', [py, '-m', 'src.adapter.serve'])
-    _spawn('驾驶舱', [py, '-m', 'cockpit.server'])
+    # 后台服务：Hub（权威·MCP 写通道 :8765）+ 驾驶舱（:8766，dsh 插件「◈驾驶舱」右栏 tab）
+    # ★ 两者必须读**同一个 journal**（T5/I2）：Hub 写 `<PROJ_ROOT>/.mecha/journal.jsonl`，
+    #   驾驶舱只读它。注意 `--root` 语义不同（见模块顶部 JOURNAL_ROOT 的说明）：
+    #   Hub 要**项目根**（serve 侧拼 `.mecha`），驾驶舱要**journal 目录**（原样使用）。
+    #   显式 `--root` 优先于环境变量（命令行可见、日志可查，符合"数据在哪要说得清"）。
+    _spawn('Hub', [py, '-m', 'src.adapter.serve', '--root', PROJ_ROOT])
+    _spawn('驾驶舱', [py, '-m', 'cockpit.server', '--root', JOURNAL_ROOT])
 
     # 等 Hub 写好 .mcp-port（dsh 插件据此发现并连 Hub）——带进度点
     pf = os.path.join(here, '.mcp-port')

@@ -46,6 +46,121 @@ C.group('MainWindow offscreen 实例化（新架构总装，脱离 pm_setup/arch
      and isinstance(_w.app_bridge.effective(), dict)),
 ])
 
+# ---------------- B. P1-7：「窗口 / 光子块」接线（此前静默失能） ----------------
+# 用户裁决 2026-09-22：这两个值**只对静态引擎生效**、对动态引擎不应生效。
+# 本组验四件事：① 值真的进了静态页（改旋钮→AC 位移变）；② 默认值与引擎默认**逐位一致**
+# （零侵入）；③ registry 键的**入册/未入册两条分支都如实反映现状**（无需再改 GUI）；
+# ④ 动态侧源码**不读**这两个键（"不生效"是结构性事实，不是靠约定）。
+#
+# ⚠ **本组对"键是否已入册"免疫**（2026-09-22 教训）：物理侧随时可能入册/改名，若断言
+# "现在必须未入册"（或反之），别人一入册就把本判据弄红——那是**过期断言**，不是回归。
+# 正确口径：**用一个人为不存在的键做反例**去验"未入册分支"，用**真实键**去验"入册分支"，
+# 并断言 `registered` **等于**"registry 里到底有没有这个键"（如实反映，不预设）。
+import os as _os                                            # noqa: E402
+from src.core import core as _core                          # noqa: E402
+
+_G = [dict(n=60, l=0, j=0.5), dict(n=60, l=1, j=1.5)]
+_f = abs(_w.cache.E_mhz(60, 1, 1.5) - _w.cache.E_mhz(60, 0, 0.5)) * 1e6
+_CFG = {'enabled': True, 'intensity': 1.0e4, 'frequency_hz': _f,
+        'polarization': 'π'}
+
+
+def _max_ac(**kw):
+    rows = _core.build_level_rows(_w.cache, 0.0, _G, _CFG, _G, **kw)
+    vals = [abs(float(r.get('ac') or 0.0)) for r in rows]
+    return max(vals) if vals else 0.0
+
+
+def _in_registry(key):
+    """该键当前是否真的在 registry 契约里（唯一事实来源，不预设）。"""
+    try:
+        _w.app_bridge.describe(key)
+        return True
+    except Exception:                                    # noqa: BLE001
+        return False
+
+
+_FIELD = type(_w.field)
+_ac_default = _max_ac()                                  # 不传参 = 引擎默认
+_ac_explicit = _max_ac(n_photon=4, sos_n_window=3)       # 控件默认值
+_ac_loose = _max_ac(n_photon=1, sos_n_window=1)          # 改小 → 精度变
+_kw0 = dict(_w.field.ac_kwargs())
+_keys = tuple(k for _a, k in _FIELD.AC_PRECISION_KEYS)
+_registered_now = bool(getattr(_w.field, '_ac_prec_registered', None))
+_registry_says = all(_in_registry(k) for k in _keys)
+
+# ③a 未入册分支：**人为构造一个不存在的键**（不依赖任何真实键的当前状态）
+_saved = _FIELD.AC_PRECISION_KEYS
+try:
+    _FIELD.AC_PRECISION_KEYS = (('window_spin', 'field.__no_such_key__'),
+                                ('n_photon_spin', 'field.__no_such_key2__'))
+    _w.field._bind_ac_precision()
+    _unreg_flag = bool(getattr(_w.field, '_ac_prec_registered', None))
+    _unreg_tip = _w.field.window_spin.toolTip()
+finally:
+    _FIELD.AC_PRECISION_KEYS = _saved
+    _w.field._bind_ac_precision()                        # 还原为真实键
+    _w.field._ac_prec_connected = False                  # 允许下面重连一次
+
+# ③b 入册分支：真实键（若物理侧已入册则必须走 registry；未入册则必须走本地）
+_w.field.window_spin.setValue(2)
+_win_key = _w.app_bridge.read('field.window')
+_events = [e for e in _w.app_bridge.activity(0)
+           if e.get('target') in _keys]
+_kw1 = dict(_w.field.ac_kwargs())
+
+# ④ 动态侧不读这两个键（源码级反向断言）
+_rs = open(_os.path.join(_os.path.dirname(_os.path.dirname(
+    _os.path.abspath(__file__))), 'src', 'core', 'runspec.py'),
+    encoding='utf-8').read()
+C.group('B P1-7 AC 精度（窗口/光子块）接线：静态生效 + 动态不生效', [
+    ('默认值 = 引擎默认（零侵入，max|ac| %.6g）' % _ac_default,
+     _ac_default == _ac_explicit),
+    ('改旋钮真的改静态结果（(1,1) → max|ac| %.6g ≠ (4,3) %.6g）'
+     % (_ac_loose, _ac_explicit), _ac_loose != _ac_explicit),
+    ('ac_kwargs 默认 = (n_photon=4, sos_n_window=3)：%s' % (_kw0,),
+     _kw0 == {'n_photon': 4, 'sos_n_window': 3}),
+    ('registered 如实反映 registry（标=%s / 实际=%s）'
+     % (_registered_now, _registry_says), _registered_now == _registry_says),
+    ('人为不存在的键 → 走"未入册"分支（registered=%s）且 tooltip 明说'
+     % _unreg_flag,
+     _unreg_flag is False and '尚未入册' in _unreg_tip),
+    ('真实键（%s）→ 改控件经 choke point 落 session（field.window=%r）'
+     % ('/'.join(_keys), _win_key),
+     (_win_key == 2) if _registry_says else (_win_key is None)),
+    ('总线事件 actor=gui（人机同路 I5，%d 条）' % len(_events),
+     bool(_events) and all(e.get('actor') == 'gui' for e in _events)),
+    ('ac_kwargs 跟随 registry（%s）' % (_kw1,),
+     _kw1['sos_n_window'] == (2 if _registry_says else 3)),
+    ('动态侧 runspec.py 不读 n_photon/sos_n_window（"不生效"是结构性事实）',
+     'n_photon' not in _rs and 'sos_n_window' not in _rs),
+])
+
+# ---------------- C. 启动器：Hub 与驾驶舱**同根**（P0-1/P0-2 收尾，防回流） ----------------
+# 背景（实测 2026-09-22）：`run_ai()` 原来两个 spawn 都没给根 ⇒ P0-1 之后
+# 驾驶舱直接 `RuntimeError` 起不来；而且两个服务的 `--root` **语义不同**——
+# serve 侧拼 `.mecha`（要项目根），cockpit 侧原样使用（要 journal 目录）。
+# 传错不会崩，会"起得来但看不见任何事件"（假绿），所以本组**按值**断言：
+#   ① 两行都显式带 `--root`；② 各自传的是正确语义的那个值；
+#   ③ 两个值指向**同一个 journal**（`<PROJ>/.mecha`）。
+_APP_SRC = open(_os.path.join(_os.path.dirname(_os.path.dirname(
+    _os.path.abspath(__file__))), 'app_entry.py'), encoding='utf-8').read()
+_root_expr = _APP_SRC.count("'--root', PROJ_ROOT")
+_jdir_expr = _APP_SRC.count("'--root', JOURNAL_ROOT")
+C.group('C 启动器：Hub/驾驶舱同根（--root 显式 + 语义正确 + 同一 journal）', [
+    ('Hub 传 --root PROJ_ROOT（serve 侧会拼 .mecha）', _root_expr == 1),
+    ('驾驶舱传 --root JOURNAL_ROOT（cockpit 侧原样用）', _jdir_expr == 1),
+    ('两个 spawn 都不再是无根调用（防"起不来"回流）',
+     "['-m', 'cockpit.server']" not in _APP_SRC
+     and "['-m', 'src.adapter.serve']" not in _APP_SRC),
+    ('JOURNAL_ROOT 就是 Hub 写 journal 的目录（同一份文件）',
+     _os.path.join(app_entry.PROJ_ROOT, '.mecha')
+     == app_entry.JOURNAL_ROOT),
+    ('PROJ_ROOT 指向仓根（app_entry.py 所在目录，含 src/ 与 save_state/）',
+     _os.path.isdir(_os.path.join(app_entry.PROJ_ROOT, 'src'))
+     and _os.path.isdir(_os.path.join(app_entry.PROJ_ROOT, 'save_state'))),
+])
+
 _ok = C.summary()
 sys.stdout.flush()
 sys.stderr.flush()
