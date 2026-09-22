@@ -86,6 +86,12 @@ def main(argv=None):
         print('RE0_MECHA_NO_SERVER 置位 → 不启动 MCP 写通道')
         return 0
 
+    # Windows：用 SelectorEventLoop 避开 Proactor 在客户端突然断连（dsh 自愈桥重连/
+    # 浏览器关 SSE）时 _call_connection_lost 刷 WinError 10054 的无害噪声。本进程不在
+    # 事件循环里 spawn 子进程，切 Selector 安全。
+    if sys.platform == 'win32':
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
     runtime.set_engine(EngineAdapter(atom=a.atom))   # 注入领域引擎
     session = Session()
     # 落一条 registry_schema 事件：驾驶舱配置态结构树的 schema 源（需求②）。cockpit 只读

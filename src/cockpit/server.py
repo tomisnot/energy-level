@@ -167,6 +167,10 @@ def main(argv=None):
         print('⚠ 绑定非 localhost（%s）却没设 --token：远程只读**必须**鉴权（T6）。'
               % a.host, file=sys.stderr)
     app = create_app(root=root, token=a.token)
+    # Windows：SelectorEventLoop 避开 Proactor 在浏览器关 SSE/断连时 _call_connection_lost
+    # 刷 WinError 10054 的无害噪声（本进程只读、不在循环里 spawn 子进程，切 Selector 安全）。
+    if sys.platform == 'win32':
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     import uvicorn
     print('驾驶舱（只读）：http://%s:%d/  root=%s' % (a.host, a.port, root),
           flush=True)
