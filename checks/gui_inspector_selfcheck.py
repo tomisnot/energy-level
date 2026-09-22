@@ -67,6 +67,45 @@ C.group('C solve.* 编辑经 choke point 落 session（人机同路径）', [
     ('写后会话读到 1e-6（%r）' % (_wrote,), _wrote == 1e-6),
 ])
 
+# ---------------- D. P0-7：4 个精度旋钮接上（此前是死控件） ----------------
+# 背景：`_bind_solver_knobs()` 定义后**无调用点** ⇒ 处理链/求解页那 4 个 QLineEdit
+# 是"可输入、不生效、不报错"的死控件（D5/D6）。现接上：只读 + 回显生效值 + 联动。
+_knob_attrs = ('god_rcrit', 'god_perfreq_m', 'god_tol', 'god_maxstep')
+_knobs = {a: getattr(_insp, a, None) for a in _knob_attrs}
+_shown = {a: (e.text() if e is not None else None) for a, e in _knobs.items()}
+_all_ro = all(e is not None and e.isReadOnly() for e in _knobs.values())
+# 联动：写 solve.MAX_STEP → refresh_param_display → god_maxstep 跟着变（读回面）
+try:
+    w.app_bridge.write('solve.MAX_STEP', 1e-6, reason='判据：旋钮回显联动', actor='gui')
+    _insp.refresh_param_display()
+    _linked = _knobs['god_maxstep'].text() == '1e-06'
+except Exception as e:                                    # noqa: BLE001
+    _linked = 'ERR:%s' % e
+C.group('D P0-7 精度旋钮已接上（只读回显 + 与 solve.* 联动）', [
+    ('4 个旋钮都存在且只读（不再假装可改）', _all_ro),
+    ('绑定计数 == 4（此前恒 0：函数无调用点）',
+     getattr(_insp, '_solver_knobs_bound', 0) == 4),
+    ('engine 常量回显 registry 默认（r_crit=%r / tol=%r）'
+     % (_shown['god_rcrit'], _shown['god_tol']),
+     _shown['god_rcrit'] == '0.0135' and _shown['god_tol'] == '1e-08'),
+    ('写 solve.MAX_STEP 后旋钮跟着变（读回面 D6，%r）' % (_linked,),
+     _linked is True),
+])
+
+# ---------------- E. 旧参数覆写管线残骸已删（反向断言，防回流） ----------------
+# 这些名字属已删的"god-mode 参数覆写管线"（god_split/god_write/engine_overrides 同族）。
+# 留着的后果：看起来有 API，其实无人调用（P0-7 的"死接线会骗人"）。
+_DEAD_API = ('set_god_params', 'god_values', 'param_overrides_valid',
+             'param_overrides', 'param_errors', 'reset_param_overrides',
+             '_mirror_write', '_sync_mirrors', '_LEGACY_KW2PATH')
+_left = [n for n in _DEAD_API if hasattr(_insp, n)]
+C.group('E 旧覆写管线死 API 已删（防回流）', [
+    ('%d 个死名全不存在（残留 %s）' % (len(_DEAD_API), _left or '无'),
+     not _left),
+    ('param_edited 信号已删（从不 emit/从不 connect）',
+     not hasattr(_insp, 'param_edited')),
+])
+
 _ok = C.summary()
 sys.stdout.flush()
 os._exit(0 if _ok else 1)

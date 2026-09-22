@@ -16,7 +16,10 @@ diag=True 时产出；UI 迭代可用 `mock_diag()`）。diag 结构契约：
 v1.1（船长反馈四条）：
 - 处理链主体富文本卡片化（分步着色徽标 + 关键数字加粗），比 AC 表更醒目；
 - 四个精度旋钮从主界面移入检视器对应位置（per_freq_M/r_crit → 处理链页，
-  tol/max_step → 求解过程页），「应用并重跑」就地生效；
+  tol/max_step → 求解过程页）。**P0-7 更正**：这 4 个旋钮是**只读回显**
+  （当前生效值），不是编辑口——真实编辑在「引擎参数」页（engine.* 只读、
+  solve.* 可写，经同一 choke point）；`_bind_solver_knobs` 此前从未被调用，
+  旋钮曾是"可输入但无任何效果"的死控件，已接上。
 - 哈密顿页：解析式按分项着色（与勾选项同色）+ 热图扇区分隔/标注 +
   坐标轴物理标签 + 矩阵元表「物理含义」列——索引与物理意义结合；
 - 窗口扩容约一倍（1500×960）。
@@ -257,9 +260,6 @@ class SolverInspector(QDialog):
     """
 
     rerun_requested = pyqtSignal()
-    # 引擎参数页 → 会话真值：**逐参数增量**（参数名, 值或 None=清覆写）。
-    # 不用整批 dict：那样一个非法框会把其它覆写一起抹掉（实测踩过）。
-    param_edited = pyqtSignal(str, object)
 
     def __init__(self, parent=None, win=None):
         super().__init__(parent)
@@ -310,6 +310,9 @@ class SolverInspector(QDialog):
         self.tabs.addTab(self._tab_s, '求解过程')
         self.tabs.addTab(self._tab_x, '扇区与重构')
         self.tabs.addTab(self._tab_e, '引擎参数')
+        # P0-7：4 个"精度旋钮"接上（此前 `_bind_solver_knobs` **从未被调用** ⇒
+        # 它们是可输入、无效果、也不报错的死控件）。现为只读回显 + 真实编辑入口提示。
+        self._bind_solver_knobs()
 
     # ---------- 上帝旋钮（内嵌各页；主界面不再占用空间） ----------
     def _make_knob(self, attr, label, tip, width=90):
@@ -323,65 +326,67 @@ class SolverInspector(QDialog):
         return lab, e
 
     def _bind_solver_knobs(self):
-        """求解页旋钮：engine.*（r_crit/tol）只读、solve.*（max_step/per_freq_M）可写
-        ——均在「引擎参数」页经 registry 统一管理；不再走已删的旧参数框架镜像通道。
-        旋钮保留为只读展示（fine-tune：可后续接 app_bridge.write）。"""
-        for _w in (getattr(self, 'god_rcrit', None), getattr(self, 'god_tol', None),
-                   getattr(self, 'god_maxstep', None),
-                   getattr(self, 'god_perfreq_m', None)):
-            if _w is not None:
-                _w.setReadOnly(True)
-                _w.setPlaceholderText('见「引擎参数」页')
-        self._mirrors = []
-        self._solver_knobs_bound = 0
-        return 0
+        """4 个精度旋钮 → 注册键的**只读回显**（P0-7 接上）。
 
-    def _mirror_write(self, path, w):
-        """（已废）镜像写入通道——engine.* 只读、solve.* 走「引擎参数」页 registry。"""
-        return
+        此前本函数**定义后无调用点**（`_solver_knobs_bound` 只在函数内赋值）⇒ 这 4 个
+        QLineEdit 是"可输入、不生效、不报错、不提示"的死控件（D5/D6：没有读回的写入 =
+        没接线的开关）。现改为：
+          · `setReadOnly(True)` —— 物理上不可输入，不再假装可改；
+          · `refresh_knobs()` 回显**当前生效值**（会话有值用会话值，否则用 registry 默认）；
+          · tooltip 写明对应的注册键与真实编辑入口（「引擎参数」页）。
+
+        **为什么不在这里直接可写**：同一键若在旋钮与「引擎参数」页各有一个写入口，
+        就成了两个写面（人类面的 choke point 只有一处）；且参数页已带校验/非法自愈/
+        已改计数。engine.*（R_CRIT/DEFAULT_RTOL）更是只读（点1），本就不能写。
+        """
+        n = 0
+        for attr, key, kind in self._KNOB_KEYS:
+            w = getattr(self, attr, None)
+            if w is None:
+                continue
+            w.setReadOnly(True)
+            w.setPlaceholderText('见「引擎参数」页')
+            w.setToolTip('%s\n\n（%s）本框只读回显当前生效值；'
+                         '编辑请到「引擎参数」页' % (w.toolTip(), kind))
+            n += 1
+        self._solver_knobs_bound = n
+        self.refresh_knobs()
+        return n
+
+    # 旋钮 → 注册键（唯一映射；kind 只用于提示文案）
+    # ⚠ engine 常量在 registry 里是**裸名**（family='engine'，见 registry.families()
+    # 的合并视图与 protocol.engine_params()），**不是** 'engine.R_CRIT' 那种前缀写法
+    # ——写成前缀会查不到记录、回显空白（`validate` 也会 UnknownKey）。
+    # 旧 `_LEGACY_KW2PATH` 里写的 'engine.R_CRIT' 就是这个错（它已是死码，一并删除）。
+    _KNOB_KEYS = (
+        ('god_rcrit', 'R_CRIT', '引擎内核常量，只读'),
+        ('god_perfreq_m', 'solve.PER_FREQ_M', '运行级参数，可写'),
+        ('god_tol', 'DEFAULT_RTOL', '引擎内核常量，只读'),
+        ('god_maxstep', 'solve.MAX_STEP', '运行级参数，可写'),
+    )
+
+    def refresh_knobs(self):
+        """旋钮回显当前生效值（读回面 D6）：会话有值用会话值，未设用 registry 默认。
+
+        由 `_bind_solver_knobs`（建窗时）与 `refresh_param_display`（每次打开检视器）
+        调用 ⇒ 人在「引擎参数」页改了 solve.* 后，旋钮跟着变（不再显示陈旧值）。
+        """
+        for attr, key, _kind in self._KNOB_KEYS:
+            w = getattr(self, attr, None)
+            if w is None:
+                continue
+            v = self._read_param(key)
+            if v is None:                       # 未设 → 显示 registry 默认（真实生效值）
+                rec = (getattr(self, '_e_recs', None) or {}).get(key) or {}
+                v = rec.get('default')
+            w.setText('' if v is None else _fmt_num(v))
 
     def _make_rerun_btn(self):
         btn = QPushButton('⟳ 应用并重跑')
-        btn.setToolTip('按当前旋钮值重新运行演化（diag 同步开启）')
+        btn.setToolTip('重新运行演化（diag 由当前模式决定；参数请先在'
+                       '「引擎参数」页改）')
         btn.clicked.connect(self.rerun_requested.emit)
         return btn
-
-    def set_god_params(self, params):
-        """回填运行级参数（存档/脚本）：solve.* 经 win 写进会话；engine.* 只读忽略（点1）。
-        旧平铺 kwarg 名经 _LEGACY_KW2PATH 映射到全路径。"""
-        p = dict(params or {})
-        p.pop('param_overrides', None)             # engine.* 运行级覆写已废（点1）
-        merged = {}
-        for k, v in p.items():
-            if k == 'diag':
-                continue
-            target = self._LEGACY_KW2PATH.get(k, k if '.' in str(k) else None)
-            if target and str(target).startswith('solve.'):
-                merged[target] = v
-        win = getattr(self, 'win', None)
-        if win is not None and merged:
-            win.apply_solve_params(merged)          # 只写 solve.* 进 session
-        self.refresh_param_display()
-
-    # 旧存档 kwarg 名 → 注册路径（唯一映射表）
-    _LEGACY_KW2PATH = {
-        'r_crit': 'engine.R_CRIT',
-        'tol': 'engine.DEFAULT_RTOL',
-        'max_step': 'solve.MAX_STEP',
-        'per_freq_M': 'solve.PER_FREQ_M',
-        'bw_opt': 'engine.BW_OPT',
-        'mw_cap': 'engine.MW_MAX_MHZ',
-        'mw_max': 'engine.MW_MAX_MHZ',
-        'mw_nres_bw': 'solve.COST_BUDGET',
-        'phase_budget': 'solve.COST_BUDGET',
-    }
-
-
-
-    def god_values(self, pair=False):
-        """→ 运行 kwargs：只标注 diag。solve.* 的唯一来源是会话（registry），
-        engine.* 只读（点1）——都不在这里出。"""
-        return {'diag': True}
 
     # ---------- 数据入口 ----------
     def set_placeholder(self, text):
@@ -657,30 +662,13 @@ class SolverInspector(QDialog):
                 self._e_count.setText(
                     '<b style="color:#A32D2D;">已忽略非法输入</b>（%s）' % err)
 
-    def _sync_mirrors(self, store):
-        """（已废）镜像框同步——mirrors 通道已移除（engine.* 只读、solve.* 走 registry）。"""
-        return
-
-    def param_overrides_valid(self):
-        """solve.* 已填且可解析的项快照（engine.* 只读、不含）。"""
-        import ast
-        out = {}
-        for name, e in (self._e_edits or {}).items():
-            rec = (getattr(self, '_e_recs', None) or {}).get(name) or {}
-            if bool(rec.get('readonly')) or rec.get('family') == 'engine':
-                continue
-            txt = e.text().strip()
-            if not txt:
-                continue
-            try:
-                out[name] = ast.literal_eval(txt)
-            except Exception:                      # noqa: BLE001
-                pass
-        return out
-
     def refresh_param_display(self, values=None):
         """会话现值 → 回填输入框（屏蔽信号，避免回环）。engine.* 只读展示、solve.* 可写。
-        以会话现值为准（app_bridge.read）；values 参保留兼容旧调用签名。"""
+        以会话现值为准（app_bridge.read）；values 参保留兼容旧调用签名。
+
+        同时刷新 4 个精度旋钮（`refresh_knobs`）——它们回显同一批键的当前生效值，
+        不跟着刷就会显示陈旧值（P0-7 接上时的读回面）。
+        """
         for name, e in (getattr(self, '_e_edits', None) or {}).items():
             v = self._read_param(name)
             txt = '' if v is None else _fmt_num(v)
@@ -689,6 +677,7 @@ class SolverInspector(QDialog):
             e.blockSignals(True)
             e.setText(txt)
             e.blockSignals(False)
+        self.refresh_knobs()
         self._refresh_e_count()
 
     def _refresh_e_count(self):
@@ -728,45 +717,6 @@ class SolverInspector(QDialog):
             self._e_count.setText(
                 ('solve.* 已改 %d 项 / 共 %d 项可写' % (n, writable)) if n
                 else '当前无覆写（%d 项可写，全部用默认值）' % writable)
-
-    def reset_param_overrides(self):
-        for e in (self._e_edits or {}).values():
-            e.setText('')
-        self._refresh_e_count()
-
-    def param_overrides(self):
-        """→ {solve.* 参数名: 值}（只含合法项；空串跳过；engine.* 只读不含）。"""
-        import ast
-        out = {}
-        for name, e in (self._e_edits or {}).items():
-            rec = (getattr(self, '_e_recs', None) or {}).get(name) or {}
-            if bool(rec.get('readonly')) or rec.get('family') == 'engine':
-                continue
-            txt = e.text().strip()
-            if not txt:
-                continue
-            try:
-                out[name] = ast.literal_eval(txt)
-            except Exception:                      # noqa: BLE001
-                pass
-        return out
-
-    def param_errors(self):
-        """→ [(参数名, 错误说明)]——solve.* 非法项（供状态栏等非模态通道提示）。"""
-        import ast
-        bad = []
-        for name, e in (self._e_edits or {}).items():
-            rec = (getattr(self, '_e_recs', None) or {}).get(name) or {}
-            if bool(rec.get('readonly')) or rec.get('family') == 'engine':
-                continue
-            txt = e.text().strip()
-            if not txt:
-                continue
-            try:
-                ast.literal_eval(txt)
-            except Exception as err:               # noqa: BLE001
-                bad.append((name, str(err)))
-        return bad
 
     # ---------- 诊断导出 ----------
     def export_diag(self):
