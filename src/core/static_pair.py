@@ -399,7 +399,13 @@ def coupling_strength_map(cache, groups, R_grid, theta_grid, phi_deg=0.0,
                         return s
             return None
         # (n,l,j,m) 四元组
-        return find_sublevel(single, *key)
+        # ⚠ 2026-09-22 修（P1-6 顺带查出）：原为 `return find_sublevel(single, *key)`
+        # —— 而 `find_sublevel` 返回的是**下标（int）**，本函数其余路径一律要**行 dict**
+        # ⇒ 只要用元组形式给 trans1/trans2，下面 `s['n']` 必崩
+        # （实测 `TypeError: 'int' object is not subscriptable`）。
+        # GUI 只走"label qstr"字符串形式，故这个崩溃一直没被踩到。
+        i = find_sublevel(single, *key)
+        return None if i is None else single[i]
 
     if trans1 is None or trans2 is None:
         # 缺省 60S↔60P 交换对（兼容直接调用方）

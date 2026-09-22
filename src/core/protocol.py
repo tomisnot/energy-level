@@ -860,25 +860,27 @@ def static_pair(cache, snap, what='exchange', with_evecs=False, n_window=None,
     if what in ('all', 'map'):
         if R_grid is None or theta_grid is None:
             raise ValueError('what="map" 需要 R_grid 与 theta_grid')
-        # 先按设计**显式**检查"交换对是否在里德堡之间"，把静默全零变成明说
+        # 顺序有意：**先查"态在不在"（配置错 → 报错），再查"是不是里德堡"（物理事实 → note）**。
+        # 反过来的话，一个既有非里德堡态、又缺另一个态的场景会只报"非里德堡"，
+        # 把真正的配置错（缺态）掩盖掉。
+        m = _sp.coupling_strength_map(
+            cache, groups, R_grid, theta_grid, phi_deg=PH,
+            trans1=trans1, trans2=trans2, B_gauss=B, n_window=nw)
+        if m is None:
+            raise ValueError(
+                '耦合强度雷达图：基组缺少指定的源/目标态'
+                '（trans1=%r, trans2=%r）——请先加对应能级组，或改用 '
+                'list_levels 的 label/qstr 指定' % (trans1, trans2))
+        Rg, Tg, Z = m
         ok, why = _exchange_domain_ok(groups, trans1, trans2)
+        out['map'] = {'exchange_valid': bool(ok),
+                      'R_grid': np.asarray(Rg, float),
+                      'theta_grid': np.asarray(Tg, float),
+                      'Z_mhz': np.asarray(Z, float),
+                      'shape_note': 'Z_mhz 形状 = (len(R_grid), len(theta_grid))'}
         if not ok:
-            out['map'] = {'exchange_valid': False, 'note': why}
-        else:
-            m = _sp.coupling_strength_map(
-                cache, groups, R_grid, theta_grid, phi_deg=PH,
-                trans1=trans1, trans2=trans2, B_gauss=B, n_window=nw)
-            if m is None:
-                raise ValueError(
-                    '耦合强度雷达图：基组缺少指定的源/目标态'
-                    '（trans1=%r, trans2=%r）——请先加对应能级组，或改用 '
-                    'list_levels 的 label/qstr 指定' % (trans1, trans2))
-            Rg, Tg, Z = m
-            out['map'] = {'exchange_valid': True,
-                          'R_grid': np.asarray(Rg, float),
-                          'theta_grid': np.asarray(Tg, float),
-                          'Z_mhz': np.asarray(Z, float),
-                          'shape_note': 'Z_mhz 形状 = (len(R_grid), len(theta_grid))'}
+            # 物理上确实无交换 ⇒ Z 恒 0 是**正确**的，但必须明说（否则读成"算出来了"）
+            out['map']['note'] = why
     return out
 
 
