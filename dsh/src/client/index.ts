@@ -1,13 +1,11 @@
 /**
  * re0-mecha dsh 插件 —— **CLIENT 入口**（浏览器侧 Cordis 插件）。
  *
- * 驾驶舱主界面 = dsh **右侧栏**：点 ◈驾驶舱 → `ctx.layout.openDetails()` 打开右栏 +
- * 把 cockpit iframe 挂进右栏列（`[data-rightbar-col]`）+ 自动关左栏；对话回中栏全高
- * （宽度随右栏打开自动收窄）。再点 → closeDetails + 复原左栏 + 移除 iframe。
+ * 驾驶舱 = 右栏一个 **tab**（dockkit tab 体制，dsh 源码验证的正确路径）：注册 tab 类型
+ * `re0-cockpit` + body（`CockpitTabBody`，native 渲染 cockpit HTTP 读原语）。点 ◈驾驶舱 →
+ * openRightbar + 关左栏 + openTab('re0-cockpit')；再点 → closeRightbar + 复原左栏。
  *
- * 贡献：① 头部切换按钮（`conversation.session.header.actions`）；② 注入 CSS
- * （`<style data-plugin-css>`，仅 `html[data-re0-cockpit="on"]` 生效）。
- * 跨 scope 的模式状态由模块级 mode-store 桥接；注册与副作用都经 `ctx.effect` 可逆。
+ * **无 iframe、单一实现**；样式由 CockpitTabBody 自注入。
  *
  * ⚠ client 半经 tsdown 打成 CJS + `__ModuleLoader__.load` 包装；改本目录源码后须
  * `npm run bundle` 并重启 dsh 才生效。
@@ -15,103 +13,55 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { CockpitPanel } from './CockpitPanel.tsx'
 import { CockpitTabBody } from './CockpitTabBody.tsx'
-import { COCKPIT_MODE_CSS } from './cockpit-mode-css.ts'
 import { getCockpitMode, subscribeCockpitMode } from './mode-store.ts'
-import { readBootstrap } from './bootstrap.ts'
 
 /** Cordis 插件名（与 host 半一致）。 */
 export const name = 're0-mecha'
 
-/** 需要 web client 的服务：slots（挂按钮）+ layout（开/关右栏、关左栏）。
- *  Cordis ctx 是代理：未在 inject 声明的服务一访问就抛
- *  "cannot get property X without inject"，故 layout 必须在此声明。 */
+/** slots（按钮+tab body）+ layout（开/关右栏、关左栏）+ 右栏 tab 服务。 */
 export const inject = ['slots', 'layout', 'sidebarRight', 'sidebarRightTabs']
 
-export async function apply(ctx: Context, config?: { cockpitNative?: boolean }): Promise<void> {
-  // native 右栏 tab 为 **opt-in**（config.cockpitNative===true）；默认 iframe（已知稳）。
-  const useNativeTab = config?.cockpitNative === true
+export async function apply(ctx: Context): Promise<void> {
   await ctx.effect(() => {
-    // 注入驾驶舱模式 CSS（data-plugin-css 标记；卸载即移除）
-    const style = document.createElement('style')
-    style.setAttribute('data-plugin-css', 're0-cockpit-mode')
-    style.textContent = COCKPIT_MODE_CSS
-    document.head.appendChild(style)
-
-    // 会话头部：驾驶舱布局切换按钮
+    // 会话头部：驾驶舱切换按钮
     const disposeBtn = ctx.slots.inject('conversation.session.header.actions', () =>
       ctx.slots.register(
         { name: 'conversation.session.header.actions', id: 're0-cockpit', order: 200 },
         CockpitPanel,
       ))
 
-    // ---- native 右栏 tab（opt-in）：注册 tab 类型 + body；ON 时 openTab 打开 ----
-    // 正确路径（源码验证）：右栏是 dockkit tab 体制，内容必须是已注册 tab 类型的 tab。
-    let relType: any = null
-    let disposeBody: (() => void) | null = null
-    if (useNativeTab) {
-      try {
-        relType = (ctx as any).sidebarRightTabs?.register?.({
-          id: 're0-cockpit', kind: 're0-cockpit', title: () => '机甲驾驶舱',
-        }) || null
-        disposeBody = ctx.slots.inject('sidebar.right.pane.tab', () =>
-          ctx.slots.register(
-            { name: 'sidebar.right.pane.tab', key: 're0-cockpit' } as any,
-            CockpitTabBody,
-          ))
-      } catch { relType = null; disposeBody = null }
-    }
+    // 右栏 tab 类型 + body（注册一次；body 由 dsh 在该 tab 打开时渲染）
+    const relType = (ctx as any).sidebarRightTabs?.register?.({
+      id: 're0-cockpit', kind: 're0-cockpit', title: () => '机甲驾驶舱',
+    }) || null
+    const disposeBody = ctx.slots.inject('sidebar.right.pane.tab', () =>
+      ctx.slots.register(
+        { name: 'sidebar.right.pane.tab', key: 're0-cockpit' } as any,
+        CockpitTabBody,
+      ))
 
-    // ---- 模式副作用：右栏=驾驶舱 + 左栏自动关 + iframe 挂右栏列 ----
-    let frame: HTMLIFrameElement | null = null
+    // 模式副作用：ON → 开右栏+关左栏+开我们的 tab；OFF → 关右栏+复原左栏
     let weClosedSidebar = false
-
-    const mountFrame = (): void => {
-      const host = document.querySelector('[data-rightbar-col]')
-      if (!host || frame) return
-      frame = document.createElement('iframe')
-      frame.className = 're0-cockpit-frame'
-      const url = readBootstrap()?.cockpitUrl
-      if (url) frame.src = url
-      frame.title = 'Re0 机甲驾驶舱（只读）'
-      host.appendChild(frame)
-    }
-    const unmountFrame = (): void => {
-      if (frame) { frame.remove(); frame = null }
-    }
-
     const unsub = subscribeCockpitMode(() => {
       if (getCockpitMode()) {
-        // 运行版 dsh(0.1.5-rc.2) 的 ctx.layout 是 openRightbar/closeRightbar（非 openDetails）；
-        // 全部可选链：API 缺失时降级不崩整站。openRightbar(true,false)=预留右栏 grid track。
         ctx.layout?.openRightbar?.(true, false)
-        // 左栏若开着则关掉（记住是我们关的，OFF 时复原）
         const fr = document.querySelector('[data-re0-frame]')
         if (fr && !fr.hasAttribute('data-sidebar-collapsed')) {
           ctx.layout?.toggleSidebar?.()
           weClosedSidebar = true
         }
-        // native tab 优先（opt-in）：openTab 打开我们的 tab（列自动展开）；
-        // 失败/未启用 → 回退 iframe 挂右栏列（已知稳）。
-        let tabbed = false
-        if (useNativeTab && relType) {
-          try { (ctx as any).sidebarRight?.openTab?.('re0-cockpit'); tabbed = true } catch { tabbed = false }
-        }
-        if (!tabbed) mountFrame()
+        try { (ctx as any).sidebarRight?.openTab?.('re0-cockpit') } catch { /* 降级 */ }
       } else {
         ctx.layout?.closeRightbar?.()
         if (weClosedSidebar) { ctx.layout?.toggleSidebar?.(); weClosedSidebar = false }
-        unmountFrame()
       }
     })
 
     return () => {
       unsub()
-      unmountFrame()
       if (disposeBody) { try { disposeBody() } catch { /* ignore */ } }
       if (typeof relType === 'function') { try { relType() } catch { /* ignore */ } }
       try { disposeBtn?.() } catch { /* ignore */ }
-      style.remove()
-      document.documentElement.removeAttribute('data-re0-cockpit')
     }
   }, 're0-mecha: cockpit mode')
 }
