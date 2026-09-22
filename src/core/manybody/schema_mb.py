@@ -11,7 +11,8 @@
 from ..param import Param
 
 __all__ = ['CONFIG_SCHEMA_MB', 'SOLVE_META_MB', 'validate_atom_list', 'mb_get',
-           'MB_N_WINDOW', 'MB_GUARD_MHZ', 'MB_ED_MAX_DIM']
+           'validate_drive_segments', 'MB_N_WINDOW', 'MB_GUARD_MHZ',
+           'MB_ED_MAX_DIM']
 
 # 标定/维度默认（就地 Param：值+元数据同处，被 protocol.engine_params 扫出；
 # 同时作为 CONFIG_SCHEMA_MB 各键 default 的单一来源）。
@@ -79,6 +80,56 @@ SOLVE_META_MB = {}
 
 def _num(x):
     return isinstance(x, (int, float)) and not isinstance(x, bool)
+
+
+def validate_drive_segments(segments, n_atoms=None, err=None):
+    """`manybody.drive_segments` 的**结构**真契约（2026-09-22，工单 P2-2）。
+
+    为什么需要：这个键的 schema 类型是通用 `list`，`session.set` 阶段**不做任何
+    结构校验**；而消费方 `engine_ed._propagate_segments` 要等到**工作线程**里才
+    `segs[j].get('t0')` / `np.asarray(segs[j].get('Om', np.zeros(n)), float)`
+    ⇒ 元素不是 dict / 缺 t0 / `Om` 长度不对，都要到 execute 才炸，而且报的是
+    AttributeError 或广播错，**不指向病因**。
+
+    这里把它变成**当场可判**：`build_run_manybody` 在 build 阶段（主线程）调它
+    ⇒ 早失败 + 点名"第几段 / 哪个键 / 期望多长"。`set` 阶段的前移需适配器把
+    `'drive_segments'` 加进 `custom_types()` 并转调本函数（跨模块，见工单 P2-2）。
+    """
+    if err is None:
+        err = ValueError
+    if segments is None:
+        return None
+    if not isinstance(segments, (list, tuple)):
+        raise err('manybody.drive_segments 须是 list（得到 %s）'
+                  % type(segments).__name__)
+    if not segments:
+        raise err('manybody.drive_segments 不能是空 list'
+                  '（要静态驱动请设为 None / 不设）')
+    n = None if n_atoms is None else int(n_atoms)
+    for i, s in enumerate(segments):
+        tag = 'segment[%d]' % i
+        if not isinstance(s, dict):
+            raise err('%s 须是 dict（{t0, Om, delta}，得到 %s）'
+                      % (tag, type(s).__name__))
+        t0 = s.get('t0')
+        if not _num(t0) or float(t0) < 0.0:
+            raise err('%s 缺 t0 或非法（须 ≥0 的数值，得到 %r）' % (tag, t0))
+        for key in ('Om', 'delta'):
+            v = s.get(key)
+            if v is None:
+                continue
+            if _num(v):
+                raise err('%s %s 是标量 %r——须给长度 = 原子数的序列：引擎按 '
+                          '%s[i] 逐原子取值，标量会退化成 0 维数组、到演化时才崩'
+                          % (tag, key, v, key))
+            if not isinstance(v, (list, tuple)) and not hasattr(v, '__len__'):
+                raise err('%s %s 须是序列（得到 %s）'
+                          % (tag, key, type(v).__name__))
+            if n is not None and len(v) != n:
+                raise err('%s %s 长度 %d ≠ 原子数 %d' % (tag, key, len(v), n))
+            if not all(_num(x) for x in v):
+                raise err('%s %s 须全为数值（得到 %r）' % (tag, key, v))
+    return list(segments)
 
 
 def mb_get(p, key):

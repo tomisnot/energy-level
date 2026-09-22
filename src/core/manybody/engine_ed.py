@@ -280,6 +280,14 @@ def evolve_manybody(calib, psi0=None, t_grid=None, Om=None, delta=None,
 
     bits = bit_matrix(n, dim)
     cut = int(entropy_cut if entropy_cut is not None else max(1, n // 2))
+    # entropy_cut 的**入口校验**（2026-09-22，工单 P2-3）：原来把越界值一直带到
+    # `_reduce` 里（传播中途）才由 entropy_at_cut 静默返 0 —— 那是"算错了伪装成
+    # 没纠缠"。现在 n≥2 时在此早失败并点名；n<2 时 S 恒 0 是物理事实（下方记 note）。
+    if want_entropy and n >= 2 and not (1 <= cut <= n - 1):
+        raise ValueError('多体：entropy_cut=%d 越界（n_atoms=%d 时须 ∈[1,%d]）'
+                         % (cut, n, n - 1))
+    S_note = (None if (not want_entropy or n >= 2)
+              else 'n_atoms=%d < 2：没有双部划分，S 恒 0（物理事实，非缺数据）' % n)
     pops_atom = np.zeros((n_t, n))
     S_mid = np.zeros(n_t)
     norm = np.zeros(n_t)
@@ -353,6 +361,7 @@ def evolve_manybody(calib, psi0=None, t_grid=None, Om=None, delta=None,
             dim=dim, n_atoms=n, n_t=n_t, hermitian=hermitian,
             used_sectors=used_sectors, full_pops=(not capped),
             entropy_cut=(cut if want_entropy else None),
+            entropy_note=S_note,
             max_norm_dev=norm_dev),
         diag=({'dim': dim, 'n_atoms': n, 'backend': backend,
                'used_sectors': used_sectors, 'hermitian': hermitian,

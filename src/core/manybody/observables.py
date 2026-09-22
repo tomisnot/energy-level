@@ -46,14 +46,25 @@ def entropy_at_cut(psi, n, cut):
     """双部 von Neumann 熵（自然对数，单位 nat）：前 cut 个原子 vs 其余。
 
     把 psi 按 (2^cut, 2^(n−cut)) 重塑 → Schmidt 奇异值 → S = −Σ λ² ln λ²。
-    cut∈[1, n−1]；越界或 dim 不匹配 → 0.0（不报错，观测量非致命）。
+
+    **区分"真 0"与"参数错"**（2026-09-22，工单 P2-3）：原实现三种情形一律
+    `return 0.0`，于是"算错了"会被伪装成"没纠缠"——
+      · `n < 2` → **0.0**：没有双部划分，S 恒 0 是**物理正确**的（不是错）；
+      · 态矢长度 ≠ 2^n → **`ValueError`**：调用方维度错；
+      · `n ≥ 2` 但 `cut ∉ [1, n−1]` → **`ValueError`**：参数错。
     """
-    if not (1 <= cut <= n - 1):
-        return 0.0
+    n = int(n)
+    if n < 2:
+        return 0.0                       # 无双部划分：S=0 是物理事实
     dim = 1 << n
     v = np.asarray(psi).ravel()
     if v.size != dim:
-        return 0.0
+        raise ValueError('entropy_at_cut：态矢长度 %d ≠ 2^%d=%d（调用方维度错）'
+                         % (v.size, n, dim))
+    cut = int(cut)
+    if not (1 <= cut <= n - 1):
+        raise ValueError('entropy_at_cut：cut=%d 越界（n=%d 时须 ∈[1,%d]）'
+                         % (cut, n, n - 1))
     a = 1 << cut
     b = dim >> cut
     M = v.reshape(a, b)

@@ -20,7 +20,7 @@ import numpy as np
 from .model import ManyBodyModel
 from . import assemble as _asm
 from . import engine_ed as _ed
-from .schema_mb import mb_get
+from .schema_mb import mb_get, validate_drive_segments
 
 __all__ = ['model_from_params', 'drive_from_model', 'resolve_mb_psi',
            'resolve_solver', 'calibrate_memo', 'build_run_manybody']
@@ -190,13 +190,17 @@ def build_run_manybody(cache, params, *, pump=None, method=None, diag=False,
 
     states = [{'label': 'atom%d@%s' % (a['id'], _fmt_pos(a['pos'])),
                'atom_id': a['id']} for a in calib['atoms']]
+    # 分段常数驱动的**结构校验**（2026-09-22，工单 P2-2）：原先只到工作线程的
+    # `_propagate_segments` 才炸（AttributeError/广播错，不指向病因）。现在在
+    # build（主线程）早失败并点名第几段/哪个键/期望多长。
+    segments = validate_drive_segments(p.get('manybody.drive_segments'), n)
     return {
         'version': 1, 'two_body': False, 'nbody': 'many',
         'method': solver, 'method_in': solver_in,
         't': t, 't_max': t_max, 'npts': npts,
         'calib': calib, 'n_atoms': n, 'dim': 1 << n,
         'psi0': psi0, 'Om': Om, 'delta': delta, 'gamma': gamma,
-        'segments': p.get('manybody.drive_segments'),
+        'segments': segments,
         'terms': list(model.terms), 'template': model.template,
         'engine_kwargs': ek, 'warnings': warnings,
         # 契约兼容字段（让 summarize_run/check_run 的通用路径不 KeyError）
