@@ -110,13 +110,19 @@ class EnergyPlotPanel(QWidget):
 
     # ---------------- 能级图 ----------------
 
-    def _draw_level_axes(self, cache, field_B, groups, address_cfg, relative, visible):
+    def _draw_level_axes(self, cache, field_B, groups, address_cfg, relative,
+                         visible, ac_kwargs=None):
         """把 core.build_level_rows 算出的能级行画到当前模式对应的画布。
 
         'single'：画到 self.ax（单图，含 off/on 两条跃迁连线）；
         'dual'  ：非寻址光（裸能级）+ 寻址光（移后）各一张并排。
+
+        `ac_kwargs`（P1-7）：AC-Stark 精度 `{n_photon, sos_n_window}`，来自
+        `FieldPanel.ac_kwargs()`（静态页唯一来源）。**只影响静态页**——动态基组
+        由 runspec 走自己的路径，从不读这两个值（用户裁决 2026-09-22）。
         """
-        rows = core.build_level_rows(cache, field_B, groups, address_cfg, visible)
+        rows = core.build_level_rows(cache, field_B, groups, address_cfg, visible,
+                                     **(ac_kwargs or {}))
         if self._level_mode == 'dual':
             return self._draw_level_dual(rows, relative, visible)
 
@@ -399,8 +405,10 @@ class EnergyPlotPanel(QWidget):
         self._redraw_spectra()
         # 能级图叠加连线需按当前状态重绘（ArcCache 缓存保证快速）
         if self._last_draw is not None:
-            cache, field_B, groups, address_cfg, relative, visible = self._last_draw
-            self.draw_levels(cache, field_B, groups, address_cfg, relative, visible)
+            cache, field_B, groups, address_cfg, relative, visible, ac_kw = \
+                self._last_draw
+            self.draw_levels(cache, field_B, groups, address_cfg, relative,
+                             visible, ac_kw)
         # 通知右侧面板显示选中峰频率 / 频率差
         self._emit_peak_freqs()
 
@@ -486,8 +494,10 @@ class EnergyPlotPanel(QWidget):
         self._level_mode = 'dual' if mode == 'dual' else 'single'
         self.level_stack.setCurrentIndex(1 if self._level_mode == 'dual' else 0)
         if self._last_draw is not None:
-            cache, field_B, groups, address_cfg, relative, visible = self._last_draw
-            self.draw_levels(cache, field_B, groups, address_cfg, relative, visible)
+            cache, field_B, groups, address_cfg, relative, visible, ac_kw = \
+                self._last_draw
+            self.draw_levels(cache, field_B, groups, address_cfg, relative,
+                             visible, ac_kw)
         self._emit_peak_freqs()
 
     def _redraw_spectra(self):
@@ -496,17 +506,21 @@ class EnergyPlotPanel(QWidget):
         self.spec_mirror_canvas.draw_idle()
         self._sync_spectrum_xlims()
 
-    def draw_levels(self, cache, field_B, groups, address_cfg, relative, visible):
+    def draw_levels(self, cache, field_B, groups, address_cfg, relative, visible,
+                    ac_kwargs=None):
         """更新画布：能级图 + 镜像对比频谱。返回能级行数据。
 
         能级图总是重绘；镜像频谱的 off/on 谱线各自独立签名缓存：
         无寻址光谱仅在裸能级输入变化时重算，有寻址光谱随光参数变化。
         谱线一律由 core.spectrum_lines 计算，画布只负责绘制。
+
+        `ac_kwargs`：AC-Stark 精度（`{n_photon, sos_n_window}`；None=引擎默认）。
         """
         # 记住本次绘制参数：点击谱峰高亮时需要重绘能级图（叠加跃迁连线）
-        self._last_draw = (cache, field_B, groups, address_cfg, relative, visible)
+        self._last_draw = (cache, field_B, groups, address_cfg, relative, visible,
+                           ac_kwargs)
         rows = self._draw_level_axes(cache, field_B, groups, address_cfg,
-                                     relative, visible)
+                                     relative, visible, ac_kwargs)
         enabled = address_cfg.get('enabled', False)
 
         if not rows:

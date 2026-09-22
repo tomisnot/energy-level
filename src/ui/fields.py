@@ -67,8 +67,12 @@ class FieldPanel(QWidget):
         row.addStretch(1)
         # ---- 偶极伙伴窗口 + 光子块阶数（AC-Stark Floquet 精度/成本权衡）----
         row.addWidget(QLabel('窗口'))
-        # AC 精度 = 静态页显示参数（A10：Re0 删了 set_ac_stark_config 全局，改
-        # build_level_rows 显式传参）→ 本地 GUI 态，不入 run-config registry
+        # AC 精度 = **静态页**参数（A10：Re0 删了 set_ac_stark_config 全局，改
+        # build_level_rows 显式传参）。P1-7：这两个值经 `ac_kwargs()` 送进静态页
+        # （此前 `ac_kwargs()` 全库无调用者 ⇒ 控件静默失能），并**接入 registry**
+        # （键 `field.window` / `field.n_photon`，与 field.B_gauss 同族）。
+        # 用户裁决 2026-09-22：**只对静态引擎生效，对动态引擎不应生效** ——
+        # 动态侧 runspec 从不读这两个键，故本接线不动动态路径。
         self.window_spin = QSpinBox()
         self.window_spin.setRange(1, 5)
         self.window_spin.setValue(3)
@@ -77,7 +81,8 @@ class FieldPanel(QWidget):
             'AC 能移基组的偶极伙伴窗口（Δn 圈数）。\n'
             'window=3 全伙伴（N~400，n=4 时 ~13s/次）；\n'
             'window=1 只最近圈（~60 态，快 ~300×，误差 <0.3% 级）。\n'
-            '两级收敛思路：先 window=1 快速定位，必要时 window=2/3 精化。')
+            '两级收敛思路：先 window=1 快速定位，必要时 window=2/3 精化。\n'
+            '作用范围：**仅静态页**（能级图/频谱）；动态演化不受影响。')
         self.window_spin.valueChanged.connect(self._changed)
         row.addWidget(self.window_spin)
         row.addWidget(QLabel('光子块'))
@@ -89,9 +94,11 @@ class FieldPanel(QWidget):
             'AC 能移 Floquet 光子块阶数（块数 = 2n+1）。\n'
             'n=4（默认）近/远失谐均收敛（n=1 与 n=4 差约 6%）；\n'
             '阶数越高越精确，但计算量立方增长（n:1/2/4/8 ≈ '
-            '1.5s/4s/13s/61s@406 态）。')
+            '1.5s/4s/13s/61s@406 态）。\n'
+            '作用范围：**仅静态页**（能级图/频谱）；动态演化不受影响。')
         self.n_photon_spin.valueChanged.connect(self._changed)
         row.addWidget(self.n_photon_spin)
+        self._bind_ac_precision()
         self.add_btn = QPushButton('＋添加光')
         self.add_btn.setMinimumWidth(110)
         self.add_btn.setToolTip(
@@ -258,9 +265,97 @@ class FieldPanel(QWidget):
         return float(self.e_spin.value())
 
     def ac_kwargs(self):
-        """AC-Stark 精度（A10：显式传给 build_level_rows，不再用全局 setter）。"""
-        return {'n_photon': int(self.n_photon_spin.value()),
-                'sos_n_window': int(self.window_spin.value())}
+        """AC-Stark 精度 → `build_level_rows(n_photon=…, sos_n_window=…)`。
+
+        **静态页的唯一来源**（P1-7）：调用方 = `ui_spectrum.refresh_view`（能级图/频谱）
+        与 `app_entry._fill_level_table`（能级表）。真值优先 registry（`field.n_photon` /
+        `field.window`：入册后 AI/存档/undo 都改得动），未入册回落控件值。
+        """
+        n_ph, win = None, None
+        if getattr(self, '_ac_prec_registered', False):
+            br = getattr(self.page, 'app_bridge', None)
+            if br is not None:
+                n_ph, win = br.read('field.n_photon'), br.read('field.window')
+        if n_ph is None:
+            n_ph = int(self.n_photon_spin.value())
+        if win is None:
+            win = int(self.window_spin.value())
+        return {'n_photon': int(n_ph), 'sos_n_window': int(win)}
+
+    # ---------------- AC 精度 ↔ registry（P1-7） ----------------
+    # 键名与 field.B_gauss/field.E_vpcm 同族；**物理侧入册后自动启用**（见 _bind_ac_precision）。
+    AC_PRECISION_KEYS = (('window_spin', 'field.window'),
+                         ('n_photon_spin', 'field.n_photon'))
+
+    def _bind_ac_precision(self):
+        """把「窗口 / 光子块」接到 registry（choke point），并回填现值。
+
+        用户裁决 2026-09-22：这两个值**只对静态引擎生效**、对动态引擎不应生效；
+        「作用情况按现在的来」⇒ 本接线只改静态页的数据来源，不碰 runspec/动态基组。
+
+        **降级语义（D5 不静默）**：键若尚未在 registry 入册（物理侧在办），
+        控件**仍可用**（值经 `ac_kwargs()` 直达 `build_level_rows`），但 tooltip
+        明确标注"未入册：AI 不可及、不进存档"，并在状态栏提示一次——绝不假装已入册。
+        入册后无需再改本文件：读写自动切到 registry（单一真值 + 可 undo + AI 可及）。
+        """
+        br = getattr(self.page, 'app_bridge', None)
+        self._ac_prec_registered = False
+        if br is not None:
+            try:
+                for _attr, key in self.AC_PRECISION_KEYS:
+                    br.describe(key)                    # 未入册 → UnknownKey
+                self._ac_prec_registered = True
+            except Exception:                          # noqa: BLE001
+                self._ac_prec_registered = False
+        for attr, key in self.AC_PRECISION_KEYS:
+            w = getattr(self, attr, None)
+            if w is None:
+                continue
+            if self._ac_prec_registered:
+                v = br.read(key)
+                if v is None:                          # 未设 → registry 默认（单一来源）
+                    try:
+                        v = (br.describe(key) or {}).get('default')
+                    except Exception:                  # noqa: BLE001
+                        v = None
+                if v is not None:
+                    w.blockSignals(True)
+                    w.setValue(int(v))
+                    w.blockSignals(False)
+                w.setToolTip(w.toolTip() + '\n\n【已入册】键 %s（经 choke point 写，'
+                                           '可存档/可 undo/AI 可及）' % key)
+                if not getattr(self, '_ac_prec_connected', False):
+                    w.valueChanged.connect(
+                        lambda _v, k=key: self._write_ac_precision(k))
+            else:
+                w.setToolTip(w.toolTip() + '\n\n【尚未入册】值只本地生效：AI 不可及、'
+                                           '不进存档。待物理侧在 CONFIG_SCHEMA 加键 '
+                                           '%s（本控件会自动切到 registry 读写）' % key)
+        if self._ac_prec_registered:
+            self._ac_prec_connected = True
+        else:
+            try:
+                self.page.log('AC 精度（窗口/光子块）：registry 键 field.window / '
+                              'field.n_photon 尚未入册——值仅本地生效（AI 不可及）',
+                              8000)
+            except Exception:                          # noqa: BLE001
+                pass
+
+    def _write_ac_precision(self, key):
+        """控件 → registry（经 choke point，人机同路 I5）；失败可见（不静默）。"""
+        if not getattr(self, '_ac_prec_registered', False):
+            return
+        br = getattr(self.page, 'app_bridge', None)
+        if br is None:
+            return
+        w = self.window_spin if key.endswith('.window') else self.n_photon_spin
+        try:
+            br.write(key, int(w.value()), reason='场面板改 %s' % key, actor='gui')
+        except Exception as e:                          # noqa: BLE001
+            try:
+                self.page.log('写 %s 失败：%s' % (key, e), 6000)
+            except Exception:                           # noqa: BLE001
+                pass
 
     # ---------------- 光场表格 ----------------
     def _pol_text(self, r):

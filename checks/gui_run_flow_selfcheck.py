@@ -97,6 +97,30 @@ C.group('C _on_evolve_done：artifact 数组 → 绘图（单体分流 _draw_bot
      and 'pops' in d._last_res),
 ])
 
+# ---- D：P0-7 死接线已清（反向断言，防回流）----
+# ① `_ai_initiated`：全库从未置位 ⇒ "AI 不弹模态"是**假保护**（恒假分支）。已删；
+#    AI 路径不弹模态现在是**结构性**保证（AI 走 MCP run_compute，不进 _run()）。
+# ② `_show_progress`/`_dlg`/`_dlg_timer`：进度弹窗 2026-09-14 已废，空方法与
+#    "撤下进度框"分支一直留着（恒 None）。已删。
+import inspect as _inspect                                    # noqa: E402
+_DP = type(d)
+_src_cost = _inspect.getsource(_DP._preflight_cost)
+_src_run = _inspect.getsource(_DP._run)
+_src_fin = _inspect.getsource(_DP._finish_run_ui)
+_src_cancel = _inspect.getsource(_DP._cancel_run)
+C.group('D P0-7 死接线已清（防回流；死接线会骗人）', [
+    ("_ai_initiated 读取代码已删（仅在注释里留说明）",
+     "getattr(self, '_ai_initiated'" not in _src_cost),
+    ('_show_progress 空方法已删',
+     not hasattr(_DP, '_show_progress')),
+    ('_dlg / _dlg_timer 已从 _run/_finish_run_ui/_cancel_run 清除',
+     not any('_dlg' in s for s in (_src_run, _src_fin, _src_cancel))),
+    ('实例上不再有 _dlg 属性（此前恒 None 的死分支）',
+     not hasattr(d, '_dlg')),
+    ('进度轮询定时器仍在 _run 里接好（常驻底栏进度未被误删）',
+     'self._timer' in _src_run and '_poll_progress' in _src_run),
+])
+
 _ok = C.summary()
 sys.stdout.flush()
 os._exit(0 if _ok else 1)          # 绕过 offscreen teardown 噪声

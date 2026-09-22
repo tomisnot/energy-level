@@ -67,6 +67,10 @@ class DynamicPanel(QWidget):
         # 能级组增删由主程序事件驱动刷新（统一机制，不散布同步调用）
         main.groups_changed.connect(self.refresh_groups)
         self._is_two_body = False
+        # 演化族（P3-1）：'single' / 'pair' / 'many'。`_is_two_body` 保留为派生量
+        # （大量既有代码读它）；'many' 由多体页经 `set_nbody('many')` 声明后借本页
+        # 的运行流（**同一条 _run**，I5），见 `_run`/`_sync_run_config` 的 many 分支。
+        self._nbody = 'single'
         # t82：检视器**常驻**（两个模式都存在，组件与后台参数一一绑定）；
         # 模式只决定它显不显示 + 运行采不采 diag。惰性建，但一旦建就不销毁。
         self._inspector = None
@@ -400,6 +404,7 @@ class DynamicPanel(QWidget):
     def _on_mode_changed(self, mode_id):
         """0=单原子, 1=双原子。纯显隐切换（两套波形面板独立存在，不搬家）。"""
         self._is_two_body = (mode_id == 1)
+        self._nbody = 'pair' if mode_id == 1 else 'single'
         # V_dd 参数
         self._vdd_box.setVisible(self._is_two_body)
         # Sambe 高级行（双原子 + sambe/auto）
@@ -414,6 +419,21 @@ class DynamicPanel(QWidget):
         self.decay_mode_cb.setEnabled(True)
         # 刷新初态下拉
         self._on_m_changed()
+
+    def set_nbody(self, nbody):
+        """声明演化族（'single' / 'pair' / 'many'）——**多体页借本页运行流的入口**。
+
+        P3-1：多体页不自己复制一份运行流（那会违反 I5 人机/单多体同一路径），而是
+        经本方法把族设为 'many'，再调 `_run(on_done=…)`。本页的单/双原子单选钮只
+        覆盖 'single'/'pair' 两档，故这里**只改 `_nbody`、不动那些单选钮的显隐**
+        （多体页有自己的参数面板与画布，切回动态页时单选钮仍指向单/双）。
+        """
+        nbody = str(nbody or 'single')
+        if nbody not in ('single', 'pair', 'many'):
+            raise ValueError('未知演化族 %r（合法 single/pair/many）' % nbody)
+        self._nbody = nbody
+        self._is_two_body = (nbody == 'pair')
+        return nbody
 
     def eventFilter(self, obj, ev):
         """波形拖放接力（与 ui_waves 拖拽源同一 MIME）：
@@ -792,21 +812,29 @@ class DynamicPanel(QWidget):
         return None
 
     # ---------- 运行演化（后台线程 + 进度条 + 可取消） ----------
-    def _run(self):
+    def _run(self, on_done=None):
+        """跑演化（单/双/多体同一条路径，I5）。
+
+        `on_done(result, error)`：结果回调覆盖（缺省 `_on_evolve_done`）。多体页
+        （P3-1）借本方法跑、但用自己的画布渲染 ⇒ 传自己的回调；回调**必须**自行调
+        `_finish_run_ui()`（那是运行 UI 收尾的唯一入口）。
+        """
         if getattr(self, '_worker', None) is not None \
                 and self._worker.isRunning():
             QMessageBox.information(self, '提示', '已有演化在运行，请先等待或取消。')
             return
         self._sweep_retired_workers()   # 上一轮线程若已退出，丢掉它的引用
+        many = (getattr(self, '_nbody', 'single') == 'many')
+        _done = on_done or self._on_evolve_done
         self.refresh_groups()          # 运行前取最新共用能级组（无需外部散布同步）
-        if not self.main_groups:
+        if not many and not self.main_groups:
             QMessageBox.information(self, '提示', '请先在主程序添加能级组。')
             return
         # t72 进度协议（engines 经 coupling.stage_progress 写入，GUI 映射）：
         #   prog[2]=阶段（0 准备 1 积分 2 收尾）、prog[0]=阶段内进度 0..1、
-        #   prog[1]=取消标志。定时器在主线程预处理（基组/场/V_dd）之前启动，
-        #   配合 _prep 的 processEvents 泵——预处理期间对话框同样显示阶段、
-        #   进度与耗时，且可取消（此前 V_dd 等长预处理完全无反馈）。
+        #   prog[1]=取消标志。轮询定时器在主线程预处理（基组/场/V_dd）之前启动，
+        #   配合 _prep 的 processEvents 泵——预处理期间**底栏常驻控件**照常显示
+        #   阶段/进度/耗时，且可取消（此前 V_dd 等长预处理完全无反馈）。
         self.progress_arr = np.zeros(3)
         self._run_active = True
         self._prep_label = '准备'
@@ -814,43 +842,45 @@ class DynamicPanel(QWidget):
         # 常驻进度控件（底栏）**不置 None**——轮询定时器（100ms）先于一切触发，
         # _poll_progress 直接写它们；缺失会变成 Qt 槽内 AttributeError →
         # PyQt qFatal → 原生崩溃（无 Python 回溯）。这里只清零 + 复位按钮。
-        self._dlg = None
         self._reset_progress_ui()
         self.run_btn.setText('取消计算')      # 运行中：同一按钮即"取消计算"
         self.run_btn.setEnabled(True)
-        self._dlg_timer = QTimer(self)
-        self._dlg_timer.setSingleShot(True)
-        self._dlg_timer.timeout.connect(self._show_progress)
-        self._dlg_timer.start(400)
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._poll_progress)
         self._timer.start(100)
         try:
-            states = self._current_states(
-                pump=lambda f: self._prep('构建基组/子能级', 0.6 * f))
-            self._prep('基组就绪', 0.65)
-            # 无波形时须有实际耗散/自动通道，否则就是空演化 → 提示
-            has_effect = self._has_waves()
-            if not has_effect:
-                mode = self._decay_mode()
-                if mode == 'custom':
-                    has_effect = bool(self.decay_cfgs)
-                elif mode == 'auto':
-                    # 门槛只做廉价判断（基组是否含低激发态），不触发 ARC 寿命计算：
-                    # 此处的 auto_decays 曾致 Qt 原生堆损坏（0xC0000005，tab 切换后
-                    # 确定性复现；与百度网盘无关，网盘关闭后依然崩）。
-                    # auto_decays 仅在真正运行时计算一次。
-                    has_effect = any(s['n'] <= 15 for s in states)
-            if not has_effect:
-                QMessageBox.information(
-                    self, '提示',
-                    '请先在下方波形区添加光波形（频率/光强/包络），'
-                    '或开启/配置自发辐射（自动档需基组含 6P 等低激发态），'
-                    '再运行演化。')
-                return
+            if many:
+                # 多体（P3-1）：基组由 manybody.atoms 自带（g/r 逐原子），**不建**
+                # 单体基组；驱动来自 atoms 的 Ω/δ，**不查**波形/衰变档 ⇒ 跳过那两道
+                # "无驱动"门槛（它们只对 single/pair 有意义）。
+                states = []
+                self._prep('多体：标定在主线程（碰 ARC）', 0.65)
+            else:
+                states = self._current_states(
+                    pump=lambda f: self._prep('构建基组/子能级', 0.6 * f))
+                self._prep('基组就绪', 0.65)
+                # 无波形时须有实际耗散/自动通道，否则就是空演化 → 提示
+                has_effect = self._has_waves()
+                if not has_effect:
+                    mode = self._decay_mode()
+                    if mode == 'custom':
+                        has_effect = bool(self.decay_cfgs)
+                    elif mode == 'auto':
+                        # 门槛只做廉价判断（基组是否含低激发态），不触发 ARC 寿命计算：
+                        # 此处的 auto_decays 曾致 Qt 原生堆损坏（0xC0000005，tab 切换后
+                        # 确定性复现；与百度网盘无关，网盘关闭后依然崩）。
+                        # auto_decays 仅在真正运行时计算一次。
+                        has_effect = any(s['n'] <= 15 for s in states)
+                if not has_effect:
+                    QMessageBox.information(
+                        self, '提示',
+                        '请先在下方波形区添加光波形（频率/光强/包络），'
+                        '或开启/配置自发辐射（自动档需基组含 6P 等低激发态），'
+                        '再运行演化。')
+                    return
             # 同步配置 → session（人机同路径 I5）；ops.prepare 在**主线程** build_run
             # （基组/场/V_dd/auto_decays 都碰 cache，ARC SQLite 线程亲和 → 必须主线程，
-            # 见 B-1①）。单/两体同一入口（dynamic.mode 决定），不再手动分派。
+            # 见 B-1①）。单/两体/多体同一入口（dynamic.mode 决定），不再手动分派。
             self._prep('同步配置 → 会话', 0.7)
             self._sync_run_config()
             self._run_states = states
@@ -862,7 +892,7 @@ class DynamicPanel(QWidget):
                 self._hub_run = True
                 self._prep('Hub 模式：演化在 Hub 侧', 1.0)
                 self._worker = HubRunWorker(self.main.app_bridge, 'GUI 运行演化')
-                self._worker.done.connect(self._on_evolve_done)
+                self._worker.done.connect(_done)
                 self._worker.log_msg.connect(self.main.log)
                 self._worker.start()
                 return
@@ -877,7 +907,7 @@ class DynamicPanel(QWidget):
             from .evolve_worker import RunWorker
             self._worker = RunWorker(ops, prepared, self.progress_arr,
                                      actor='gui', reason='GUI 运行演化')
-            self._worker.done.connect(self._on_evolve_done)
+            self._worker.done.connect(_done)
             self._worker.log_msg.connect(self.main.log)
             self._worker.start()
         except RuntimeError as e:
@@ -887,7 +917,7 @@ class DynamicPanel(QWidget):
                 return
             raise
         finally:
-            # worker 已启动（_worker 非 None）时定时器/对话框由 done 回调收尾；
+            # worker 已启动（_worker 非 None）时定时器由 done 回调收尾；
             # 其余返回路径（提示/取消/异常）在此统一清理。
             if getattr(self, '_worker', None) is None:
                 self._finish_run_ui()
@@ -901,14 +931,24 @@ class DynamicPanel(QWidget):
         """
         from ..core import waveforms as _wf
         two = bool(self._is_two_body)
+        nbody = getattr(self, '_nbody', 'pair' if two else 'single')
         patch = {
             'groups.list': [dict(g) for g in self.main_groups],
-            'dynamic.mode': 1 if two else 0,
+            # 演化族（P3-1）：many 时写 2 → runspec 唯一分派到 manybody.runspec_mb；
+            # many 不用 waves/psi/decay（驱动在 manybody.atoms 的 Ω/δ），故下面
+            # 那些键只在 single/pair 分支写。
+            'dynamic.mode': {'single': 0, 'pair': 1, 'many': 2}[nbody],
             'dynamic.method': self.method_cb.currentText(),
             'dynamic.t_max': float(self.tmax_sb.value()),
             'dynamic.npts': int(self.npts_sb.value()),
             'dynamic.decay_index': int(self.decay_mode_cb.currentIndex()),
         }
+        if nbody == 'many':
+            patch.pop('dynamic.decay_index')             # 多体不走本页衰变档
+            patch = {k: v for k, v in patch.items() if v is not None}
+            self.main.app_bridge.write_many(
+                patch, reason='GUI 运行前同步配置（多体）', actor='gui')
+            return
         if patch['dynamic.decay_index'] == 2:            # 自定义衰变通道
             patch['dynamic.decays'] = [dict(c) for c in self.decay_cfgs]
         if two:
@@ -938,9 +978,9 @@ class DynamicPanel(QWidget):
     def _prep(self, label, frac):
         """主线程预处理进度泵（t72）：写阶段 0 进度 + 泵事件 + 取消检查。
 
-        processEvents 让 400ms 对话框定时器/100ms 轮询定时器/重绘在长
+        processEvents 让 100ms 轮询定时器/重绘/取消按钮在长
         预处理（dme 查询、V_dd 构建）期间照常运行——否则主线程阻塞，
-        对话框出不来、取消点不动。"""
+        进度条纹丝不动、取消点不动。"""
         pa = self.progress_arr
         self._prep_label = label
         pa[2] = 0.0
@@ -964,13 +1004,8 @@ class DynamicPanel(QWidget):
         现在：仍在跑 → 交给它的 `finished` 信号释放（那时线程确已退出）；已退出
         → 直接丢。收尾时刻的强引用保存在 `_retired_workers`。
         """
-        if getattr(self, '_dlg_timer', None) is not None:
-            self._dlg_timer.stop()
         if getattr(self, '_timer', None) is not None:
             self._timer.stop()
-        if getattr(self, '_dlg', None) is not None:
-            self._dlg.close()
-        self._dlg = None
         # ⚠ 2026-09-14 修（用户实测：算完进度条停在 90% 多不动）：
         #   这里原来还有 `self._pbar = None` / `self._stage_label = None`——
         #   那是"进度框随运行销毁"时代的产物。现在它们是**常驻**控件
@@ -1202,18 +1237,9 @@ class DynamicPanel(QWidget):
         if getattr(self, '_stage_label', None) is not None:
             self._stage_label.setText('空闲' if idle else '准备…')
 
-    def _show_progress(self):
-        """**已废除**（2026-09-14 使用者裁决）：进度改由窗口底栏常驻控件显示，
-        不再弹对话框。保留此空方法只为兼容既有接线（`_dlg_timer`、
-        `ai/server.py` 的 patch/restore）——调它不做任何事。
-        """
-        return
-
     def _cancel_run(self):
         """用户点取消：置取消标志，等待计算线程退出。"""
         self.progress_arr[1] = 1.0
-        if self._dlg is not None:
-            self._dlg.setWindowTitle('正在取消…')
         # 常驻底栏（取代弹窗）：取消也要有可见反馈
         if getattr(self, '_stage_label', None) is not None:
             self._stage_label.setText('正在取消…')
@@ -1260,7 +1286,10 @@ class DynamicPanel(QWidget):
         背景（用户裁决）：成本预算曾作为引擎参数、默认 4e4 rad，构造期就按成本窗
         删对且静默 —— 那是"为了跑得快悄悄改模型"。现在默认不限制（solve.COST_BUDGET
         留空），真实耦合一律保留；代价与省法都摆到运行前这一次选择里。
-        AI 发起的运行不弹窗（`_ai_initiated`）：只写日志、采用"完整物理"路径。
+
+        P0-7：原 docstring 写"AI 发起的运行不弹窗（`_ai_initiated`）"——该旗标全库
+        从未置位，已删（见下方删除处说明）。**AI 路径依然不弹模态**：AI 运行走 MCP
+        `run_compute`（Hub 进程），不经过本方法；本方法只服务人的点击。
         """
         run = (prepared or {}).get('run') or {}
         if run.get('method') != 'mixed' or run.get('two_body'):
@@ -1304,20 +1333,12 @@ class DynamicPanel(QWidget):
               f'最远失谐降到 {alt.get("max_det_mhz", 0):.4g} MHz。\n'
               f'注意：剔除的是**真实物理通道**（freeze 三光子梯子第三级'
               f'就是这么丢的）。')
-        if getattr(self, '_ai_initiated', False):
-            self.main.log(f'[成本预检] {head}；{detail.splitlines()[1]}'
-                          f'AI 运行 → 采用完整物理路径（不弹窗）')
-            return prepared
-        # ⚠ 弹对话框之前**必须先把进度框撤下**：进度框在 _run 开头 400ms 后
-        # 自动弹出，且是 `Qt.WindowModal` —— 模态阻塞的是整个父窗口（含挂在
-        # 它下面的其它对话框），于是成本报告被压在下面、**根本点不到**（实测 bug）。
-        timer = getattr(self, '_dlg_timer', None)
-        if timer is not None:
-            timer.stop()
-        dlg = getattr(self, '_dlg', None)
-        dlg_was = bool(dlg is not None and dlg.isVisible())
-        if dlg_was:
-            dlg.hide()
+        # ⚠ P0-7：这里原来有一个 `if self._ai_initiated: … 不弹窗` 分支，但全库
+        # **没有任何地方给它赋过 True** ⇒ 恒假，是"看起来在保护其实没有"的死接线。
+        # 已删除。**AI 路径仍然不弹模态**，但是**结构性**保证而非旗标保证：AI 的
+        # 运行走 MCP `run_compute`（Hub 进程内 ops.run），**不经过本方法**；
+        # 本方法只由人的点击（`_on_run_clicked` / 检视器「应用并重跑」）进入。
+        # 若将来新增"进程内 AI 直调 _run"的路径，必须显式传参声明，不要靠旗标默认值。
         from PyQt5.QtWidgets import QMessageBox
         box = QMessageBox(self.main)
         box.setWindowTitle('运行前成本报告')
@@ -1329,19 +1350,14 @@ class DynamicPanel(QWidget):
                                QMessageBox.DestructiveRole)
         b_cancel = box.addButton('取消', QMessageBox.RejectRole)
         box.setDefaultButton(b_full)
-        box.setWindowModality(Qt.ApplicationModal)   # 独立于父窗口，确保可点
+        # 独立于父窗口（本对话框自己就是最上层窗口，无进度框可被压住）
+        box.setWindowModality(Qt.ApplicationModal)
         box.exec_()
         clicked = box.clickedButton()
         if clicked is b_cancel:
-            # 取消＝本轮未起算：进度框不再恢复，由调用方 _finish_run_ui 收尾
+            # 取消＝本轮未起算，由调用方 _finish_run_ui 收尾
             self.main.log('成本预检：用户取消本次运行')
             return None
-        # 继续运行 → 恢复进度 UI。**不要**再启动 400ms 定时器：到点会再造
-        # 一个进度框（旧框没人更新 → 屏幕上两个框、一个动一个不动，实测 bug）。
-        if dlg_was and dlg is not None:
-            dlg.show()
-        else:
-            self._show_progress()        # 幂等：已有框就直接返回
         if clicked is b_fast:
             # 写会话真值（solve.COST_BUDGET，运行级）→ 进存档、可 undo、AI 也看得见；
             # 配置变了 → 重新 prepare（build_run 按成本窗剔除远失谐对）。

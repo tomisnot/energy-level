@@ -219,7 +219,12 @@ class LevelAnalysisPanel(QWidget):
         fs = self.owner.field_state
         B = fs.B_gauss if fs is not None else 0.0
         ac = fs.address_cfg if fs is not None else {'enabled': False}
-        self.canvas.draw_levels(self.owner.cache, B, self.owner.groups, ac, True, visible)
+        # P1-7：AC-Stark 精度（窗口/光子块）来自场面板（静态页唯一来源）；
+        # 无场面板（独立构造/自检）→ None = 引擎默认，逐位不变。
+        _fld = getattr(self.owner, 'field', None)
+        ac_kw = _fld.ac_kwargs() if _fld is not None else None
+        self.canvas.draw_levels(self.owner.cache, B, self.owner.groups, ac, True,
+                                visible, ac_kw)
         if self.canvas._lines_off is not self.owner._last_lines_off:
             self.owner._last_lines_off = self.canvas._lines_off
             self.populate_peak_table(self.spec_off_table, self.canvas._lines_off)
