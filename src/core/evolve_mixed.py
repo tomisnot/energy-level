@@ -31,7 +31,7 @@ from .diag import h_snapshot_note as _h_snap_note
 from .coupling import (rhs_phi_pairs, pack_rhs, stage_progress,
                        static_phase_keep, mw_pair_keep, mw_cap_mhz,
                        dop853_driver_mixed)  # 薄包装：让磁盘缓存命中
-from .field_build import group_by_freq
+from .field_build import group_by_freq, feature_max_step
 from .sambe import (_SambeSetup, _m_analytic, embed,
                     sector_sum_pops, sector_sum_amp)
 
@@ -271,6 +271,9 @@ class _MixedSetup:
         # 耦合对 7 元组（a<b 单侧——反向由共享内核厄米补齐，与两体同契约；
         # t70 三角过滤：Kcw 为 Hermitian 全矩阵，双向打包会把同一耦合驱动两次）
         self.pairs = []
+        # 光场对因 BW_OPT 被丢弃的记账（2026-09-22，手册 §8.3）：原先**完全静默**
+        # （同族的成本窗剔除在两体侧有记账 + diag + 告警，单体侧什么都没有）。
+        self.bw_drop_stats = {'n': 0, 'max_abs_v_mhz': 0.0}
         for gi, g in enumerate(grps_opt):
             Kcw_list = self.setup.kc_lists(gi)   # 唯一入口（稠密缺失→同源稀疏）
             for wi_local, wf in enumerate(g['envs']):
@@ -286,6 +289,13 @@ class _MixedSetup:
                             (int(a), int(b), Kcw[a, b],
                              float(self.D_full[a] - self.D_full[b]),
                              0, 0.0, wf))
+                    else:
+                        # BW_OPT 名义是"双峰分离器"（共振对 ~0 vs 反旋 ~2ω），但它
+                        # 同时会删掉任何落在 bw~2ω 之间的光场对 ⇒ 改了模型必须交代
+                        self.bw_drop_stats['n'] += 1
+                        self.bw_drop_stats['max_abs_v_mhz'] = max(
+                            self.bw_drop_stats['max_abs_v_mhz'],
+                            abs(complex(Kcw[a, b])))
         for g in grps_mw:
             w = float(g['omega_mhz'])
             for A, env in zip(g['As'], g['envs']):
@@ -528,9 +538,24 @@ def evolve_mixed(states, fields, psi0, t_grid, tol=None,
     if driver == 'numba':
         # 阶段 1（积分）由驱动在首个接受步置位——调用内的 numba 装载/
         # 编译期保持阶段 0（"准备"标签 + 耗时），GUI 显示不失真
+        #
+        # ⚠ 2026-09-22 修 C1b（手册 §8.1 同族，**默认引擎静默给错**）：
+        # `max_step` 只在**起步**参与步长选择（dop853.py:239-243 自述：
+        # `h_abs = min(100·h0, h1, interval, max_step)`，之后按误差控制自由
+        # 增长），**不是上限**。而包络在脉冲前后**恰为 0**（|t−c| ≳ 19σ 时
+        # exp 下溢到 0.0）⇒ 误差估计看到 0 误差 ⇒ 步长一路涨到 ~60 ns ⇒
+        # **整个短脉冲被跨过去**。实测（σ=2 ns / T=620 ns / 共振 1000 MHz /
+        # Ω=1 MHz）：默认 nfev=131（10 个接受步！）给 7.7e-94（解析 2.48e-4）；
+        # σ=0.62 ns 给**恰好 0**。且**与 tol 无关、与 max_step 无关**（后者只管
+        # 起步）——这正是"调 tol/调 max_step 都没反应"的原因。
+        # 修法：未显式给 max_step_hard 时，由包络最窄特征时长导出每步硬上限
+        # （`feature_max_step`，深混叠区才生效 ⇒ 宽脉冲场景 no-op）。
+        _msh = max_step_hard
+        if _msh is None:
+            _msh = feature_max_step(getattr(setup, '_env_list', None), T)
         y_out = dop853_driver_mixed(X0, t, T, float(tol), DEFAULT_ATOL,
                                     max_step, prog, stat, dt_hist,
-                                    float(max_step_hard or 0.0),
+                                    float(_msh or 0.0),
                                     pack['iis'], pack['jjs'],
                                     pack['vals'], pack['dDs'], pack['is_mw'],
                                     pack['wcos'], pack['n_pairs_w'],
@@ -606,6 +631,12 @@ def evolve_mixed(states, fields, psi0, t_grid, tol=None,
         {'skipped': _h_snap_note(setup.dim)})
         diag_dt = (dt_hist[:int(stat[4])] if dt_hist is not None
                    else np.zeros((0, 2)))
+        # 2026-09-22（手册 §8.4）：`diag.summarize/warnings` 读的
+        # `meta['keep'/'n_drop_cap'/'n_drop_phase']`、`pairs['n'/'max_abs_v_mhz']`、
+        # `acize['n_shifted']` 此前**全仓无写入端** ⇒ 那些字段恒 None、"成本窗剔除
+        # =改了模型"的告警**永不触发**（哑告警）。此处一并补齐。
+        _vmax = (float(np.abs(diag_pairs['v']).max())
+                 if diag_pairs['v'].size else 0.0)
         out_diag = dict(
             meta=dict(method='mixed', backend='mixed-phi-dop853', N=N,
                       P=setup.P, dim=setup.dim, t_end=T,
@@ -613,14 +644,24 @@ def evolve_mixed(states, fields, psi0, t_grid, tol=None,
                       r_crit=float(rc), n_pairs=len(pr), tol=float(tol),
                       max_step=float(max_step), bw=float(setup.bw),
                       mw_cap=float(setup.mw_cap), mw_max=float(mm),
+                      keep=int(setup.mw_pair_stats.get('keep', 0)),
+                      n_drop_cap=int(setup.mw_pair_stats.get('drop_cap', 0)),
+                      n_drop_phase=int(setup.mw_pair_stats.get('drop_phase', 0)),
+                      n_drop_bw=int(setup.bw_drop_stats.get('n', 0)),
+                      max_drop_bw_abs_v_mhz=float(
+                          setup.bw_drop_stats.get('max_abs_v_mhz', 0.0)),
+                      max_abs_v_mhz=_vmax,
                       labels=[s['label'] for s in states], stride=N),
             photon=dict(Ms=list(setup.M_used), P=setup.P, dim=setup.dim,
                         strides=list(setup.setup.strides),
                         nvecs=np.asarray(setup.setup.nvecs),
                         D_full=np.asarray(setup.D_full, float).copy()),
             acize=dict(r_crit=float(rc), fields=acize_fields,
+                       n_shifted=int(np.count_nonzero(
+                           np.abs(np.asarray(E2 - E, float)) > 1e-9)),
                        shift=np.asarray(E2 - E, float).copy()),
-            pairs=diag_pairs,
+            pairs=dict(diag_pairs, n=int(diag_pairs['v'].size),
+                       max_abs_v_mhz=_vmax),
             solver=dict(t_steps=diag_dt[:, 0].copy(),
                         dt=diag_dt[:, 1].copy(),
                         nfev=int(stat[0]), n_acc=int(stat[1]),
@@ -642,8 +683,13 @@ def evolve_mixed(states, fields, psi0, t_grid, tol=None,
     if comp is not None:
         out['loss_components'] = comp
     if record_amp:
-        Xf = np.exp(-1j * C * setup.D_full * T) * y_out[-1]
-        out['psi_amp'] = Xf
+        # ⚠ 2026-09-22 修（手册 §8.8）：原为
+        #     Xf = exp(-1j*C*setup.D_full*T) * y_out[-1];  out['psi_amp'] = Xf
+        # 两个错：① 长度是**扩展维** N·P（其余单体引擎 hard/sambe/reference/
+        # twofield 一律回 N 维物理振幅）；② 给的是 Sambe 的 X，不是物理振幅。
+        # `sector_sum_amp` 正是本引擎算 pops 用的同一个重构（见上方
+        # `pops[i] = sector_sum_pops(y_out[i], setup.P, N)`）⇒ 与 pops 同源、长度 N。
+        out['psi_amp'] = sector_sum_amp(y_out[-1], setup.P, N)
     return out
 
 
@@ -757,12 +803,24 @@ _BW_STATS = {'n_drop_bw': 0, 'max_drop_abs_v_mhz': 0.0}
 def _take_bw_stats():
     """**读取并清零**（N2 修：模块级计数器必须每次运行独立——原来跨运行累积，
     实测同一进程连跑两次两体 mixed：run1 `n_drop_bw=16` → run2 `=32`，
-    会让诊断虚高、归因错；GUI 连续运行 / 脚本扫描 / MCP 多次 run_compute 都会中）。"""
+    会让诊断虚高、归因错；GUI 连续运行 / 脚本扫描 / MCP 多次 run_compute 都会中）。
+
+    ⚠ 2026-09-22 补（手册 §8.2）：**这个"读并清零"只在 `diag=True` 时被调用**
+    （唯一调用点在 `if diag:` 块内）⇒ `diag=False` 的运行仍然累积，于是随后任一
+    `diag=True` 的运行报出的是"本进程至今所有运行之和"（实测 diag=False 连跑 3 次
+    ⇒ 16/32/48）。真正的修法在入口：`evolve_mixed_pair` 开头调 `_reset_bw_stats()`。
+    """
     n = int(_BW_STATS.get('n_drop_bw', 0))
     m = float(_BW_STATS.get('max_drop_abs_v_mhz', 0.0))
     _BW_STATS['n_drop_bw'] = 0
     _BW_STATS['max_drop_abs_v_mhz'] = 0.0
     return n, m
+
+
+def _reset_bw_stats():
+    """每次**运行入口**清零（与 diag 无关）——见 `_take_bw_stats` 的 ⚠ 段。"""
+    _BW_STATS['n_drop_bw'] = 0
+    _BW_STATS['max_drop_abs_v_mhz'] = 0.0
 
 
 def _split_waves(fields, mw_max=None):
@@ -818,6 +876,7 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
     if progress_arr is None:
         progress_arr = np.zeros(3)
     stage_progress(progress_arr, 0, 0.0)     # 阶段 0：装配/JIT 装载
+    _reset_bw_stats()                        # 每次运行独立（手册 §8.2）
     t = np.asarray(t_grid, float)
     T = float(t[-1])
     N = len(states)
@@ -905,7 +964,11 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
     pairs = []
     pair_tags = []
     # t79：微波对保留统计（主判据=累积相位，mw_cap 是成本预算）
-    mw_stats = {'keep': 0, 'drop_cap': 0, 'drop_phase': 0}
+    # `drop_cost_loud`（2026-09-22）：**仅因成本窗**被剔除、而 Θ 判据本来会保留的
+    # 对数——单体侧早有此记账 + 吵闹日志（见 `_MixedSetup` 与 `drop_cost_loud`），
+    # 两体侧一直没有 ⇒ "把演化窗口拉长反而丢掉远失谐梯级"在两体上完全静默。
+    mw_stats = {'keep': 0, 'drop_cap': 0, 'drop_phase': 0,
+                'drop_cost_loud': 0, 'loud_max_om': 0.0, 'loud_max_det': 0.0}
 
     def _one(tv):
         return np.ones_like(np.atleast_1d(tv))
@@ -968,6 +1031,13 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
                         # 一判据，随 Ω² 自适应）；mw_cap 是相预算派生的成本上限。
                         if det > mw_cap:
                             mw_stats['drop_cap'] += 1
+                            # 成本剔除但 Θ 判据本来会保留 ⇒ 这是"拉长窗口反而丢
+                            # 路径"的信号，必须吵闹（与单体侧同口径）
+                            if mw_pair_keep(om, det, T):
+                                mw_stats['drop_cost_loud'] += 1
+                                if om > mw_stats['loud_max_om']:
+                                    mw_stats['loud_max_om'] = om
+                                    mw_stats['loud_max_det'] = det
                             continue
                         if not mw_pair_keep(om, det, T):
                             mw_stats['drop_phase'] += 1
@@ -989,6 +1059,12 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
     log(f'[mixed_pair] 微波对累积相位判据：保留 {mw_stats["keep"]}'
         f'（θ_tol={PHASE_TOL:.0e} rad；成本预算剔除 '
         f'{mw_stats["drop_cap"]}，累积相位剔除 {mw_stats["drop_phase"]}）')
+    if mw_stats['drop_cost_loud']:
+        log(f'[mixed_pair] ⚠ 有 {mw_stats["drop_cost_loud"]} 对**仅因成本窗被剔除**'
+            f'（Θ 判据本会保留，最强一对 |Ω|={mw_stats["loud_max_om"]:.3g} MHz /'
+            f' Δ={mw_stats["loud_max_det"]:.3g} MHz）。窗宽 = PHASE_BUDGET/(C·T)，'
+            f'此处 T={T:g} ns 给出 {mw_cap:.4g} MHz；若该远失谐通道是物理的一部分，'
+            f'请把成本预算留空（= 不限制）。成本只该"换速度"，不该默默改模型。')
 
     # 任意波形微波（t79）：8 元组带 ph_fn → 内核走 cos(φ(t)) 查表。
     # 选对判据用**信号瞬时频率带宽**（任意波形无单一 om_m），不能用
@@ -1035,6 +1111,11 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
 
     pack = pack_rhs(pairs, T)
     Cv = CONV
+    # 窄脉冲每步硬上限（2026-09-22，C1b 同族修复）：与单体 mixed 同一处事故
+    # （`max_step` 只管起步；包络在脉冲外恰为 0 ⇒ 步长暴涨跨过脉冲）。
+    _msh = max_step_hard
+    if _msh is None:
+        _msh = feature_max_step([p[6] for p in pairs], T)
     stat = np.zeros(6) if diag else np.zeros(4)
     dt_hist = (np.zeros((100000, 2)) if diag else None)
     stage_progress(progress_arr, 0, 0.9)     # 打包/env 表完成（JIT 在驱动首调）
@@ -1058,7 +1139,7 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
     if driver == 'numba':
         y_out = dop853_driver_mixed(
             X0, t, T, float(tol), 1e-11, max_step,
-            progress_arr, stat, dt_hist, float(max_step_hard or 0.0),
+            progress_arr, stat, dt_hist, float(_msh or 0.0),
             pack['iis'], pack['jjs'],
             pack['vals'], pack['dDs'], pack['is_mw'], pack['wcos'],
             pack['n_pairs_w'], pack['env_tab'], pack['env_dt'],
@@ -1144,6 +1225,8 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
                  if _h_snap_ok(dim) else {'skipped': _h_snap_note(dim)})
         diag_dt = (dt_hist[:int(stat[4])] if dt_hist is not None
                    else np.zeros((0, 2)))
+        _vmax = (float(np.abs(diag_pairs['v']).max())
+                 if diag_pairs['v'].size else 0.0)
         out_diag = dict(
             meta=dict(method='mixed', backend='mixed-phi-dop853-pair', N=N,
                       P=P, dim=dim, t_end=T, M=[1] if has_opt else [],
@@ -1153,8 +1236,16 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
                       # 2026-09-15（核查报告 D1）：光场对因 BW_OPT 被丢弃的数量——
                       # 与成本窗同款的"改了模型必须交代"；原来完全静默、且
                       # diag 侧读的 n_drop_cap/n_drop_phase 根本没有写入端（哑告警）。
+                      # 2026-09-22（手册 §8.4）：把 keep/n_drop_cap/n_drop_phase 也
+                      # 补上——它们此前仍无写入端，故"成本窗剔除=改了模型"的告警
+                      # 一直不触发（D1 只补了 n_drop_bw）。
                       n_drop_bw=(_bw := _take_bw_stats())[0],
                       max_drop_bw_abs_v_mhz=float(_bw[1]),
+                      keep=int(mw_stats['keep']),
+                      n_drop_cap=int(mw_stats['drop_cap']),
+                      n_drop_phase=int(mw_stats['drop_phase']),
+                      n_drop_cost_loud=int(mw_stats['drop_cost_loud']),
+                      max_abs_v_mhz=_vmax,
                       labels=[f"({states[i]['label']})×({states[j]['label']})"
                               for i in range(N) for j in range(N)],
                       stride=N2),
@@ -1162,8 +1253,9 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
                         strides=[1] if has_opt else [],
                         nvecs=np.arange(P), D_full=np.asarray(K0, float).copy()),
             acize=dict(r_crit=float(rc), fields=acize_fields,
-                       shift=np.zeros(N2)),
-            pairs=diag_pairs,
+                       n_shifted=0, shift=np.zeros(N2)),
+            pairs=dict(diag_pairs, n=int(diag_pairs['v'].size),
+                       max_abs_v_mhz=_vmax),
             solver=dict(t_steps=diag_dt[:, 0].copy(), dt=diag_dt[:, 1].copy(),
                         nfev=int(stat[0]), n_acc=int(stat[1]),
                         n_rej=int(stat[2]), norm_dev=norm_dev),
@@ -1187,7 +1279,12 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
         diag=out_diag if diag else None,
     )
     if record_amp:
-        out['psi_amp'] = sector_sum_amp(X, P, N2)
+        # ⚠ 2026-09-22 修（手册 §8.8 同族）：原为 `sector_sum_amp(X, P, N2)`——
+        # `X` 只在 **scipy** 分支（`driver != 'numba'`）里被赋值，生产路径
+        # （driver='numba'）走 `y_out` ⇒ `record_amp=True` **必崩**
+        # （实测 `UnboundLocalError: local variable 'X'`）。改用 `y_out[-1]`
+        # （与上方 `pops[i] = sector_sum_pops(y_out[i], P, N2)` 同源）。
+        out['psi_amp'] = sector_sum_amp(y_out[-1], P, N2)
     log(f'[mixed_pair] 完成：norm {norm_dev:.2e}，DOP853 求值 {n_dop}')
     return out
 

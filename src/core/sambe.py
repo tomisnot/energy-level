@@ -21,7 +21,8 @@ from scipy.sparse.linalg import expm_multiply, LinearOperator, gmres
 
 from .evolve_util import (CONV, _POL_Q, as_vector,
                           pair_psi0_vector, env_at)  # t74 工具/常量单源
-from .field_build import group_by_freq, _validate_fields
+from .field_build import (group_by_freq, _validate_fields,
+                          env_span, env_is_const, env_feature_ns)
 from .tensor import (_pair_loss_vectors, _as_product_psi,
                      _reduce_A, _reduce_B)
 from .tensor_fields import _pair_groups
@@ -459,13 +460,29 @@ class _SambeSetup(SambeSetup):
 
 def _seg_decomp(setup, groups, ta, tb):
     """段算符分解：中点全零包络 → 冻结对角（单体既有快路径）；
-    否则装配 K(mid)（dense/sparse 由 SambeSetup 按扩展维自动分流）。"""
+    否则装配 K(mid)（dense/sparse 由 SambeSetup 按扩展维自动分流）。
+
+    ⚠ 2026-09-22 修（手册 §8.1 同族）：原实现只看**中点**是否恰为 0。若某段
+    的中点落在包络的零区、而段内其实有场（窄脉冲整段包住、方波沿落在段内），
+    旧实现返回 `('diag', None)` —— 该段**不带任何耦合、且不做缺陷修正**，
+    场被静默丢掉。现在只有**整段**包络恒为 0 才走对角快路径；否则装配
+    K(mid) 并由缺陷修正去积分段内真实的包络变化（K(mid) 在 env(mid)=0 时
+    数值上仍等于 K_static，故不改变"中点确实无场"的那部分行为）。
+    """
     mid = 0.5 * (ta + tb)
     for gi, g in enumerate(groups):
         if not setup._group_active[gi]:
             continue
         for wf in _group_envs(g):
             if env_at(wf, mid) != 0.0:
+                return SambeSetup.hamiltonian_seg(setup, mid)
+    # 中点全零：再确认**整段**是否真的没有场（廉价路径在前，故这里很少走到）
+    for gi, g in enumerate(groups):
+        if not setup._group_active[gi]:
+            continue
+        for wf in _group_envs(g):
+            lo, hi = env_span(wf, ta, tb)
+            if max(abs(lo), abs(hi)) > 0.0:
                 return SambeSetup.hamiltonian_seg(setup, mid)
     return ('diag', None)
 
@@ -780,10 +797,17 @@ def _propagate_adaptive(setup, groups, psi0, t_grid, tol, progress_arr, log,
 
 
 def _env_all_constant(groups, T):
+    """所有包络在 [0,T] 上是否恒常（决定"一次对角化覆盖全时刻"的快路径）。
+
+    ⚠ 2026-09-22 修（手册 §8.1）：原实现是
+        `np.ptp(wf(np.linspace(0.0, T, 64))) > 1e-9`
+    ——固定 64 点对**窄脉冲是盲的**（实测 T=620/σ=0.5：64 点 ptp=9.3e-22，
+    真实 ptp=1.0）⇒ 误判恒常 ⇒ 整窗按中点包络（=脉冲峰）的 CW 算。
+    现在走 `field_build.env_is_const`（Wave 包络解析精确，见 `env_span`）。
+    """
     for g in groups:
         for wf in g['envs']:
-            v = np.asarray(wf(np.linspace(0.0, T, 64)), float)
-            if np.ptp(v) > 1e-9:
+            if not env_is_const(wf, 0.0, float(T)):
                 return False
     return True
 
@@ -1246,12 +1270,13 @@ def _pair_propagate(E_pair_rot, N, groups, opt_terms, V, gamma_pair,
         + (f'；纯冻结 h={frozen_h_ns}ns' if frozen_h_ns else ''))
 
     # ---- 全常数包络快速路径（稠密）：一次本征分解覆盖全部输出时刻 ----
+    # ⚠ 2026-09-22 修（手册 §8.1）：原用 64 点 np.ptp（对窄脉冲盲）⇒ 误判恒常
+    # ⇒ 整窗按中点 CW 算。现走 env_is_const（Wave 包络解析精确）。
     all_const = True
     probes = [wf for g in groups for wf in g['envs_w']]
     probes = probes + list(setup.opt_envs_w)
     for wf in probes:
-        v = np.asarray(wf(np.linspace(0.0, T, 64)), float)
-        if np.ptp(v) > 1e-9:
+        if not env_is_const(wf, 0.0, T):
             all_const = False
             break
     report = dict(n_segments=0, max_richardson_diff=0.0, dt_min_hit=False,

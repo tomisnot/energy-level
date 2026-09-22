@@ -70,6 +70,26 @@ class GaussianEnv:
         return self.peak * np.exp(-(tau - self.center_ns) ** 2
                                   / (2.0 * self.sigma_ns ** 2))
 
+    def span(self, lo, hi):
+        """包络在 [lo,hi]（**包络相对时间**）上的 (inf, sup)——**精确**。
+
+        GaussianEnv 单峰 ⇒ 极值只可能在区间两端或峰位取得（O(1)，与区间宽度
+        无关）。这是"这段包络是否恒常"的**唯一权威答案**，取代固定点数采样
+        （事故说明见 `field_build.env_span`）。
+        """
+        a, b = float(self.center_ns), float(self.sigma_ns)
+        lo, hi = float(lo), float(hi)
+        cands = [lo, hi]
+        if lo <= a <= hi:
+            cands.append(a)
+        vals = [self.peak * float(np.exp(-((c - a) ** 2) / (2.0 * b * b)))
+                for c in cands]
+        return min(vals), max(vals)
+
+    def dt_feature_ns(self):
+        """最窄变化特征时长（ns）：高斯 ⇒ σ。"""
+        return float(self.sigma_ns)
+
     def __repr__(self):
         return (f'GaussianEnv(center={self.center_ns}ns, '
                 f'sigma={self.sigma_ns}ns, peak={self.peak})')
@@ -104,6 +124,32 @@ class SquareEnv:
                         np.where(t > self.fall_start_ns + self.edge_ns,
                                  0.0, env))
 
+    def span(self, lo, hi):
+        """包络在 [lo,hi] 上的 (inf, sup)。
+
+        分段单调（升沿/平台/降沿/零区各自单调）⇒ 极值在折点或区间端点取得。
+        唯一例外：`fall_start < start+edge` 时升沿与降沿**重叠**，乘积在重叠区
+        可能有一个内部极值 ⇒ 额外取该重叠区中点与相邻候选点中点。
+        """
+        lo, hi = float(lo), float(hi)
+        knots = [self.start_ns, self.start_ns + self.edge_ns,
+                 self.fall_start_ns, self.fall_start_ns + self.edge_ns]
+        pts = [lo, hi] + [k for k in knots if lo <= k <= hi]
+        ov_lo, ov_hi = self.fall_start_ns, self.start_ns + self.edge_ns
+        if ov_hi > ov_lo:
+            mid = 0.5 * (ov_lo + ov_hi)
+            if lo <= mid <= hi:
+                pts.append(mid)
+        pts.sort()
+        pts = pts + [0.5 * (a + b) for a, b in zip(pts[:-1], pts[1:])]
+        vals = [float(np.asarray(self(np.array([c])), float).flat[0])
+                for c in pts]
+        return min(vals), max(vals)
+
+    def dt_feature_ns(self):
+        """最窄变化特征时长（ns）：方波 ⇒ 沿时长（0 = 理想跳变，无特征尺度）。"""
+        return float(self.edge_ns)
+
 
 class FileEnv:
     """**文件导入的光强包络**（保留载频）：env(τ) = interp(τ, t_ns, |amp|)。
@@ -136,6 +182,23 @@ class FileEnv:
     def __call__(self, tau):
         return np.interp(np.asarray(tau, float), self.t_ns, self.amp,
                          left=0.0, right=0.0)
+
+    def span(self, lo, hi):
+        """包络在 [lo,hi] 上的 (inf, sup)——精确。
+
+        `np.interp(..., left=0, right=0)` 是**分段线性 + 区外钳 0** ⇒ 极值在
+        样品点或区间端点取得。
+        """
+        lo, hi = float(lo), float(hi)
+        m = (self.t_ns >= lo) & (self.t_ns <= hi)
+        vals = [float(x) for x in self.amp[m]]
+        vals.append(float(np.asarray(self(np.array([lo])), float).flat[0]))
+        vals.append(float(np.asarray(self(np.array([hi])), float).flat[0]))
+        return min(vals), max(vals)
+
+    def dt_feature_ns(self):
+        """最窄变化特征时长（ns）：文件包络 ⇒ 最小样品间隔。"""
+        return self.dt_min_ns()
 
     def span_ns(self):
         """包络的绝对时长（ns）。"""
@@ -202,6 +265,22 @@ class Wave:
         """包络 callable：t→[0,1]，已按 offset 做绝对定位。"""
         t = np.asarray(t, float)
         return self.envelope(t - self.start())
+
+    # ---------- 包络变差（"这段是否恒常"的权威答案） ----------
+    def span(self, t0, t1):
+        """包络在**绝对时间** [t0,t1] 上的 (inf, sup)；包络不支持解析 ⇒ None。
+
+        消费方见 `field_build.env_span`（它同时处理裸 callable 的兜底）。
+        """
+        fn = getattr(self.envelope, 'span', None)
+        if not callable(fn):
+            return None
+        return fn(float(t0) - self.offset_ns, float(t1) - self.offset_ns)
+
+    def dt_feature_ns(self):
+        """最窄变化特征时长（ns）；包络不支持 ⇒ None。"""
+        fn = getattr(self.envelope, 'dt_feature_ns', None)
+        return None if not callable(fn) else float(fn())
 
     def __repr__(self):
         return (f'Wave({self.name!r}, freq={self.freq_mhz:.6g}MHz, '

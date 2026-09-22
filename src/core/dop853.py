@@ -248,6 +248,9 @@ def _dop853_driver(rhs, y0, t_eval, T, rtol, atol, max_step, prog, stat,
     MIN_FACTOR = 0.2
     MAX_FACTOR = 10.0
     EXP = -1.0 / 8.0
+    # 步长下溢下限（ns）：见拒绝分支的防下溢报错。取 1e-12 ns——比任何物理尺度
+    # 小 6 个量级以上，正常路径永远不会碰到（只有连续 ~18 次以上拒绝才到）。
+    _H_ABS_MIN = 1e-12
     t0 = 0.0
     K = _np.zeros((16, n), _np.complex128)
     y_out = _np.zeros((n_eval, n), _np.complex128)
@@ -353,6 +356,18 @@ def _dop853_driver(rhs, y0, t_eval, T, rtol, atol, max_step, prog, stat,
                 step_accepted = True
             else:
                 h_abs *= max(MIN_FACTOR, SAFETY * error_norm ** EXP)
+                # 防下溢（2026-09-22，实测缺陷）：连续拒绝按 0.2^k 把 h_abs 压到
+                # **恰好 0.0**，此后 h=0 ⇒ t 停滞、且稠密输出分支
+                # `x = (t_eval−t)/h_step` 抛 ZeroDivisionError（一句无从下手的
+                # 报错）。实测触发点：`max_step_hard` ≤0.2（hard）/ ∈{1.0,0.155,
+                # 0.1,0.05}（mixed，σ=2ns 场景）——即**运行级旋钮 MAX_STEP_HARD
+                # 调小反而必崩**。这里换成明确报错（D5：不静默、可教学）。
+                if h_abs < _H_ABS_MIN:
+                    raise RuntimeError(
+                        'DOP853 步长下溢：连续拒绝把 h 压到 %.3g ns < 下限 %.3g ns'
+                        '——RHS 在该尺度下过刚或已发散。检查 max_step_hard 是否'
+                        '过小、或场幅度是否发散（原行为是在稠密输出处抛'
+                        'ZeroDivisionError）' % (h_abs, _H_ABS_MIN))
                 if max_step_hard > 0.0 and h_abs > max_step_hard:
                     h_abs = max_step_hard      # 拒绝分支同样压住
                 step_rejected = True

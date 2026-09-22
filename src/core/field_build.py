@@ -19,17 +19,144 @@ from .param import Param   # 就地参数声明（值+元数据同处；mecha.re
 
 
 # ==== 本模块的参数（就地定义；Param 声明值+元数据同处，透明子类读点免改）====
-_ENV_SAMPLES = Param(64, 'field_build 包络探针数；包络恒常判断采样数（粗粒度）', tier='internal')
+_ENV_SAMPLES = Param(64, 'field_build 包络探针数；恒常判断的**均值**采样数（恒常与否由 env_span 决定，不由采样密度决定）', tier='internal')
+_ENV_CONST_TOL = Param(1e-9, '包络恒常门；sup−inf ≤ 本值 → 判恒常（沿用原 np.ptp<1e-9 口径）', tier='internal')
+_ENV_SPAN_FALLBACK_N = Param(2001, '包络变差兜底采样点数；**仅**用于没有解析 span 的裸 callable（Wave 包络走各自的精确 span）', tier='internal')
 # （原 AC_NEAR_CUTOFF_MHZ 的近/远分流随 real_field 一并删除）
 # 上态总衰变率缓存（(n,l,j) → Γ MHz；远失谐散射损失用）
 _lifetime_cache = {}
 
 
+def env_span(wf, t0, t1):
+    """包络在**绝对时间** [t0,t1] 上的 (inf, sup)——判"是否恒常"的唯一入口。
+
+    ## 为什么不能用固定点数采样（2026-09-22 修，见手册 §8.1）
+
+    原先消费方（`sambe._env_all_constant` / `sambe._pair_propagate` /
+    `env_samples`）用 `np.ptp(wf(np.linspace(0,T,64))) > 1e-9` 判恒常。**固定
+    采样点对窄脉冲是盲的**：σ ≲ T/800 时整个脉冲落在采样点之间——实测
+    T=620 ns / σ=0.5 ns 时 64 点 ptp=9.3e-22（< 1e-9）而**真实 ptp=1.0**。
+    后果是两个引擎给出**方向相反**的错答案，且都静默：
+      · sambe 判恒常 → 走"一次对角化"快路径、用**中点**包络 ⇒ 整窗按峰值 CW 算；
+      · ip4  判恒常 → 取**均值**（≈0）⇒ 场完全消失。
+    （`error_report['n_segments']=1` 看起来完全正常。）
+
+    ## 修法取向：让波形数据层自己回答（而非加密采样）
+
+    "是否恒常"是包络**自身**的性质，可以解析给出、与采样密度无关：
+      · `GaussianEnv` 单峰 ⇒ 极值在两端或峰位（O(1)，精确）；
+      · `SquareEnv` 分段单调 ⇒ 极值在折点（精确；升降沿重叠时补中点）；
+      · `FileEnv` 分段线性 + 区外钳 0 ⇒ 极值在样品点或端点（精确）。
+    取向 a（探针密度挂钩最窄特征宽度）仍需选一个"多密才够"的启发式阈值，且
+    永远可能被更窄的特征骗过；故采用**取向 b**：`span()` 由各包络类实现（单一
+    定义点），本函数只做"解析 → 兜底"的分发。
+
+    分发顺序：① `wf.__self__` 是 `Wave` → `Wave.span`（带 offset，绝对时间）；
+    ② `wf` 自带 `span`；③ 兜底密集采样（**不是判据**，只是没有解析答案时的近似）。
+    """
+    t0, t1 = float(t0), float(t1)
+    self_obj = getattr(wf, '__self__', None)          # Wave.waveform 是绑定方法
+    fn = getattr(self_obj, 'span', None)
+    if callable(fn):
+        r = fn(t0, t1)
+        if r is not None:
+            return float(r[0]), float(r[1])
+    fn = getattr(wf, 'span', None)
+    if callable(fn):
+        r = fn(t0, t1)
+        if r is not None:
+            return float(r[0]), float(r[1])
+    ts = np.linspace(t0, t1, int(_ENV_SPAN_FALLBACK_N))
+    vs = np.asarray(wf(ts), float)
+    if vs.size == 0:
+        return 0.0, 0.0
+    return float(vs.min()), float(vs.max())
+
+
+def env_is_const(wf, t0, t1, tol=None):
+    """包络在 [t0,t1] 上是否恒常（sup−inf ≤ tol，默认 `_ENV_CONST_TOL`）。"""
+    tol = float(_ENV_CONST_TOL) if tol is None else float(tol)
+    lo, hi = env_span(wf, t0, t1)
+    return bool((hi - lo) <= tol)
+
+
+def env_feature_ns(wf, T=None):
+    """包络最窄变化特征时长（ns）——"积分器必须分辨的时间尺度"；不可得 ⇒ None。
+
+    ① 解析（首选）：`Wave` 的包络自带 `dt_feature_ns()`（高斯 ⇒ σ；方波 ⇒ 沿时长；
+       文件 ⇒ 最小样品间隔）。
+    ② 兜底（裸 callable，如自检/脚本里直接传 lambda）：按 `_ENV_SPAN_FALLBACK_N`
+       点采样求**非零支撑宽度** W（|env| > 1e-3·sup 的最窄连续段），返回 W/8
+       ——对高斯 W≈7.4σ ⇒ W/8≈0.93σ，与解析值同量级。
+       分辨率上限 = T/(N−1)：**窄于该分辨率的特征估不出来**（返回 None），此时
+       请显式给积分器的 max_step，或改用 `Wave`（走解析路径）。
+    """
+    for obj in (getattr(wf, '__self__', None), wf):
+        fn = getattr(obj, 'dt_feature_ns', None)
+        if callable(fn):
+            v = fn()
+            if v is not None:
+                return float(v)
+    if T is None or float(T) <= 0.0:
+        return None
+    ts = np.linspace(0.0, float(T), int(_ENV_SPAN_FALLBACK_N))
+    vs = np.abs(np.asarray(wf(ts), float))
+    sup = float(vs.max()) if vs.size else 0.0
+    if sup <= 0.0:
+        return None
+    m = vs > 1e-3 * sup
+    if not m.any():
+        return None
+    idx = np.flatnonzero(m)
+    brk = np.flatnonzero(np.diff(idx) > 1)
+    starts = np.concatenate([[0], brk + 1])
+    ends = np.concatenate([brk, [idx.size - 1]])
+    dt = float(T) / max(len(ts) - 1, 1)
+    widths = [(int(idx[e]) - int(idx[s]) + 1) * dt
+              for s, e in zip(starts, ends)]
+    return min(widths) / 8.0
+
+
 def env_samples(waveform, t_end):
-    """采样包络判断恒常性。返回 (mean, is_constant)。"""
+    """采样包络判断恒常性。返回 (mean, is_constant)。
+
+    `mean` 仅供**已判恒常**的消费方（ip4 的常数包络快路径）当常数值，按
+    `_ENV_SAMPLES` 点采样；`is_constant` 由 `env_span` **解析**决定（不靠采样
+    密度）——原实现用同一批 64 点的 `np.ptp` 兼任两者，正是 §8.1 的事故点。
+    """
     ts = np.linspace(0.0, float(t_end), _ENV_SAMPLES)
     vs = np.asarray(waveform(ts), float)
-    return float(vs.mean()), bool(np.ptp(vs) < 1e-9)
+    return float(vs.mean()), env_is_const(waveform, 0.0, float(t_end))
+
+
+_FEATURE_MAX_STEP_FRAC = Param(64, '窄特征步长保护门；T/最窄特征 > 本值 时才限制积分步长（深混叠区；既有宽脉冲场景为 no-op）', tier='internal')
+_FEATURE_MAX_STEP_MULT = Param(4.0, '窄特征步长上限 = 本值 × 最窄特征时长（自适应积分器看得见该特征所需）', tier='internal')
+
+
+def feature_max_step(waveforms, T):
+    """由包络最窄特征时长导出的**积分步长上限**（ns）；无需保护 ⇒ None。
+
+    动机（2026-09-22，与 `env_span` 同族、同一份事故）：自适应积分器（DOP853）
+    的步长由**它看得见的**最快振荡决定。窄脉冲（σ ≪ 窗口）可能整个落在两步
+    之间——更糟的是 `exp(−(t−c)²/2σ²)` 在 `|t−c| > ~19σ` 时**下溢到 0.0**，
+    于是每次 RHS 求值包络都**恰为 0**，结果**逐位等于零场**且无任何报错。
+    实测：`evolve_reference`（全库"权威锚"）在 T=620 ns / σ=0.5 ns 高斯下
+    `max P_e = 0.000000e+00`（解析值 1.550e-5）。
+
+    只在 `T/特征 > _FEATURE_MAX_STEP_FRAC`（深混叠区）时生效 ⇒ 对既有宽脉冲
+    场景（如 σ=60 / T=400）是 **no-op**，不改变任何已验收数值。
+    """
+    T = float(T)
+    if T <= 0.0:
+        return None
+    feats = [f for f in (env_feature_ns(wf, T) for wf in (waveforms or []))
+             if f is not None and f > 0.0]
+    if not feats:
+        return None
+    fmin = min(feats)
+    if T / fmin <= float(_FEATURE_MAX_STEP_FRAC):
+        return None
+    return float(_FEATURE_MAX_STEP_MULT) * fmin
 
 
 # ---------------- 能级 ----------------

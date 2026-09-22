@@ -13,7 +13,7 @@ from scipy.integrate import solve_ivp
 from .sambe import CONV
 from .evolve_util import env_at
 from .evolve_util import as_vector, decay_ops
-from .field_build import _validate_fields
+from .field_build import _validate_fields, feature_max_step
 from .evolve_util import as_vector, decay_ops
 
 
@@ -45,6 +45,14 @@ def evolve_reference(states, fields, psi0, t_grid, decays=None,
     E = E - float(E.min())
     terms = [(np.asarray(f['A'], float), float(f['omega_L_mhz']),
               f['waveform']) for f in fields]
+    # 窄特征步长保护（2026-09-22，与 `field_build.env_span` 同一份事故）：
+    # 自适应 DOP853 的步长由它**看得见**的最快振荡决定；窄脉冲可能整个落在两步
+    # 之间（`exp(−(t−c)²/2σ²)` 在 |t−c| ≳ 19σ 时下溢到 0.0）⇒ 每次 RHS 求值的
+    # 包络**恰为 0** ⇒ 结果**逐位等于零场**且无报错。实测本函数（全库"权威锚"）
+    # 在 T=620 ns / σ=0.5 ns 下 max P_e 恒 0.000000e+00（解析值 1.550e-5）。
+    # 仅在深混叠区（T/特征 > 64）生效 ⇒ 既有宽脉冲场景（σ=60/T=400）为 no-op。
+    _ms = feature_max_step([x[2] for x in terms], T)
+    _max_step = np.inf if _ms is None else float(_ms)
 
     def coupling_at(tv):
         V = np.zeros((N, N))
@@ -59,7 +67,7 @@ def evolve_reference(states, fields, psi0, t_grid, decays=None,
             u = np.exp(1j * CONV * E * tv)
             return -1j * CONV * (u * (coupling_at(tv) @ (np.conj(u) * y)))
         sol = solve_ivp(_rhs_sambe, (0.0, T), psi0v, method='DOP853',
-                        t_eval=t, rtol=rtl, atol=atl)
+                        t_eval=t, rtol=rtl, atol=atl, max_step=_max_step)
         if not sol.success:
             raise RuntimeError(f'reference 积分失败: {sol.message}')
         return sol                              # 相互作用绘景振幅（.y / .nfev）
@@ -112,7 +120,8 @@ def evolve_reference(states, fields, psi0, t_grid, decays=None,
     def _run_mastereq(rtl, atl):
         # BDF：支持复数 y（Radau 不支持；耗散率可致刚性，隐式多步稳定）
         sol = solve_ivp(rhs_me, (0.0, T), rho0.ravel(order='F'),
-                        method='BDF', t_eval=t, rtol=rtl, atol=atl)
+                        method='BDF', t_eval=t, rtol=rtl, atol=atl,
+                        max_step=_max_step)
         if not sol.success:
             raise RuntimeError(f'reference(Lindblad) 积分失败: {sol.message}')
         return sol
