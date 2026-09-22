@@ -179,12 +179,12 @@ def _consumed_keys():
 
 # 反方向白名单：**确属"声明了但本路径不消费"**的键，必须写明原因。
 # 判据要求"被豁免的键一旦真被消费 → 提示可从白名单移除"（防白名单腐烂）。
+# ⚠ 白名单条目**必须仍存在于 schema**——否则会长出指向不存在键的**僵尸条目**
+#   （2026-09-22 实例：`manybody.seed` 被物理侧从 schema 删除后，本表那行就成了僵尸）。
 _UNCONSUMED_OK = {
     'dynamic.waves_single': '由 runspec 动态模式 p.get("dynamic.waves_%s"%atom) 覆盖',
     'dynamic.waves_A':      '同上（动态家族成员）',
     'dynamic.waves_B':      '同上（动态家族成员）',
-    'manybody.seed':        '**已知未接线**（P2-1）：声明了但消费端 add_atom 不吃 seed；'
-                            '要么实现、要么标无效——白名单只保证"被看见"，不表示已修',
 }
 _consumed = _consumed_keys()
 # 动态家族成员：字面量出现在 `'dynamic.waves_%s' % atom` 这种**动态模式**里，
@@ -194,8 +194,10 @@ _dyn_members = {k for k in cfg if 'waves_' in k}
 _consumed_direct = _consumed - _dyn_members
 _unconsumed = sorted(k for k in cfg if k not in _consumed)
 _unconsumed_unlisted = [k for k in _unconsumed if k not in _UNCONSUMED_OK]
-# 白名单腐烂侦测：豁免的键若**被直接消费**了，说明豁免已无必要（应移除）
+# 白名单腐烂侦测①：豁免的键若**被直接消费**了，说明豁免已无必要（应移除）
 _whitelist_stale = [k for k in _UNCONSUMED_OK if k in _consumed_direct]
+# 白名单腐烂侦测②：豁免的键若**已不在 schema**，该条目成僵尸（应删除）
+_whitelist_zombie = [k for k in _UNCONSUMED_OK if k not in cfg]
 _dyn_covers = bool(dyn) and _dyn_members <= set(_UNCONSUMED_OK)
 
 C.group('C I6 **双向**：读的键都在 schema（正）+ 声明的键都被消费或显式豁免（反）', [
@@ -208,6 +210,8 @@ C.group('C I6 **双向**：读的键都在 schema（正）+ 声明的键都被�
     ('动态家族确由动态模式覆盖（%s）' % (dyn or '无'), _dyn_covers),
     ('**漂移侦测**：已消费的键仍挂在豁免表（应移除）：%s'
      % (_whitelist_stale or '无'), not _whitelist_stale),
+    ('**僵尸侦测**：豁免表里指向**已不存在的 schema 键**（应删除）：%s'
+     % (_whitelist_zombie or '无'), not _whitelist_zombie),
     ('反向扫描**被看见**的未消费键共 %d 个：%s' % (len(_unconsumed), _unconsumed),
      True),
     ('schema 至少覆盖 groups/field/dynamic/solve 四族',

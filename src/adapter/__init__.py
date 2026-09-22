@@ -9,6 +9,7 @@ app/判据组装时注入：`mecha.runtime.set_engine(EngineAdapter())`；
 GUI 走 `AppBridge(engine=EngineAdapter())`（内部即 set_engine）。
 """
 from ..core import protocol as _cp
+from ..core.manybody import schema_mb as _mb_schema
 from mecha.errors import InvalidValue
 from mecha.protocol import EngineProtocol
 
@@ -41,7 +42,23 @@ class EngineAdapter(EngineProtocol):
         return recs
 
     def config_schema(self):
-        return _cp.config_schema()
+        """core 的配置 schema + 一处**类型改判**（P2-2，跨模块接缝）。
+
+        `manybody.drive_segments` 在 core 里声明为通用 `type='list'`（只判"是不是
+        list"），而它的真契约是**逐段结构**。库的 `validate` 只在 `type` 命中
+        `engine.custom_types()` 时才委托 `validate_custom` —— 故这里把它改判为
+        自定义类型 `'drive_segments'`，使结构校验在 **`session.set` 当场**生效
+        （原行为：要到 build 阶段、甚至工作线程才炸，报错不指向病因）。
+
+        只在**适配层**改判，core 的 `CONFIG_SCHEMA_MB` 一字未动（物理侧单一定义点不变）。
+        """
+        recs = _cp.config_schema()
+        _ds = recs.get('manybody.drive_segments')
+        if _ds is not None and _ds.get('type') == 'list':
+            _ds = dict(_ds)
+            _ds['type'] = 'drive_segments'
+            recs['manybody.drive_segments'] = _ds
+        return recs
 
     def solve_schema(self):
         return _cp.solve_schema()
@@ -60,11 +77,13 @@ class EngineAdapter(EngineProtocol):
 
     # ---------- 领域私有政策（归还项目侧：mecha-sdk 库内零领域信息） ----------
     def custom_types(self):
-        """**声明**本引擎接管的两个自定义类型名（P1-9b）。
+        """**声明**本引擎接管的三个自定义类型名（P1-9b / P2-2）。
 
         库只判"type 在不在这个集合里"，类型名与真契约都留在项目侧。
+        声明了就**必须**在 `validate_custom` 里有对应分支——否则库会抛
+        `ContractError`（"声明接管却不校验"，见 mecha_kernel_selfcheck F2 组）。
         """
-        return ('wave_list', 'atom_list')
+        return ('wave_list', 'atom_list', 'drive_segments')
 
     def validate_custom(self, typ, value):
         """上述自定义类型的真契约（领域知识）在此。"""
@@ -72,6 +91,13 @@ class EngineAdapter(EngineProtocol):
             return _cp.validate_wave_list(value, err=InvalidValue)
         if typ == 'atom_list':
             return _cp.validate_atom_list(value, err=InvalidValue)
+        if typ == 'drive_segments':
+            # P2-2：把 drive_segments 的结构真契约**前移到 set 当场**（原只在
+            # build 阶段拒，元素不是 dict / 缺 t0 / Om 是标量都要到工作线程才炸）。
+            # 这里**只做结构校验**（n_atoms=None）——`registry.validate(key,value)`
+            # 拿不到快照，故"Om/delta 长度 == 原子数"这条跨键约束仍留在 build 阶段
+            # （schema_mb.validate_drive_segments(..., n_atoms=n) 已在那里调）。
+            return _mb_schema.validate_drive_segments(value, err=InvalidValue)
         return value
 
     def codeact_not_exposed(self):
