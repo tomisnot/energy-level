@@ -144,7 +144,16 @@ def main(argv=None):
     hc_port, _hc_token = start_human_control(session)
     print('人工控制端点：http://%s:%d/switch_mode（token 在 .human-token）'
           % (a.host, hc_port), flush=True)
-    srv, _ = create_server(session, ops, actor='ai')   # MCP 是 **AI 的面**（P2-4）
+    # MCP 是 **AI 的面**（actor='ai'，P2-4）；身份由**领域侧**给（P1-9e：
+    # 库不再写死 're0-mecha' / "Re0 物理引擎…"——那是控诉书罪四）。
+    _eng = runtime.engine()
+    srv, _tools = create_server(
+        session, ops, actor='ai',
+        name=getattr(_eng, 'server_name', lambda: None)() or None,
+        instructions=getattr(_eng, 'server_instructions', lambda: None)() or None)
+    print('MCP 服务名：%s；工具数：%d'
+          % (getattr(_eng, 'server_name', lambda: 'mecha')(), len(_tools)),
+          flush=True)
 
     if a.stdio:
         print('MCP 写通道：stdio 传输', flush=True)

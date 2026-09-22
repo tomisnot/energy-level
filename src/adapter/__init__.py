@@ -110,6 +110,28 @@ class EngineAdapter(EngineProtocol):
         return {'method': run.get('method'),
                 'body': 'pair' if run.get('two_body') else 'single'}
 
+    # ---------- 领域自报 MCP 工具（P1-9d：领域工具不再焊进库） ----------
+    def mcp_tools(self):
+        """→ 本领域的额外 MCP 工具（`set_drive` / `get_waves`），见 `adapter/mcp_tools.py`。
+
+        这两个工具**原本在 mecha 库里**（签名含 `rabi_mhz`/`intensity_mwcm2`/`pol='π'`
+        等物理量）⇒ 非物理项目接进来会凭空多出物理工具（控诉书罪一/L1）。现已搬回本层。
+        """
+        from .mcp_tools import build_tools
+        return build_tools()
+
+    # ---------- 领域身份（P1-9e：库不再顶着别人的名字） ----------
+    def server_name(self):
+        """MCP 服务名（旧版写死在库里 `'re0-mecha'`）。"""
+        return 're0-mecha'
+
+    def server_instructions(self):
+        """MCP instructions（旧版写死在库里，且正文写"Re0 物理引擎"）。"""
+        return ('Re0 物理引擎语义内核的写通道。list_params 看可调项，set_param 逐项写'
+                '配置（记进事件总线、可 undo），estimate_cost 看代价，preview_behavior '
+                '提交前预检，run_compute 跑演化（超阈值自动转 async）。键名走 registry '
+                '契约；打错会给建议。建场用本领域扩展工具 set_drive/get_waves。')
+
     def result_arrays(self, res):
         """**本领域自报**要落进可复现产物的数组（P1-8 / P1-9c）。
 

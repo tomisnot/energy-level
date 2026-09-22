@@ -84,7 +84,8 @@ C.group("B backend='sim' 逐位等价现状 + 默认 + AI 侧零改动", [
     ('默认与显式 sim 同配置→同 artifact_id（逐位等价）',
      r_def.get('artifact_id') == r_sim.get('artifact_id')),
     ('**AI 侧零改动**：backend 是 ops 的路由细节，硬件档不新增 MCP 工具（工具面 backend-agnostic）',
-     len(SVR.TOOL_NAMES) == 18
+     # 16 = P1-9d 后的**通用**工具数（领域工具 set_drive/get_waves 已搬回领域侧）
+     len(SVR.TOOL_NAMES) == 16
      and not any('hardware' in t for t in SVR.TOOL_NAMES)),
 ])
 

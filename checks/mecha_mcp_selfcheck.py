@@ -62,13 +62,22 @@ def call(name, **kw):
 
 
 # ---------------- A. 工具面 ----------------
+# P1-9d：`set_drive`/`get_waves` 已**搬回领域侧**（`src/adapter/mcp_tools.py`），
+# 库的 `TOOL_NAMES` 只剩**通用**工具（18→16）；领域工具经 `engine.mcp_tools()` 自报。
 _names = sorted(k for k in tools if not k.startswith('_'))
-C.group('A MCP 工具面 = 18 个薄封装（能力清单）', [
-    ('create_server 返回 18 个工具（实际 %d）' % len(_names), len(_names) == 18),
-    ('工具名与 TOOL_NAMES 一致', set(_names) == set(SVR.TOOL_NAMES)),
-    ('含 async 作业面 + preview_behavior + 建场 set_drive/get_waves + list_levels + mecha_script',
-     {'submit_job', 'job_status', 'cancel_job', 'list_jobs', 'preview_behavior',
-      'set_drive', 'get_waves', 'list_levels', 'mecha_script'} <= set(_names)),
+_domain = sorted(set(_names) - set(SVR.TOOL_NAMES))
+C.group('A MCP 工具面 = 16 通用 + 领域自报（能力清单）', [
+    ('库内通用工具 %d 个（实际注册总数 %d）'
+     % (len(SVR.TOOL_NAMES), len(_names)), len(SVR.TOOL_NAMES) == 16),
+    ('注册总数 = 通用 16 + 领域自报 %d' % len(_domain),
+     len(_names) == len(SVR.TOOL_NAMES) + len(_domain)),
+    ('**领域工具不在库里**（库 TOOL_NAMES 不含 set_drive/get_waves）',
+     not ({'set_drive', 'get_waves'} & set(SVR.TOOL_NAMES))),
+    ('**领域工具由本领域自报**（set_drive/get_waves 在）',
+     {'set_drive', 'get_waves'} <= set(_names)),
+    ('含 async 作业面 + preview_behavior + list_levels + mecha_script',
+     {'submit_job', 'job_status', 'cancel_job', 'list_jobs',
+      'preview_behavior', 'list_levels', 'mecha_script'} <= set(_names)),
     ('工具可调、返回可解析 JSON（薄封装，逻辑在 session/ops）',
      isinstance(call('get_state'), dict)),
 ])
@@ -220,8 +229,9 @@ def _connection_test():
 conn = _connection_test()
 C.group('I 真实 MCP 连接（streamable-http；harness 能连，不永久 SKIP）', [
     ('连接无错（%s）' % conn.get('error', 'ok'), 'error' not in conn),
-    ('initialize + list_tools 返回 16 个工具',
-     conn.get('names') == sorted(SVR.TOOL_NAMES)),
+    ('initialize + list_tools 与本地注册表一致（%d 个：通用 %d + 领域自报 %d）'
+     % (len(_names), len(SVR.TOOL_NAMES), len(_domain)),
+     conn.get('names') == sorted(_names)),
     ('call_tool(list_params) 成功、count>0',
      conn.get('list_ok') is True and (conn.get('count') or 0) > 0),
     ('call_tool(set_param) 经传输写入成功', conn.get('set_ok') is True),
@@ -312,6 +322,11 @@ class _NoFieldsEngine:
     def preview(self, cache, snap): return {'ok': True}
     def list_levels(self, cache, snap): return []
     def run_annotations(self, snap): return {'n_waves': 0, 'overlap_warning': None}
+    # P1-9d 后领域工具**由引擎自报**（库里没有）；本桩**自报**这两个工具但**不给**
+    # make_fields ⇒ 正好验"声明了 needs_fields 而无建场层 → 可教学错误、不崩"。
+    def mcp_tools(self):
+        from src.adapter.mcp_tools import build_tools
+        return build_tools()
 
 
 _old_eng = runtime.engine()
@@ -343,7 +358,8 @@ C.group('L P0-3/P0-4：numpy 惰性（不在 import 期）+ 无建场层不崩�
     ('**致死性(P0-4)**：鸭子引擎（无 make_fields）→ create_server **不抛**（%s）'
      % (_nf_crash or '未抛'),
      _nf_crash is None),
-    ('工具面仍 18 个（不因缺建场层而少注册）', len(_nf_tools) == 18),
+    ('工具面 = 通用 16 + 自报 2（不因缺建场层而少注册）',
+     len(_nf_tools) == len(SVR.TOOL_NAMES) + 2),
     ('set_drive 回**可教学**错误（kind+hint+suggest 齐）',
      _sd.get('ok') is False and bool(_sd_err.get('hint'))
      and bool(_sd_err.get('suggest'))),
