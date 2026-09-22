@@ -11,15 +11,28 @@ import json
 
 TEMPLATES = ('ising', 'xy', 'potts3')
 TERMS = ('I1', 'I2', 'I3')          # I1=nn V, I2=交换 J, I3=双激发 A
+# 模板 → `terms` 预设（2026-09-22，工单 P2-1）。**这就是 template 的全部功能**：
+# 它是"相互作用项开关"的**预设选择器**，不是一个独立的物理开关。
+# 约定（教科书对应）：Ising = 密度-密度 Σ V n_i n_j ⇒ I1；XY = 交换 Σ J(σ⁺σ⁻+h.c.) ⇒ I2。
+# 横向场由逐原子 Ω（σˣ）提供，与模板无关。
+# ⚠ **显式 `terms` 优先**（见 `__init__`）：给 terms 就以 terms 为准，template 只供预设
+# ——这样"相互作用内容"始终只有一个真源，不会出现两个开关互相打架。
+# 原实现里 template **完全不被 build_H_sparse 引用**（ising≡xy 恒等），是个静默无效的
+# 选择器；本表把它变成有定义的功能，且默认路径（ising→I1）与改前**逐位一致**。
+TEMPLATE_TERMS = {'ising': ('I1',), 'xy': ('I2',)}
 
 
 class ManyBodyModel:
     """多体页的"模型卡"：一次标定、多次运行、可存档往返。"""
 
-    def __init__(self, template='ising', terms=('I1',), B_gauss=0.0,
-                 n_window=3, r_cut_um=None, energy_window_mhz=None):
+    def __init__(self, template='ising', terms=None, B_gauss=0.0,
+                 n_window=3, r_cut_um=None):
         if template not in TEMPLATES:
             raise ValueError(f'template 须为 {TEMPLATES}，收到 {template!r}')
+        # terms=None ⇒ 取 template 的预设；显式给 terms（含空表 = 不要任何相互作用项）
+        # ⇒ **以 terms 为准**。两种写法语义明确、不重叠。
+        if terms is None:
+            terms = TEMPLATE_TERMS.get(template, ('I1',))
         bad = [t for t in terms if t not in TERMS]
         if bad:
             raise ValueError(f'terms 含未知项 {bad}，可选 {TERMS}')
@@ -28,8 +41,6 @@ class ManyBodyModel:
         self.B_gauss = float(B_gauss)
         self.n_window = int(n_window)
         self.r_cut_um = None if r_cut_um is None else float(r_cut_um)
-        self.energy_window_mhz = (None if energy_window_mhz is None
-                                  else float(energy_window_mhz))
         self.atoms = []            # [{id, g:(n,l,j,m), r:(n,l,j,m), pos:(x,y,z)}]
         self.beams = []            # I5 串扰标定用（M0 只占位，不接线）
 
@@ -98,7 +109,6 @@ class ManyBodyModel:
         return dict(template=self.template, terms=list(self.terms),
                     B_gauss=self.B_gauss, n_window=self.n_window,
                     r_cut_um=self.r_cut_um,
-                    energy_window_mhz=self.energy_window_mhz,
                     atoms=[dict(id=a['id'], g=list(a['g']), r=list(a['r']),
                                 pos=list(a['pos']),
                                 Omega_mhz=a.get('Omega_mhz', 0.0),
@@ -109,9 +119,12 @@ class ManyBodyModel:
 
     @classmethod
     def from_dict(cls, d):
-        m = cls(d['template'], d['terms'], d.get('B_gauss', 0.0),
-                d.get('n_window', 3), d.get('r_cut_um'),
-                d.get('energy_window_mhz'))
+        # `energy_window_mhz` 已于 2026-09-22 删除（工单 P2-1）：它**按声明就无法实现**
+        # ——能量窗要配 `ref_energy_mhz` 而 schema 里没有这个键；且"二阶中间态截断"
+        # 已由 `n_window`（伙伴态窗）+ `guard_mhz`（近简并剔除）覆盖。旧存档里若带它，
+        # 这里**明确忽略并留给调用方看见**（不静默当作已生效）。
+        m = cls(d['template'], d.get('terms'), d.get('B_gauss', 0.0),
+                d.get('n_window', 3), d.get('r_cut_um'))
         for a in d['atoms']:
             m.atoms.append(dict(id=a['id'], g=tuple(a['g']),
                                 r=tuple(a['r']), pos=tuple(a['pos']),

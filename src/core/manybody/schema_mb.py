@@ -29,10 +29,15 @@ MB_ED_MAX_DIM = Param(1 << 20, 'ED 维度上限 2^N（solver=auto 据此判可�
 CONFIG_SCHEMA_MB = {
     'manybody.template': dict(
         type='str', enum=['ising', 'xy', 'potts3'], default='ising',
-        desc='局部空间模板：ising/xy=每原子 2 能级（M1 ED 支持）；potts3=3 能级（未实现）'),
+        desc='局部空间/相互作用**预设**：ising→terms=I1（密度-密度 V·n_i n_j）、'
+             'xy→terms=I2（交换 J σ⁺σ⁻）；两者都是**每原子 2 能级**，横向场由逐原子 '
+             'Ω 提供。**显式 manybody.terms 优先于本预设**（相互作用内容只有一个真源）。'
+             'potts3=3 能级/原子（M1 未实现，选了会明确报错）'),
     'manybody.terms': dict(
-        type='list', default=['I1'],
-        desc='相互作用项开关：I1=密度-密度 V·n_i n_j / I2=交换 J(σ⁺σ⁻) / I3=双激发 A(σ⁺σ⁺)'),
+        type='list', default=None,
+        desc='相互作用项开关：I1=密度-密度 V·n_i n_j / I2=交换 J(σ⁺σ⁻) / I3=双激发 A(σ⁺σ⁺)。'
+             '**None（默认）= 跟随 manybody.template 的预设**（ising→[I1] / xy→[I2]）；'
+             '显式给出（含空表 []=不要任何相互作用项）则以此为准'),
     'manybody.atoms': dict(
         type='atom_list', default=[],
         desc='任意点云：逐原子 {g:(n,l,j,m), r:(n,l,j,m), pos:(x,y,z)µm, '
@@ -50,9 +55,10 @@ CONFIG_SCHEMA_MB = {
     'manybody.r_cut_um': dict(
         type='float', unit='um', default=None, lo=0.0,
         desc='相互作用截断半径（None=不截断；被丢对计入 dropped 报告，不静默）'),
-    'manybody.energy_window_mhz': dict(
-        type='float', unit='MHz', default=None,
-        desc='能量窗口截断（可选）'),
+    # `manybody.energy_window_mhz` 已于 2026-09-22 **删除**（工单 P2-1）：它声明了但
+    # 从不被消费（`assemble.calibrate` 只读 `r_cut_um`），且**按声明就无法实现**——
+    # 能量窗要配 `ref_energy_mhz`（参考能量），而 schema 里没有这个键。二阶中间态的
+    # 截断已由 `n_window`（伙伴态窗）+ `guard_mhz`（近简并剔除）覆盖，不需要第三个旋钮。
     'manybody.solver': dict(
         type='str', enum=['auto', 'ed', 'tebd'], default='auto',
         desc='求解器：auto=按维度选 / ed=精确对角化（M1）/ tebd=TeNPy MPS（M3，未实现）'),

@@ -17,7 +17,7 @@ import hashlib
 
 import numpy as np
 
-from .model import ManyBodyModel
+from .model import ManyBodyModel, TEMPLATE_TERMS
 from . import assemble as _asm
 from . import engine_ed as _ed
 from .schema_mb import mb_get, validate_drive_segments
@@ -40,7 +40,7 @@ def _calib_key(model, second_order, guard_mhz):
     h = hashlib.sha1()
     h.update(repr((model.template, tuple(model.terms),
                    round(float(model.B_gauss), 9), int(model.n_window),
-                   model.r_cut_um, model.energy_window_mhz,
+                   model.r_cut_um,
                    bool(second_order), round(float(guard_mhz), 9))).encode())
     for a in model.atoms:
         h.update(repr((tuple(a['g']), tuple(a['r']),
@@ -65,21 +65,34 @@ def calibrate_memo(cache, model, second_order=True, guard_mhz=1.0):
     return calib
 
 
-def model_from_params(p):
-    """登记册快照 → ManyBodyModel（从 manybody.* 键装配；类比 runspec.build_states）。"""
+def model_from_params(p, warnings=None):
+    """登记册快照 → ManyBodyModel（从 manybody.* 键装配；类比 runspec.build_states）。
+
+    `terms` 与 `template` 的关系（2026-09-22，工单 P2-1）：**显式 terms 优先**；
+    terms 为 None（未设）时由 `template` 给预设（ising→I1 / xy→I2）。若两者**都显式
+    给出且不一致**，写一条 warning（不静默——否则用户"选了 xy 却得到 I1"无从察觉）。
+    """
     p = p or {}
     B = p.get('manybody.B_gauss')
     if B is None:
         B = p.get('field.B_gauss')               # 未设 → 复用共享 Zeeman 场
+    tmpl = mb_get(p, 'manybody.template')
+    terms_raw = mb_get(p, 'manybody.terms')      # None = 跟随 template 预设
+    if warnings is not None and terms_raw is not None:
+        preset = TEMPLATE_TERMS.get(tmpl)
+        if preset is not None and tuple(terms_raw) != tuple(preset):
+            warnings.append(
+                '[多体] manybody.terms=%s 与 manybody.template=%s 的预设 %s 不一致'
+                '——**以显式 terms 为准**（相互作用内容只有一个真源）；'
+                '若想用模板预设，请清空 manybody.terms'
+                % (list(terms_raw), tmpl, list(preset)))
     m = ManyBodyModel(
-        template=mb_get(p, 'manybody.template'),
-        terms=tuple(mb_get(p, 'manybody.terms') or ('I1',)),
+        template=tmpl,
+        terms=(None if terms_raw is None else tuple(terms_raw)),
         B_gauss=float(B or 0.0),
         n_window=int(mb_get(p, 'manybody.n_window')),
         r_cut_um=(None if p.get('manybody.r_cut_um') is None
-                  else float(p.get('manybody.r_cut_um'))),
-        energy_window_mhz=(None if p.get('manybody.energy_window_mhz') is None
-                           else float(p.get('manybody.energy_window_mhz'))))
+                  else float(p.get('manybody.r_cut_um'))))
     for a in (p.get('manybody.atoms') or []):
         m.add_atom(a['g'], a['r'], a['pos'],
                    Omega_mhz=a.get('Omega_mhz', 0.0),
@@ -142,7 +155,7 @@ def build_run_manybody(cache, params, *, pump=None, method=None, diag=False,
     from ..runspec import _time_grid, god_kwargs_from_params, _filter_kw
     p = params or {}
     warnings = []
-    model = model_from_params(p)
+    model = model_from_params(p, warnings=warnings)
     n = len(model.atoms)
     if n == 0:
         raise ValueError('多体：manybody.atoms 为空——先摆原子'
