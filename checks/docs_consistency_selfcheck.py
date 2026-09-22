@@ -229,4 +229,8 @@ C.group('D 致死性：探测器抓得住坏文档、且不误报好文档（非
      not audit_skill(_FAKE_SKILL_NOCOUNT, _FAKE_TOOLS)),
 ])
 
-sys.exit(0 if C.summary() else 1)
+_ok = C.summary()
+# 只在**作为脚本跑**时带退出码；被 import（如复用其中的纯探测器做测试）时不打断调用方。
+# run_checks.py 以子进程跑本文件，故正常路径不受影响。
+if __name__ == '__main__':
+    sys.exit(0 if _ok else 1)
