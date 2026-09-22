@@ -91,9 +91,16 @@ def orientation(root, tail_n=12):
 # 告警规则（例外驱动 M5；每条都可被构造点亮 = 致死性，防哑告警 D4）
 # =====================================================================
 def _run_warnings(ev):
-    """从 run 事件的 provenance 取 runspec 的 warnings（"被忽略/改道"的不静默出口）。"""
-    prov = ev.get('provenance') or {}
-    rs = prov.get('runspec') or {}
+    """从 run 事件的 provenance 取 runspec 的 warnings（"被忽略/改道"的不静默出口）。
+
+    类型守卫：provenance/runspec 可能是**字符串**（ops 写 provenance.runspec 时放的是
+    summarize_run 的摘要串而非 dict）→ 非 dict 一律视为无 warnings，不崩 /api/orientation。"""
+    prov = ev.get('provenance')
+    if not isinstance(prov, dict):
+        return []
+    rs = prov.get('runspec')
+    if not isinstance(rs, dict):
+        return []
     w = rs.get('warnings') or []
     return list(w)
 
