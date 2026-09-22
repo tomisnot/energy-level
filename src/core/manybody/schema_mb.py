@@ -71,11 +71,19 @@ CONFIG_SCHEMA_MB = {
     'manybody.ed_max_dim': dict(
         type='int', default=int(MB_ED_MAX_DIM), lo=2,
         desc='ED 维度上限（solver=auto 据此判可行；超过明确报错，等 M3 的 MPS）'),
-    'manybody.seed': dict(
-        type='int', default=None, desc='随机种子（阵列抖动/量子轨迹，可复现）'),
+    # `manybody.seed` 已于 2026-09-22 **删除**（工单 P2-1）：它声明了却**从不生效**
+    # ——消费端 `model_from_params` 不传它，`model.add_array(jitter=…)` 读的是 Python
+    # kwarg。而 registry 路径**只调 `add_atom`（逐原子显式坐标）、从不调 `add_array`**
+    # ⇒ 就算把 seed 接进模型，登记册路径也没有任何随机性可播种。
+    # 处置：删掉这个"声明了却不生效"的键（比留着更诚实），Python API 的
+    # `ManyBodyModel.add_array(..., seed=)` 保留（脚本仍可复现）。
+    # 若将来要"按模板一键摆阵列"，应同时加 `manybody.array={kind,n,spacing_um,jitter}`
+    # 并把 seed 一起接上——那是 P3-1（多体页）范围，届时一并恢复本键。
     'manybody.drive_segments': dict(
         type='list', default=None,
-        desc='分段常数驱动 [{t0,Om:[…],delta:[…]},…]（缺省=静态，用 atoms 的 Ω/δ）'),
+        desc='分段常数驱动 [{t0,Om:[…],delta:[…]},…]（缺省=静态，用 atoms 的 Ω/δ）。'
+             '结构在 build 阶段当场校验（schema_mb.validate_drive_segments）：'
+             '每段须是 dict、t0 为 ≥0 数值、Om/delta 为长度=原子数的数值序列'),
 }
 
 # M1 无多体 solve.* 运行旋钮：所有多体配置走 manybody.*（含标定/维度旋钮）。

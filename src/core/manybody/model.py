@@ -69,7 +69,15 @@ class ManyBodyModel:
 
     def add_array(self, kind, n, spacing_um=5.0, jitter=0.0, rng=None,
                   g=None, r=None, **kw):
-        """便利摆点：chain/square/ring。全部原子共用同一对 (g,r) 能级。"""
+        """便利摆点：chain/square/ring。全部原子共用同一对 (g,r) 能级。
+
+        ⚠ **仅 Python API**（2026-09-22，工单 P2-1）：登记册路径
+        （`runspec_mb.model_from_params`）只调 `add_atom`（逐原子显式坐标），
+        **不调本函数** ⇒ `manybody.seed` 已因此从 schema 删除（声明了却不生效）。
+        脚本要复现抖动请显式给 `seed=`（经 `kw`）或自建 `rng`。
+        若将来登记册也要"按模板摆阵列"，需新增 `manybody.array` 键并把 seed 接上
+        ——那是 P3-1（多体页）范围。
+        """
         import numpy as np
         if g is None or r is None:
             raise ValueError('add_array 需要 g/r 能级四元组')
