@@ -100,6 +100,81 @@ class EngineAdapter(EngineProtocol):
             return _mb_schema.validate_drive_segments(value, err=InvalidValue)
         return value
 
+    # ---------- 引擎自报：库只搬运、不解释（P0-5 / P1-9c） ----------
+    def run_meta(self, run):
+        """`{'method':…, 'body':…}`：把"哪种体系"从库的硬编码判断收回领域侧。
+
+        原库内写的是 `'pair' if run['two_body'] else 'single'`——那是**物理方言**，
+        且非物理领域不实现也会拿到 `single`（默认值掩盖未接线）。现在由本领域明说。
+        """
+        return {'method': run.get('method'),
+                'body': 'pair' if run.get('two_body') else 'single'}
+
+    def result_arrays(self, res):
+        """**本领域自报**要落进可复现产物的数组（P1-8 / P1-9c）。
+
+        为什么必须自报而不是让库按 `.shape` 猜：
+        - 多体的 **`S`（纠缠熵）是逐时刻算好的数组**、`corr` 可能是 list ⇒
+          `hasattr(v,'shape')` **判不出来**，会被静默漏掉；
+        - 单/两体与多体的数组集合**不同族** ⇒ 按族自报，`manifest['result_keys']`
+          才与实际落盘一致（"声明 ⊇ 实际"的守卫方向不能反）。
+
+        `pops` 的**语义随规模变**（`engine_ed` 的 `_MB_FULLPOP_MAX`）：dim ≤ 65536 时
+        是 2^N 联合分布，超过则**退化为逐原子边缘**（N 列）。调用方**从形状看不出**，
+        故 `full_pops` 随 `result_meta` 一起给出（见下）。
+        """
+        r = res or {}
+        out = {}
+        for k in ('t', 'pops', 'loss', 'pops_A', 'pops_B', 'loss_A', 'loss_B'):
+            if r.get(k) is not None:
+                out[k] = r[k]
+        if r.get('method') == 'manybody' or 'pops_atom' in r:
+            # 多体族：pops_atom(逐原子) / S(逐时刻熵) / corr(末态关联) / psi_amp(末态)
+            for k in ('pops_atom', 'S', 'corr', 'psi_amp'):
+                if r.get(k) is not None:
+                    out[k] = r[k]
+        return out
+
+    def result_meta(self, res):
+        """`{name: meta}`：随数组一起给消费者**必须知道**的语义标记。
+
+        关键是 `full_pops`：它决定 `pops` 是"2^N 联合分布"还是"逐原子边缘"，
+        而两者**形状不同却都叫 pops**（同一字段在不同规模下语义不同）。不给这条，
+        消费者会把 N 列边缘当联合分布读——与 `--root` 那类"同名不同义"同族。
+        """
+        er = (res or {}).get('error_report') or {}
+        r = res or {}
+        return {'full_pops': er.get('full_pops'),
+                'dim': er.get('dim'), 'n_atoms': er.get('n_atoms'),
+                'entropy_cut': er.get('entropy_cut'),
+                'psi_scope': ('final' if r.get('psi_amp') is not None else None)}
+
+    def annotations(self, snapshot):
+        """**不透明**旁注：波形条数 + 重叠告警（库不解读，只透传）。"""
+        allw = []
+        for atom in ('single', 'A', 'B'):
+            allw.extend(snapshot.get('dynamic.waves_%s' % atom) or [])
+        from .fields import detect_wave_overlap
+        return {'n_waves': len(allw),
+                'overlap_warning': detect_wave_overlap(allw)}
+
+    def alerts(self, run, summary, annotations):
+        """**本领域自报**要落哪些告警（原判断逻辑在库 `ops.py`，现收回领域侧）。
+
+        规则名/级别/文案与迁移前逐字一致 ⇒ `kind='alert'` 事件形状不变，
+        `cockpit/backend.py` 透传侧**零改动**。
+        """
+        out = []
+        _ow = (annotations or {}).get('overlap_warning')
+        if _ow:
+            out.append({'rule': 'overlap', 'level': 'warn',
+                        'reason': (_ow.get('warning')
+                                   if isinstance(_ow, dict) else str(_ow))})
+        if (summary or {}).get('empty') is True:
+            out.append({'rule': 'empty', 'level': 'error',
+                        'reason': '结果自报空（after.empty=True）——检查驱动/输入配置'})
+        return out
+
     def codeact_not_exposed(self):
         """CodeAct 额外屏蔽的 EL 私有名字（裸 core 模块/物理库/波形类）。"""
         return ['static_atom', 'sambe', 'evolve_mixed', 'evolve_twofield', 'hard',
@@ -140,7 +215,19 @@ class EngineAdapter(EngineProtocol):
 
     # ---------- query（preview 叠加建场层的重叠检测） ----------
     def estimate(self, cache, snapshot):
-        return _cp.estimate(cache, snapshot)
+        """成本预估 + **保证 `est_sec` 存在**（P0-5 的键契约收口）。
+
+        实测：core 的 `estimate` **只在两体/多体**分支给 `est_sec`（单体分支不给）。
+        于是 `run_compute(mode='auto')` 的"超阈值转 async"对**单体永远不触发**——
+        旧库用 `or 0.0` 把它静默吞掉。现在由本层补齐：单体给 0.0（单体演化秒级，
+        确实不该转 async），并注明来源，使该键**在所有分支都有定义**。
+        """
+        est = _cp.estimate(cache, snapshot)
+        if est.get('est_sec') is None:
+            est['est_sec'] = 0.0
+            est['est_sec_note'] = ('单体演化秒级；core 单体分支不给 est_sec，'
+                                   '由适配层补 0.0（两体/多体由 core 给真实值）')
+        return est
 
     def preview(self, cache, snapshot):
         p = _cp.preview(cache, snapshot)

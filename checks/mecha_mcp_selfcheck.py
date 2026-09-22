@@ -354,4 +354,74 @@ C.group('L P0-3/P0-4：numpy 惰性（不在 import 期）+ 无建场层不崩�
      _no_module_numpy),
 ])
 
+# ---------------- M. 引擎自报告警 ⇄ 实落事件 的**对拍**（P1-9c 要求 C） ----------------
+# 这套设计把"告警内容"从库移到了引擎，于是**新的失效模式**是：
+# "引擎自报的 alerts 与 ops 实际落的事件不一致"（少落/多落/字段丢）。
+# 对拍放在**产出侧**（cockpit 是透传方，不该由它负责发现产出缺漏）。
+from mecha.ops import Ops as _Ops2                     # noqa: E402
+from mecha.session import Session as _Session2         # noqa: E402
+from mecha import hooks as _hooks                      # noqa: E402
+
+
+class _AlertEngine:
+    """自报 2 条告警（不同 level/rule）+ 1 条框架级 degradation 的引擎。"""
+    def engine_params(self): return {}
+    def _rec(self, n):
+        return {'name': n, 'type': 'float', 'unit': '', 'lo': None, 'hi': None,
+                'desc': 'd', 'default': 0.0, 'family': 'config', 'readonly': False}
+    def config_schema(self): return {'x': self._rec('x')}
+    def solve_schema(self): return {}
+    def solve_map(self): return {}
+    def settable_keys(self): return ['x']
+    def validate_wave_list(self, v): return v
+    def make_cache(self): return object()
+    def build_run(self, cache, snap, diag=False):
+        return {'method': 'alerty', 'two_body': False, 'spec': dict(snap)}
+    def check_run(self, run): return ['框架级：自检发现一处降级']
+    def evolve_run(self, run, progress_arr=None): return {'ok': True}
+    def result_summary(self, run, res, **kw): return {'ok': True}
+    def summarize_run(self, run): return 'alerty'
+    def estimate(self, cache, snap): return {'est_sec': 0.0}
+    def preview(self, cache, snap): return {'ok': True}
+    def list_levels(self, cache, snap): return []
+    def run_meta(self, run): return {'method': run['method'], 'body': 'single'}
+    def annotations(self, snap): return {'n_waves': 0, 'overlap_warning': None}
+    def alerts(self, run, summary, annotations):
+        return [{'rule': 'rule_a', 'level': 'warn', 'reason': '甲'},
+                {'rule': 'rule_b', 'level': 'error', 'reason': '乙'}]
+
+
+_old_e3 = runtime.engine()
+try:
+    runtime.set_engine(_AlertEngine())
+    _a_tmp = tempfile.mkdtemp(prefix='mecha_alert_')
+    _a_sess = _Session2(root=_a_tmp)
+    _a_ops = _Ops2(_a_sess)
+    _prep = _a_ops.prepare(actor='ai', reason='对拍', land_artifact=False)
+    _ann = dict(_hooks.annotations(_AlertEngine(), _a_sess.effective()))
+    _ann.setdefault('check_problems', list(_prep.get('problems') or []))
+    _expect = _hooks.alerts(_AlertEngine(), _prep['run'], {'ok': True}, _ann)
+    _a_ops.execute(_prep, actor='ai', reason='对拍', land_artifact=False)
+    _evs = [e for e in _a_sess.activity(0) if e['kind'] == 'alert']
+    _pairs = [((e.get('after') or {}).get('rule'),
+               (e.get('provenance') or {}).get('level'), e.get('reason'))
+              for e in _evs]
+    _exp_pairs = [(a['rule'], a['level'], a['reason']) for a in _expect]
+finally:
+    runtime.set_engine(_old_e3)
+
+C.group('M 引擎自报告警 ⇄ 实落 alert 事件**逐项对拍**（P1-9c 要求 C；含致死性）', [
+    ('自报 %d 条 ⇒ 实落 %d 条（数量一致）' % (len(_expect), len(_evs)),
+     len(_evs) == len(_expect)),
+    ('rule/level/reason **逐项**传递（实落 == 自报）', _pairs == _exp_pairs),
+    ('引擎自报的两条都在（rule_a/rule_b）',
+     {p[0] for p in _pairs} >= {'rule_a', 'rule_b'}),
+    ('level 分档正确（warn/error 各就位）',
+     {p[0]: p[1] for p in _pairs}.get('rule_b') == 'error'),
+    ('**框架级 degradation 与引擎自报合并**（check_run 的问题不被吞）',
+     'degradation' in {p[0] for p in _pairs}),
+    ('**致死性构造**：若少落一条，数量断言必红（%d != %d）'
+     % (len(_evs), len(_expect) - 1), len(_evs) != len(_expect) - 1),
+])
+
 sys.exit(0 if C.summary() else 1)
