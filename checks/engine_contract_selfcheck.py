@@ -140,6 +140,11 @@ _WHITELIST = {
     # C5（第 14 刀）：hard/mixed 共用的耗散落点校验器，无更轻的公开入口；
     # dissip_contract_selfcheck 走它验证报错文案。刻意显式放行。
     ('src.core.evolve_util', '_single_loss_rates'),
+    # P2-5a（2026-09-22）：稀疏路径"如实记账"（`error_report['sparse_uncontrolled']`）是契约，
+    # 要验它必须**强制**走稀疏路径，而公开入口 `evolve_sambe` **不接受 `dense_max`**
+    # （稀疏阈值只在 `SambeSetup` 构造期定）⇒ 无更轻的公开入口，只能直取内核做一稀一稠对照。
+    # 与上一条同性质，刻意显式放行。见 checks/evolve_exact_selfcheck.py 的 G 段。
+    ('src.core.sambe', '_propagate_adaptive'),
 }
 _CHK = os.path.join(os.path.dirname(os.path.abspath(__file__)))
 _priv_imports, _dots = set(), set()
