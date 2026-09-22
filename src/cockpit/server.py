@@ -20,6 +20,8 @@ import os
 import sys
 
 from starlette.applications import Starlette
+from starlette.middleware import Middleware
+from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse, StreamingResponse
 from starlette.routing import Route, Mount
 from starlette.staticfiles import StaticFiles
@@ -149,7 +151,11 @@ def create_app(root=None, token=None):
     if os.path.isdir(_STATIC):
         routes.append(Mount('/', StaticFiles(directory=_STATIC, html=True),
                             name='static'))
-    return Starlette(routes=routes)
+    # CORS：dsh 插件原生驾驶舱从 :3080 跨源 fetch 本只读 API（:8766）。cockpit 只读、
+    # token 走 query（非 cookie），故 allow_origins=* + 仅 GET 安全（不涉凭证/写）。
+    return Starlette(routes=routes, middleware=[
+        Middleware(CORSMiddleware, allow_origins=['*'],
+                   allow_methods=['GET'], allow_headers=['*'])])
 
 
 def main(argv=None):
