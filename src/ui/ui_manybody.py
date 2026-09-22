@@ -20,8 +20,14 @@
 **M0 范围**（未做项显式列在 `NOT_YET`，不放假控件）：
   · 点云的**画布交互编辑**（点击加原子/拖拽）——M1；M0 用表编辑 + 只读点云；
   · 关联矩阵 C_ij 热图 / 纠缠熵 S 曲线——M2（且 S 依赖 P1-8 的 artifact 边界）；
-  · `drive_segments` 分段驱动表、`psi0='sup'` 叠加、`manybody.seed`——
-    待裁决⑤（物理侧定"实现/标无效/删"）后再定控件。
+  · `drive_segments` 分段驱动表、`psi0='sup'` 叠加——后续（见 `NOT_YET`）。
+
+**已裁决不做**（裁决⑤ 2026-09-22，见 `DECIDED_NO`）：`manybody.seed`（core 已删）与
+`manybody.energy_window_mhz`（core 已删）**都不上控件**，原因写在 `DECIDED_NO` 里并显示在
+页面底部——**不留"待裁决"的悬空措辞**（否则后来人会以为还悬着）。
+`manybody.template` 已由"预设选择器"**真实现**（core `TEMPLATE_TERMS`）⇒ 本页恢复
+ising/xy 单选（**有物理效果**），potts3 下拉项**禁用**（未实现，D3 显式边界）；
+`manybody.terms` 是**权威开关**，UI 上用三态控件完整表达 None/list/[] 并写明"显式覆盖预设"。
 """
 import numpy as np
 from PyQt5.QtCore import Qt
@@ -35,10 +41,27 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from ..core import core
 from . import _mecha_bind as MB
 from ..core import protocol as _proto
+# 模板→预设相互作用项的唯一真源在 core（本页**不复制**这张表，守 I2）
+from ..core.manybody.model import TEMPLATE_TERMS
 
 # M0 未做的能力（页面上显式说明，避免"以为有"）
 NOT_YET = ('点云画布交互编辑（点击/拖拽加原子）', '关联矩阵 C_ij 热图与纠缠熵 S 曲线',
            '分段驱动 drive_segments 表', 'ψ0 叠加（sup）编辑器')
+
+# **已裁决不做**（2026-09-22 工单 P2-1 / 裁决⑤）——写明原因，避免后来人以为还悬着。
+# ⚠ `seed` 是"暂时不做"而非"永久不做"：它要真生效必须先有阵列生成器键
+# `manybody.array={kind,n,spacing_um,jitter}`（core 注释里已写明）⇒ 届时**一并恢复**。
+DECIDED_NO = (
+    ('manybody.seed',
+     '已删（core 37701ad）：registry 路径只调 add_atom（逐原子显式坐标），'
+     '结构上无随机性可播种；将来加 manybody.array（阵列生成器）时一并恢复本控件'),
+    ('manybody.energy_window_mhz',
+     '已删（core）：按声明无法实现（能量窗需配 ref_energy_mhz，schema 无此键）；'
+     '中间态截断已由 n_window + guard_mhz 覆盖'),
+)
+
+# 「相互作用项」三态（与 schema 一一对应，D2：优先级写在界面上）
+_TERMS_MODES = ('跟随模板预设', '自定义勾选', '显式无相互作用')
 
 _TERMS = ('I1', 'I2', 'I3')
 _TERM_TIP = {'I1': '密度-密度 V·n_i n_j（vdW/blockade 主项）',
@@ -128,9 +151,20 @@ class ManyBodyPanel(QWidget):
         self.template_cb = MB.combobox(
             reg, 'manybody.template', ['ising', 'xy', 'potts3'],
             spec=MB.ParamSpec('str', options=['ising', 'xy', 'potts3'],
-                              desc='局部空间模板'))
-        self.template_cb.setToolTip('ising / xy：每原子 2 能级（M1 ED 支持）\n'
-                                    'potts3：3 能级——**未实现**，选中会在运行时明确报错')
+                              desc='局部空间/相互作用预设'))
+        self.template_cb.setToolTip(
+            '相互作用**预设**（core `TEMPLATE_TERMS`）：\n'
+            '  ising → terms=I1（密度-密度 V·n_i n_j）\n'
+            '  xy    → terms=I2（交换 J σ⁺σ⁻）\n'
+            '两者都是每原子 2 能级（横向场由逐原子 Ω 提供）。\n'
+            'potts3：3 能级/原子——**M1 未实现**，选中会在运行时明确报错。\n'
+            '⚠ **优先级**：显式 manybody.terms 覆盖本预设（相互作用内容只有一个真源）。')
+        # potts3 未实现 ⇒ 下拉项**禁用**（不是删掉：D3 显式边界，让人看得见"有这个档但没做"）
+        _pi = self.template_cb.findText('potts3')
+        if _pi >= 0:
+            self.template_cb.model().item(_pi).setEnabled(False)
+        self.template_cb.currentTextChanged.connect(
+            lambda _t: self._refresh_terms_display())
         row.addWidget(self.template_cb)
         row.addWidget(QLabel('求解器'))
         self.solver_cb = MB.combobox(
@@ -140,12 +174,26 @@ class ManyBodyPanel(QWidget):
         self.solver_cb.setToolTip('auto：按 dim=2^N 与 ed_max_dim 自动判可行\n'
                                   'ed：精确对角化（M1）\n'
                                   'tebd：TeNPy/MPS——**M3 未实现**，选中会明确报错')
+        _si = self.solver_cb.findText('tebd')
+        if _si >= 0:
+            self.solver_cb.model().item(_si).setEnabled(False)
         row.addWidget(self.solver_cb)
         row.addStretch(1)
         p.addLayout(row)
 
+        # 相互作用项：**三态**控件，与 schema 一一对应（None / 显式 list / 显式 []）。
+        # 为什么用 combo+勾选框而不是"就三个勾选框"：schema 里"跟随模板预设(None)"与
+        # "显式不要任何相互作用项([])"是**两个不同的值**，三个勾选框表达不了这个区别，
+        # 会造成"取消勾选到底等于哪个"的歧义（D2：多键/同旋钮必须写明优先级）。
         row2 = QHBoxLayout()
-        row2.addWidget(QLabel('相互作用项'))
+        self.terms_mode_cb = QComboBox()
+        self.terms_mode_cb.addItems(list(_TERMS_MODES))
+        self.terms_mode_cb.setToolTip(
+            '跟随模板预设：manybody.terms=None（ising→I1 / xy→I2）\n'
+            '自定义勾选：写显式列表，**覆盖**模板预设\n'
+            '显式无相互作用：写 []（自由自旋，无 I1/I2/I3）')
+        self.terms_mode_cb.currentIndexChanged.connect(self._on_terms_mode_changed)
+        row2.addWidget(self.terms_mode_cb)
         self.term_cbs = {}
         for t in _TERMS:
             cb = QCheckBox(t)
@@ -153,6 +201,9 @@ class ManyBodyPanel(QWidget):
             cb.stateChanged.connect(self._write_terms)
             row2.addWidget(cb)
             self.term_cbs[t] = cb
+        self.terms_hint = QLabel('')
+        self.terms_hint.setStyleSheet('color:#6b7280;')
+        row2.addWidget(self.terms_hint)
         row2.addStretch(1)
         p.addLayout(row2)
 
@@ -229,6 +280,15 @@ class ManyBodyPanel(QWidget):
         self.not_yet.setWordWrap(True)
         self.not_yet.setStyleSheet('color:#9ca3af; font-size:8pt;')
         p.addWidget(self.not_yet)
+        # **已裁决不做**（不是"待裁决"）：写明键名与原因，避免后来人以为还悬着
+        self.decided_no = QLabel(
+            '已裁决不做：' + '；'.join('%s（%s）' % (k, why)
+                                      for k, why in DECIDED_NO) + '。')
+        self.decided_no.setWordWrap(True)
+        self.decided_no.setStyleSheet('color:#9ca3af; font-size:8pt;')
+        self.decided_no.setToolTip('\n'.join('%s\n  %s' % (k, why)
+                                             for k, why in DECIDED_NO))
+        p.addWidget(self.decided_no)
         p.addStretch(1)
         return panel
 
@@ -256,11 +316,25 @@ class ManyBodyPanel(QWidget):
         except Exception:                               # noqa: BLE001
             atoms = []
         self._atoms = [dict(a) for a in atoms]
-        terms = br.read('manybody.terms') or ['I1']
-        for t, cb in self.term_cbs.items():
-            cb.blockSignals(True)
-            cb.setChecked(t in terms)
-            cb.blockSignals(False)
+        # 相互作用项三态：None=跟随模板 / list=显式 / []=显式无
+        terms = br.read('manybody.terms')
+        self.terms_mode_cb.blockSignals(True)
+        if terms is None:
+            self.terms_mode_cb.setCurrentIndex(0)
+        elif len(terms) == 0:
+            self.terms_mode_cb.setCurrentIndex(2)
+        else:
+            self.terms_mode_cb.setCurrentIndex(1)
+        self.terms_mode_cb.blockSignals(False)
+        # 读路径（真 bug 修，2026-09-22 自测发现）：模式 1 的勾选框**必须**从会话现值
+        # 同步——否则加载存档/undo 后勾选框是空的，而 session 里其实有显式列表
+        # （显示与真值分叉；且下一次 `_write_terms` 会把空表当作用户意图写回去）。
+        if isinstance(terms, (list, tuple)):
+            for t, cb in self.term_cbs.items():
+                cb.blockSignals(True)
+                cb.setChecked(t in terms)
+                cb.blockSignals(False)
+        self._refresh_terms_display()
         psi = br.read('manybody.psi0')
         self.psi0_cb.blockSignals(True)
         if psi == 'ground':
@@ -380,16 +454,91 @@ class ManyBodyPanel(QWidget):
         self._draw_cloud()
         self.refresh_cost()
 
+    def _preset_terms(self):
+        """当前模板的预设项（core `TEMPLATE_TERMS`，不复制表）。"""
+        return list(TEMPLATE_TERMS.get(self.template_cb.currentText(), ('I1',)))
+
+    def _on_terms_mode_changed(self, idx):
+        """切换三态：**进入"自定义勾选"时以当前生效值为起点**，不凭空重置。
+
+        ⚠ 修一个真 bug（2026-09-22 自测发现）：模式 0（跟随预设）下勾选框显示的是
+        **模板预设**（如 ising→I1）。若切到模式 1 时直接沿用这几个勾选框，会把会话里
+        已有的**显式值**（如 ['I2']）静默改成预设（['I1']）——切个模式就把用户设置改了。
+        故：进入模式 1 前先从会话现值（None → 模板预设）播种勾选框。
+        """
+        if int(idx) == 1:
+            cur = None
+            br = getattr(self.main, 'app_bridge', None)
+            if br is not None:
+                try:
+                    cur = br.read('manybody.terms')
+                except Exception:                       # noqa: BLE001
+                    cur = None
+            seed = (list(cur) if isinstance(cur, (list, tuple))
+                    else self._preset_terms())
+            for t, cb in self.term_cbs.items():
+                cb.blockSignals(True)
+                cb.setChecked(t in seed)
+                cb.blockSignals(False)
+        self._write_terms()
+
+    def _refresh_terms_display(self):
+        """按三态刷新勾选框的可用性/勾选与提示（**只显示，不写 session**）。"""
+        mode = self.terms_mode_cb.currentIndex()
+        if mode == 0:                       # 跟随模板预设
+            eff = self._preset_terms()
+            for t, cb in self.term_cbs.items():
+                cb.blockSignals(True)
+                cb.setChecked(t in eff)
+                cb.setEnabled(False)
+                cb.blockSignals(False)
+            self.terms_hint.setText('跟随模板 %s → %s'
+                                    % (self.template_cb.currentText(),
+                                       '、'.join(eff) or '（无）'))
+        elif mode == 1:                     # 自定义勾选（显式）
+            for cb in self.term_cbs.values():
+                cb.setEnabled(True)
+            eff = [t for t in _TERMS if self.term_cbs[t].isChecked()]
+            self.terms_hint.setText('显式：%s（覆盖模板预设）'
+                                    % ('、'.join(eff) or '（空——请至少勾一项）'))
+        else:                               # 显式无相互作用 []
+            for t, cb in self.term_cbs.items():
+                cb.blockSignals(True)
+                cb.setChecked(False)
+                cb.setEnabled(False)
+                cb.blockSignals(False)
+            self.terms_hint.setText('显式 []（自由自旋，无 I1/I2/I3）')
+
     def _write_terms(self):
-        terms = [t for t in _TERMS if self.term_cbs[t].isChecked()] or ['I1']
+        """三态 → `manybody.terms`：None（跟随模板）/ 显式 list / 显式 []。
+
+        与 schema 一一对应；**显式覆盖模板**（core 侧若两者不一致会写 warning，
+        本页把优先级直接写在 combo 与提示里，D2）。
+        """
+        mode = self.terms_mode_cb.currentIndex()
+        if mode == 0:
+            val = None
+        elif mode == 2:
+            val = []
+        else:
+            val = [t for t in _TERMS if self.term_cbs[t].isChecked()]
+            if not val:
+                # 自定义模式下全不勾 = 语义含糊（None 还是 []？）⇒ 不猜，回退"跟随模板"
+                self.main.log('相互作用项：自定义模式下未勾任何项——已回退为'
+                              '「跟随模板预设」（要显式清空请选「显式无相互作用」）', 8000)
+                self.terms_mode_cb.blockSignals(True)
+                self.terms_mode_cb.setCurrentIndex(0)
+                self.terms_mode_cb.blockSignals(False)
+                val = None
         br = getattr(self.main, 'app_bridge', None)
-        if br is None:
-            return
-        try:
-            br.write('manybody.terms', terms, reason='多体页：相互作用项',
-                     actor='gui')
-        except Exception as e:                          # noqa: BLE001
-            self.main.log('写 manybody.terms 失败：%s' % e)
+        if br is not None:
+            try:
+                br.write('manybody.terms', val, reason='多体页：相互作用项',
+                         actor='gui')
+            except Exception as e:                      # noqa: BLE001
+                self.main.log('写 manybody.terms 失败：%s' % e)
+        self._refresh_terms_display()
+        self.refresh_cost()
 
     def _write_psi0(self):
         i = self.psi0_cb.currentIndex()

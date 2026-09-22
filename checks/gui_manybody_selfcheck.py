@@ -55,35 +55,103 @@ C.group('A 多体页装配（第三页；既有两页不动 = M3）', [
 ])
 
 # ---------------- B. 参数页 → choke point ----------------
-_keys = ('manybody.template', 'manybody.terms', 'manybody.solver',
-         'manybody.second_order', 'manybody.n_window', 'manybody.guard_mhz',
-         'manybody.ed_max_dim', 'manybody.psi0')
-# 6 个标量/布尔走 `_mecha_bind` 工厂；`terms`(多选) 与 `psi0`(三态+模式串)
-# 是**手写控件**（工厂没有 list/多态类型）——它们也必须经 choke point 写。
+# 6 个标量/布尔走 `_mecha_bind` 工厂；`terms`(三态) 与 `psi0`(三态+模式串) 是
+# **手写控件**（工厂没有 list/多态类型）——它们也必须经 choke point 写。
 _BOUND_KEYS = ('manybody.template', 'manybody.solver', 'manybody.second_order',
                'manybody.n_window', 'manybody.guard_mhz', 'manybody.ed_max_dim')
-_CUSTOM_KEYS = ('manybody.terms', 'manybody.psi0')
+_TERMS_UI = ('I1', 'I2', 'I3')
 _bound = [k for (_wd, k, _s) in _w.binder._binds if k.startswith('manybody.')]
 _mb.template_cb.setCurrentText('xy')
+_tpl_written = _w.app_bridge.read('manybody.template')     # 就地取（后面探针会改回 ising）
 _mb.nwin_sb.setValue(2)
-_terms_before = _w.app_bridge.read('manybody.terms')
-_mb.term_cbs['I2'].setChecked(True)
-_terms_after = _w.app_bridge.read('manybody.terms')
-_mb.psi0_cb.setCurrentIndex(1)                      # Lanczos 基态
-_psi0_written = _w.app_bridge.read('manybody.psi0')
+_nwin_written = _w.app_bridge.read('manybody.n_window')
 _evs = [e for e in _w.app_bridge.activity(0)
         if str(e.get('target') or '').startswith('manybody.')]
-C.group('B 参数页经 _mecha_bind 绑到 session（choke point，actor=gui）', [
+
+
+def _probe_terms(mode, checks, template=None):
+    """驱动「相互作用项」三态控件 → 读回 session（判据与致死性共用同一探针）。"""
+    if template:
+        _mb.template_cb.setCurrentText(template)
+    _mb.terms_mode_cb.setCurrentIndex(mode)
+    for t in _TERMS_UI:
+        _mb.term_cbs[t].setChecked(t in checks)
+    _mb._write_terms()
+    return _w.app_bridge.read('manybody.terms')
+
+
+# 三态语义（与 schema 一一对应；裁决⑤ 后 `terms` 默认由 ['I1'] 改成 None）
+_t_follow = _probe_terms(0, set(), 'ising')      # 跟随模板 → None
+_t_follow_xy = _probe_terms(0, set(), 'xy')      # 换模板仍是 None（预设真值在 core）
+_t_custom = _probe_terms(1, {'I2'})              # 自定义 → 显式 list
+_t_custom2 = _probe_terms(1, {'I1', 'I3'})
+_t_empty = _probe_terms(2, set())                # 显式无相互作用 → []
+
+# 读路径回归（自测发现真 bug）：会话显式 ['I2'] → refresh 后勾选框必须显示 I2
+_w.app_bridge.write('manybody.terms', ['I2'], reason='判据：读路径', actor='gui')
+_mb.refresh_from_session()
+_read_mode = _mb.terms_mode_cb.currentIndex()
+_read_checks = [t for t in _TERMS_UI if _mb.term_cbs[t].isChecked()]
+
+# 切模式不覆盖（自测发现真 bug）：mode0 显示的是预设(ising→I1)，切到 mode1 不得
+# 把会话里的 ['I2'] 静默改成 ['I1']
+_w.app_bridge.write('manybody.terms', ['I2'], reason='判据：切模式', actor='gui')
+_mb.refresh_from_session()
+_mb.terms_mode_cb.setCurrentIndex(0)
+_mb.terms_mode_cb.setCurrentIndex(1)
+_switch_val = _w.app_bridge.read('manybody.terms')
+
+# 致死性：把"写出值"故意改错（三态一律写 ['I1']）→ 同一批期望必须判出不一致
+_orig_write_terms = type(_mb)._write_terms
+
+
+def _broken_write_terms(self):
+    self.main.app_bridge.write('manybody.terms', ['I1'],
+                               reason='致死性：故意写错', actor='gui')
+
+
+type(_mb)._write_terms = _broken_write_terms
+try:
+    _lethal = [_probe_terms(0, set(), 'ising'), _probe_terms(1, {'I2'}),
+               _probe_terms(2, set())]
+finally:
+    type(_mb)._write_terms = _orig_write_terms
+_lethal_caught = (_lethal != [_t_follow, _t_custom, _t_empty])   # 与三条模式断言同一批期望
+_w.app_bridge.write('manybody.terms', None, reason='判据：复原', actor='gui')
+_mb.refresh_from_session()
+
+# psi0 三态
+_mb.psi0_cb.setCurrentIndex(1)
+_psi0_ground = _w.app_bridge.read('manybody.psi0')
+_mb.psi0_cb.setCurrentIndex(0)
+_psi0_none = _w.app_bridge.read('manybody.psi0')
+_mb.psi0_cb.setCurrentIndex(2)
+_mb.psi0_edit.setText('grg')
+_mb._write_psi0()
+_psi0_str = _w.app_bridge.read('manybody.psi0')
+
+C.group('B 参数页经 _mecha_bind / choke point 绑到 session（含三态语义）', [
     ('6 个标量/布尔键都进了 binder（实测 %d：%s）' % (len(_bound), _bound),
      sorted(_bound) == sorted(_BOUND_KEYS)),
-    ('2 个手写控件也经 choke point 写 session（terms=%r / psi0=%r）'
-     % (_terms_after, _psi0_written),
-     isinstance(_terms_after, (list, tuple)) and 'I2' in _terms_after
-     and _psi0_written == 'ground'),
-    ('改模板 → session 读到 xy', _w.app_bridge.read('manybody.template') == 'xy'),
-    ('改 n_window → session 读到 2', _w.app_bridge.read('manybody.n_window') == 2),
-    ('相互作用项写入是 list（%r → %r）' % (_terms_before, _terms_after),
-     isinstance(_terms_after, (list, tuple)) and 'I2' in _terms_after),
+    ('改模板 → session 读到 xy（就地取值，免受后续探针改模板影响）',
+     _tpl_written == 'xy'),
+    ('改 n_window → session 读到 2', _nwin_written == 2),
+    ('相互作用项·跟随模板 → 写 None（%r / %r；预设真值在 core，不复制表）'
+     % (_t_follow, _t_follow_xy), _t_follow is None and _t_follow_xy is None),
+    ('相互作用项·自定义 → 写显式 list（%r / %r）' % (_t_custom, _t_custom2),
+     _t_custom == ['I2'] and _t_custom2 == ['I1', 'I3']),
+    ('相互作用项·显式无 → 写 []（与 None 是两个不同值，不可混同）',
+     _t_empty == []),
+    ('读路径：会话显式 [I2] → 模式=1 且勾选框显示 I2（mode=%d, 勾选=%s）'
+     % (_read_mode, _read_checks),
+     _read_mode == 1 and _read_checks == ['I2']),
+    ('切模式不覆盖：[I2] 经 mode0→mode1 往返仍是 [I2]（%r）' % (_switch_val,),
+     _switch_val == ['I2']),
+    ('致死性：写出值故意改错 → 同一批期望判出不一致（%r）' % (_lethal,),
+     _lethal_caught),
+    ('ψ0 三态：Lanczos=%r / 全基态=%r / 模式串=%r'
+     % (_psi0_ground, _psi0_none, _psi0_str),
+     _psi0_ground == 'ground' and _psi0_none is None and _psi0_str == 'grg'),
     ('总线事件 actor=gui（人机同路 I5，%d 条）' % len(_evs),
      bool(_evs) and all(e.get('actor') == 'gui' for e in _evs)),
 ])
