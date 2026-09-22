@@ -14,6 +14,7 @@
  */
 import type { Context } from '@deepseek-ai/cordis'
 import { CockpitPanel } from './CockpitPanel.tsx'
+import { CockpitTabBody } from './CockpitTabBody.tsx'
 import { COCKPIT_MODE_CSS } from './cockpit-mode-css.ts'
 import { getCockpitMode, subscribeCockpitMode } from './mode-store.ts'
 import { readBootstrap } from './bootstrap.ts'
@@ -24,9 +25,11 @@ export const name = 're0-mecha'
 /** 需要 web client 的服务：slots（挂按钮）+ layout（开/关右栏、关左栏）。
  *  Cordis ctx 是代理：未在 inject 声明的服务一访问就抛
  *  "cannot get property X without inject"，故 layout 必须在此声明。 */
-export const inject = ['slots', 'layout']
+export const inject = ['slots', 'layout', 'sidebarRight', 'sidebarRightTabs']
 
-export async function apply(ctx: Context): Promise<void> {
+export async function apply(ctx: Context, config?: { cockpitNative?: boolean }): Promise<void> {
+  // native 右栏 tab 为 **opt-in**（config.cockpitNative===true）；默认 iframe（已知稳）。
+  const useNativeTab = config?.cockpitNative === true
   await ctx.effect(() => {
     // 注入驾驶舱模式 CSS（data-plugin-css 标记；卸载即移除）
     const style = document.createElement('style')
@@ -40,6 +43,23 @@ export async function apply(ctx: Context): Promise<void> {
         { name: 'conversation.session.header.actions', id: 're0-cockpit', order: 200 },
         CockpitPanel,
       ))
+
+    // ---- native 右栏 tab（opt-in）：注册 tab 类型 + body；ON 时 openTab 打开 ----
+    // 正确路径（源码验证）：右栏是 dockkit tab 体制，内容必须是已注册 tab 类型的 tab。
+    let relType: any = null
+    let disposeBody: (() => void) | null = null
+    if (useNativeTab) {
+      try {
+        relType = (ctx as any).sidebarRightTabs?.register?.({
+          id: 're0-cockpit', kind: 're0-cockpit', title: () => '机甲驾驶舱',
+        }) || null
+        disposeBody = ctx.slots.inject('sidebar.right.pane.tab', () =>
+          ctx.slots.register(
+            { name: 'sidebar.right.pane.tab', key: 're0-cockpit' } as any,
+            CockpitTabBody,
+          ))
+      } catch { relType = null; disposeBody = null }
+    }
 
     // ---- 模式副作用：右栏=驾驶舱 + 左栏自动关 + iframe 挂右栏列 ----
     let frame: HTMLIFrameElement | null = null
@@ -70,7 +90,13 @@ export async function apply(ctx: Context): Promise<void> {
           ctx.layout?.toggleSidebar?.()
           weClosedSidebar = true
         }
-        mountFrame()
+        // native tab 优先（opt-in）：openTab 打开我们的 tab（列自动展开）；
+        // 失败/未启用 → 回退 iframe 挂右栏列（已知稳）。
+        let tabbed = false
+        if (useNativeTab && relType) {
+          try { (ctx as any).sidebarRight?.openTab?.('re0-cockpit'); tabbed = true } catch { tabbed = false }
+        }
+        if (!tabbed) mountFrame()
       } else {
         ctx.layout?.closeRightbar?.()
         if (weClosedSidebar) { ctx.layout?.toggleSidebar?.(); weClosedSidebar = false }
@@ -81,6 +107,8 @@ export async function apply(ctx: Context): Promise<void> {
     return () => {
       unsub()
       unmountFrame()
+      if (disposeBody) { try { disposeBody() } catch { /* ignore */ } }
+      if (typeof relType === 'function') { try { relType() } catch { /* ignore */ } }
       try { disposeBtn?.() } catch { /* ignore */ }
       style.remove()
       document.documentElement.removeAttribute('data-re0-cockpit')
