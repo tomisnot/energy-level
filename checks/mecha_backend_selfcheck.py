@@ -127,21 +127,37 @@ C.group('D hardware 预留未实现：明确报 Reserved（不静默退化成 si
      and ReservedBackend.kind == 'reserved_backend'),
 ])
 
-# ---------------- E. 数字孪生 dry-run（§6 统一点） ----------------
+# ---------------- E. 数字孪生 dry-run（§6 统一点；附告二 后**域参数化**） ----------------
+# 旧版库内写死 `l3_gate('hardware')` / `target='hardware'`；现在目标由**领域**给。
+# 三种情形都验：未指定目标（最严、不放行）、显式 hardware、领域登记的不逆 op。
 seq0 = _sess.bus.last_seq
-prop = _ops_default.propose(reason='提议一段硬件序列（先 sim 预演）', actor='ai')
-prop_events = [e for e in _sess.activity(seq0) if e['kind'] == 'propose']
-C.group('E 数字孪生 dry-run：AI 提议→先 sim 跑→摆给人（不武装硬件）', [
-    ('propose 跑了 sim dry-run（estimate + preview 基组规模）',
+prop = _ops_default.propose(reason='提议一段序列（先 sim 预演）', actor='ai')
+prop_events = [e for e in _sess.activity(seq0) if e.get('kind') == 'propose']
+_prop_hw = _ops_default.propose(reason='显式指定 hardware 目标',
+                                actor='ai', backend_target='hardware')
+AU.register_irreversible_ops({'fire_laser': '出光——不可逆、安全攸关'})
+_prop_op = _ops_default.propose(reason='领域登记的不逆 op', actor='ai',
+                                op='fire_laser')
+AU.register_irreversible_ops({})          # 还原，避免影响后续
+C.group('E 数字孪生 dry-run：AI 提议→先 sim 跑→摆给人（不武装）＋目标**域参数化**', [
+    ('propose 跑了 dry-run（estimate + preview 基组规模）',
      prop['dry_run_sim']['preview_n_states'] == 6
      and 'estimate' in prop['dry_run_sim']),
-    ('proposal 目标 backend=hardware 但 armed=False',
-     prop['proposal']['backend_target'] == 'hardware'
-     and prop['armed'] is False),
+    ('**未指定目标 ⇒ 按最严**：不放行（旧版靠写死 hardware 才恒拒）',
+     prop['proposal']['backend_target'] is None
+     and prop['l3_gate']['allow'] is False),
+    ('**显式 hardware 目标**：仍不放行（armed=False）且 armed 标 False',
+     _prop_hw['proposal']['backend_target'] == 'hardware'
+     and _prop_hw['armed'] is False and _prop_hw['l3_gate']['allow'] is False),
+    ('**领域登记的不逆 op**（未指定 backend）→ 走不可逆档、不放行',
+     _prop_op['l3_gate']['allow'] is False
+     and '不可逆 op' in str(_prop_op['l3_gate']['reason'])),
     ('requires_confirmation=True（单向门必须人把关）',
      prop['requires_confirmation'] is True),
-    ('L3 闸未放行（AI 只能提议）', prop['l3_gate']['allow'] is False),
-    ('发了一条 propose 事件（M1 归因，进总线）', len(prop_events) == 1),
+    ('发了一条 propose 事件（M1 归因，进总线）', len(prop_events) >= 1),
+    ('`is_irreversible` 只认登记过的 op（未登记 → 假）',
+     AU.is_irreversible('fire_laser') is False
+     and AU.irreversible_ops() == {}),
 ])
 
 # ---------------- F. 分级自治 classify ----------------

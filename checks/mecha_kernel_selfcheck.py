@@ -467,4 +467,93 @@ C.group('H I1 无侧门：改 _snapshot 只在 __init__/_write（AST 守卫 + �
      lethal_fires and len(_rogue_hits) >= 1),
 ])
 
+# ---------------- I. 罪六：undo 按 seq 寻址 + 按 reversibility 拒绝 ----------------
+_tmp_u = tempfile.mkdtemp(prefix='mecha_undo_')
+_su = SESS.Session(root=_tmp_u)
+_r_a = _su.set('field.B_gauss', 1.0, actor='ai', reason='第一写')
+_r_b = _su.set('field.B_gauss', 2.0, actor='ai', reason='第二写')
+_r_c = _su.set('field.E_vpcm', 3.0, actor='ai', reason='第三写')
+_seq_b = _r_b['seq']
+# LIFO 撤最近一次（撤 E_vpcm）
+_lifo = _su.undo(actor='ai', reason='LIFO')
+# 按 seq 撤到第二写（应撤 B_gauss=2.0 → 恢复 1.0，且不动其他键）
+_byseq = _su.undo(actor='ai', reason='按 seq', seq=_seq_b)
+# 不可逆：往撤销栈里塞一条非 undo 的记录，验"按 reversibility 拒"
+_su._undo.append(('field.E_vpcm', 3.0, 999999, 'rerun'))
+try:
+    _su.undo(actor='ai', reason='撤不可逆')
+    _rej = None
+except Exception as e:                                        # noqa: BLE001
+    _rej = e
+C.group('I 罪六：undo(seq) 按事件寻址 + 按 reversibility 拒绝（含致死性）', [
+    ('LIFO 撤最近一次（E_vpcm 被撤）',
+     _lifo.get('mode') == 'lifo' and _lifo['key'] == 'field.E_vpcm'),
+    ('按 seq 撤**指定那条**（B_gauss 回到 1.0）',
+     _byseq.get('mode') == 'by_seq' and _byseq['key'] == 'field.B_gauss'
+     and _byseq['restored'] == 1.0),
+    ('回执带 `undid_seq`（撤的是哪一条，可审计）',
+     _byseq.get('undid_seq') == _seq_b),
+    ('**致死性**：reversibility != undo 的记录被**可教学拒绝**（不是假装撤了）',
+     _rej is not None and 'reversibility' in str(_rej)
+     and bool(getattr(_rej, 'hint', None))),
+    ('既有 LIFO 调用点**不受影响**（向后兼容：`undo()` 仍可用）',
+     _lifo.get('ok') is True),
+])
+
+# ---------------- J. 附告一：RunSpec JSON 侧车 + 格式自报 ----------------
+# 真落一次产物：验 manifest 自报格式、侧车存在且**真可 JSON 解析**、pickle 仍是权威。
+from mecha.ops import save_artifact as _save_art          # noqa: E402
+from mecha.ops import load_artifact as _LOAD              # noqa: E402
+import json as _json                                      # noqa: E402
+import numpy as _np                                       # noqa: E402
+_tmp_a = tempfile.mkdtemp(prefix='mecha_art_')
+_run = {'method': 'toy', 't': _np.arange(3.0), 'x': 1,
+        'nested': {'c': complex(1, 2)}}
+_art = _save_art(_tmp_a, 'aid1', {'k': 1}, _run, {}, {'ok': True},
+                 arrays={'t': _np.arange(3.0)})
+_adir = os.path.join(_tmp_a, 'artifacts', 'aid1')
+_man = _json.load(open(os.path.join(_adir, 'manifest.json'), encoding='utf-8'))
+_sidecar = os.path.join(_adir, 'runspec.json')
+_side_ok = os.path.exists(_sidecar)
+_side = _json.load(open(_sidecar, encoding='utf-8')) if _side_ok else {}
+C.group('J 附告一：RunSpec 落 JSON 侧车 + manifest **自报格式**（含致死性）', [
+    ('manifest 自报 `runspec_format`（消费者不必猜）',
+     _man.get('runspec_format') == 'pickle/4'),
+    ('manifest 自报侧车名', _man.get('runspec_json') == 'runspec.json'),
+    ('**侧车真存在且可 JSON 解析**（人/AI 可直读）', _side_ok and bool(_side)),
+    ('ndarray 被编码为带 dtype/shape 的可读结构（不丢形状信息）',
+     (_side.get('t') or {}).get('__ndarray__') is True
+     and (_side.get('t') or {}).get('shape') == [3]),
+    ('complex 被编码为 {__complex__:[re,im]}（不丢虚部）',
+     (_side.get('nested') or {}).get('c', {}).get('__complex__') == [1.0, 2.0]),
+    ('**pickle 仍是权威重跑格式**（文件在，且 load_artifact 读得回）',
+     os.path.exists(os.path.join(_adir, 'runspec.pkl'))
+     and _LOAD(_tmp_a, 'aid1') is not None),
+])
+
+
+# 致死性：**不可序列化**的值 → 侧车不写、manifest 记原因（不静默）
+class _Weird:
+    def __repr__(self):
+        return '<weird>'
+
+
+_art2 = _save_art(_tmp_a, 'aid2', {}, {'method': 'toy', 'bad': _Weird()}, {},
+                  {'ok': True}, arrays=None)
+_man2 = _json.load(open(os.path.join(_tmp_a, 'artifacts', 'aid2',
+                                     'manifest.json'), encoding='utf-8'))
+C.group('J2 附告一 致死性：不可序列化的 RunSpec → **不写侧车 + manifest 记原因**', [
+    ('侧车**未**写（不写半个坏 JSON）',
+     not os.path.exists(os.path.join(_tmp_a, 'artifacts', 'aid2',
+                                     'runspec.json'))),
+    ('manifest 的 `runspec_json` 为 None（明确"没有侧车"）',
+     _man2.get('runspec_json') is None),
+    ('manifest **记了原因**（D5 不静默）',
+     bool(_man2.get('runspec_json_note'))),
+    ('权威格式仍自报 pickle/4（消费者仍知道怎么读）',
+     _man2.get('runspec_format') == 'pickle/4'),
+    ('pickle 仍落盘（重跑能力不受影响）',
+     os.path.exists(os.path.join(_tmp_a, 'artifacts', 'aid2', 'runspec.pkl'))),
+])
+
 sys.exit(0 if C.summary() else 1)
