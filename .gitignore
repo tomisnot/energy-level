@@ -8,9 +8,9 @@ __pycache__/
 # 大数据 / 运行时产物（本机产物，不入库）
 .arcdata/
 save_state/
-runtime/ai_results/
-runtime/sweeps/
-runtime/_journal/
+# runtime/ 整目录排除：sweeps（扫描产物）/ _journal（旧 AI 管线日志）/ check_profile.csv
+# （scripts/check_profile.py 的诊断输出）。仓库里唯一值得入库的运行数据是 save_state/。
+runtime/
 .mecha/
 scripts/tmp/
 
