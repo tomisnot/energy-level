@@ -28,6 +28,9 @@ const TAB_CSS = `
 .re0-tab-native details.re0-ev[open]>summary::before{content:'▾'}
 .re0-tab-native details.re0-ev .seq{color:#0969da}
 .re0-tab-native details.re0-ev .actor-ai{color:#8250df}
+.re0-tab-native details.re0-ev .re0-tag{color:#57606a;border:1px solid #d0d7de;border-radius:4px;padding:0 4px;font-size:11px}
+.re0-tab-native details.re0-ev .re0-reason{color:#1f2328;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.re0-tab-native details.re0-ev .body i{color:#8b949e;font-style:normal;margin-right:4px}
 .re0-tab-native details.re0-ev .body{padding:4px 8px 8px 22px;border-top:1px solid #eaeef2;color:#57606a;white-space:pre-wrap}
 .re0-tab-native details.re0-sub{margin:2px 0 6px 8px;border-left:2px solid #d0d7de;padding-left:8px}
 .re0-tab-native details.re0-fam{margin:0 0 6px}
@@ -64,6 +67,18 @@ export function CockpitTabBody() {
       String(x ?? '').replace(/[&<>"]/g, (c) =>
         ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string))
 
+    // 旧版 fmtVal：截断/指针友好显示，不 dump 转义 JSON（防“乱码”）
+    const fmtVal = (v: any): string => {
+      if (v === null || v === undefined) return '∅'
+      if (typeof v === 'object') {
+        if (v.$pointer) return '⟨数组 ' + ((v.shape || []) as any[]).join('×') + '⟩'
+        if (v.$truncated) return '⟨截断 ' + v.kept + '/' + v.total + '⟩'
+        return JSON.stringify(v)
+      }
+      return String(v)
+    }
+
+    // 旧版方案：summary 概括 = seq/actor/kind/**reason(中文描述)**；展开 = 全量多行
     const recPage = (evs: any[]): string =>
       evs.slice(-60).reverse().map((e) => {
         const k = 'ev:' + e.seq
@@ -71,9 +86,14 @@ export function CockpitTabBody() {
         return `<details class="re0-ev" data-key="${k}"${open}><summary>` +
           `<span class="seq">#${e.seq}</span>` +
           `<span class="${e.actor === 'ai' ? 'actor-ai' : ''}">${esc(e.actor)}</span>` +
-          `<span>${esc(e.kind)}</span><span>${esc(e.target)}</span></summary>` +
-          `<div class="body">${esc(e.reason || '')}\nbefore: ${esc(JSON.stringify(e.before))}\n` +
-          `after: ${esc(JSON.stringify(e.after))}</div></details>`
+          `<span class="re0-tag">${esc(e.kind)}</span>` +
+          `<span class="re0-reason" title="${esc(e.reason || '')}">${esc(e.reason || '')}</span>` +
+          `</summary><div class="body">` +
+          `<div><i>target</i>${esc(e.target)}</div>` +
+          `<div><i>before → after</i>${esc(fmtVal(e.before))} → ${esc(fmtVal(e.after))}</div>` +
+          `<div><i>reason</i>${esc(e.reason || '')}</div>` +
+          `<div><i>可逆</i>${esc(e.reversibility || '')}</div>` +
+          `</div></details>`
       }).join('')
 
     const cfgPage = (groups: any): string =>
