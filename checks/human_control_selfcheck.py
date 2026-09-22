@@ -1,6 +1,13 @@
 # -*- coding: utf-8 -*-
 """人工控制端点判据（Phase 1 出口）：switch_mode 经 **token 鉴权 HTTP**（非 MCP，AI 不能
 自授权）；错 token 拒（403）；正确 token 切换成功且 `authority_switch` 事件落总线（actor=human）。
+
+★ **本判据 2026-09-22 的重要修正：改为测"装配"而不只是"机制"。**
+原先它**自己造 session**（`Session(bus=bus, authority=auth)`），只验端点处理器；
+于是**从没验过启动器 `serve.main` 的装配**——而 main 里当时传的是
+`Session(root=root)`（**没有 authority**）⇒ **Hub 进程里"两模式写权"这条不变量根本不存在**，
+本判据却 7/0 全绿。**单元被测了，装配没被测。**
+现改为调 `serve.build_session(...)`（启动器用的**同一个**装配函数）⇒ 装配点可被测。
 """
 import json
 import os
@@ -12,12 +19,9 @@ import urllib.request
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from checklib import Checker                              # noqa: E402
-from mecha.authority import Authority                # noqa: E402
-from mecha.bus import Bus                            # noqa: E402
-from mecha.session import Session                    # noqa: E402
 from mecha import runtime                            # noqa: E402
 from src.adapter import EngineAdapter                # noqa: E402
-from src.adapter.serve import start_human_control        # noqa: E402
+from src.adapter.serve import build_session, start_human_control   # noqa: E402
 
 # 人工**写**端点走 `session.set` ⇒ 过 registry 校验 ⇒ 需要注入引擎
 # （P2-4 之前本判据只测 switch_mode，不碰写路径，故一直没注入过）。
@@ -41,9 +45,30 @@ def main():
     # 数据根**显式**（P0-1：mecha 不再从 __file__ 倒推项目根）。判据是独立进程、
     # cwd 未必是仓根，故用临时目录而非相对路径。
     tmp = tempfile.mkdtemp(prefix='human_ctl_')
-    bus = Bus(root=tmp)
-    auth = Authority(bus=bus, mode='human')
-    sess = Session(bus=bus, authority=auth)
+    # ★★ 关键：用**启动器的装配函数**（`serve.build_session`），不再自己造 session。
+    sess = build_session(tmp, mode='human')
+    auth = sess.authority
+    bus = sess.bus
+
+    # ---- ★ 装配门控是**活的**（这是修复前真正缺失的那一环） ----
+    _ai_denied = None
+    try:
+        sess.set('field.B_gauss', 5.0, actor='ai', reason='AI 越权（应被拒）')
+        _ai_denied = False
+    except Exception as e:                                    # noqa: BLE001
+        _ai_denied = e
+    C.group('★ 装配门控是活的：human 模式下 AI 写**被拒**（可教学、不静默）', [
+        ('`build_session` 返回的 Session **挂着 authority**（不是 None）',
+         auth is not None),
+        ('human 模式下 AI 写入**被拒**（不是静默通过）', _ai_denied is not False),
+        ('拒绝可教学（kind=authority_denied + hint）',
+         getattr(_ai_denied, 'kind', None) == 'authority_denied'
+         and bool(getattr(_ai_denied, 'hint', None))),
+        ('被拒后快照**未变**（没写进去）', 'field.B_gauss' not in sess.effective()),
+        ('**致死性**：若装配漏了 authority（= 修复前 `main` 的状态），'
+         'AI 写会**静默通过** ⇒ 上面那条必红', auth is not None),
+    ])
+
     port, token = start_human_control(sess, port=0)
     url = 'http://127.0.0.1:%d/switch_mode' % port
 

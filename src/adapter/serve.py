@@ -97,6 +97,25 @@ def start_human_control(session, host='127.0.0.1', port=8767):
     return srv.server_address[1], token
 
 
+def build_session(root, *, mode='human'):
+    """**装配**一个 Hub 用的 Session（控制权门 + 数据根 + 引擎）。
+
+    ★ 为什么把它抽成**具名函数**（主代理 2026-09-22）：原来这段埋在 `main()` 里，
+    于是判据只能"自己造 session"去验端点机制，**从没验过启动器的装配**——
+    结果 `main()` 里传的是 `Session(root=root)`（**没有 authority**），
+    `authority.gate` 整段被跳过 ⇒ **Hub 进程里"两模式写权"这条不变量根本不存在**，
+    而判据 `human_control_selfcheck` 却 7/0 全绿。**单元被测了，装配没被测。**
+    抽出来之后，装配点变成**可被测的东西**（判据直接调本函数断言门是活的）。
+
+    `mode='human'`（人先开车，与 `AppBridge` 默认一致）；交给 AI 由人经
+    `/switch_mode`（独立 token，AI 不能自授权）。
+    """
+    from mecha.authority import Authority
+    from mecha.bus import Bus
+    bus = Bus(root=root)
+    return Session(bus=bus, authority=Authority(bus=bus, mode=mode))
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog='python -m src.adapter.serve')
     ap.add_argument('--root', default=None,
@@ -128,9 +147,11 @@ def main(argv=None):
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
     runtime.set_engine(EngineAdapter(atom=a.atom))   # 注入领域引擎
-    session = Session(root=root)
-    print('数据根：%s（journal/artifacts/payloads/jobs）' % session.bus.root,
-          flush=True)
+    # ★ 装配走 `build_session`（**可被测的具名装配点**）——`Session(authority=None)`
+    #   会让写权门整段失效（A1 的深层缺陷，见该函数 docstring）。
+    session = build_session(root, mode='human')
+    print('数据根：%s（journal/artifacts/payloads/jobs）；控制权模式：human'
+          % session.bus.root, flush=True)
     # 落一条 registry_schema 事件：驾驶舱配置态结构树的 schema 源（需求②）。cockpit 只读
     # journal 即可富渲染、不 import mecha（黑匣子纯净 T5）；大 schema 被 I4 体积闸截成
     # 指针，cockpit 端顺 where 读回原文。
