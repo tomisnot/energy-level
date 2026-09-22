@@ -520,8 +520,18 @@ _DIRECT_SHIFT_CACHE_MAX = 64
 # 调用方（静态页面板）要改精度就**显式传参**给
 # `direct_ac_stark_shifts` / `direct_ac_stark_sweep` 的同名形参。
 # **只影响静态页的能级显示**——AC 位移是静态显示量，不参与演化。
-AC_N_PHOTON = 4          # 光子块阶数（块数 = 2·本值+1）
-AC_SOS_N_WINDOW = None   # 偶极伙伴窗；None = 用 DIRECT_SOS_N_WINDOW
+AC_N_PHOTON = Param(4, 'AC-Stark 光子块阶数（块数 = 2·本值+1）；**静态页显示精度，不参与演化**', tier='run')
+# `field.window` 的引擎侧默认：**派生**自 `DIRECT_SOS_N_WINDOW`（不另立第二真源
+# ⇒ 改一处两边同步）。原来是裸 `None` 哨兵，语义等价：`None` 仍表示"用本默认"。
+AC_SOS_N_WINDOW = Param(DIRECT_SOS_N_WINDOW, 'AC-Stark 偶极伙伴窗 |Δn|≤本值（= field.window 的引擎默认；派生自 DIRECT_SOS_N_WINDOW）', tier='run')
+# ↑ P1-7（2026-09-22）：这两项原本是**裸模块常量** ⇒ `registry.engine_params()`
+#   收集不到 ⇒ GUI「窗口 / 光子块」控件**静默失能**（人改了无反应、AI 也改不到）。
+#   现在包成 `Param` 进注册表（family='engine'，只读）；**可写入口**是新增的配置键
+#   `field.window` / `field.n_photon`（protocol.CONFIG_SCHEMA），由调用方**显式传参**
+#   给 build_level_rows / direct_ac_stark_shifts（GUI 已接线）。
+# ⚠ **只对静态生效**：动态侧 `runspec.py` 对 n_photon / sos_n_window **零命中**——
+#   这是结构性事实（AC 位移是静态显示量，不参与演化，见上方 519-522 行），
+#   接线时不得把这两个键引进动态通路。
 # Floquet 空间 NM = N·(2n+1)，对角化要 **NM²** 的 evecs + NM² 的 H_diag：
 #   NM= 8784 → ~0.6 GiB + 1.2 GiB
 #   NM=18864 → ~2.7 GiB + 5.3 GiB
@@ -531,9 +541,14 @@ AC_NM_MAX = 12000
 
 
 def _ac_precision(n_photon, sos_n_window):
-    """缺省 → 本模块常量；并做入口校验（非正/负值直接拒）。"""
-    n_photon = AC_N_PHOTON if n_photon is None else int(n_photon)
-    sos_n_window = (DIRECT_SOS_N_WINDOW if sos_n_window is None
+    """缺省 → 本模块 `Param`（AC_N_PHOTON / AC_SOS_N_WINDOW）；入口校验（非正/负值直接拒）。
+
+    P1-7：默认值改从 `Param` 读（两者都在 registry 里，值不变）——这样"键默认"
+    与"引擎默认"只有一个真源（`AC_SOS_N_WINDOW` 派生自 `DIRECT_SOS_N_WINDOW`，
+    `field.window` 的 CONFIG_SCHEMA 默认又派生自 `AC_SOS_N_WINDOW`）。
+    """
+    n_photon = int(AC_N_PHOTON) if n_photon is None else int(n_photon)
+    sos_n_window = (int(AC_SOS_N_WINDOW) if sos_n_window is None
                     else int(sos_n_window))
     if n_photon < 1:
         raise ValueError('n_photon 必须 >= 1（得到 %r）' % n_photon)

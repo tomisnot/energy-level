@@ -16,6 +16,10 @@ import os
 
 from . import runspec as _runspec
 from .manybody import schema_mb as _mb_schema   # 多体配置契约（schema_mb 只 import param，无环）
+# P1-7（2026-09-22）：AC-Stark **静态**精度旋钮的引擎默认。CONFIG_SCHEMA 的
+# `field.window` / `field.n_photon` 默认值**派生**自这里（不手抄数字 ⇒ 不会漂）。
+# 二者只被静态通路消费（`static_atom._ac_precision`），动态侧 `runspec.py` 零命中。
+from .static_atom import AC_N_PHOTON, AC_SOS_N_WINDOW
 
 __all__ = ['CONFIG_SCHEMA', 'SOLVE_META', 'config_schema', 'solve_schema',
            'solve_map', 'engine_params', 'engine_param_names', 'settable_keys',
@@ -36,6 +40,21 @@ CONFIG_SCHEMA = {
     'field.B_gauss': dict(type='float', unit='Gauss', desc='静磁场（Zeeman）'),
     'field.E_vpcm': dict(type='float', unit='V/cm',
                          desc='静电场（DC-Stark）；n=60 的 Inglis-Teller 约 25 V/cm'),
+    # ---- P1-7（2026-09-22）：AC-Stark **静态**精度旋钮 ----
+    # 「窗口 / 光子块」两个控件原先**静默失能**（人改了无反应、AI 也改不到），根因是
+    # 引擎侧 `AC_N_PHOTON`/`AC_SOS_N_WINDOW` 是**裸模块常量**、且没有可写配置键。
+    # 现在：① 两者包成 `Param`（registry 收集得到，family='engine' 只读）；
+    #       ② 这两个键给出**可写**入口（default 派生自引擎 Param，不手抄）。
+    # ⚠ **只对静态生效**：消费方是 `static_atom._ac_precision`（经 build_level_rows /
+    #   direct_ac_stark_shifts 的**显式形参**），**动态侧 runspec.py 零命中**——
+    #   AC 位移是静态显示量、不参与演化（`static_atom.py` 的 519-522 行）。接线时
+    #   不要把这两个键引进 build_run/evolve_run，否则会破坏"两页同基准"的前提。
+    'field.n_photon': dict(type='int', default=int(AC_N_PHOTON), lo=1, hi=12,
+                           desc='AC-Stark 光子块阶数（块数=2n+1）；静态页显示精度，'
+                                '不参与演化。n 越大越准越慢（n=8 时 ~61s/次）'),
+    'field.window': dict(type='int', default=int(AC_SOS_N_WINDOW), lo=1, hi=5,
+                         desc='AC-Stark 偶极伙伴窗 |Δn|≤本值（Floquet 基组）；'
+                              '静态页显示精度，不参与演化'),
     'dynamic.mode': dict(type='int', enum=[0, 1, 2],
                          desc='0=单体 / 1=两体 / 2=多体（N 原子阵列，走 manybody.*）'),
     'dynamic.method': dict(type='str', enum=['mixed', 'sambe', 'hard'],
