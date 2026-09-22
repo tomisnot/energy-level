@@ -20,12 +20,14 @@ from .manybody import schema_mb as _mb_schema   # 多体配置契约（schema_mb
 # `field.window` / `field.n_photon` 默认值**派生**自这里（不手抄数字 ⇒ 不会漂）。
 # 二者只被静态通路消费（`static_atom._ac_precision`），动态侧 `runspec.py` 零命中。
 from .static_atom import AC_N_PHOTON, AC_SOS_N_WINDOW
+from . import static_atom as SA          # 静态查询（P1-6）要 build_level_rows_direct 等
 
 __all__ = ['CONFIG_SCHEMA', 'SOLVE_META', 'config_schema', 'solve_schema',
            'solve_map', 'engine_params', 'engine_param_names', 'settable_keys',
            'validate_wave_list', 'validate_atom_list', 'build_run', 'check_run',
            'evolve_run', 'result_summary', 'summarize_run', 'make_cache',
            'estimate', 'preview', 'list_levels', 'count_waves',
+           'wave_acfg', 'address_cfg_from_snapshot',
            'runspec_read_keys']
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -55,6 +57,18 @@ CONFIG_SCHEMA = {
     'field.window': dict(type='int', default=int(AC_SOS_N_WINDOW), lo=1, hi=5,
                          desc='AC-Stark 偶极伙伴窗 |Δn|≤本值（Floquet 基组）；'
                               '静态页显示精度，不参与演化'),
+    # ---- P1-6（2026-09-22）：静态列的 opt-in 开关 ----
+    # 为什么是**快照键**而不是函数形参：`list_levels` 这条链（server/ops/protocol/
+    # adapter）**四处都是无参的** ⇒ 没有 `**opts` 可透传。走快照键 ⇒ 零 mecha-sdk
+    # 改动，且本键会出现在 list_params 里（带代价说明）⇒ 对 AI **可发现**。
+    'static.columns': dict(
+        type='str', enum=['off', 'basic', 'ac'], default='off',
+        desc='list_levels 是否附静态列：off（默认，逐位不变）/ '
+             'basic（+ E0_mhz/dc_shift_mhz/qstr/group_label/color/amps；'
+             '**无额外代价**，与 base_sublevels 同一遍）/ '
+             'ac（再 + ac_shift_mhz/ac_affected；**需一次 Floquet 对角化，'
+             '实测 n_photon=4/window=3 时 ~13 s/次**，window=5 更大）。'
+             '**只影响静态查询，不参与演化**'),
     'dynamic.mode': dict(type='int', enum=[0, 1, 2],
                          desc='0=单体 / 1=两体 / 2=多体（N 原子阵列，走 manybody.*）'),
     'dynamic.method': dict(type='str', enum=['mixed', 'sambe', 'hard'],
@@ -311,6 +325,51 @@ def count_waves(snap):
 
 
 # =====================================================================
+# 寻址光 → address_cfg（**单一定义点**，2026-09-22 P1-6）
+# =====================================================================
+def wave_acfg(w, field_B=None):
+    """一个 `Wave` → `static_atom` 系列要的 `address_cfg`。
+
+    这是"寻址光参数从哪来"的**唯一答案**：**从 `dynamic.waves_*` 的波形现造**
+    （静态页那套 GUI 本地态不入 registry）⇒ "AI 设的寻址光"与"人设的波形"是
+    **同一个真源**，且零新增 schema 键。
+    原先这段逻辑内联在 `preview` 里；现在 preview 与静态查询**共用本函数**。
+    """
+    acfg = {'enabled': True,
+            'intensity': getattr(w, 'intensity_mwcm2', None),
+            'frequency_hz': float(getattr(w, 'freq_mhz')) * 1e6}
+    ell = getattr(w, 'elliptical', None)
+    if getattr(w, 'pol', None) == '椭圆偏' and ell:
+        acfg['elliptical'] = ell
+    else:
+        acfg['polarization'] = getattr(w, 'pol', None)
+    return acfg
+
+
+def address_cfg_from_snapshot(snap, atom=None):
+    """快照 → (address_cfg | None, note)。
+
+    取**第一条有单一载频**的波（任意波形无载频 ⇒ 定不了 AC 失谐）。
+    返回 None 时 `note` 说明原因（**不静默给 0 位移**，D5）。
+    """
+    atoms = ((atom,) if atom else
+             (('A', 'B') if int((snap or {}).get('dynamic.mode') or 0) == 1
+              else ('single',)))
+    n_arb = 0
+    for a in atoms:
+        for w in _runspec.waves_for(snap, a):
+            if getattr(w, 'freq_mhz', None) is None:
+                n_arb += 1
+                continue
+            return wave_acfg(w), None
+    if n_arb:
+        return None, ('寻址光只有任意波形（无单一载频）——定不了 AC 失谐；'
+                      '要算 AC 位移请用「光强包络」（Wave + 载频）')
+    return None, ('未配置寻址光（dynamic.waves_%s 为空）→ 无 AC 位移'
+                  % '/'.join(atoms))
+
+
+# =====================================================================
 # 4. 查询：estimate / preview / list_levels（纯查询，不跑演化）
 #    多体（dynamic.mode==2）走 _mb_* 分支（委托 manybody 的 cost_mb/runspec_mb）
 # =====================================================================
@@ -497,13 +556,7 @@ def preview(cache, snap):
                 continue
             wd['freq_mhz'] = freq
             out['waves'].append(wd)
-            acfg = {'enabled': True, 'intensity': wd['intensity_mwcm2'],
-                    'frequency_hz': float(freq) * 1e6}
-            ell = getattr(w, 'elliptical', None)
-            if getattr(w, 'pol', None) == '椭圆偏' and ell:
-                acfg['elliptical'] = ell
-            else:
-                acfg['polarization'] = w.pol
+            acfg = wave_acfg(w, B)
             try:
                 for (ls, qs, lt, qt, det, om) in SA.collect_transitions(
                         cache, g_lab, acfg, field_B=B):
@@ -533,23 +586,102 @@ def preview(cache, snap):
 
 
 def list_levels(cache, snap):
-    """列出当前基组的态（label + 身份键 + 能量）——语义寻址，不猜索引。"""
+    """列出当前基组的态（label + 身份键 + 能量）——语义寻址，不猜索引。
+
+    ## 静态列（P1-6，2026-09-22）——**显式 opt-in，默认关**
+
+    由快照键 `static.columns` 控制（`off` 默认 / `basic` / `ac`）：
+      · `basic`：额外回 `E0_mhz`(= `E_mhz`，同一行) / `dc_shift_mhz` / `qstr` /
+        `group_label` / `color` / `amps`。**便宜**——这些量本就在
+        `base_sublevels` 的那一遍里算出来了（`with_dc` 顺手记下 DC 位移）。
+      · `ac`：再额外回 `ac_shift_mhz` / `ac_affected`（AC-Stark）。**贵**——
+        要一次 Floquet 对角化：`n_photon=4 / window=3` 时 **~13 s/次**
+        （`src/ui/fields.py:82` 实测原文"window=3 全伙伴（N~400，n=4 时 ~13s/次）"），
+        `window=5` 更大。故**绝不默认开**，且回 `cost_note` 说明代价（D5）。
+
+    为什么用**快照键**而不是函数形参：`list_levels` 这条链
+    （`server.list_levels()` → `ops.list_levels()` → `protocol` → `adapter`）
+    **四处都是无参的**（实测 `server.py:202` / `ops.py:199` / `mecha/protocol.py:81`
+    / `adapter/__init__.py:261`）⇒ 没有 `**opts` 可透传。走快照键 ⇒
+    **零 `mecha-sdk` 改动**，且该键会出现在 `list_params` 里、带 desc 说明代价
+    ——对 AI 反而**可发现**。（若将来库侧加了形参，本键可退回默认关。）
+    """
     if _is_many(snap):
         return _mb_list_levels(cache, snap)
     from .atomic_levels import state_key
     groups = _runspec.groups_from_params(snap)
+    cols = str((snap or {}).get('static.columns') or 'off')
+    if cols not in ('off', 'basic', 'ac'):
+        raise ValueError('static.columns 只认 off/basic/ac，得到 %r' % cols)
     if not groups:
         return {'n_states': 0, 'states': [],
                 'note': '基组为空——先 set_param("groups.list", [{n,l,j}, ...])'}
     states = _runspec.build_states(cache, groups, snap.get('field.B_gauss'),
-                                   snap.get('field.E_vpcm'))
+                                   snap.get('field.E_vpcm'),
+                                   with_static=(cols != 'off'))
     out = [{'label': s['label'], 'key': list(state_key(s)),
             'n': s['n'], 'l': s['l'], 'j': s['j'], 'kind': s['kind'],
             'm': s.get('m'), 'E_mhz': round(float(s['E_mhz']), 6)}
            for s in states]
-    return {'n_states': len(out), 'states': out,
-            'hint': 'set_param("dynamic.psi_single", <key>) 设初态；'
-                    'set_drive 的 src/tgt 可用 label 或 key'}
+    if cols != 'off':
+        for d, s in zip(out, states):
+            d['E0_mhz'] = round(float(s['E_mhz']), 6)
+            d['qstr'] = s.get('qstr')
+            d['group_label'] = s.get('group_label')
+            d['color'] = s.get('color')
+            d['dc_shift_mhz'] = round(float(s.get('dc_shift_mhz', 0.0)), 6)
+            d['amps'] = ({str(k): [float(np.real(v)), float(np.imag(v))]
+                          for k, v in (s.get('amps') or {}).items()}
+                         if s.get('amps') else None)
+    res = {'n_states': len(out), 'states': out,
+           'hint': 'set_param("dynamic.psi_single", <key>) 设初态；'
+                   'set_drive 的 src/tgt 可用 label 或 key'}
+    if cols == 'off':
+        res['static_hint'] = (
+            '要 DC-Stark 位移 / qstr / amps：set_param("static.columns","basic")；'
+            '再加 AC-Stark（**~13 s/次**，n_photon=4/window=3）："ac"')
+        return res
+    res['static_columns'] = cols
+    if cols == 'basic':
+        res['cost_note'] = ('basic 列来自 base_sublevels 同一遍计算，**无额外代价**；'
+                            'AC-Stark 需另设 static.columns="ac"（~13 s/次）')
+        return res
+    # ---- ac 档：一次 Floquet 对角化（贵）----
+    B = float(snap.get('field.B_gauss') or 0.0)
+    acfg, note = address_cfg_from_snapshot(snap)
+    if acfg is None:
+        for d in out:
+            d['ac_shift_mhz'] = None
+            d['ac_affected'] = None
+        res['ac_note'] = note
+        res['cost_note'] = 'AC 列未计算（%s）' % note
+        return res
+    n_ph = (snap or {}).get('field.n_photon')
+    win = (snap or {}).get('field.window')
+    rows = SA.build_level_rows_direct(
+        cache, B, groups, acfg, groups, float(snap.get('field.E_vpcm') or 0.0),
+        n_ph, win)
+    # 按 (n,l,j,qstr) 分桶、桶内按 occ 顺序消费 —— 与 `_occ_keys_direct` 同语义，
+    # 故重复组（同 n,l,j 加两次）也能逐一对上，不靠位置猜。
+    buckets = {}
+    for r in rows:
+        k = (r['n'], r['l'], r['j'], r['qstr'])
+        buckets.setdefault(k, []).append(r)
+    occ = {}
+    for d, s in zip(out, states):
+        k = (s['n'], s['l'], s['j'], s.get('qstr'))
+        i = occ.get(k, 0)
+        occ[k] = i + 1
+        bucket = buckets.get(k) or []
+        r = bucket[i] if i < len(bucket) else None
+        d['ac_shift_mhz'] = (None if r is None
+                             else round(float(r.get('ac', 0.0)), 6))
+        d['ac_affected'] = (None if r is None
+                            else bool(r.get('affected', False)))
+    res['ac_precision'] = {'n_photon': n_ph, 'window': win}
+    res['cost_note'] = ('ac 列需一次 Floquet 对角化（实测 n_photon=4/window=3 时 '
+                        '~13 s；window=5 更大）——故**只在显式请求时**算。')
+    return res
 
 
 # =====================================================================
