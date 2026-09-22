@@ -60,6 +60,11 @@ GOLDEN = {
 }
 
 # ---------------- A. 收集不是复制（C1 单一定义点） ----------------
+# ⚠ 断言性质 = **漂移侦测**，不是"总数相等"：
+#   物理侧每新增一个内部 Param（如 P1-1 的包络检测旋钮）都会让"总数相等"变红，
+#   而那是**良性演进**、不是回归 —— 两位负责人都在跑，会互相打断。
+#   故：① GOLDEN 里的项必须**都在**且值**逐位不变**（缺失/变值 = 真回归，FAIL）；
+#       ② 出现 GOLDEN 之外的新参数 → **明确列出并要求登记**（被看见，而不是静默通过）。
 ep = R.engine_params()
 val_bad = []
 for name, want in GOLDEN.items():
@@ -70,17 +75,25 @@ for name, want in GOLDEN.items():
     got = rec['default']
     if not (got == want):
         val_bad.append('%s(%r!=%r)' % (name, got, want))
+# 新增（未登记）参数：只报告、不判死；若一直没人登记，下次对拍就少了它
+new_params = sorted(set(ep) - set(GOLDEN))
+if new_params:
+    print('  [note] 引擎新增 %d 个未登记参数（请按需补进 GOLDEN 以纳入对拍）：%s'
+          % (len(new_params), new_params))
 tiers = {}
 for rec in ep.values():
     tiers[rec['tier']] = tiers.get(rec['tier'], 0) + 1
 # solve.* 键从 SOLVE_KWARG 派生（不是手抄）
 solve_keys = set(R.solve_schema())
 derived_ok = solve_keys == {'solve.' + k for k in RS.SOLVE_KWARG}
-C.group('A registry 收集 core 的 Param（值逐位不变 + solve.* 派生）', [
-    ('收集到 %d 个引擎参数（= golden 数 %d）' % (len(ep), len(GOLDEN)),
-     len(ep) == len(GOLDEN)),
+C.group('A registry 收集 core 的 Param（漂移侦测：值逐位不变 + 新参数被看见 + solve.* 派生）', [
+    ('%d 个 golden 参数**都在**（缺：%s）'
+     % (len(GOLDEN), [n for n in GOLDEN if n not in ep] or '无'),
+     not any(v.endswith('(缺)') for v in val_bad)),
     ('%d 个值逐位等于 golden（不符：%s）' % (len(GOLDEN), val_bad or '无'),
      not val_bad),
+    ('新增未登记参数**被列出**（%d 个；不判死，属良性演进）' % len(new_params),
+     True),
     ('每个 record 带 name/home/type/unit/desc/default/tier',
      all({'name', 'home', 'type', 'desc', 'default', 'tier'} <= set(r)
          for r in ep.values())),
