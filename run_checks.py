@@ -45,21 +45,23 @@ SUPPORT = {'checklib.py', 'pair_evolve.py'}
 SLOW = {'mw_bench_firstprinciples.py'}
 
 # =====================================================================
-# 快档（--fast）：给开发内循环用的秒级判据集
+# 分档（--core / --fast）：给开发内循环用的秒级判据集
 #
-# 选择规则（**自动，不手工维护名单**）：
-#   · 名字命中 FAST_KINDS 里的类（结构/契约/守卫/边界/绑定 …）
-#   · 且**实测耗时 < FAST_MAX_SEC**（表在下面，来源 scripts/check_profile.py）
-# 新写的秒级判据只要名字落在这些类里，就自动进快档；反之，重的物理对拍永远进不来。
-# 想调整粒度：改 FAST_KINDS（类）或 FAST_MAX_SEC（阈值）——不要手抄脚本名。
+# **唯一的判据是"实测耗时"**，登记在下面的 FAST_KNOWN_SEC 里（来源
+# `scripts/check_profile.py` → `runtime/check_profile.csv`）。
+#
+# ⚠ 这里原先还有一道 `FAST_KINDS`（"名字命中 `_selfcheck`/`guard`/`contract`…"）——
+# 实测发现它是**假门槛**：48 个判据**全部**命中（都叫 `*_selfcheck`），真正在起作用的
+# 只有耗时阈值。留着它只会让人以为"按名字筛过了"。已删除，让机制说真话。
+#
+# 想让新判据进档：跑一次 `scripts/check_profile.py` 量出它的耗时，填进 FAST_KNOWN_SEC。
+# **未登记的判据不进档**（保守：宁可漏跑，不可拖慢内循环）——代价是它只会在全档里跑，
+# 所以新判据一写完就该来登记。
 # =====================================================================
-FAST_KINDS = ('_selfcheck', 'guard', 'purity', 'contract', 'sentinel', 'toyengine')
-# 三档（按单判据实测耗时切）：内循环 / 提交前 / 全量。
-# 阈值不是拍脑袋——来自 scripts/check_profile.py 的实测分布（见 FAST_KNOWN_SEC）。
+# 两档（按单判据实测耗时切）：内循环 / 提交前。
 TIER_CORE_SEC = 3.0       # --core：秒级，改一行就跑
 TIER_FAST_SEC = 15.0      # --fast：提交前
-# 单判据实测耗时（秒；2026-09-22 由 scripts/check_profile.py 在干净树上测得）。
-# 未列出的判据：视为"未测"，**不进快档**（保守：宁可漏跑，不可拖慢内循环）。
+# 单判据实测耗时（秒；2026-09-22 由 scripts/check_profile.py 测得）。
 FAST_KNOWN_SEC = {
     'docs_consistency_selfcheck.py': 0.4,
     'mecha_toyengine_selfcheck.py': 0.1,
@@ -100,19 +102,13 @@ FAST_KNOWN_SEC = {
 
 
 def fast_lane(scripts, max_sec):
-    """按实名类 + 实测耗时阈值挑判据；**未实测的不进**（保守：宁可漏跑，不可拖慢内循环）。
+    """→ 已登记且实测耗时 < max_sec 的判据。
 
-    想改粒度：调 TIER_*_SEC 阈值，或往 FAST_KNOWN_SEC 补新判据的实测耗时
-    （用 scripts/check_profile.py 现测现填）。**不要手抄脚本名。**
+    判据**只有一个**：FAST_KNOWN_SEC 里的实测耗时。未登记的不进档（保守）。
+    想调整档位粒度：改 TIER_CORE_SEC / TIER_FAST_SEC，或补登新判据的实测耗时。
     """
-    out = []
-    for s in scripts:
-        if not any(k in s for k in FAST_KINDS):
-            continue
-        sec = FAST_KNOWN_SEC.get(s)
-        if sec is not None and sec < max_sec:
-            out.append(s)
-    return out
+    return [s for s in scripts
+            if FAST_KNOWN_SEC.get(s) is not None and FAST_KNOWN_SEC[s] < max_sec]
 
 # **接线判据**：曾经验旧架构 GUI 登记册（pm_setup）的接线、在纯引擎沙盒里跑不了而默认跳过。
 # Re0 回归主仓库后 GUI 已迁入（solve_max_step_hard 的 D 组改用 runspec.SOLVE_KWARG/registry），
