@@ -82,27 +82,47 @@ export async function apply(ctx: Context, config?: { cockpitNative?: boolean }):
       }
     }
     const mountNative = (): void => {
-      const host = document.querySelector('[data-rightbar-col]')
-      if (!host || nativeRoot) return
-      nativeRoot = document.createElement('div')
-      nativeRoot.className = 're0-cockpit-native'
-      host.appendChild(nativeRoot)
-      renderNative(nativeRoot)
-      poll = setInterval(() => { if (nativeRoot) renderNative(nativeRoot) }, 3000)
+      if (nativeRoot) return
+      // openRightbar 触发 React 重渲染，[data-rightbar-col] **异步**才出现；同步查会落空
+      // → 轮询等列出现再挂（~4s 放弃；模式已 OFF 也放弃）。
+      let tries = 0
+      const iv = setInterval(() => {
+        tries++
+        const host = document.querySelector('[data-rightbar-col]')
+        if (host) {
+          clearInterval(iv)
+          nativeRoot = document.createElement('div')
+          nativeRoot.className = 're0-cockpit-native'
+          host.appendChild(nativeRoot)
+          renderNative(nativeRoot)
+          poll = setInterval(() => { if (nativeRoot) renderNative(nativeRoot) }, 3000)
+        } else if (tries > 40 || !getCockpitMode()) {
+          clearInterval(iv)
+        }
+      }, 100)
     }
     const unmountNative = (): void => {
       if (poll) { clearInterval(poll); poll = null }
       if (nativeRoot) { nativeRoot.remove(); nativeRoot = null }
     }
     const mountFrame = (): void => {
-      const host = document.querySelector('[data-rightbar-col]')
-      if (!host || frame) return
-      frame = document.createElement('iframe')
-      frame.className = 're0-cockpit-frame'
-      const url = readBootstrap()?.cockpitUrl
-      if (url) frame.src = url
-      frame.title = 'Re0 机甲驾驶舱（只读）'
-      host.appendChild(frame)
+      if (frame) return
+      let tries = 0
+      const iv = setInterval(() => {
+        tries++
+        const host = document.querySelector('[data-rightbar-col]')
+        if (host) {
+          clearInterval(iv)
+          frame = document.createElement('iframe')
+          frame.className = 're0-cockpit-frame'
+          const url = readBootstrap()?.cockpitUrl
+          if (url) frame.src = url
+          frame.title = 'Re0 机甲驾驶舱（只读）'
+          host.appendChild(frame)
+        } else if (tries > 40 || !getCockpitMode()) {
+          clearInterval(iv)
+        }
+      }, 100)
     }
     const unmountFrame = (): void => {
       if (frame) { frame.remove(); frame = null }
