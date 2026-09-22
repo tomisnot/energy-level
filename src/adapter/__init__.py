@@ -28,7 +28,17 @@ class EngineAdapter(EngineProtocol):
 
     # ---------- schema ----------
     def engine_params(self):
-        return _cp.engine_params()
+        """core 的引擎就地常量 + 本领域给的**只读原因**（P1-9a）。
+
+        `readonly_reason` 是领域文案：库只负责在报错里拼接，不写死项目名/项目历史。
+        core 不认识 mecha 的展示需求，故这一层在此补齐（薄加工，不改 core）。
+        """
+        recs = _cp.engine_params()
+        for rec in recs.values():
+            rec.setdefault(
+                'readonly_reason',
+                '引擎就地常量（import 期定值），本运行期没有覆写通道')
+        return recs
 
     def config_schema(self):
         return _cp.config_schema()
@@ -49,8 +59,15 @@ class EngineAdapter(EngineProtocol):
         return _cp.validate_atom_list(value, err=InvalidValue)
 
     # ---------- 领域私有政策（归还项目侧：mecha-sdk 库内零领域信息） ----------
+    def custom_types(self):
+        """**声明**本引擎接管的两个自定义类型名（P1-9b）。
+
+        库只判"type 在不在这个集合里"，类型名与真契约都留在项目侧。
+        """
+        return ('wave_list', 'atom_list')
+
     def validate_custom(self, typ, value):
-        """registry 不认识的自定义类型的真契约（领域知识）在此。"""
+        """上述自定义类型的真契约（领域知识）在此。"""
         if typ == 'wave_list':
             return _cp.validate_wave_list(value, err=InvalidValue)
         if typ == 'atom_list':
