@@ -46,6 +46,12 @@ def make_levels(cache, specs):
       - 缺省 kind → 按 mJ 处理（向后兼容）
     E_mhz = 组中心（可显式覆盖） + E_hf。
     返回 states: [{n,l,j,kind,F,mF,mj,m,amps,E_mhz,label,index}]。
+
+    **透传字段（2026-09-22，P1-6）**：specs 里若带 `qstr` / `dc_shift_mhz` /
+    `group_label` / `color`，原样带进 states——它们来自 `static_atom.base_sublevels`
+    （静态页与动态基组的唯一基准），是"静态量能对回态"的必需身份信息
+    （`qstr` 是静态页行身份键的一半；`dc_shift_mhz` 是 DC-Stark 位移）。
+    不带这些键时行为与改前**逐位相同**（键不出现）。
     """
     states = []
     for i, s in enumerate(specs):
@@ -58,16 +64,20 @@ def make_levels(cache, specs):
             label = s.get(
                 'label',
                 f'{core.auto_label(n, l, j)} F={F:.1f}, m_F={mF:+.1f}')
-            states.append(dict(
+            st = dict(
                 n=n, l=l, j=j, kind='F', F=F, mF=mF, mj=None, m=mF,
-                amps=s.get('amps'), E_mhz=E, label=label, index=i))
+                amps=s.get('amps'), E_mhz=E, label=label, index=i)
         else:
             m = float(s['m'])
             label = s.get('label',
                           f'{core.auto_label(n, l, j)} m_J={m:+.1f}')
-            states.append(dict(
+            st = dict(
                 n=n, l=l, j=j, kind='mJ', F=None, mF=None, mj=m, m=m,
-                amps=None, E_mhz=E, label=label, index=i))
+                amps=None, E_mhz=E, label=label, index=i)
+        for k in ('qstr', 'dc_shift_mhz', 'group_label', 'color'):
+            if k in s:
+                st[k] = s[k]
+        states.append(st)
     return states
 
 

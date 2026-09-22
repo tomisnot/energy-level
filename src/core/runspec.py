@@ -123,7 +123,8 @@ def groups_from_params(p):
     return [dict(g) for g in ((p or {}).get('groups.list') or [])]
 
 
-def build_states(cache, groups, B_gauss=0.0, E_vpcm=0.0, pump=None):
+def build_states(cache, groups, B_gauss=0.0, E_vpcm=0.0, pump=None,
+                 with_static=False):
     """登记册里的能级组 → 动态基组（`make_levels` 的 states）。
 
     枚举、能量、逐子能级裁剪**全部走 `static_atom.base_sublevels`**——
@@ -133,20 +134,26 @@ def build_states(cache, groups, B_gauss=0.0, E_vpcm=0.0, pump=None):
     `E_hf` 留 0，因为行里的 `E_mhz` 已含超精细项。
 
     pump：可选 callable(frac)——每个能级组完成后上报。
+    `with_static=True`（2026-09-22，P1-6）：把 `qstr` / `dc_shift_mhz` /
+    `group_label` / `color` 一并透传进 states（供 `protocol.list_levels` 的
+    静态列用）。默认 False ⇒ 与改前**逐位相同**。
     """
     B = float(B_gauss or 0.0)
     Ev = float(E_vpcm or 0.0)
     specs = []
-    for r in core.base_sublevels(cache, groups, B, Ev, pump=pump):
+    for r in core.base_sublevels(cache, groups, B, Ev, pump=pump,
+                                 with_dc=with_static):
+        common = dict(n=r['n'], l=r['l'], j=r['j'], E_mhz=r['E_mhz'],
+                      label=r['label'])
+        if with_static:
+            for k in ('qstr', 'dc_shift_mhz', 'group_label', 'color'):
+                if k in r:
+                    common[k] = r[k]
         if r['kind'] == 'F':
-            specs.append(dict(n=r['n'], l=r['l'], j=r['j'], kind='F',
-                              F=r['F'], mF=r['mF'], E_hf=0.0,
-                              E_mhz=r['E_mhz'], amps=r['amps'],
-                              label=r['label']))
+            specs.append(dict(common, kind='F', F=r['F'], mF=r['mF'],
+                              E_hf=0.0, amps=r['amps']))
         else:
-            specs.append(dict(n=r['n'], l=r['l'], j=r['j'], kind='mJ',
-                              m=float(r['mj']), E_mhz=r['E_mhz'],
-                              label=r['label']))
+            specs.append(dict(common, kind='mJ', m=float(r['mj'])))
     return make_levels(cache, specs)
 
 

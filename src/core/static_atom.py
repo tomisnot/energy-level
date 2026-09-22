@@ -900,7 +900,8 @@ def dc_stark_hf(cache, n, l, j, amps, groups, E_vpcm, B_gauss):
     return tot
 
 
-def base_sublevels(cache, groups, B_gauss=0.0, E_vpcm=0.0, pump=None):
+def base_sublevels(cache, groups, B_gauss=0.0, E_vpcm=0.0, pump=None,
+                   with_dc=False):
     """**静态页与动态页共用的唯一**「组 → 子能级」实现。
 
     里德堡态忽略核自旋（fine-structure 的 m_J）；低激发态展开超精细 (F, m_F)。
@@ -915,6 +916,10 @@ def base_sublevels(cache, groups, B_gauss=0.0, E_vpcm=0.0, pump=None):
     **不含 AC 位移**：AC 是静态页的显示层叠加（`_fill_ac`），动态页的光移由
     场耦合在传播中涌现，两者不混。逐子能级裁剪（组的 ms/Fs）在此统一施加。
     `E_vpcm=0` 时能量与旧的逐页实现逐位相同。`pump` 为可选 callable(frac)，逐组上报。
+
+    `with_dc=True`（2026-09-22，P1-6）：每行**额外**记 `dc_shift_mhz` = 该子能级的
+    DC-Stark 位移。**在算 E_mhz 的同一遍里顺手记下**（不重复调用 `dc_stark_shift_mhz`
+    ⇒ 与 `E_mhz` 逐位自洽，也不会算两遍）。默认 False ⇒ 行结构与改前**逐位相同**。
     """
     rows = []
     n_groups = max(len(groups), 1)
@@ -930,26 +935,36 @@ def base_sublevels(cache, groups, B_gauss=0.0, E_vpcm=0.0, pump=None):
             gJ = cache.gJ(l, j)
             for m in np.arange(-j, j + 1, 1.0):
                 e = E0 + gJ * MU_B_MHZ_PER_G * m * B_gauss
+                e_dc = 0.0
                 if abs(E_vpcm) > 1e-9:
-                    e += dc_stark_shift_mhz(cache, n, l, j, float(m),
-                                            groups, E_vpcm, B_gauss)
-                g_rows.append(dict(
+                    e_dc = dc_stark_shift_mhz(cache, n, l, j, float(m),
+                                              groups, E_vpcm, B_gauss)
+                    e += e_dc
+                row = dict(
                     n=n, l=l, j=j, kind='mJ', mj=m, mF=None, F=None,
                     amps=None, E_mhz=float(e), qstr=f'm_J={m:+.1f}',
                     color=color, label=f'{base} m_J={m:+.1f}',
-                    group_label=group_label))
+                    group_label=group_label)
+                if with_dc:
+                    row['dc_shift_mhz'] = float(e_dc)
+                g_rows.append(row)
         else:
             for F, mF, e_hf, _w, amps in hf:
                 e = E0 + e_hf
+                e_dc = 0.0
                 if abs(E_vpcm) > 1e-9:
-                    e += dc_stark_hf(cache, n, l, j, amps, groups,
-                                      E_vpcm, B_gauss)
-                g_rows.append(dict(
+                    e_dc = dc_stark_hf(cache, n, l, j, amps, groups,
+                                       E_vpcm, B_gauss)
+                    e += e_dc
+                row = dict(
                     n=n, l=l, j=j, kind='F', F=float(F), mj=None, mF=mF,
                     amps=amps, E_mhz=float(e),
                     qstr=f'F={F:.1f}, m_F={mF:+.1f}',
                     color=color, label=f'{base} F={F:.1f}, m_F={mF:+.1f}',
-                    group_label=group_label))
+                    group_label=group_label)
+                if with_dc:
+                    row['dc_shift_mhz'] = float(e_dc)
+                g_rows.append(row)
         rows.extend(apply_trim(g_rows, *trim_of(g)))
         if pump is not None:
             pump((gi + 1) / n_groups)
