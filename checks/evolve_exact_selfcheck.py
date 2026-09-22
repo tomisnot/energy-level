@@ -183,5 +183,44 @@ d7 = float(np.max(np.abs(r7['pops'] - ref7['pops'])))
 ck.check(f'E7b STIRAP vs DOP853 参考 max|Δpops|={d7:.2e} ≤ 5e-5',
          d7 <= 5e-5, f'Δ={d7}')
 
+# ---------------- G. 稀疏路径如实记账（P2-5a，2026-09-22） ----------------
+# 为什么值得一条判据：`error_report['sparse_uncontrolled']` 是**契约**——GUI/AI 靠它
+# 判断"tol 到底是不是精度承诺"。删掉这个标记，消费者会看到 None（falsy）⇒ 误以为
+# 精度受控，**正是本仓这一整轮在消灭的那类静默错**。故带致死性（去掉标记必红）。
+from src.core.sambe import (SambeSetup as _SS,               # noqa: E402
+                            _propagate_adaptive as _pa)
+
+_A = np.zeros((2, 2)); _A[0, 1] = _A[1, 0] = 10.0
+_wf = lambda t: np.exp(-((np.asarray(t, float) - 5.0) ** 2) / 2.0)      # noqa: E731
+_grp = [dict(omega_mhz=1000.0, As=[_A], envs=[_wf], labels=['g'])]
+_E = np.array([0.0, 1000.0])
+_tg = np.linspace(0.0, 10.0, 3)
+_psi0 = np.array([1.0, 0.0], complex)
+_st_sp = _SS(_E, _grp, [1], dense_max=1)            # 强制稀疏（dim=2 > 1）
+_st_dn = _SS(_E, _grp, [1], dense_max=10 ** 9)      # 强制稠密
+_, _psi_sp, _rep_sp = _pa(_st_sp, _grp, _psi0, _tg, 1e-6, np.zeros(3),
+                          lambda *a: None, None)
+_, _, _rep_dn = _pa(_st_dn, _grp, _psi0, _tg, 1e-6, np.zeros(3),
+                    lambda *a: None, None)
+_nd_sp = abs(float(np.sum(np.abs(_psi_sp) ** 2)) - 1.0)
+ck.group('G 稀疏路径如实记账（P2-5a）：error_report 不假装 tol 是精度承诺', [
+    ('setup 确为一稀一稠（dim>dense_max / dim≤dense_max）',
+     (not _st_sp.dense) and _st_dn.dense),
+    ('稀疏路径置 sparse_uncontrolled=True（去掉即变红）',
+     _rep_sp.get('sparse_uncontrolled') is True),
+    ('稠密路径置 False（不是恒真）',
+     _rep_dn.get('sparse_uncontrolled') is False),
+    (f'稀疏路径仍幺正（不是垃圾态，范数偏差 {_nd_sp:.2e}）', _nd_sp < 1e-6),
+])
+# 大声告知：evolve_sambe 必须按该标记写一条点明"tol 不代表精度"的日志
+# （源码级断言——本仓既有做法，见 sweep_spec_selfcheck / gui_app_entry 的反向断言）
+_src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                         'src', 'core', 'sambe.py'), encoding='utf-8').read()
+ck.group('G 稀疏路径必须"大声告知"（不只留一个字段）', [
+    ('源码含 sparse_uncontrolled 判定分支', 'sparse_uncontrolled' in _src),
+    ('告知文案点明"没有误差控制"', '没有误差控制' in _src),
+    ('告知文案点明 tol 不代表实际精度', '不代表实际精度' in _src),
+])
+
 ok = ck.summary()
 sys.exit(0 if ok else 1)
