@@ -363,11 +363,15 @@ def _dop853_driver(rhs, y0, t_eval, T, rtol, atol, max_step, prog, stat,
                 # 0.1,0.05}（mixed，σ=2ns 场景）——即**运行级旋钮 MAX_STEP_HARD
                 # 调小反而必崩**。这里换成明确报错（D5：不静默、可教学）。
                 if h_abs < _H_ABS_MIN:
+                    # ⚠ numba nopython **不支持元组 %-格式化**（实测编译期报
+                    # "No implementation of function mod for (unicode_type,
+                    # UniTuple)"）⇒ 本消息必须是**静态串**；下限值见 _H_ABS_MIN
+                    # （1e-12 ns），改一处要同步这句文案。
                     raise RuntimeError(
-                        'DOP853 步长下溢：连续拒绝把 h 压到 %.3g ns < 下限 %.3g ns'
-                        '——RHS 在该尺度下过刚或已发散。检查 max_step_hard 是否'
-                        '过小、或场幅度是否发散（原行为是在稠密输出处抛'
-                        'ZeroDivisionError）' % (h_abs, _H_ABS_MIN))
+                        'DOP853 步长下溢：连续拒绝把 h 压到 < 1e-12 ns——RHS 在'
+                        '该尺度下过刚或已发散。检查 max_step_hard 是否过小、或'
+                        '场幅度是否发散（原行为是在稠密输出处抛 '
+                        'ZeroDivisionError，无从下手）')
                 if max_step_hard > 0.0 and h_abs > max_step_hard:
                     h_abs = max_step_hard      # 拒绝分支同样压住
                 step_rejected = True

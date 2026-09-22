@@ -1152,6 +1152,7 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
             pops[i] = sector_sum_pops(y_out[i], P, N2)
             stage_progress(progress_arr, 2, i / max(len(t) - 1, 1))
         n_dop = int(stat[0]) if len(stat) > 0 else 0
+        phi_end = y_out[-1]             # numba 路径的 φ-帧末态（见下方 psi_amp）
     else:
         from scipy.integrate import solve_ivp
         X = X0.copy()
@@ -1181,6 +1182,7 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
             pops[i] = np.abs(psi) ** 2
             tprev = tb
             progress_arr[0] = min(tprev / T, 0.999)
+        phi_end = X                     # scipy 路径的 φ-帧末态（见下方 psi_amp）
     stage_progress(progress_arr, 2, 1.0)
 
     # t62 耗散：loss_A/loss_B 曲线 + 含 loss 范数（同 sambe.evolve_sambe_pair）
@@ -1280,11 +1282,12 @@ def evolve_mixed_pair(states, fields_A, fields_B, psi0_A, psi0_B, t_grid,
     )
     if record_amp:
         # ⚠ 2026-09-22 修（手册 §8.8 同族）：原为 `sector_sum_amp(X, P, N2)`——
-        # `X` 只在 **scipy** 分支（`driver != 'numba'`）里被赋值，生产路径
-        # （driver='numba'）走 `y_out` ⇒ `record_amp=True` **必崩**
-        # （实测 `UnboundLocalError: local variable 'X'`）。改用 `y_out[-1]`
-        # （与上方 `pops[i] = sector_sum_pops(y_out[i], P, N2)` 同源）。
-        out['psi_amp'] = sector_sum_amp(y_out[-1], P, N2)
+        # `X` 只在 **scipy** 分支被赋值，生产路径（driver='numba'）走 `y_out`
+        # ⇒ `record_amp=True` **必崩**（实测 `UnboundLocalError: local variable 'X'`）。
+        # 反过来只改成 `y_out[-1]` 又会把 scipy 对照路径弄崩 ⇒ 两条路各给一个
+        # `phi_end`，此处统一消费（与 `pops[i] = sector_sum_pops(y_out[i], P, N2)`
+        # 同源：`sector_sum_amp` 吃的就是 φ-帧态，全局相位不影响布居）。
+        out['psi_amp'] = sector_sum_amp(phi_end, P, N2)
     log(f'[mixed_pair] 完成：norm {norm_dev:.2e}，DOP853 求值 {n_dop}')
     return out
 
