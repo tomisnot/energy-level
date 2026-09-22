@@ -123,8 +123,10 @@ C.group('C 行为预览：不跑演化答"基组够不够"（D7）', [
 # ---------------- D. 可复现产物（D8）+ 内容寻址（rid） ----------------
 r1 = _ops.run(actor='ai', reason='产物落地测试')
 aid = r1['artifact_id']
-adir = artifact_dir(_TMP, aid)
-loaded = load_artifact(_TMP, aid)
+# 产物落 `session.bus.root`（= <项目根>/.mecha，P0-1 后 root 语义 = 项目根）
+_aroot = _sess.bus.root
+adir = artifact_dir(_aroot, aid)
+loaded = load_artifact(_aroot, aid)
 files = sorted(os.listdir(adir)) if os.path.isdir(adir) else []
 rr = _ops.rerun(aid, actor='ai', reason='可复现重跑')
 r2 = _ops.run(actor='ai', reason='二次提交（同配置）', use_cache=True)

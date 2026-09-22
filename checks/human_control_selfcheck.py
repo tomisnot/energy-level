@@ -5,6 +5,7 @@
 import json
 import os
 import sys
+import tempfile
 import urllib.error
 import urllib.request
 
@@ -31,7 +32,10 @@ def _post(url, obj):
 
 
 def main():
-    bus = Bus(root=None)
+    # 数据根**显式**（P0-1：mecha 不再从 __file__ 倒推项目根）。判据是独立进程、
+    # cwd 未必是仓根，故用临时目录而非相对路径。
+    tmp = tempfile.mkdtemp(prefix='human_ctl_')
+    bus = Bus(root=tmp)
     auth = Authority(bus=bus, mode='human')
     sess = Session(bus=bus, authority=auth)
     port, token = start_human_control(sess, port=0)

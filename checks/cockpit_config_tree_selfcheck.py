@@ -30,6 +30,7 @@ C = Checker('cockpit_config_tree')
 # ---- 造一份 journal：大 schema（>4096B 触发体积闸）+ 两条 set ----
 tmp = tempfile.mkdtemp(prefix='cfgtree_')
 bus = Bus(root=tmp)
+tmp = bus.root                          # P0-1：数据根 = <项目根>/.mecha
 _PAD = 'x' * 5000                       # 确保 schema 的 after 超 _MAX_INLINE_BYTES 被截断
 schema = [
     {'name': 'field.B_gauss', 'family': 'config', 'type': 'float', 'unit': 'Gauss',
@@ -80,6 +81,7 @@ C.group('C 大 schema 经 I4 体积闸截断 → config_tree 读回原文（不�
 # ---- D 致死性：无 schema 事件 → 空树 + orphans ----
 tmp2 = tempfile.mkdtemp(prefix='cfgtree2_')
 b2 = Bus(root=tmp2)
+tmp2 = b2.root                          # P0-1：数据根 = <项目根>/.mecha
 b2.append(actor='ai', kind='set', target='field.B_gauss', before=None, after=1.0,
           reason='r', provenance='p', reversibility='undo')
 t2 = backend.config_tree(tmp2)
@@ -99,6 +101,7 @@ from mecha.session import Session as _Sess             # noqa: E402
 runtime.set_engine(EngineAdapter())
 tmp3 = tempfile.mkdtemp(prefix='cfgtree3_')
 s3 = _Sess(root=tmp3)
+tmp3 = s3.bus.root                      # P0-1：数据根 = <项目根>/.mecha
 # 与 src/adapter/serve.py 逐字一致的 emit（真 schema、真体积闸）
 s3.bus.append(actor='system', kind='registry_schema', target='registry',
               after=REG.list_params(include_internal=True)['params'],

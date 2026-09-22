@@ -73,7 +73,11 @@ def start_human_control(session, host='127.0.0.1', port=8767):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(prog='python -m src.adapter.serve')
-    ap.add_argument('--port', type=int, default=8765)
+    ap.add_argument('--root', default=None,
+                    help='项目根：数据落 <root>/.mecha、端口文件写 <root>/.mcp-port'
+                         '（默认 = 当前工作目录；也可用环境变量 MECHA_ROOT）')
+    ap.add_argument('--port', type=int, default=None,
+                    help='MCP 端口（默认让 OS 分配；**不再默认抢 8765**）')
     ap.add_argument('--host', default='127.0.0.1')
     ap.add_argument('--atom', default='Rubidium87')
     ap.add_argument('--stdio', action='store_true',
@@ -86,6 +90,11 @@ def main(argv=None):
         print('RE0_MECHA_NO_SERVER 置位 → 不启动 MCP 写通道')
         return 0
 
+    # 数据根**显式**取当前工作目录（launcher 约定从项目根跑），并注入环境变量，
+    # 让同进程内其它组件（驾驶舱子进程等）拿到同一个根——不再从 __file__ 倒推。
+    root = os.path.abspath(a.root or os.environ.get('MECHA_ROOT') or os.getcwd())
+    os.environ['MECHA_ROOT'] = root
+
     # Windows：用 SelectorEventLoop 避开 Proactor 在客户端突然断连（dsh 自愈桥重连/
     # 浏览器关 SSE）时 _call_connection_lost 刷 WinError 10054 的无害噪声。本进程不在
     # 事件循环里 spawn 子进程，切 Selector 安全。
@@ -93,7 +102,9 @@ def main(argv=None):
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
     runtime.set_engine(EngineAdapter(atom=a.atom))   # 注入领域引擎
-    session = Session()
+    session = Session(root=root)
+    print('数据根：%s（journal/artifacts/payloads/jobs）' % session.bus.root,
+          flush=True)
     # 落一条 registry_schema 事件：驾驶舱配置态结构树的 schema 源（需求②）。cockpit 只读
     # journal 即可富渲染、不 import mecha（黑匣子纯净 T5）；大 schema 被 I4 体积闸截成
     # 指针，cockpit 端顺 where 读回原文。
@@ -115,7 +126,8 @@ def main(argv=None):
         return 0
 
     port = find_free_port(a.port)
-    pf = write_port_file(port)
+    # 端口文件与数据根同址：<root>/.mcp-port（harness/GUI 靠它发现 Hub；T4）。
+    pf = write_port_file(port, root=os.path.dirname(session.bus.root))
     atexit.register(lambda: os.path.exists(pf) and os.remove(pf))
     host = '0.0.0.0' if a.allow_remote_write else a.host
     if a.allow_remote_write:

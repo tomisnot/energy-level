@@ -191,8 +191,8 @@ C.group('G bus：I3 指针+sha1 / I4 体积闸告知 / M4 append-only 续 seq', 
     ('大数组不内联，转指针（$pointer + shape + sha1）',
      ptr.get('$pointer') is True and ptr.get('shape') == [20, 100]
      and len(ptr.get('sha1', '')) == 40),
-    ('指针落 npz 到 payloads/', os.path.exists(
-        os.path.join(tmp, ptr['path'])) if 'path' in ptr else False),
+    ('指针落 npz 到 payloads/（相对 bus.root，P0-1 后 = <项目根>/.mecha）',
+     os.path.exists(os.path.join(b.root, ptr['path'])) if 'path' in ptr else False),
     ('超体积文本被截断且**告知截了多少+原文在哪**',
      tr.get('$truncated') is True and tr.get('total', 0) > tr.get('kept', 0)
      and 'where' in tr),

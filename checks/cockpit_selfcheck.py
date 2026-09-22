@@ -44,6 +44,9 @@ _COCKPIT = os.path.dirname(os.path.abspath(_cockpit_pkg.__file__))
 # ---- 建一个有事件的 journal，然后"杀掉项目"（丢弃 Bus 对象）----
 _TMP = tempfile.mkdtemp(prefix='cockpit_chk_')
 _bus = Bus(root=_TMP)
+# P0-1：Bus(root=X) 的 X 是**项目根**，journal 落 `X/.mecha`（不再是 X 本身）。
+# 驾驶舱读的是「数据根」，所以这里统一用 bus.root。
+_TMP = _bus.root
 _bus.append(actor='ai', kind='set', target='field.B_gauss', before=None,
             after=21.7, reason='Zeeman 调谐', provenance='session.set',
             reversibility='undo')
@@ -127,9 +130,10 @@ from mecha.ops import Ops as _Ops                    # noqa: E402
 from mecha.session import Session as _Session        # noqa: E402
 _TMP2 = tempfile.mkdtemp(prefix='cockpit_warn_')
 _rt.set_engine(_WarnEngine())
-_wops = _Ops(_Session(root=_TMP2))
+_wsess = _Session(root=_TMP2)
+_wops = _Ops(_wsess)
 _wops.run(actor='test', reason='warn run', land_artifact=False)
-a_ops = backend.evaluate_alerts(backend.read_events(_TMP2, 0))
+a_ops = backend.evaluate_alerts(backend.read_events(_wsess.bus.root, 0))
 C.group('C ③ 告警灯致死性：适配器/ops 落 alert 事件→cockpit 透传亮；干净→不亮（防哑告警 D4）', [
     ('**致死性(产出侧)**：ops 见 check_run warnings → 落 alert 事件 → 透传亮（rule=degradation）',
      any(x['rule'] == 'degradation' for x in a_ops)),

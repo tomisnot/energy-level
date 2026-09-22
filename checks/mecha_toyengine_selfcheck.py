@@ -84,8 +84,24 @@ def main():
     from mecha.session import Session
 
     runtime.set_engine(ToyEngine())
-    sess = Session(root=None)
+    # 数据根**显式**（P0-1：mecha 不再从 __file__ 倒推项目根）——用临时目录，不污染仓库。
+    import tempfile as _tf
+    _root = _tf.mkdtemp(prefix='toy_engine_')
+    sess = Session(root=_root)
     ops = Ops(sess)
+
+    # P0-1 致死性：不给根且无 MECHA_ROOT → 必须**明确报错**，不得静默猜路径
+    _saved = os.environ.pop('MECHA_ROOT', None)
+    try:
+        try:
+            Session()
+            _no_root_raises = False
+        except Exception:                              # noqa: BLE001
+            _no_root_raises = True
+    finally:
+        if _saved is not None:
+            os.environ['MECHA_ROOT'] = _saved
+    C.check('P0-1 未指定数据根 → 明确报错（不猜路径、不静默）', _no_root_raises)
 
     rec = sess.set('x', 1.5, actor='test', reason='toy set')
     C.check('set 经 choke point 落事件', rec.get('seq', 0) > 0, str(rec))
