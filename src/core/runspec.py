@@ -790,6 +790,16 @@ def check_run(run):
             problems.append(
                 '既无波形也无耗散通道 → 空演化（先加波形，或开自发辐射/'
                 '自定义衰变通道）')
+    # 场致损耗的**唯一消费者是单体 mixed**（`evolve_run` 的 mixed 单体分支）。
+    # 其余路径（hard / sambe / reference / 两体 / 多体）会**静默忽略**它 ⇒ 明确报出来
+    # （2026-09-22，工单 P2-5；D5：不许"以为生效了"）。
+    if run.get('field_loss') is not None and not (
+            run.get('method') == 'mixed' and not run.get('two_body')):
+        problems.append(
+            'dynamic.field_loss 已配置，但当前路径（method=%s%s）**不消费**场致损耗'
+            '——它只在「单体 mixed」生效；请改用 mixed 单体，或清空 '
+            'dynamic.field_loss（不静默忽略）'
+            % (run.get('method'), ' 两体' if run.get('two_body') else ''))
     return problems
 
 
