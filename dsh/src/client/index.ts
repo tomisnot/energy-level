@@ -26,16 +26,18 @@ import { getCockpitMode, subscribeCockpitMode } from './mode-store.ts'
 /** Cordis 插件名（与 host 半一致）。 */
 export const name = 're0-mecha'
 
-/** 原生驾驶舱 CSS：occupant 容器内铺满 + 暗色 + 双栏（配置态/事件）。 */
+/** 原生驾驶舱 CSS：**亮色科技感**（与 dsh 亮色主界面搭）：浅灰底+白卡片+等宽字+
+ * 大写蓝色栏目头+细边框阴影。occupant 容器内铺满 + 双栏（配置态/事件）。 */
 const NATIVE_CSS = `
-.re0-cockpit-native{height:100%;overflow:auto;background:#0d1117;color:#c9d1d9;font-size:12px}
+.re0-cockpit-native{height:100%;overflow:auto;background:#f6f8fa;color:#1f2328;font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
 .re0-cockpit-native .re0-native{display:flex;gap:8px;padding:8px;height:100%}
-.re0-cockpit-native .re0-native-col{flex:1;overflow:auto;border:1px solid #30363d;border-radius:6px;padding:8px}
-.re0-cockpit-native h4{margin:0 0 6px;color:#58a6ff}
+.re0-cockpit-native .re0-native-col{flex:1;overflow:auto;background:#ffffff;border:1px solid #d0d7de;border-radius:8px;padding:10px;box-shadow:0 1px 2px rgba(31,35,40,.05)}
+.re0-cockpit-native h4{margin:0 0 8px;color:#0969da;font-size:11px;letter-spacing:.1em;text-transform:uppercase;border-bottom:1px solid #d8e6f5;padding-bottom:4px}
 .re0-cockpit-native table{width:100%;border-collapse:collapse}
-.re0-cockpit-native td{border-bottom:1px solid #21262d;padding:2px 4px;vertical-align:top}
-.re0-cockpit-native details summary{cursor:pointer;color:#8b949e;margin:4px 0}
-.re0-cockpit-native .re0-native-msg{padding:8px;color:#f85149}
+.re0-cockpit-native td{border-bottom:1px solid #eaeef2;padding:2px 4px;vertical-align:top}
+.re0-cockpit-native td:first-child{color:#0550ae}
+.re0-cockpit-native details summary{cursor:pointer;color:#57606a;margin:4px 0;font-weight:600}
+.re0-cockpit-native .re0-native-msg{padding:8px;color:#cf222e}
 `
 
 /** 需要 web client 的服务：slots（挂按钮+右栏 occupant）+ layout（开/关右栏、关左栏）。
@@ -77,10 +79,13 @@ export async function apply(ctx: Context, config?: { cockpitNative?: boolean }):
         }
         // 注册右栏 occupant：RightbarColumn 只在有 occupant 时渲染 [data-rightbar-col]；
         // 驾驶舱内容由 occupant 组件自渲染（native 或 iframe）。
+        // rightbar.session 是 **single** slot 且 dsh 自带 occupant 在 priority 0；同 priority
+        // 再注册会抛错。按运行版规则“lowest renders”→ 用更低的 priority(-100) shadow 掉默认。
         if (!disposeRightbar) {
           disposeRightbar = ctx.slots.inject('rightbar.session', () =>
             ctx.slots.register(
-              { name: 'rightbar.session', id: 're0-cockpit-rightbar', order: 100 },
+              { name: 'rightbar.session', id: 're0-cockpit-rightbar',
+                order: 100, priority: -100 } as any,
               CockpitRightbar,
             ))
         }
