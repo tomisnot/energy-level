@@ -706,7 +706,7 @@ def _propagate_adaptive(setup, groups, psi0, t_grid, tol, progress_arr, log,
     pops = np.zeros((len(t), N))
     pops[0] = _pops_of(psi0)
     report = dict(n_segments=0, max_richardson_diff=0.0, dt_min_hit=False,
-                  max_norm_dev=0.0)
+                  sparse_uncontrolled=False, max_norm_dev=0.0)
     if frozen_h_ns is not None and frozen_h_ns > 0:
         report['frozen_h_ns'] = float(frozen_h_ns)
     h_floor = max(T / _DT_MIN_FRAC, 1e-9)
@@ -720,6 +720,8 @@ def _propagate_adaptive(setup, groups, psi0, t_grid, tol, progress_arr, log,
             # 的相邻段共享分解；稀疏段仍走单体 expm_multiply 策略）
             nsub = max(1, int(np.ceil((tb - ta) / float(frozen_h_ns))))
             report['n_segments'] += nsub
+            if not setup.dense:
+                report['sparse_uncontrolled'] = True
             return frozen_seg_propagate(
                 setup, ta, tb, X, frozen_h_ns, groups,
                 sparse_step=lambda K, dt, Xk: expm_multiply(
@@ -730,6 +732,12 @@ def _propagate_adaptive(setup, groups, psi0, t_grid, tol, progress_arr, log,
             return X * np.exp(-1j * CONV * (tb - ta) * setup.diag)
         kind, K = dec
         if kind == 'sparse':
+            # ⚠ 稀疏路径**没有误差控制**（2026-09-22，手册 §8.12）：`expm_multiply`
+            # 不接受 tol，这里既不细分也不记 est ⇒ `error_report` 里的 tol /
+            # max_richardson_diff 会**看起来收敛**而实际精度由 scipy 默认容差决定。
+            # 两体侧有 EP6 保护（dt_min_hit + 明确报错），单体侧没有 ⇒ 至少**如实记账**。
+            report['sparse_uncontrolled'] = True
+            report['n_segments'] += 1
             return expm_multiply(-1j * CONV * (tb - ta) * K, X)
         evals, evecs = np.linalg.eigh(K)
         a0 = evecs.conj().T @ X
@@ -833,6 +841,7 @@ def _run_sambe(E, groups, M, psi0, t, tol, progress_arr, log,
         pops = np.abs(ps) ** 2
         report = dict(n_segments=1, max_richardson_diff=0.0,
                       dt_min_hit=False,
+                      sparse_uncontrolled=(prop[0] == 'sparse'),
                       max_norm_dev=float(np.max(
                           np.abs(pops.sum(axis=1) - 1.0))))
         return pops, ps[-1], report, setup
@@ -946,6 +955,12 @@ def evolve_sambe(states, fields, psi0, t_grid, tol=1e-6, decays=None,
         pops, psi_f, report, setup = _run_sambe(
             E, groups, Ms, psi0v, t, tol, progress_arr, log, frozen_h_ns)
     stage_progress(progress_arr, 2, 1.0)      # 阶段 2：收尾
+    if report.get('sparse_uncontrolled'):
+        # 如实告知（2026-09-22，手册 §8.12）：稀疏路径没有误差控制，tol 不再是精度承诺。
+        log('[exact] ⚠ 本次走了**稀疏 expm_multiply** 路径：该路径**没有误差控制**'
+            '（expm_multiply 不接受 tol）⇒ tol / Richardson 差**不代表实际精度**，'
+            '精度由 scipy 默认容差决定。要可控精度请用 frozen_h_ns，或减小基组'
+            '（扩展维 ≤ _DENSE_MAX=2200 走稠密自适应路径）。')
     if frozen_h_ns is not None and frozen_h_ns > 0:
         log(f'[exact] 纯冻结模式完成：{report["n_segments"]} 段'
             f'（h={frozen_h_ns}ns），范数偏差 {report["max_norm_dev"]:.2e}')
@@ -1280,7 +1295,7 @@ def _pair_propagate(E_pair_rot, N, groups, opt_terms, V, gamma_pair,
             all_const = False
             break
     report = dict(n_segments=0, max_richardson_diff=0.0, dt_min_hit=False,
-                  max_norm_dev=0.0)
+                  sparse_uncontrolled=False, max_norm_dev=0.0)
 
     if (all_const or (not groups and not setup.opt_Ko)) and setup.dense:
         K = setup.hamiltonian_seg(T / 2.0 if T > 0 else 1.0, groups)
@@ -1362,6 +1377,9 @@ def _pair_propagate(E_pair_rot, N, groups, opt_terms, V, gamma_pair,
                 prev = cur
         else:
             # 稀疏：对角相互作用绘景 + Volterra–Picard
+            # 2026-09-22（手册 §8.12）：两体稀疏路径**有** est 与 EP6 保护，但
+            # `expm_multiply` 本身不接受 tol ⇒ 仍是"记账式"精度；如实标记。
+            report['sparse_uncontrolled'] = True
             psi_out, est, _mf, _qw = _subspace_segment(
                 setup, K[1], X, ta, tb, tol, groups)
         if (not np.isfinite(est) or est > tol) and (tb - ta) > h_floor:
