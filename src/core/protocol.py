@@ -815,10 +815,14 @@ def static_pair(cache, snap, what='exchange', with_evecs=False, n_window=None,
     if not groups:
         raise ValueError('基组为空：先 set_param("groups.list", [{n,l,j}, ...])')
     B = float((snap or {}).get('field.B_gauss') or 0.0)
-    pair = (snap or {}).get('dynamic.pair') or {}
-    R = float(pair.get('R_um') or 0.0)
-    TH = float(pair.get('theta_deg') or 0.0)
-    PH = float(pair.get('phi_deg') or 0.0)
+    # 两体几何**只认 registry 的三个扁平键**（与 `runspec.py:555-557` 同一真源）——
+    # 旧版读 `snap.get('dynamic.pair')` 字典键，而该键**不在 registry 里**
+    # （`set_param("dynamic.pair", …)` 会被 UnknownKey 拒）⇒ 经 MCP/AI 调本查询
+    # 时 R 恒为 0、必报"需要 R_um > 0"；只有绕过 registry 直调 core 的合成快照
+    # 能喂到那个字典键（判据因此假绿）。2026-09-22 修。
+    R = float((snap or {}).get('dynamic.pair.R_um') or 0.0)
+    TH = float((snap or {}).get('dynamic.pair.theta_deg') or 0.0)
+    PH = float((snap or {}).get('dynamic.pair.phi_deg') or 0.0)
     nw = int(1 if n_window is None else n_window)
     out = {'R_um': R, 'theta_deg': TH, 'phi_deg': PH, 'B_gauss': B,
            'n_window': nw,

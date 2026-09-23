@@ -39,6 +39,10 @@ C = Checker('static_ai')
 cache = P.make_cache()
 
 # 便宜场景：n_photon=1 / window=1（AC 档才 ~1-2 s；GUI 默认 4/3 是 ~13 s/N~400）
+# ⚠ 两体几何用 **registry 的三个扁平键**（`dynamic.pair.R_um` 等）——与
+# `runspec.py:555-557` 同一真源。旧版这里喂 `'dynamic.pair'` 字典键：它**不在
+# registry 里**（set_param 会 UnknownKey 拒）⇒ 只有本判据这种"直调 core 的合成
+# 快照"能喂进去，MCP/AI 路径恒 R=0 必报错（2026-09-22 修 core 时同步改这里）。
 BASE = {
     'groups.list': [dict(n=60, l=0, j=0.5, label='G1', color='#f00'),
                     dict(n=60, l=1, j=1.5, label='G2')],
@@ -47,7 +51,8 @@ BASE = {
     'dynamic.waves_single': [{'name': '寻址光', 'freq_mhz': 295.7237e6,
                               'intensity': 1e3, 'pol': 'σ-', 'offset_ns': 0.0,
                               'env': ['gauss', 0.0, 1e9, 1.0]}],
-    'dynamic.pair': {'R_um': 8.0, 'theta_deg': 30.0, 'phi_deg': 0.0},
+    'dynamic.pair.R_um': 8.0, 'dynamic.pair.theta_deg': 30.0,
+    'dynamic.pair.phi_deg': 0.0,
 }
 def snap(**kw):
     return dict(BASE, **kw)
@@ -208,7 +213,7 @@ for tag, fn in (('空基组(static_spectrum)',
                 ('非法 static.columns',
                  lambda: P.list_levels(cache, snap(**{'static.columns': 'xx'}))),
                 ('两体 R=0', lambda: P.static_pair(
-                    cache, snap(**{'dynamic.pair': {'R_um': 0.0}})))):
+                    cache, snap(**{'dynamic.pair.R_um': 0.0})))):
     try:
         fn()
         _errs[tag] = None

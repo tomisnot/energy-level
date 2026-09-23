@@ -261,6 +261,46 @@ class EngineAdapter(EngineProtocol):
     def list_levels(self, cache, snapshot):
         return _cp.list_levels(cache, snapshot)
 
+    # ---------- 泛化查询（P1-6）：库零查询名，查询表由本领域自报 ----------
+    def queries(self):
+        """**自报查询表**：`{name: 入参 schema}`——库只按 name 分派、把表原样回给
+        AI 做可发现性，**表的内容（有哪些查询、收什么参数）全是领域知识**。
+
+        对应 core 的三条静态查询（`_cp.static_spectrum/static_ac_sweep/static_pair`）
+        + `list_levels`（旧名入口：MCP 工具 `list_levels` ≡ `query("list_levels")`，
+        统一移除前并存）。新增查询只需改本表 + 加一个同名委托方法，**库零改动**。
+        """
+        return {
+            'list_levels': {
+                'desc': '语义寻址表（label+身份键+量值）；静态列走快照键 '
+                        'static.columns（off 默认/basic/ac，ac 档 ~13 s/次）',
+                'params': {}},
+            'static_spectrum': {
+                'desc': '偶极允许跃迁谱线（频率 Hz + 爱因斯坦 A + 两端身份 + 偏振）；'
+                        'full=True 另回 7 个列数组（库自动无损转 $pointer）',
+                'params': {'top_n': 50, 'full': False, 'ac_on': True}},
+            'static_ac_sweep': {
+                'desc': 'AC-Stark 位移 vs 光强（一次 Floquet 结构、批量对角化）',
+                'params': {'intensities_mwcm2': '必填：光强序列（mW/cm²）'}},
+            'static_pair': {
+                'desc': '两体静态：交换耦合 J（默认便宜档）/ 本征能 / vdW 位移 / '
+                        '耦合强度雷达图；evals/vdw 受 PAIR_EIGEN_MAX_DIM 闸保护',
+                'params': {'what': 'exchange', 'with_evecs': False,
+                           'n_window': None}},
+        }
+
+    def static_spectrum(self, cache, snapshot, **params):
+        """谱线查询（领域实现 = core.protocol.static_spectrum，与 GUI 静态页同源）。"""
+        return _cp.static_spectrum(cache, snapshot, **params)
+
+    def static_ac_sweep(self, cache, snapshot, **params):
+        """AC 位移 vs 光强扫描（同上，薄委托）。"""
+        return _cp.static_ac_sweep(cache, snapshot, **params)
+
+    def static_pair(self, cache, snapshot, **params):
+        """两体静态查询（同上，薄委托）。"""
+        return _cp.static_pair(cache, snapshot, **params)
+
     # P1-9g：`run_annotations` 已删——它是旧 ABC 的弃用方法（docstring 写死
     # `{n_waves, overlap_warning}`）。旁注统一走上面的 `annotations()`（不透明 dict），
     # 库不再硬读它的键。

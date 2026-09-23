@@ -56,28 +56,33 @@ _ops = Ops(_session)
 _srv, tools = SVR.create_server(_session, _ops, actor='ai-test', log_level='ERROR')
 
 
-def call(name, **kw):
-    """直接调已注册的工具函数（返回 JSON 字符串）→ dict。同一份代码路径。"""
-    return json.loads(tools[name](**kw))
+def call(tool, **kw):
+    """直接调已注册的工具函数（返回 JSON 字符串）→ dict。同一份代码路径。
+
+    ⚠ 第一个形参名**不能**叫 `name`：`query(name=…)` 这类工具自身就有 `name`
+    入参，撞名会 "got multiple values for argument"（P 组踩过）。
+    """
+    return json.loads(tools[tool](**kw))
 
 
 # ---------------- A. 工具面 ----------------
 # P1-9d：`set_drive`/`get_waves` 已**搬回领域侧**（`src/adapter/mcp_tools.py`），
 # 库的 `TOOL_NAMES` 只剩**通用**工具（18→16）；领域工具经 `engine.mcp_tools()` 自报。
+# P1-6：+`query`（泛化查询，引擎自报查询表驱动）⇒ 16→17。
 _names = sorted(k for k in tools if not k.startswith('_'))
 _domain = sorted(set(_names) - set(SVR.TOOL_NAMES))
-C.group('A MCP 工具面 = 16 通用 + 领域自报（能力清单）', [
+C.group('A MCP 工具面 = 17 通用 + 领域自报（能力清单）', [
     ('库内通用工具 %d 个（实际注册总数 %d）'
-     % (len(SVR.TOOL_NAMES), len(_names)), len(SVR.TOOL_NAMES) == 16),
+     % (len(SVR.TOOL_NAMES), len(_names)), len(SVR.TOOL_NAMES) == 17),
     ('注册总数 = 通用 16 + 领域自报 %d' % len(_domain),
      len(_names) == len(SVR.TOOL_NAMES) + len(_domain)),
     ('**领域工具不在库里**（库 TOOL_NAMES 不含 set_drive/get_waves）',
      not ({'set_drive', 'get_waves'} & set(SVR.TOOL_NAMES))),
     ('**领域工具由本领域自报**（set_drive/get_waves 在）',
      {'set_drive', 'get_waves'} <= set(_names)),
-    ('含 async 作业面 + preview_behavior + list_levels + mecha_script',
+    ('含 async 作业面 + preview_behavior + list_levels + mecha_script + query',
      {'submit_job', 'job_status', 'cancel_job', 'list_jobs',
-      'preview_behavior', 'list_levels', 'mecha_script'} <= set(_names)),
+      'preview_behavior', 'list_levels', 'mecha_script', 'query'} <= set(_names)),
     ('工具可调、返回可解析 JSON（薄封装，逻辑在 session/ops）',
      isinstance(call('get_state'), dict)),
 ])
@@ -248,7 +253,10 @@ _w = WF.Wave('opt', freq_mhz=_freq,
 for _k, _v in {'groups.list': _G, 'dynamic.mode': 0, 'dynamic.method': 'mixed',
                'dynamic.t_max': 10.0, 'dynamic.npts': 11,
                'dynamic.decay_index': 1, 'dynamic.psi_single': state_key(_st[0]),
-               'dynamic.waves_single': WF.serialize_waves([_w])}.items():
+               'dynamic.waves_single': WF.serialize_waves([_w]),
+               # 两体几何（P1-6 的 static_pair 查询要；mode=0 时对 run 无影响）
+               'dynamic.pair.R_um': 8.0, 'dynamic.pair.theta_deg': 30.0,
+               'dynamic.pair.phi_deg': 0.0}.items():
     _session.set(_k, _v, actor='setup', reason='判据配置')
 
 # ---------------- J. preview_behavior + list_levels 一等工具 ----------------
@@ -265,6 +273,58 @@ C.group('J preview_behavior 预检基组（D7）+ list_levels 语义寻址 + mec
      and 'label' in lv['states'][0]),
     ('mecha_script 工具可多步编排（受限命名空间）',
      _ca.get('ok') is True and _ca.get('result', {}).get('nk', 0) >= 20),
+])
+
+# ---------------- P. P1-6 泛化查询：装配三处 + AI 真够到静态查询 ----------------
+# **判据必须测装配，不能只测单元**（本仓教训 §15：机制建好但装配没接）：
+#   ① `query` 进 `TOOL_NAMES`（库常量）；
+#   ② `create_server` 真注册（上面 `tools` 里的 query 可直接调）；
+#   ③ ops/CodeAct 白名单真暴露（经 `mecha_script` 在**同一个** run_codeact
+#      命名空间里验，不自己造等价物）。
+# 三处缺一即红；任一处"改回未接线形式"都必须红。
+# 便宜档：n_photon/window=1（AC 档默认 4/3 在 N~400 时 ~13 s/次；与
+# static_ai_selfcheck 的便宜场景同参）。
+_session.set('field.n_photon', 1, actor='setup', reason='判据便宜档')
+_session.set('field.window', 1, actor='setup', reason='判据便宜档')
+_tbl = call('query')
+_q_names = sorted((_tbl.get('queries') or {}))
+_q_ll = call('query', name='list_levels')
+_q_sp = call('query', name='static_spectrum', params={'top_n': 3})
+_q_pair = call('query', name='static_pair', params={'what': 'exchange'})
+_q_bad = call('query', name='static_spectru')          # 手滑打错（少个 m）
+_ca_q = call('mecha_script', script=(
+    "result = {'ops': sorted(ops.__dir__()),"
+    " 'reg_has_queries': 'queries' in registry.__dir__(),"
+    " 'll': ops.list_levels()['n_states'],"
+    " 'q': ops.query('static_pair', {'what': 'exchange'})['exchange']['J_mhz']}"))
+C.group('P P1-6 泛化查询装配（TOOL_NAMES→create_server→CodeAct 三处都接）', [
+    ('**① TOOL_NAMES**：含 query（P1-6 后 16→17）',
+     'query' in SVR.TOOL_NAMES and len(SVR.TOOL_NAMES) == 17),
+    ('**② create_server 真注册**：query 工具可调、回引擎自报查询表',
+     'query' in tools and bool(_tbl.get('queries'))),
+    ('引擎自报查询表含三个静态查询 + list_levels（adapter.queries() 真接线）',
+     {'list_levels', 'static_spectrum', 'static_ac_sweep',
+      'static_pair'} <= set(_q_names)),
+    ('**query("list_levels") ≡ list_levels 工具**（同 n_states，非空）',
+     _q_ll.get('n_states') == lv.get('n_states') and _q_ll.get('n_states', 0) > 0),
+    ('**AI 真够到谱线查询**：query("static_spectrum", top_n=3) 回谱线'
+     '（freq/A/两端身份齐；本小节基组偶极允许线 2 条 ≤ top_n）',
+     _q_sp.get('n_lines', 0) > 0
+     and 0 < len(_q_sp.get('lines') or []) <= 3
+     and all({'freq_hz', 'A_s1', 'label_a', 'label_b'} <= set(l)
+             for l in (_q_sp.get('lines') or []))),
+    ('**AI 真够到两体查询**：query("static_pair") 默认便宜档回 J_mhz',
+     isinstance((_q_pair.get('exchange') or {}).get('J_mhz'), float)),
+    ('未知查询名 → 可教学错误（did_you_mean 建议 static_spectrum）',
+     _q_bad.get('ok') is False
+     and 'static_spectrum' in (_q_bad.get('error', {}).get('suggest') or [])),
+    ('**③ CodeAct 白名单真暴露**：ops 门面含 query + list_levels',
+     {'query', 'list_levels'} <= set((_ca_q.get('result') or {}).get('ops') or [])),
+    ('registry 门面含 queries（脚本里先发现再调）',
+     (_ca_q.get('result') or {}).get('reg_has_queries') is True),
+    ('脚本里 ops.query("static_pair") 真分派（J_mhz 与 MCP 路同值）',
+     (_ca_q.get('result') or {}).get('q')
+     == (_q_pair.get('exchange') or {}).get('J_mhz')),
 ])
 
 # ---------------- K. async 作业面 + run_compute 超阈值自动转 async ----------------
@@ -358,7 +418,7 @@ C.group('L P0-3/P0-4：numpy 惰性（不在 import 期）+ 无建场层不崩�
     ('**致死性(P0-4)**：鸭子引擎（无 make_fields）→ create_server **不抛**（%s）'
      % (_nf_crash or '未抛'),
      _nf_crash is None),
-    ('工具面 = 通用 16 + 自报 2（不因缺建场层而少注册）',
+    ('工具面 = 通用 17 + 自报 2（不因缺建场层而少注册）',
      len(_nf_tools) == len(SVR.TOOL_NAMES) + 2),
     ('set_drive 回**可教学**错误（kind+hint+suggest 齐）',
      _sd.get('ok') is False and bool(_sd_err.get('hint'))
