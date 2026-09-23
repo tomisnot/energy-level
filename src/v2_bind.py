@@ -16,8 +16,9 @@ History**。cache 经 CacheProxy 汇流到引擎线程（ARC SQLite 认线程，
   假设 v2 已生效，不兼容同进程 import v1 的 mecha.ops/session 等。
 - gc（数据回收）在 v2 未实现（D-9 保留策略等第二项目）；GUI 的回收按钮在
   v2 下会显示"未接线"而非静默，见 load_artifact 旁的 gc 垫片。
-- undo/redo 未接：v2 History 是 append-only 事件流，撤销要按"反向 set 记一条
-  新事件"实现（语义与 v1 的 session.undo 不同），等接 GUI 撤销按钮时写 ADR。
+- undo/redo 未接：v2 History 是 append-only 事件流，撤销按"反向 set 记一条
+  新事件"实现（决策见 mecha 仓 ADR `EL能力面取舍` 第 3 条；语义与 v1 的
+  session.undo 不同），实现挂起至接 GUI 撤销按钮（真实调用方出现）。
 """
 from __future__ import annotations
 
