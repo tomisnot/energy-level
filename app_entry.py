@@ -157,6 +157,11 @@ class MainWindow(QMainWindow):
         # app_bridge.switch_mode。engine.* 只读（点1），故不再有引擎覆写状态。
         self.god_mode = False
         self._build_ui()
+        if _V2:
+            # 第一交付物（总纲 §1.2 事实 2）：人监控 AI 的侧边栏，两层信任。
+            # 须在 _build_ui 之后挂（menuBar 那时才存在）。
+            from src.ui.monitor_panel import attach_monitor_dock
+            attach_monitor_dock(self)
 
     def log(self, msg, timeout=8000):
         """统一信息出口：状态栏显示。"""
