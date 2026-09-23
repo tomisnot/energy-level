@@ -264,6 +264,8 @@ try:
     health = _http('GET', _base + '/healthz?token=sekret')
     index = _http('GET', _base + '/')
     alerts = _http('GET', _base + '/api/alerts?token=sekret')
+    # ⚠ 必须在 `finally` 关服务**之前**取（否则请求打不通）
+    branding = _http('GET', _base + '/api/branding?token=sekret')
 finally:
     _srv.should_exit = True
     time.sleep(0.3)
@@ -282,8 +284,13 @@ C.group('E ⑤ 远程只读（鉴权）+ 不暴露写端点（T6）', [
      with_auth[0] == 200 and wa.get('count', 0) == _LAST),
     ('POST 写请求 → 405（只读，无写端点）', posted[0] == 405),
     ('healthz 自报 read_only=True', health[0] == 200 and hl.get('read_only') is True),
-    ('静态前端可达（GET / → 200，index.html）',
-     index[0] == 200 and '机甲驾驶舱' in index[1]),
+    ('静态前端可达（GET / → 200，含 HTML 标题）',
+     # ⚠ 断言**不钉任何品牌串**（W1/D-1 把出厂标题中性化了：旧版是 "Re0 机甲驾驶舱"）。
+     # 这里只验"前端真能取到、是个带 <title> 的 HTML"——品牌由项目经 /api/branding 注入。
+     index[0] == 200 and '<title>' in index[1]),
+    ('品牌注入端点在位（/api/branding 可读，且**不含项目名**）',
+     branding[0] == 200 and 'Re0' not in branding[1]
+     and 'title' in branding[1]),
     ('alerts 端点给出级别（平静 ok）',
      alerts[0] == 200 and json.loads(alerts[1]).get('level') == 'ok'),
 ])

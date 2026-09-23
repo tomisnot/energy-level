@@ -118,6 +118,37 @@ def _py_files(dirs):
     return sorted(out)
 
 
+# ★ 非 .py 的**文本资产**也要扫（D-1 的教训）：`cockpit/static/` 是出厂 UI，
+#   里面有标题/文案/前端键名——旧版只扫 `.py` ⇒ `Re0` 明明在词表里却**扫不到**，
+#   于是 `index.html` 的 `<title>Re0 机甲驾驶舱…</title>` 一路漏到审查者手里。
+#   同类问题换个扩展名就会再来一次，故扫描面必须按**资产类型**收，而不是按扩展名。
+_TEXT_ASSET_EXT = ('.html', '.js', '.css', '.json', '.md', '.txt', '.svg', '.yml', '.yaml')
+
+
+def _text_assets(dirs):
+    """两个包里的**非 .py 文本资产**（出厂 UI/静态资源/随包文档）。"""
+    out = []
+    for d in dirs:
+        for dp, _dn, fns in os.walk(d):
+            for fn in fns:
+                if fn.endswith('.py'):
+                    continue
+                if fn.lower().endswith(_TEXT_ASSET_EXT):
+                    out.append(os.path.join(dp, fn))
+    return sorted(out)
+
+
+def scan_text(src, path='<synthetic>'):
+    """**非 .py 文本** → 命中列表（逐行子串匹配；无 AST，故**注释也算**——
+    对出厂 UI 而言注释与文案同等重要，都会被新项目照抄）。"""
+    hits = []
+    for i, line in enumerate(src.split('\n'), 1):
+        for w in DOMAIN_WORDS:
+            if w in line:
+                hits.append((path, i, w, line.strip()[:60], 'text'))
+    return hits
+
+
 def _strip_docstrings(tree):
     """剥掉模块/类/函数的 docstring（注释本就不在 AST 里，天然排除）。"""
     for node in ast.walk(tree):
@@ -180,6 +211,14 @@ _residual = [h for h in _raw_hits if h[2] not in WHITELIST]
 _whitelisted = [h for h in _raw_hits if h[2] in WHITELIST]
 _wl_counts = {w: sum(1 for h in _raw_hits if h[2] == w) for w in WHITELIST}
 
+# ---------------------------------------------------------------- A2. 扫非 .py 文本资产（D-1）
+_assets = _text_assets(_PKGS)
+_asset_hits = []
+for _p in _assets:
+    with open(_p, encoding='utf-8', errors='replace') as f:
+        _asset_hits.extend(scan_text(f.read(), _p.replace(_LIB + os.sep, '')))
+_asset_residual = [h for h in _asset_hits if h[2] not in WHITELIST]
+
 
 def _fmt(hits, limit=8):
     out = ['%s:%d[%s] %s→%r' % (os.path.basename(h[0]), h[1], h[4], h[2], h[3])
@@ -189,8 +228,8 @@ def _fmt(hits, limit=8):
     return '; '.join(out)
 
 
-print('库：%s（扫 mecha/ + cockpit/ 共 %d 个 .py；examples/ 不在两包内故天然排除）'
-      % (_LIB, len(_files)))
+print('库：%s（扫 mecha/ + cockpit/ 共 %d 个 .py + %d 个非 .py 文本资产；'
+      'examples/ 不在两包内故天然排除）' % (_LIB, len(_files), len(_assets)))
 print('词表 %d 个：%s' % (len(DOMAIN_WORDS), ' '.join(DOMAIN_WORDS)))
 if _whitelisted:
     print('白名单放行 %d 处：%s' % (len(_whitelisted), _fmt(_whitelisted)))
@@ -203,6 +242,19 @@ C.group('A 库真代码领域词命中（剥注释/docstring 后；白名单放�
 ] + [('**腐烂侦测**：白名单条目 %r 仍命中 %d 处（0 ⇒ 该清理白名单了——'
       '说明它已修好/已移除，放行理由失效）' % (w, _wl_counts.get(w, 0)),
       _wl_counts.get(w, 0) > 0) for w in WHITELIST])
+
+# ★ A2：**非 .py 文本资产**（D-1 的教训）。出厂 UI 也是"会被照抄的形状"，
+#   旧版只扫 .py ⇒ `index.html` 的 `<title>Re0 机甲驾驶舱…</title>` 一路漏掉。
+C.group('A2 **非 .py 文本资产**领域词命中（%d 个文件：static 前端/随包文档）'
+        % len(_assets), [
+    ('扫描面含非 .py 资产（%d 个）' % len(_assets), len(_assets) >= 1),
+    ('**非白名单命中 0 处**（命中：%s）' % (_fmt(_asset_residual) or '无'),
+     not _asset_residual),
+    ('**致死性**：合成一段含 `Re0` 的 HTML ⇒ 必被 `scan_text` 检出（非哑守卫）',
+     bool(scan_text('<title>Re0 机甲驾驶舱</title>', 'synthetic.html'))),
+    ('**不许误报**：中性 HTML ⇒ 0 命中',
+     not scan_text('<title>mecha 驾驶舱</title>', 'synthetic.html')),
+])
 
 C.group('B 前提：定位到库 + 扫描面正确（mecha/ + cockpit/；docstring 已剥）', [
     ('库目录（%s）含 mecha/ 与 cockpit/ 两个包'
