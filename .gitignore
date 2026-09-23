@@ -9,7 +9,8 @@ __pycache__/
 .arcdata/
 save_state/
 # runtime/ 整目录排除：sweeps（扫描产物）/ _journal（旧 AI 管线日志）/ check_profile.csv
-# （scripts/check_profile.py 的诊断输出）。仓库里唯一值得入库的运行数据是 save_state/。
+# （scripts/check_profile.py 的诊断输出）。本机运行产物一律不入库：上面的 save_state/ 同样排除
+# （存档归本地数据，历史上曾短暂入库，现已改回"只在磁盘侧"）。
 runtime/
 .mecha/
 scripts/tmp/
