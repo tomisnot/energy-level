@@ -61,23 +61,19 @@ def audit_readme(text, mods, pyproject):
     missing = sorted(mods - mentioned - _NOT_LISTED_OK)
     if missing:
         problems.append('README 模块清单缺：%s' % missing)
-    # ② 方法数：README 里的"N 个必实现"与"ABC 抽象方法数"
-    m = re.search(r'(\d+)\s*个必实现', text)
-    if m:
-        n_readme = int(m.group(1))
-        abc = _abc_counts()
-        if n_readme != abc['n_abstract']:
-            problems.append('README 说 %d 个必实现，ABC 实际 %d'
-                            % (n_readme, abc['n_abstract']))
-    else:
-        problems.append('README 未声明"必实现"方法数（无法对拍）')
-    m2 = re.search(r'(\d+)\s*个可选钩子', text)
-    if m2:
-        n_hooks_readme = int(m2.group(1))
-        hooks_n = len(_hook_names())
-        if n_hooks_readme != hooks_n:
-            problems.append('README 说 %d 个可选钩子，hooks 实际 %d'
-                            % (n_hooks_readme, hooks_n))
+    # ② 方法数：★ W6/D-25 后 —— **只有写了才检查**。
+    #    README **不再要求**写死方法数（那正是"手抄计数"的病：本月已为它付两次账）。
+    #    规则：写了就必须对（与 `protocol.__abstractmethods__` / `hooks.__all__` 实测一致）；
+    #    **不写则合规**（推荐指向单一来源，如"见 `protocol.__abstractmethods__`"）。
+    #    这样既消灭计数漂移，又保留"若有人写了错数字 ⇒ 当场红"的守卫力。
+    abc = _abc_counts()
+    hooks_n = len(_hook_names())
+    for pat, actual, what in ((r'(\d+)\s*个必实现', abc['n_abstract'], '必实现'),
+                              (r'(\d+)\s*个可选钩子', hooks_n, '可选钩子')):
+        m = re.search(pat, text)
+        if m and int(m.group(1)) != actual:
+            problems.append('README 说 %d 个%s，实际 %d（W6：请改为指向单一来源，'
+                            '别手抄计数）' % (int(m.group(1)), what, actual))
     # ③ extras
     ex_readme = set(re.findall(r'extras[：:]\s*([^\n。]+)', text))
     if ex_readme:
@@ -140,10 +136,11 @@ C.group('② 方法数：README 声明 == ABC 实际（抽象 %d / 钩子 %d）'
         % (_abc['n_abstract'], len(_hooks)), [
     ('ABC 抽象方法 %d 个' % _abc['n_abstract'], _abc['n_abstract'] == 13),
     ('hooks 导出 %d 个' % len(_hooks), len(_hooks) == 4),
-    ('README 声明的"必实现"数 == 13',
-     bool(re.search(r'13\s*个必实现', _text))),
-    ('README 声明的"可选钩子"数 == 4',
-     bool(re.search(r'4\s*个可选钩子', _text))),
+    ('**W6**：README **不手抄方法数**（不写=合规；写了就必须对）',
+     not re.search(r'\d+\s*个必实现', _text)
+     and not re.search(r'\d+\s*个可选钩子', _text)),
+    ('README 指向单一来源（提到 `__abstractmethods__` 或 `spec` §0.1）',
+     '__abstractmethods__' in _text or '§0.1' in _text),
     ('README 不再声称"17 方法"（旧漂移）', '17 方法' not in _text),
 ])
 C.group('③ README extras == pyproject extras（%s）' % sorted(_extras_want), [
@@ -157,14 +154,17 @@ C.group('④ 综合：README 与代码一致（问题：%s）' % (_problems or '
 ])
 
 # ---------------- 致死性 + 不许误报 ----------------
+# ⚠ 变异要**从当前真 README 出发**构造（W6 后 README 已无计数）：
 _bad_mod = _text.replace('`gc`', '`GONE`')
-_bad_num = _text.replace('13 个必实现', '17 个必实现')
+# 往一份**带计数**的合成 README 里塞错数字 ⇒ 必须报出（证明"写了就必须对"仍载重）
+_with_count = _text + '\n（本文声称 17 个必实现）\n'
+_bad_num = _with_count.replace('17 个必实现', '17 个必实现')   # 17 ≠ 实际 ⇒ 应报
 _bad_extras = _text.replace('extras：`mcp`、`cockpit`、`numpy`',
                             'extras：`mcp`、`cockpit`')
 C.group('⑤ **致死性**：坏 README 必被检出；好 README **不误报**', [
     ('少一个模块 → 报出',
      bool(audit_readme(_bad_mod, _mods, _PYPROJECT))),
-    ('方法数写错 → 报出',
+    ('**写了错方法数 → 报出**（W6 后仍载重：不写=合规，写了必须对）',
      any('必实现' in p for p in audit_readme(_bad_num, _mods, _PYPROJECT))),
     ('extras 少一个 → 报出',
      any('extras' in p for p in audit_readme(_bad_extras, _mods, _PYPROJECT))),
