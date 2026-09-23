@@ -141,9 +141,12 @@ _prop_op = _ops_default.propose(reason='领域登记的不逆 op', actor='ai',
                                 op='fire_laser')
 AU.register_irreversible_ops({})          # 还原，避免影响后续
 C.group('E 数字孪生 dry-run：AI 提议→先 sim 跑→摆给人（不武装）＋目标**域参数化**', [
-    ('propose 跑了 dry-run（estimate + preview 基组规模）',
-     prop['dry_run_sim']['preview_n_states'] == 6
-     and 'estimate' in prop['dry_run_sim']),
+    # dry-run 摘要 = estimate + **整份 preview 原样搬运**（P1-9c：库不挑领域键。
+    # 旧版在这里拼 n_states/basis_enough/driven 三个键——那正是"库替领域决定
+    # 哪几个键重要"的残留；非物理引擎的 preview 里根本没有这些键。）
+    ('propose 跑了 dry-run（estimate + preview 原样透传，基组规模 6）',
+     'estimate' in prop['dry_run_sim']
+     and (prop['dry_run_sim'].get('preview') or {}).get('n_states') == 6),
     ('**未指定目标 ⇒ 按最严**：不放行（旧版靠写死 hardware 才恒拒）',
      prop['proposal']['backend_target'] is None
      and prop['l3_gate']['allow'] is False),
