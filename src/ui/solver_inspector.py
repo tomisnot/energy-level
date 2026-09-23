@@ -66,10 +66,14 @@ class _GcWorker(QThread):
 
     def run(self):
         try:
-            from mecha import gc as _gc
-            rep = _gc.gc(self.root, dry_run=self.dry_run, bus=self.bus,
-                         triggered_by=self.triggered_by,
-                         reason=self.reason or 'GUI 数据回收')
+            try:
+                from mecha import gc as _gc
+                rep = _gc.gc(self.root, dry_run=self.dry_run, bus=self.bus,
+                             triggered_by=self.triggered_by,
+                             reason=self.reason or 'GUI 数据回收')
+            except ImportError:                   # mecha v2：gc 未实现，如实报告
+                from src.v2_bind import gc_report
+                rep = gc_report(self.root, dry_run=self.dry_run)
             self.done.emit(rep, None)
         except Exception as e:                              # noqa: BLE001
             self.done.emit(None, '%s: %s' % (type(e).__name__, e))

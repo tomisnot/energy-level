@@ -809,7 +809,10 @@ class ManyBodyPanel(QWidget):
         res = None
         aid = (result or {}).get('artifact_id')
         try:
-            from mecha.ops import load_artifact
+            try:
+                from mecha.ops import load_artifact
+            except ImportError:                       # mecha v2：无 mecha.ops
+                from src.v2_bind import load_artifact
             loaded = (load_artifact(self.main.app_bridge.ops.root, aid)
                       if aid else None)
             if loaded is not None:

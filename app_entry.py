@@ -49,8 +49,15 @@ from src.ui import ui_theme
 from src.ui import _mecha_bind
 from src.ui.ui_group import EnergyGroupPanel
 from src.ui.ui_spectrum import LevelAnalysisPanel
-from mecha.app_bridge import AppBridge
-from src.adapter import EngineAdapter
+
+# RE0_V2=1 → 走 mecha v2（同一道门：GUI + AI 共一 Gate）；否则 v1（默认不变）。
+_V2 = os.environ.get('RE0_V2') == '1'
+if _V2:
+    from src.v2_bind import make_v2_bridge, load_artifact as _v2_load_artifact
+    AppBridge = EngineAdapter = None            # v2 分支不 import v1 门面
+else:
+    from mecha.app_bridge import AppBridge
+    from src.adapter import EngineAdapter
 
 matplotlib.rcParams['font.family'] = 'sans-serif'
 matplotlib.rcParams['font.sans-serif'] = ['Microsoft YaHei', 'SimHei', 'DejaVu Sans']
@@ -110,22 +117,26 @@ class MainWindow(QMainWindow):
         # `resolve_root` 会拼成 `<repo>/.mecha`（正是 .gitignore 里那一项，
         # 也修掉"产物落到库上级目录"的旧 bug）。
         # ⚠ `.mcp-port`（下一行 discover_hub）属 P0-2，按主代理要求**本轮不动**。
-        from mecha.hub_client import discover_hub
-        from mecha.hub_bridge import HubBridge
         _proj_root = PROJ_ROOT
         self._hub_connected = False
-        # RE0_GUI_INPROC=1 → 强制 in-process（判据/离线用）；否则有活 Hub（.mcp-port）就连它
-        hub_url = None if os.environ.get('RE0_GUI_INPROC') else discover_hub()
-        if hub_url:
-            try:
-                self.app_bridge = HubBridge(hub_url)
-                self._hub_connected = True
-            except Exception:                              # noqa: BLE001
+        if _V2:
+            # v2：GUI 与 AI（MCP 服务器线程）共享一个 Gate；人工控制端点供夺权。
+            self.app_bridge = make_v2_bridge(_proj_root)
+        else:
+            from mecha.hub_client import discover_hub
+            from mecha.hub_bridge import HubBridge
+            # RE0_GUI_INPROC=1 → 强制 in-process（判据/离线用）；否则有活 Hub（.mcp-port）就连它
+            hub_url = None if os.environ.get('RE0_GUI_INPROC') else discover_hub()
+            if hub_url:
+                try:
+                    self.app_bridge = HubBridge(hub_url)
+                    self._hub_connected = True
+                except Exception:                              # noqa: BLE001
+                    self.app_bridge = AppBridge(root=_proj_root, engine=EngineAdapter(),
+                                                mode='human')
+            else:
                 self.app_bridge = AppBridge(root=_proj_root, engine=EngineAdapter(),
                                             mode='human')
-        else:
-            self.app_bridge = AppBridge(root=_proj_root, engine=EngineAdapter(),
-                                        mode='human')
         self.cache = self.app_bridge.cache
         # 面板控件 ↔ session。**notify=self.log**：写权被拒等"必须让人看见"的反馈
         # 走状态栏（P2-4）——没有它，`Binder._reject` 就只是"声明了没人接"的空机制。
