@@ -66,6 +66,7 @@ FAST_KNOWN_SEC = {
     'docs_consistency_selfcheck.py': 0.4,
     'mecha_toyengine_selfcheck.py': 0.1,
     'mecha_purity_selfcheck.py': 0.2,
+    'mecha_domain_words_selfcheck.py': 0.3,
     'interlock_selfcheck.py': 0.1,
     'checks_sentinel.py': 0.5,
     'cleanliness_guard_selfcheck.py': 1.6,

@@ -13,6 +13,8 @@ from ..core.manybody import schema_mb as _mb_schema
 from mecha.errors import InvalidValue
 from mecha.protocol import EngineProtocol
 
+import os
+
 __all__ = ['EngineAdapter']
 
 
@@ -122,13 +124,22 @@ class EngineAdapter(EngineProtocol):
     def server_name(self):
         """MCP 服务名（旧版写死在库里 `'re0-mecha'`）。"""
         return 're0-mecha'
-
     def server_instructions(self):
         """MCP instructions（旧版写死在库里，且正文写"Re0 物理引擎"）。"""
         return ('Re0 物理引擎语义内核的写通道。list_params 看可调项，set_param 逐项写'
                 '配置（记进事件总线、可 undo），estimate_cost 看代价，preview_behavior '
                 '提交前预检，run_compute 跑演化（超阈值自动转 async）。键名走 registry '
                 '契约；打错会给建议。建场用本领域扩展工具 set_drive/get_waves。')
+
+    def archives_dir(self):
+        """本项目的存档目录（**绝对路径**）——AI 只读存档面与 GUI 存档对话框的
+        同一真源（P1-9f：库里不再默认 EL 的目录名，改由本层声明）。
+
+        从 `__file__` 推仓库根、**不从 cwd**：从别的目录跑 GUI/判据/Hub 时 cwd 会变，
+        按 cwd 解析会**静默读空**（AI 以为"没有存档"）——那正是 P1-9f 修掉的坑。
+        """
+        _here = os.path.dirname(os.path.abspath(__file__))       # <repo>/src/adapter
+        return os.path.join(os.path.dirname(os.path.dirname(_here)), 'save_state')
 
     def result_arrays(self, res):
         """**本领域自报**要落进可复现产物的数组（P1-8 / P1-9c）。
