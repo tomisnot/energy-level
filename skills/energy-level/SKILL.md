@@ -1,324 +1,104 @@
 ---
 name: energy-level
-description: 通过 MCP 操控 Rb-87 里德堡原子仿真软件 Energy Level——管理能级组、场与微波/光波形，运行含时演化，并解读布居转移结果。含单位约定、v3 登记册 AI 可及面、典型工作流与已知坑。
-whenToUse: 当需要操控 Energy Level 软件（改参数、加能级组、配波形、跑演化计算、取布居结果）或解读其计算结果时。软件需处于运行状态，MCP 端点见项目根 .mcp-port（默认 8765）。
+description: 通过 MCP 操控 Rb-87 里德堡原子仿真软件 Energy Level（mecha v2）——管理能级组、场与微波/光波形，运行含时演化，并解读布居转移结果。含单位约定、v2 工具面、典型工作流与已知物理坑。
+whenToUse: 当需要操控 Energy Level 软件（改参数、加能级组、配波形、跑演化计算、取布居结果）或解读其计算结果时。软件需处于运行状态（RE0_V2=1），MCP 端点见项目根 .mcp-port。
 ---
 
-# SKILL: Energy Level — Rb-87 里德堡原子仿真（AI 操作指南）
+# SKILL: Energy Level — Rb-87 里德堡原子仿真（AI 操作指南 · mecha v2）
 
-> 本文件是 AI harness 的 skill 说明书：连接方式、工具清单、工作流、
-> 单位约定、坑。AI 使用中若发现文档与实态不符，应回头修正本文件
-> （自我迭代，G4）。
+> 本文件是 AI harness 的 skill 说明书：连接方式、工具清单、工作流、单位约定、
+> 物理坑。AI 使用中若发现文档与实态不符，应回头修正本文件（自我迭代）。
+> **本版对齐 mecha v2**：工具面 = `examples/energy_level/tools.py` 注册的 12 个
+> MCP 工具（用 `list_tools` 以实际返回为准）。v1 的 GUI 内嵌 AI 面
+> （run_python/submit_sweep/get_diag/screenshot/set_groups…）**在 v2 不存在**，
+> 见末节"v2 暂缺的能力"。
 
 ## 连接
 
-软件启动后自动开放 streamable HTTP 端点：默认端口 **8765**（环境变量
-`EL_MCP_PORT` 可改；被占自动回退随机端口），实际端口始终写入项目根
-`.mcp-port` 文件。
+软件以 v2 模式启动后自动开放 streamable HTTP 端点：`RE0_V2=1 python 能级.py`
+→ GUI 与 MCP 服务器**同进程共一道 Gate**，实际端口写入项目根 `.mcp-port`
+（裸端口，兼容 dsh `resolveHubUrl`）。你 attach 到 `http://127.0.0.1:<port>/mcp`。
 
-**Trae IDE 接入（本项目已配好）**：项目根 `.trae/mcp.json` 已写入：
+**Trae IDE 接入**：项目根 `.trae/mcp.json` 指向该端点。需在 Trae 设置 → MCP 打开
+"启用项目级 MCP"，然后**新开会话**生效（工具在会话启动时加载）。
 
-```json
-{"mcpServers": {"energy-level": {"url": "http://127.0.0.1:8765/mcp"}}}
-```
+人的夺权/交权/写走**人工控制端点** `:8767`（`/switch_mode`、`/write`、
+`/write_many`，token 在 `.human-token`）——AI 面改不了写权模式、伪造不了 human 归因。
 
-需在 Trae 设置 → MCP 打开"启用项目级 MCP"，然后**新开会话**生效
-（工具在会话启动时加载）。
+## 工具清单（v2 实际面 = 12）
 
-其他 harness：Claude Code 用 `claude mcp add --transport http
-energy-level http://127.0.0.1:8765/mcp`；通用 JSON 形态同上。
-若端口非默认（GUI 状态栏"● AI 在线 :端口"可见），改配置或读 `.mcp-port`。
+| 工具 | 作用 | 关键参数 |
+|---|---|---|
+| `query_params` | 可写配置键的元数据：type/unit/lo/hi/enum/desc/default | — |
+| `query_levels` | 基组每个子能级：**label + 身份键 key + 能量 MHz** | — |
+| `read_config` | 当前所有已设配置键（快照）——确认改动是否生效 | — |
+| `set_config` | 写一个配置键（过 Gate 校验；类型/枚举/值域/wave_list 当场判） | `key, value` |
+| `set_drive` | **在跃迁上建驱动**：给 Rabi/光强 + 脉冲形状 → 自动算频率/光强/时长 | `src, tgt, rabi_mhz｜intensity_mwcm2, pulse("pi"/"pi2")｜duration_ns, pol, detuning_mhz, atom("single"/"A"/"B"), mode("append"/"replace")` |
+| `estimate_run` | dry-run 成本（不跑演化）；单体回 `est_sec` 粗估 | — |
+| `preview_run` | 行为预览：驱动哪些跃迁 / **基组够不够**（`basis_enough`） | — |
+| `run_sim` | 跑演化，回终态布居摘要（不含大数组） | `cancel_after_sec`（可选超时取消） |
+| `submit_job` | 长任务提交后台，立即回 `job_id`（提交时刻固定配置） | — |
+| `read_job` | 查任务：给 `job_id` 查单个（done 含 result），省略则列全部 | `job_id` |
+| `cancel_job` | 请求取消后台任务（下一步边界生效） | `job_id` |
+| `run_actions` | **多步编排**：一串 `{op,args}` 按序执行，任一步失败即停在该步 | `actions` |
 
-## 两种驱动形态的选择（重要）
-
+### 两种驱动形态的选择
 | 场景 | 用什么 | 原因 |
 |---|---|---|
-| 单步探索、需要人逐步监督 | 细粒度工具（set_param/run_compute/…） | 每步在对话+GUI 双通道可见 |
-| 参数扫描、批量对比、多步组合、结果后处理 | **run_python**（CodeAct） | 一次调用=任意多操作，省回合；大数组进程内消化 |
+| 单步探索、需人逐步监督 | 细粒度工具（`set_config`/`run_sim`/…） | 每步在对话+GUI 双通道可见 |
+| 参数扫描、批量对比、多步组合 | `run_actions`（CodeAct 结构化动作） | 一次调用=多步，省回合 |
 
-`run_python` 约定：
-- **命名空间白名单（仅这些；没有 os / sys / subprocess / open）**：
-  `summary() get_state(scope) set_param(path,v,reason='')
-  add_level_group(n,l,j) remove_level_group(i) set_waves(list,atom)
-  save_archive(path) load_archive(path)
-  run_compute_and_wait(timeout=1800,poll=1.0,save_npz=False)
-  submit_compute(diag=True)
-  submit_sweep(axes=…)/sweep_status(sid)/sweep_result(sid,states=…)
-  cancel_sweep(sid)/list_sweeps()/run_sweep_and_wait(…)
-  job_status(jid) job_result(jid) list_jobs() result_states(…)
-  list_params(prefix) get_diag(scope) cancel_job(jid)
-  activity(since=0) np(=numpy) json time ROOT`
-  ⚠ **`get_envelope` 不在白名单里**（2026-09-16 实测：脚本内调用 →
-  `NameError: name 'get_envelope' is not defined`）。要曲线就在**脚本外**
-  单独调一次 `get_envelope(path, index)`，再把数组拼进代码字面量；
-  或直接读 `get_state('dynamic')`（见坑 27，那条路给全量采样）。
-- 要自己写文件请**拼字符串**：`np.savez(ROOT + '/runtime/ai_results/x.npz', ...)`。
-  用 `os.path.join` 会直接 `NameError`——这是刻意的设计边界（状态变更必须
-  全部经 ParamRegistry），不是缺陷。
-- **把结论赋给 `result` 变量**（自动回传，JSON 化）；过程信息用 `print`。
-- 数组不要整体回传（>50 元素会被截成形状摘要）——print 统计量或存 npz。
-- undo 语义：整段脚本算**一步**，撤销回到脚本执行前。
-- **结果自动落盘**（2026-09-10 加）：每次执行都写 `runtime/ai_results/<run_id>.json`
-  （含 result / stdout / **完整代码** / 状态 / 耗时），保留最近 200 份。
-  返回值含 `run_id`。所以**脚本末尾报错或客户端断线都不会丢结果**。
-- 超长任务用 `run_python_async(code)` 立即拿 `run_id` 后台跑，再用
-  `run_result(run_id)` 轮询；该查询**只读文件、不经 Qt 主线程**，因此长任务
-  执行期间也能用（`run_python` 的脚本占用主线程，别的工具会被排队）。
-  断线重连后用 `list_runs()` 找回之前那次跑的 run_id。
-- 示例（B 场扫描一次调用）：
+`run_actions` 约定：
+- 每步是 `{"op": 名称, "args": 对象}`。op 可为内置 `estimate`/`summary`/`run`/`schema`，
+  或只读查询名 `read_config`/`query_params`/`preview_run`/`query_levels`/`get_waves`。
+- **不 eval 任意代码**（库只编排自家工具，任意代码是宿主 code-runtime 的权力）。
+- 回执 `{ok, steps:[{index,op,ok,detail}], outputs, stopped_at}`；`stopped_at=-1` = 全成。
+- `run`/`estimate` 步缺省 spec 时用当前配置（顶层 `spec` 参数可覆写）。
+- 每步留可追溯记录（逐子调用审计，不污染域状态史）。
 
-```python
-out = []
-for B in [20, 25, 30]:
-    set_param('field.B_gauss', B, reason=f'扫描 B={B}')
-    r = run_compute_and_wait()
-    out.append({'B': B, 'final': r.get('summary', {}).get('final_pop')})
-    print(out[-1])
-result = out
-```
+## 配置键（`set_config` 的 key）
 
-### ⚠ 先看 `summary()['code']`（T3/A12，2026-09-12 加）
-引擎/服务端是**进程内**代码：改了 `src/` 不重启，你看到的仍是旧行为（本会话曾因此白烧整轮）。
-```python
-summary()['code']
-# {'stale': True, 'n_stale': 7, 'n_files': 118, 'age_s': 812.0,
-#  'loaded_at': …, 'src_core_mtime': …, 'src_ai_mtime': …,
-#  'newest': [{'path': 'src/ai/sim_state.py', 'mtime': …, 'stale': True}, …],
-#  'hint': '⚠ 代码已陈旧：… **需要重启软件** 才生效；当前结果仍来自旧代码。'}
-```
-- `stale=True` → **别下结论**：先让人重启再重跑；
-- `run_python` 的返回里也带 `stale_code_warning`（陈旧时一句话，新鲜时 `None`）；
-- 基准 = "本进程加载代码的时刻"（`server.py` 导入期盖戳，first-wins）→ 只要有人改过 `src/` 就能立刻看出。
+可写面 = `query_params` 返回的清单（唯一权威）。除标量外这些结构化键也可整表写：
 
-## 工具清单
-
-| 工具 | 作用 | 备注 |
-|---|---|---|
-| `summary` | 轻量摘要（组数/场/方法/波形数）+ **`code` 代码新鲜度** | **每次会话先调这个建立认知**；`code.stale=True` ⇒ 进程跑的是**旧代码**，让人重启 |
-| `get_state(scope)` | 全量/分模块状态导出 | scope ∈ 空/groups/field/dynamic |
-| `list_params(prefix)` | 参数 schema：type/unit/desc/range/options/value | set_param 的字典；**波形包络只给摘要** |
-| `get_envelope(path, index)` | 取某条波形的**原始包络采样数组** | 大数组专用通道（list_params 只给摘要，防响应膨胀）|
-| `set_param(path, value, reason)` | 改一个在册参数（登记面=可改面） | 过控件校验；reason 写动机 |
-| `add_level_group(n,l,j,reason)` | 加能级组 | 自动校验+配色 |
-| `remove_level_group(index,reason)` | 删能级组 | 索引见 get_state |
-| `set_waves(waves, atom, reason)` | 整表替换波形 | atom=single/A/B（三套独立），格式见下 |
-| `set_superposition(atom, components)` | 设**逐原子叠加态**初态 | 分量须在基组内，自动归一；存为**持久真值**（下拉显示"叠加态（自定义 n 项）"）。见坑 14 |
-| `set_pair_superposition(components, reason)` | 设**两体纠缠初态**（交换后的结果） | 分量须在当前两体基内；存 `dynamic.psi_pair`，**取代** psi_A/psi_B；传 `[]` 清除。见坑 13 |
-| `run_compute(diag=true)` | 启动演化计算 | 立即返回 job_id，GUI 同步显示。**diag=true（默认）**额外采集运行诊断供 `get_diag` 用（仅 mixed 引擎产出） |
-| `get_diag(scope,job_id,limit,save_npz)` | **只读：运行诊断** | 理解"为什么"的主通道。scope 空=摘要；`pairs`/`steps`/`sectors`/`traj`/`H` 给明细（截断/落盘）。job_id 空=最近一次或 GUI 当前 |
-| `job_status(job_id)` | 查进度 | 轮询到 done=true |
-| `job_result(job_id, save_npz)` | 取结果摘要 | 大数组落 npz 给路径 |
-| `cancel_job(job_id)` | 取消计算 | |
-| `get_activity(since_seq)` | 操作流水（人+AI） | 了解"现在什么状况" |
-| `undo(reason)` | 撤销最近一个 AI 操作 | 先斩后奏的兜底 |
-| `save_archive(path)` / `load_archive(path)` | JSON 存档读写 | 与菜单同源，可 undo |
-| `screenshot()` | 主窗口截图 → PNG 路径 | 了解人眼所见 |
-| `run_python(code)` | **CodeAct**：一次调用跑多步编排 | 见上"两种驱动形态" |
-| `run_python_async(code)` | **CodeAct 异步版**：立即返回 run_id | 长扫描/大系综；断线不丢结果 |
-| `run_result(run_id)` | 取运行状态与结果 | 只读文件，**长任务期间也能查** |
-| `list_runs(limit)` | 列出最近运行记录 | 断线重连后找回 run_id |
-| **`submit_sweep(axes,…)`** | **并行扫描**：一次调用把 N 个参数点交给**多进程池** | 立即返回 sweep_id；**跑网格的首选**，见下节 |
-| `sweep_status(sweep_id)` | 逐点进度（含每点百分比/进程数/定档理由） | 只读文件、不经 Qt 主线程 ⇒ 长扫描期间也能查 |
-| `sweep_result(sweep_id, states)` | 逐点摘要 + **关注态的汇总表** | `states=[…]` 给 `selected_table`（行=点，列=态） |
-| `cancel_sweep(sweep_id)` | 取消并行扫描 | 先优雅（已完成点保留），超时才硬杀进程树 |
-| `list_sweeps(limit)` | 列出最近的并行扫描 | 与 `list_jobs` 同构；断线后找回 sweep_id |
-
-## v3 登记册的 AI 可及面（2026-09 参数管理改造）
-
-可改面 = 登记在册面，`list_params()` 是唯一权威清单。除标量外这些
-结构化参数也可 `set_param` 整表读写：
-
-- `field.lights`：光场行 list（`frequency_hz`/`intensity`/`polarization`/
-  `scope`/`enabled`，椭圆偏另带 `elliptical`）；
-- `dynamic.waves_single` / `waves_A` / `waves_B`：波形（用 `set_waves` 更顺手）；
-- `dynamic.psi_single` / `psi_A` / `psi_B`：初态**身份键**（非索引，跨 B 稳定）；
-  读得到键即可写回；
-- `dynamic.psi_pair`（2026-09-12 加）：**两体纠缠初态 spec**，形如
-  `['pair_sup', [[nA,lA,jA,mA, nB,lB,jB,mB, re, im], …]]`，默认 `None`。
-  用 `set_pair_superposition` 写（别手拼）；两体模式下**取代** psi_A/psi_B。
-  新登记项 ⇒ **只在重启后的进程里有**（旧进程会报"没登记"）；
-- `dynamic.mode`：0 单原子 / 1 双原子（= 人点单选钮同路）；
-- `dynamic.decay_index`（2026-09-15 补文档）：自发辐射档位 **0 自动（ARC 寿命）/ 1 禁用 /
-  2 自定义**（`pm_setup.py:190`，= 人改下拉同路）；
-- `dynamic.decays`：自定义衰变通道 list，元素
-  `{'from': 态键, 'to': 态键 | None, 'gamma_mhz': Γ}`（Γ 单位 **MHz**）。
-  `to=None` = **丢失**（布居离开建模空间 → 进结果里的 `loss`）；`to` 在基组内 = 显式落点；
-  `from == to` = **纯退相**。⚠ **引擎支持面不同**（详见 `docs/非幺正演化-自发辐射与耗散模型.md`）：
-  - `hard` / `mixed`（单、两体）只支持**丢失**，显式落点/纯退相会抛 `NotImplementedError`；
-  - **单原子 + `sambe`** 遇通道会转入 **Lindblad 主方程**（`backend=reference-bdf`），
-    是 GUI 上唯一能跑显式落点/纯退相的组合；
-  - 两体三种引擎都只支持**丢失**。
-  - ⇒ AI 要跑"自发辐射落回基态"这类**内空间**转移，必须 `dynamic.mode=0` + `dynamic.method='sambe'`。
-
-### 引擎/求解器控制量（2026-09 t83/t84：上帝模式的控制面已对 AI 开放）
-
-同一个注册表里还有两类**控制参数**（键 = 全路径）：
-
-- **`engine.*`** —— `src/core/params.py` 的 31 个**引擎**参数（默认值/分层/单位/
-  说明见 `list_params('engine.')`）。最常用的几个：
-  | 键 | 作用 | 何时动它 |
-  |---|---|---|
-  | `engine.PHASE_TOL` | 弱耦合丢弃门 Θ（rad，默认 1e-4） | 少留无贡献的弱对（提速）；调大可能丢多光子通道 |
-  | `engine.R_CRIT` | AC 化边界 r=Ω/ω（默认 0.0135） | 强驱动下远强对被剔出光子块 |
-  | `engine.MW_MAX_MHZ` | 微波/光场分界 + 候选窗绝对上界（1e5） | 一般不动 |
-  | `engine.BW_OPT` / `OPT_NRES_BW_MHZ` / `AC_NEAR_CUTOFF_MHZ` | 各引擎的对过滤/分流窗 | 模型边界，改=换模型 |
-- **`solve.*`** —— **运行级**参数（只管这一次怎么算，不改模型）：
-  | 键 | 作用 | 默认 |
-  |---|---|---|
-  | `solve.COST_BUDGET` | 微波候选窗的**成本上限**（rad）；窗宽 = 值/(C·T) | **空 = 不限制** |
-  | `solve.MAX_STEP` | DOP853 **初始**步长上限（ns）——⚠ 只管起步 | 空 = 自适应 |
-  | `solve.MAX_STEP_HARD` | DOP853 步长**硬上限**（ns，每步复核） | **空/0 = 不限制**（默认；置值会显著增加步数与耗时） |
-  | `solve.PER_FREQ_M` | 逐载频光子块 M | 空 = 自动探针 |
-  | `solve.FROZEN_H_NS` | 两体纯冻结段长（ns） | 0 = 全自适应 |
-
-**成本预算已从"引擎参数"改为"运行级参数"（t84 用户裁决）**：它曾经默认 4e4 rad、
-在构造期就静默按成本窗删耦合对 —— 那是"为了跑得快悄悄改模型"。现在：
-① 默认**不限制**，真实存在的耦合一律保留；② 人在点"运行"时会看到**成本报告**
-对话框（保留对数 / 最远失谐 / 预计步数，可选"完整物理"或"剔除远对换速度"）；
-③ AI 发起的运行**不弹窗**（AI 走 MCP `run_compute`，不经 GUI 的运行入口），走完整物理路径并只写日志。
-**你要提速就显式 `set_param('solve.COST_BUDGET', 4e4)`**，并在结论里说明你
-剔掉了哪些远失谐通道 —— 那等于改物理，必须交代。
-
-改这些 = 改**会话真值**（进存档、可 undo、GUI 检视器即时回填+亮灯）。
-只想"这一次试试"就用 CodeAct 的 `params.override`（见 `run_python` 说明），
-别污染会话/存档。
-
-**不入册 = AI 碰不到**（也不入存档）：显示态数 topn、荧光读出态/权重、
-显示模式、关注跃迁；检视器的**窗口显隐/模式开关**属视图状态（AI 不改）。
-
-## 语义状态面（二期 A，2026-09-12 —— 首选，别再手拼索引/键）
-
-| 工具 | 用法 | 为什么 |
-|---|---|---|
-| `set_groups([(n,l,j),…])` | **声明式**让基组恰好包含这些组；原子、幂等，回 `{added,removed,kept,retrimmed,resolved,psi_warnings,field_warnings}` | 按索引增删 + 按标签字符串判重会**删错组/漏加组**（实测两次：`'60P'` 先匹配 60P_3/2、`'58G_{'` 漏掉 58G_9/2）。**逐子能级裁剪**见坑 24 |
-| `list_levels()` | 基组内每个子能级 `(n,l,j,m)` + **合法身份键** | `psi` 的 `options` 是 null，**猜能量会静默选到别的能级**（实测落到 59D_3/2 且报 ok） |
-| `set_initial_state(atom,n,l,j,m)` | 按语义身份设初态；不在基组 → **报错** | 同上，根治静默错态 |
-| `get_config()` | 规范化运行配置（groups/mode/pair/psi/t_max/npts/方法/波数） | `get_state()` 与 `summary()` 字段曾不一致，脚本无法自检配置 |
-
-运行时还会给**模型卡**（见下条），其中 `warnings` 会点名"微波候选对为 0（疑缺中间态）"
-与"maxΩ/ω>1（出 RWA 适用区）"这类静默物理问题。
+- `groups.list`（必填）：`[{"n":60,"l":0,"j":0.5}, …]` 能级组；逐子能级裁剪见坑 6
+- `field.B_gauss`(Gauss) · `field.E_vpcm`(V/cm)
+- `dynamic.mode`(0单原子/1双原子/2多体) · `dynamic.method`(`mixed`｜`sambe`｜`hard`) ·
+  `dynamic.t_max`(ns,>0) · `dynamic.npts`(≥2) · `dynamic.decay_index`(0自动/1禁/2自定义)
+- `dynamic.psi_single` / `psi_A` / `psi_B`：初态**身份键**（query_levels 的 `key`，非索引，跨 B 稳定）
+- `dynamic.psi_pair`：两体纠缠初态 spec（见坑 4），两体模式下**取代** psi_A/psi_B
+- `dynamic.decays`：自定义衰变通道 list，元素 `{'from':态键,'to':态键|None,'gamma_mhz':Γ}`（见坑 5）
+- `dynamic.waves_single` / `waves_A` / `waves_B`：波形——**用 `set_drive` 建、`get_waves` 读，别手搓**
+- `solve.*`：运行级旋钮（`MAX_STEP`/`MAX_STEP_HARD`/`PER_FREQ_M`/`FROZEN_H_NS`/`COST_BUDGET`）
+- `engine.*`：**只读引擎常量**，`set_config` 会被当场拒（`readonly_key`）——改模型不是运行级的事
 
 ## 单位约定（务必遵守）
 
 - 磁场 B：**Gauss**；静电场 E：**V/cm**
-- 光频：GUI 显示 GHz，但参数 `field.lights` 的 `frequency_hz` 字段用 **Hz**
-  （v3 登记册格式；6800 GHz → `6800e9`）；光强：**mW/cm²**
-- 微波频率：**MHz**（波形 freq_mhz）
+- 微波频率：**MHz**（波形 freq_mhz）；光频：**Hz**；光强：**mW/cm²**
 - 时间轴 t_max / 波形包络参数：**ns**；衰变率 Γ：**MHz**
 - 能级组：n 主量子数（1-200）、l 轨道角动量（0-199）、j 半整数/整数
 
 ## 典型工作流
 
 **复现一次微波 π 脉冲**：
-1. `summary` 看现状
-2. `add_level_group(60,0,0.5)` + `add_level_group(60,1,1.5)`（或
-   `load_archive('save_state/微波驱动.json')` 一步到位）
-3. `set_waves([{name:'π脉冲', freq_mhz:17236.743, intensity:5.5e-5,
-   pol:'σ-', offset_ns:0, env:['gauss',70,20,1.0]}])`
-4. `set_param('dynamic.method','hard')`、`set_param('dynamic.t_max',500)`
-5. `run_compute` → `job_status` 轮询 → `job_result(save_npz=true)`
-6. 从 `top_states_avg_pop` / `final_pop` 解读布居转移
+1. `set_config('groups.list',[{"n":60,"l":0,"j":0.5},{"n":60,"l":1,"j":1.5}])`
+2. `query_levels` → 拿 60S / 60P 各子能级的**身份键 key**
+3. `set_config('dynamic.psi_single', <60S 的 key>)` 设初态（用 key 不用 label）
+4. `set_drive(src=<60S key>, tgt=<60P key>, rabi_mhz=5.0, pulse='pi', pol='σ-')`
+   —— 频率/光强/时长自动算
+5. `set_config('dynamic.method','hard')`、`set_config('dynamic.t_max',500)`
+6. `preview_run` 看基组够不够 → `estimate_run` 看耗时 → `run_sim` 跑
+7. 从回执 `final_top_pop` / `top_states_avg_pop` 解读布居转移
 
-**两体纠缠初态（"交换后的结果"当 freeze 的初态）**：
-```python
-set_groups([(60,0,0.5),(60,1,1.5)])            # 两体交换集（按需加中间态）
-r = set_pair_superposition([                    # (|P_A,S_B⟩ + i|S_A,P_B⟩)/√2
-    {'pair': [[60,1,1.5,-0.5],[60,0,0.5,+0.5]], 'amp': [1,0]},
-    {'pair': [[60,0,0.5,+0.5],[60,1,1.5,-0.5]], 'amp': [0,1]}])
-set_param('dynamic.mode', 1)                    # 双原子（否则只有 mode_warning）
-# r['info']['populations'] 复核占据谱；缺项会在这里报错
-submit_compute()                                # 重活走异步，别同步等
-```
-注意：对称组合（两个 amp 都是 1）是**暗态**，布居不摆（坑 13）。
+**两体纠缠初态（"交换后的结果"当初态）**：
+`set_config('dynamic.psi_pair', ['pair_sup', [[nA,lA,jA,mA, nB,lB,jB,mB, re, im], …]])`
+→ `set_config('dynamic.mode', 1)` → `submit_job` 异步跑。注意对称组合（两 amp 都 1）
+是**暗态**，布居不摆（坑 4）。
 
-**改参数扫描**：`set_param` 逐个改 → 每次 `run_compute`；演化数组落在
-`scripts/tmp/ai_job*.npz`（`run_compute_and_wait(save_npz=True)` 会给路径），
-用本地脚本读 npz 做精细分析，别往 context 灌数组。**脚本级的 result /
-stdout / 代码**则自动落在 `runtime/ai_results/`（见上"结果自动落盘"）。
+**参数扫描**：`run_actions` 串多步（逐点 `set_config` + `run`），或循环调 `submit_job`
++ `read_job` 轮询。别往 context 灌大数组（run_sim 只回摘要，全量在 artifact）。
 
-## 并行扫描（CPU 多进程）——2026-09-15 加，**跑网格的首选**
-
-**以前**：想扫 50 个点，只能写 `run_python` 脚本逐点 `run_compute_and_wait` ——
-串行、占满整个回合、还要自己写归并（`scripts/tmp/_scan2d_par.py` 那类）。
-**现在**：一次 `submit_sweep` 把整个网格交给**独立 runner 进程**的多进程池。
-
-```python
-r = submit_sweep(axes={
-      'field.lights[0].intensity': [4, 5, 6],
-      'dynamic.waves_A[0].freq_mhz': {'linspace': [7300, 7420, 25]},
-    }, states=['60S', '60P', '58G'], tag='freeze-2d', workers=10)
-# → {'ok':True,'sweep_id':'sw20260915_…','n_points':75,'workers':10,
-#    'workers_why':'…', 'dir':'runtime/sweeps/sw…'}   ← 立即返回，不阻塞
-sweep_status(r['sweep_id'])            # 逐点百分比 / 完成数 / 进程数
-sweep_result(r['sweep_id'], states=['60S', '58G'])['selected_table']
-#   → [{'k':0,'tag':'…','60S':0.9994,'58G':0.0012}, …]   ← 直接看趋势
-cancel_sweep(r['sweep_id'])            # 取消（已完成点保留）
-```
-
-### 轴怎么写
-
-- **轴键 = 登记册全路径**（`list_params()` 那套名字），可带索引：
-  `'dynamic.t_max'`、`'field.lights[0].intensity'`、`'dynamic.waves_A[0].env'`、
-  `'groups.list'`（整表替换）。规则 = **第一个 `[` 之前是登记键**，之后是索引/字段。
-- **轴值五种**：`[4,5,6]`（显式）、`{'linspace':[起,止,点数]}`、`{'arange':[起,止,步长]}`、
-  `{'logspace':[起,止,点数]}`、`{'value': 整表}`（把整个 list 当一个取值，用于
-  波形表/包络这类**本身就是 list** 的参数）。
-- 多轴 = **笛卡尔积**；顺序确定（轴名排序，**最后一个轴变化最快**）。
-- `points=[{路径:取值}, …]` 可显式逐点（与 axes 并用时排在 axes 之后）。
-
-### 结果口径（别读错）
-
-- `sweep_result(..., states=['60P','58G'])` 的 **`selected_table`**：行=扫描点、
-  列=态片段、值=**该片段命中的态终态布居之和**。这是看趋势最省事的形态。
-- 每点摘要里的布居是 **6 位小数舍入**（与 `job_result` 口径一致）；
-  **全精度**在每点 npz（`points/pt_XXXX.npz` 的 `final_pop`，float64）。
-  要做位级对拍就读 npz，别读摘要。
-- `record` 档位：`'final'`（默认，只存终态）/ `'pops'`（另存降采样序列
-  `series_t`/`series_pop`，点数由 `record_npts` 控）/ `'none'`（只留摘要）。
-- 落盘位置：`runtime/sweeps/<sweep_id>/`（`spec.json` 可复现、`status.json` 进度、
-  `points/` 每点成果、`runner.log`）。**每点跑完即落盘** ⇒ runner 被杀也不丢已完成点。
-
-### 并行度是自动定的
-
-不传 `workers` 时按 `min(核数−1, 可用内存×40% ÷ 单进程峰值, 点数)` 定档，
-两体按实测锚点 dim=4624→1.36 GB 做 dim² 外推。**为什么是这个数**写在
-`sweep_status(...)['workers_why']` 里（一句人话）。要提速就显式给 `workers`，
-但**先看 `estimate_cost()` 的内存建议**——两体大 dim 下 W×1.36 GB 会吃满内存。
-
-### 为什么它和"人点运行"同源
-
-runner 用的是 `src/core/runspec.py`（无 Qt）：`build_states` / `build_fields_*` /
-`resolve_psi` / `resolve_decays` / `god_kwargs_from_params` / `evolve_run`。
-GUI 的 `_current_states`/`_run_*` 也调同一批函数 ⇒ **扫描 ≠ 另一套配置解析**，
-不会出现"离线脚本与登记册基组不同源"那类静默分叉。
-`checks/sweep_e2e_selfcheck.py` 的 G 包按**生效值**对拍这条。
-
-### 并行扫描的坑
-
-1. **需要开发模式（非 frozen）**：runner 是 `sys.executable scripts/sweep_runner.py`
-   子进程。PyInstaller 打包运行下会**明确报错**（不静默退化）。
-2. **子进程继承提交侧的 `sys.path`**（`EL_SWEEP_SYS_PATH`）：软件本体可能依赖
-   项目外的包（本项目的 `param_manager` 就是同级另一个仓库），不继承就会
-   在远处的 worker 里 import 失败、很难归因。
-3. **每个 worker 独立付一次导入/JIT 成本**：`hard` 引擎的 numba JIT 每进程
-   各编一次（几秒）。点很短时"并行"可能比串行慢——**点越多越划算**。
-4. **`V_dd` 是每 worker 记忆化的**：不碰 `dynamic.pair.R_um/theta_deg/phi_deg`
-   的轴，每个 worker 只算一次 V_dd；碰了这三者就每点重算（很贵）。
-5. **位级一致的前提是 BLAS 线程钉成 1**：runner 与 worker 都设
-   `OMP/MKL/NUMBA=1`；GUI 交互跑用默认线程数 ⇒ "GUI 单跑结果 vs 扫描点"
-   只保证到积分器容差级（不是逐位）。
-6. **不是所有 solve.* 每个引擎都收**：`frozen_h_ns` 是 sambe 两体的旋钮，
-   `evolve_mixed*` 签名里**没有**它。runspec 按签名**显式白名单**过滤并
-   把被丢掉的键写进 `warnings`（不静默、也不 TypeError）。
-7. **扫描不参与 `undo`**：提交/取消只记 `journal`（**无快照**），所以
-   「撤销AI」不会被一次扫描顶掉（撤的是最近一次真正的状态变更）。
-8. **人机同源可见**：扫描期间 GUI **底栏之上会向上展开一栏**（`SweepStack`：
-   表头 + 逐点进度条，可"收起/展开"），它读的是**同一份** `status.json`
-   （= 你 `sweep_status` 读的）。⚠ 2026-09-16 起**不再是右下角浮窗、画布上
-   也没有单独一行字**（用户裁决：浮窗"最小化"后被轮询弹回来 ⇒ 改布局内部件；
-   画布那行职能并入表头）。
-
-## 波形格式（set_waves 的 waves 列表元素）
+## 波形格式（`set_drive` 建、`get_waves` 读；手搓 `set_config` 时的元素形状）
 
 ```json
 {"name":"波形1","freq_mhz":6800.0,"intensity":0.05,"pol":"π",
@@ -326,339 +106,92 @@ GUI 的 `_current_states`/`_run_*` 也调同一批函数 ⇒ **扫描 ≠ 另一
 ```
 - env 高斯：`["gauss", 中心ns, σ_ns, 峰值]`
 - env 方波：**必须 5 个元素** `["square", 起点ns, 沿ns, 高度, 下降起点ns]`
-  （第 5 个是平台结束/开始下降的时刻；`serialize_waves` 就是这么输出的。
-  ⚠ 只给 4 个会被反序列化器判"波形数据不合法: list index out of range"——
+  （第 5 个是平台结束/开始下降的时刻；只给 4 个会被反序列化器判"波形数据不合法"——
   实测踩过。平台到演化末尾就写 `t_max`）
-- **env 文件（光强包络，AI 可直接下发）**：`["file", t_ns 数组, amp 数组]`
-  —— 保留载频，**sambe / mixed / hard 三引擎全支持**，是"任意包络 / 随机
-  抖动 / 任意分段调制"的正确通道。实测与同参数方波 `env` **逐位等价**。
-- pol：微波用 π/σ+/σ-；光场同
-- **椭圆偏（2026-09-12 补文档）**：`pol='椭圆偏'` 时同一元素再加一个键
-  `'elliptical': {'alpha_deg': …, 'theta_deg': …, 'eps_deg': …}`
-  （α=θ=ε=0 ⇒ σ± 等权 = ⊥B 线偏）。实测可用（波形读回与结果都对）；
-  这是"复现 σ± 等权 / 椭圆偏"的唯一通道。
-- **完整驱动（`type:'arb'`）不是上面这个**：它的文件是**完整时域信号、无载频**。
-  结算路径 = `arbitrary_mw_group()`（Hilbert 分解 amp(t)=env·cosφ）→ 并入微波组
-  → **hard 的 `cos(φ_f(t))` 任意相位路径**。
-
-  **引擎支持面（现行仅 sambe / hard / mixed 三款）**：
-
-  | 场类型 | sambe | hard | mixed |
-  |---|---|---|---|
-  | 微波·任意波形（完整驱动） | 改道 hard | ✅ 直接支持 | 改道 hard |
-  | 微波·任意包络 | ✅ | ✅ | ✅ |
-  | 光学·任意包络（`FileEnv`） | ✅ | ✅ | ✅ |
-  | 光学·任意波形 | ❌ | ❌ | ❌ |
-
-  - **微波场支持任意波形**：hard 直接支持；**sambe / mixed 选中时会自动改道 hard**（GUI 日志有提示）。
-  - **光学场不支持任意波形**：无载频 → 不参与光场旋转 → RHS 带 THz 相位 → 积分器被钉死
-    （源码实测警告："2 ns 演化 >60 s 未完成"）。光学只能用上面的 env 文件（光强包络 + 载频）。
-  - 任意波形暂不通过 `set_waves` 提供，需走存档。
+- env 文件（光强包络）：`["file", t_ns 数组, amp 数组]`——保留载频，三引擎全支持
+- pol：微波/光场用 π/σ+/σ-；椭圆偏另带 `'elliptical': {'alpha_deg','theta_deg','eps_deg'}`
+- **完整驱动（`type:'arb'`）**：无载频的完整时域信号，只有 `hard` 直接支持，
+  `sambe`/`mixed` 遇它自动改道 hard（回执 `arb_note` 提示）
 
 ### ⚠ 光强包络的两个语义陷阱（实测标定，务必按配方换算）
-
 `FileEnv` 名为"光强包络"，但实现上：
+1. **峰值归一化**——文件幅值被除以自身峰值，绝对标度丢弃。整体标度只能靠
+   `intensity` 字段，峰值永远钉死在 `intensity` 上。
+2. **它是振幅因子，不是光强因子**——耦合 ∝ √I·env，即 **光强(t) = intensity × env(t)²**。
 
-1. **峰值归一化** —— 文件里的幅值会被除以自身峰值，绝对标度被丢弃。
-   实测：`[1,1,1,1]` 与 `[0.5,0.5,0.5,0.5]` 在**同 `intensity`** 下结果
-   `max|Δpops| = 0.0`（逐位相同）。所以 **文件只表达形状，整体标度只能靠
-   `intensity` 字段**，且峰值永远被钉死在 `intensity` 上。
-2. **它是振幅因子，不是光强因子** —— 代码链为 `field_e0_sq` 线性（E0²∝I）、
-   `rabi_mhz` 取 √，故耦合 ∝ √I·env，即 **光强(t) = intensity × env(t)²**。
-
-**→ 想要 I(t) = I₀·(1+δ(t))（δ ∈ [−a, +b]）的正确配方**：
-
+**→ 想要 I(t) = I₀·(1+δ(t))（δ ∈ [−a,+b]）的正确配方**：
 ```
 intensity = I₀ · (1 + b)                 # 峰值
 env 采样   = √[ (1 + δ(t)) / (1 + b) ]    # 峰值恰为 1
 ```
+**反面教材**：把绝对光强曲线直接塞进文件 → 被静默归一化 → 整体光位移悄悄错掉。
 
-若要同时把**平均**光强锁在 I₀（隔离"均值漂移"这个混淆因素）：
-先做峰值归一化，再令 `intensity = I₀ / mean(env²)`。
+## 引擎支持面（现行 sambe / hard / mixed 三款）
 
-**反面教材**：把绝对光强曲线直接塞进文件 → 被静默归一化 → 整体光位移悄悄
-错掉。而按物理文档，光位移差几 MHz 就等于交换从共振变解谐。
+| 场类型 | sambe | hard | mixed |
+|---|---|---|---|
+| 微波·任意波形（完整驱动） | 改道 hard | ✅ 直接支持 | 改道 hard |
+| 微波·任意包络（FileEnv） | ✅ | ✅ | ✅ |
+| 光学·任意包络（FileEnv） | ✅ | ✅ | ✅ |
+| 光学·任意波形 | ❌ | ❌ | ❌ |
 
-## 坑（已知）
+- 光学场不支持任意波形：无载频 → RHS 带 THz 相位 → 积分器被钉死。光学只能用 env 文件。
+- **耗散通道支持面**：`hard`/`mixed`（单、两体）只支持**丢失**（`to=None`）；显式落点/纯退相
+  仅**单原子 + `sambe`**（转 Lindblad 主方程）支持。要跑"自发辐射落回基态"这类内空间转移，
+  必须 `dynamic.mode=0` + `dynamic.method='sambe'`。
 
-1. **mixed 纯微波亦可**（t77 起）：没有光场时光子维退化 P=1，等价于微波/V_dd
-   当场精确积分（与 hard 同物理）。会强制改道的是**任意波形（完整驱动）**——
-   sambe / mixed 遇它自动改用 hard（无载频，光子块引擎不支持），GUI 日志有提示；
-   **光强包络（`FileEnv`）是普通 Wave，不受影响**。
-2. **run_compute 阻塞预处理**：两体 V_dd 预计算可达数十秒，工具返回前
-   主线程在泵进度——超时设长一点（默认 300s）。
-3. **undo 是整快照回滚**：撤销 set_param 会连带恢复该步之后的所有
-   同 op 影响；逐步操作逐步撤，别攒。
-4. **双原子模式**：`dynamic.pair.*` 仅双原子模式生效；切模式用
-   `set_param('dynamic.mode', 0|1)`（0 单原子 / 1 双原子，= 人点单选钮同路）。
-5. **上帝模式怎么用（t83 更新，旧说明"不开放给 AI"已作废）**：
-   - **能用的**：引擎/求解器控制参数（`engine.*` / `solve.*`，见上）与
-     **运行诊断**（`get_diag`）。诊断是回答"为什么"的主通道；
-   - **不碰的**：检视器窗口显隐、极简/上帝模式开关（视图状态，P6）。
-6. **结果反直觉时的诊断套路**（比猜参数快得多）：
-   ① `get_diag('')` 看摘要（AC 化剔了几对、M=几、P/dim、步长分位数、归一偏差）；
-   ② 布居**完全不动** → `get_diag('pairs')` 看目标跃迁在不在保留集里
-   （不在 → 多为 `engine.PHASE_BUDGET` 砍了远失谐梯级，或基组缺中间态）；
-   ③ 跑得**异常慢** → 看 `solver.dt_ns` 与 `nfev`（光强过大 → Ω≫失谐 → 步长被钉死；
-   先降 intensity，别硬等）。
-7. 计算失败时 `job_result` 的 msg 含原因；常见=光强过大不收敛，
-   降 intensity 或换 hard。
+## 坑（已知 · 物理/引擎级，v2 仍成立）
 
-8. **多光子通道要求中间态在基组里**（2026-09-12 实测）：引擎的多光子耦合是由基组内**真实的单光子
-   矩阵元**串起来的。做 60P→58G 的三光子踢出时，基组里必须有 59D（≈10.2 GHz）与 58F（≈11.2 GHz）
-   作中间态；只放 60P/58G 会出现"频率对、强度对，却一点都踢不动"（实测 58G 布居为 0）。
-   裁基组前先确认目标跃迁的中间态在不在。
-9. **AI 发起的重活没有弹窗、用户也取消不了**（2026-09-12 实测）：AI 发起的 `run_compute` 不弹成本框；
-   GUI 的"取消"不覆盖 AI 作业，AI 侧也拿不到 job_id → 一旦提交重活双方都被卡住（后续
-   `run_compute_and_wait` 全被拒："已有演化在运行（人或 AI 发起）"）。**重活一律用 `run_python_async`**，
-   两体+光学场的窗口开短（t_max ≤ 200 ns、npts ≈ 101），提交前先估量级。
-10. **两体作业的 npz 现在**自动**落盘（2026-09-12 起，原坑已修）**：AI 作业一完成，
-    `_jobs` 里就存了 `runtime/ai_results/job_<jid>.json`（摘要）**与全量 npz**
-    （`scripts/tmp/ai_job<jid>_*.npz`）；`job_result(jid)` **即使不给 `save_npz`**
-    也会回传该 npz 路径（`summary['npz']`，带 `npz_auto=True`）。
-    仍建议：**跑完立刻** `job_result(jid, save_npz=True)` 再存一份并记下路径
-    （npz 只保留最近 100 份）。
-11. **基组编辑会静默重置初态**（2026-09-12）：改完组后 `psi_A` 曾从 60P_3/2 变回 60S（无提示）；
-    改完组务必用 `list_params('dynamic.psi_A')` 复核 `value` 与 `last_committed` 是否一致。
-12. **初态键的能量若猜错会静默选到别的能级**：`psi` 的 `options` 目前是 null，不要凭能量猜；
-    实测猜错的键导致初态落到 `59D_{3/2} m=+1.5` 而运行仍报 ok。
-13. **两体纠缠初态怎么写**（2026-09-12 加，交换类实验的前置）：
-    `set_pair_superposition(components)`，分量 =
-    `{'pair': [[nA,lA,jA,mA], [nB,lB,jB,mB]], 'amp': [re,im]}`
-    （或 `{'mag':…, 'phase_deg':…}`；省略 amp 默认 1）。
-    - 分量按 **(n,l,j,m) 解析**（不是索引）→ 跨 B/基组重排稳定；缺项**报错并列出**
-      缺失项，绝不静默丢；
-    - 自动归一，**相对相位保留**（`[1,0]` 与 `[0,1]` = 相位差 i）；
-    - 存进 `dynamic.psi_pair`，两体模式下**取代** psi_A/psi_B；反过来设
-      `set_initial_state`/`set_superposition` 会清掉它（返回 `pair_spec_cleared: True`）；
-    - `dynamic.mode=0` 时返回带 `mode_warning`（**不**自动替你切模式）；
-    - ⚠ **对称组合 `(|ab⟩+|ba⟩)/√2` 是交换哈密顿量的暗态**：只吃全局相位、布居不动。
-      想看交换摆动，要么给相对相位（如 `[0,1]`=i），要么用逐原子直积初态。
-14. **逐原子叠加态初态现在真的可用了**（2026-09-12 修，原为两处叠在一起的缺陷）：
-    ① **引擎侧格式错配**：`build_sup_spec` 存 `['sup', [[n,l,j,m,re,im],…]]`，而
-    `_as_vector` 的 sup 分支只认旧形态 `[[spec, amp],…]` → 规范形态的 `item[0]`（= n，如 60）
-    被当成**索引** → `IndexError`（即"叠加态初态"从未在引擎里跑通）；
-    ② **GUI 侧通道丢失**：spec 只进 `_pending_psi_keys`，`find_state_index` 匹配不到 →
-    运行期读 `psi_combo.currentIndex()` → **静默回落 0 号态**。
-    现在：spec 是**持久真值**（`dynamic.psi_*` 读回就是 spec），下拉显示
-    "叠加态（自定义 n 项）"，`_psi0_for` **spec 优先且失败即报错**（不再静默回落）。
-    三种写法都吃：`[n,l,j,m,re,im]`（规范）/ `[spec, amp]` / `[n,l,j,m]`（幅度默认 1）。
-15. **`solve.MAX_STEP` 只是"初始步长上限"**（2026-09-12 实测）：`dop853.py` 只在**起步**取
-    `min(…, max_step)`，之后步长由误差控制自由增长——实测请求 0.05 ns 的 10 ns 演化里
-    出现 **2.2 ns** 的接受步（7 步走完，nfev=98）。要**真**压步长用新键
-    **`solve.MAX_STEP_HARD`**（默认关；置值后每步复核，代价是步数/耗时上升；
-    只对 mixed/hard 的 DOP853 生效——sambe 走自带传播子）。
-16. **软件实例的生命周期归人管；跑 GUI 自检前先问**（2026-09-12 事故后立规）：
-    GUI 自检会构 `MainWindow` + 真实 ARC 基组，与**正在跑实验的实例**争 ARC SQLite；
-    且它的 `win.close()` 会触发 `stop_server()`（曾把活实例的 `.mcp-port` 删掉，
-    已修：分工文档 §六 #6）。规则：① 不自己 `python main.py`、不杀 python 进程；
-    ② GUI 自检用 `QT_QPA_PLATFORM=offscreen`，人在跑实验时**先问**；
-    ③ 需要新代码生效就报"需要重启"，由人重启。
-17. **⚠ 基组裁剪必须给"观测量收敛证据"，否则结论不可引用**（2026-09-12 使用者实测，
-    **灾难级**）：同一个 freeze 脉冲（7380 MHz / I=5 / σ=16.99 / 中心 50.96 / 椭圆偏 α=θ=ε=0），
-    只看 `C = P_end(60S|初态60S) − P_end(60P|初态60P)`：
-    **7 组 → C=0.006**（60S 保留 0.7144，28.6% 落到 **59D_5/2 m=+2.5**：缺 59D_3/2/60D_5/2
-    时那条 Δm=+2 双光子通道不被抵消）；**13 组 → C=0.9982**（60S 保留 0.9994）。
-    `field.n_photon` 2 vs 4 **逐位相同** → 这不是多光子窗口问题，是**基组本身**。
-    → 做法：≥3 个基组（如 7/10/13 组）跑同一脉冲，`C` 与目标态保留的**变化 ≤1%** 才敢下结论；
-    → ⭐ **主判据永远是观测量；配对数只是诊断线索**（使用者 2026-09-12 写死）：
-      E1 那套"配对数 150→1206"在**完备基**下**不复现**（实测：13 组 178 对 → 加**极远**
-      70S_1/2 仍 178 对且 `C_dual` 逐位不变；加近旁无关能级只 +33%/态、观测量动 0.9%）
-      ⇒ "配对数爆炸"不具物理意义，**裁剪基组真正要担心的是观测量未收敛**；
-    → 未知跃迁先问"中间态/抵消通道在不在基组里"（坑 8 同源）；
-    → 两个观测量可能**在不同基组大小上收敛**（本轮：60S 保留 10 组就收敛、60P 踢出要到
-      13 组）——别用一个基组的大小代表"全都收敛了"；
-    → ⚠ **做基组判据要挑"不敏感的工作点"**：I=5/7380 MHz 上 kick 那一路是**窄三光子
-      共振**（相邻 5 MHz 摆动 ±0.15；**已定性 = 物理**，见坑 20），而 60S 保留单调平滑。
-      **别把窄共振当"配对选择 bug"**；基组测试放到不敏感处（如 I=4，那里 60S 保留 ≡ 1.0000）做。
-18. **离线批量通道的基组与登记册不同源**（2026-09-12）：手工脚本用
-    `make_levels(..., kind='mJ')` 把 6P_3/2 展开成 4 个 mJ 态，而软件登记册展开成
-    **16 个 (F,m_F)** 态——两者基组定义不同。本次两条通道 4 位小数吻合（碰巧：6P 在
-    296 THz 外）。**交叉验证前先确认基组同源**，否则"对得上"是运气、"对不上"是白查。
-19. **⚠ 教训：写入侧通了 ≠ 引擎侧通了——验收必须打到引擎**（2026-09-12）：
-    "叠加态初态"曾按"写入侧已实现"记进文档（spec 能写进 param、能读回），
-    但**引擎侧 `_as_vector` 只认另一种形态** → 一跑就 `IndexError`，即**从未跑通过**。
-    同一轮的 `psi_pair` 也踩过"GUI 通道丢失、运行期静默回落 0 号态"。
-    → 任何"接口已实现"的结论，必须用**真引擎跑一次**（哪怕合成小基组）才算数；
-      自检要打在**引擎入口**，不是打在存储/序列化层。
-20. **freeze kick 在 7380 MHz/I=5 是"窄三光子共振"——这是物理，不是抖动 bug**
-    （2026-09-12 使用者 `tol` 复核定性；详见待办 §10）：
-    - 同一 ω 下变 `tol`(1e-7/1e-9) 与 `npts`(1501/3001)，`C` 极差仅 **3×10⁻⁷~6×10⁻⁷**，
-      比 5 MHz 步长引起的 ~0.15 **小六个数量级** ⇒ 结构物理；±1% 平坦区只 **1/45** 格点；
-    - 机制：60P→58G 的**裸共振在 7219–7347 MHz**，同一 J 内相邻子能级间隔/3 ≈ **9–11 MHz**
-      （对上实测峰间隔 10 MHz）；实测峰比裸共振**高 ~+40 MHz**（I=5 的 AC Stark）
-      ⇒ **不能按裸共振布点，必须扫**；共振宽 ≈ 1/(3τ) ≈ **4 MHz**（τ=FWHM 40 ns）；
-    - **交付条件**：必须给**频率精度要求（~1–2 MHz 级）**；"参数抖动平坦"在当前方案不成立；
-    - **平坦化路线**：❌ **纯圆偏振不行**（使用者全窗口扫描：**σ+ ≤ 0.42、σ− ≤ 0.37**，
-      多数 0.0–0.3 甚至为负：只剩单条 Δm=±3 路径，每圆分量场强 1/√2 ⇒ 三光子振幅
-      ∝(1/√2)³，同强度补不回来；提 I 则 60S 损伤）
-      ｜ ⚠ 更短脉冲（要更高 I，有损伤风险）｜ ⭐ **啁啾/绝热脉冲**（扫频 ⇒ 天然宽带；
-      通道：微波**任意波形（完整时域驱动）** 由 `hard` 支持，`sambe/mixed` 自动改道
-      `hard`；⚠ 任意波形不经 `set_waves`，需走存档）。
-    - **平坦性的正确表述（使用者 2026-09-12 实测）**：椭圆偏在 **7355–7400 MHz 有宽的高
-      平台**（`C_ent` 0.74–0.99，叠 ~5 MHz 精细结构）→ 交付口径是
-      **"保证 0.79、标称 0.99"**（±10 MHz 窗口的保证值 = **0.786 @ 中心 7375**），
-      而**不是**"完全不平坦"。路线选择等用户裁决。
-21. **⚠ 长两体作业曾"跑完时整进程消失、成果全丢"**（2026-09-12 事故；销毁者仍未定性）：
-    - 现象：13 组 / dim=7056 的 AI 两体作业在尾段进程**静默消失**（Windows：
-      faulting module **Qt5Core.dll**、exception **0xc0000409**、WER BEX64）；
-      stderr 最后一句 `QThread: Destroyed while thread is still running`；
-      `.mcp-port` 未变 ⇒ 不是正常关窗；结果随进程丢失。
-    - **机制已证实**：那句话 = `qFatal` in `QThread::~QThread`（`running && !finished`）——
-      隔离复现（销毁运行中的 QThread）给出**同一句消息 + 退出码 0xC0000409**。
-    - **触发者未定位；假说 B（内存）已被实测排除**：同类型两体作业（dim=4624）全程
-      **私有内存逐位不动 1358 MB**、系统可用 ≥5.2 GB ⇒ 不是"dim 吃爆内存"。
-      已排除的还有：AI 没持强引用（AI 与 GUI 走**同一条** `dyn._run()`，worker 都存在
-      面板 `self._worker`）、无 `sip.delete`/`deleteLater`、无 Qt 父对象、
-      `src/` 内无 `quit()/sys.exit` 可达路径。**崩溃时确无 Python traceback**
-      （使用者抓到原 stderr：8 条 `Terminating session` + 唯一一条 Qt 原生消息）⇒
-      **没有 Python 层触发者**，销毁在 C++ 侧。
-      **WER 全 dump 已配好**（`scripts/tmp/crashdumps`、DumpType=2、DumpCount=3）→
-      下次崩溃自动落 dump，用 cdb 看 `~QThread` 调用栈即可钉死。
-      ✅ **已修并验**：`_finish_run_ui` 不再丢"仍在跑的 worker"的最后一根引用
-      （`_retired_workers` + `finished` 释放，同时覆盖取消路径）；自检
-      `checks/gui_worker_lifetime_test.py` **10/10 通过**（含"收尾时线程仍在跑"的时序）。
-      ⚠ **现场保全**：每个实例用**带 pid 的日志名**，崩溃后先复制现场再重启
-      （实测事故：实例 stderr 被下一次启动的同路径日志**截断覆盖**）。
-22. **⚠ 零波形 = 跑不了**（2026-09-12 使用者实测）：没有波形、也没有实际耗散/自动寿命通道时，
-    `run_compute` 会**拒绝启动**（`ok=False`、`msg="未启动（校验未过或无波形，见 GUI 日志）"`、
-    作业不登记）。**这是既有设计（空演化没意义），不是缺陷**。
-    - ⚠ **2026-09-15 更正（本次读码）**：判据是"**既无波形、也无耗散通道**"——**有通道时零波形合法**：
-      自定义通道非空，或 auto 档且基组含 n ≤ 15 的低激发态（`ui_dynamic.py:855-873`）。
-      这正是"自发辐射衰减 / 纯退相"实验的跑法（自检 D1/D8 就是这么跑的）。
-      **AI 可以直接发起**：`set_param('dynamic.decay_index', 2)`（0 自动/1 禁用/2 自定义）
-      + `set_param('dynamic.decays', [{'from':…, 'to':…|None, 'gamma_mhz':…}])`
-      （两者都已入册，见"v3 登记册的 AI 可及面"）。
-    → **静止类验收（只验初态/基底是否正确、且不加通道）必须加一个"不落在时间窗内"的脉冲**，
-      例如中心远在 `t_max` 之外的窄高斯：这样演化等于静止，但校验能过。
-      **引擎级验收范例（#3/#5 叠加态，2026-09-12 使用者现场跑）**：
-      `set_superposition('single', [{'state':[60,0,0.5,0.5],'amp':[1,0]},
-      {'state':[60,1,1.5,-0.5],'amp':[0,1]}])` + 一个窗外的微波脉冲 →
-      **终点布居 `60S(+0.5)=0.50178`、`60P(−0.5)=0.49822`、其余全 0**
-      （旧 bug 会给 `60S(−0.5)=1.0000`、其余 0）⇒ 叠加态**确实进了引擎**，
-      读回 `get_config()['config']['psi']['single']` 也是规范 spec。
-      —— 这就是坑 19"验收必须打到引擎"的正面样板。
-23. **🚨 性能阈值曾静默删掉整批光场耦合（E1 真凶，2026-09-12 定位并修复）**：
-    `SambeSetup` 在 `dim > engine._DENSE_MAX`(=2200) 时把 `Kc_dense` 置 None（只是
-    "稠密/稀疏"的**性能**选择），而 `evolve_mixed._build_pair_geometry` 原来只在稠密分支里
-    收光场近对 ⇒ **超阈值时光场耦合整批消失、光场变成没接线**。实测（频移光只在 A 上）：
-    - 3 组 + 光（dim=1452）→ `n_pairs=1206`、`B:60P=0.8956`（光**有效**）；
-    - 3 组 + 58G_7/2 + 光（dim=2700）→ 修前 `n_pairs=150`、`B:60P=0.0060`
-      （**与不加光逐位相同 = 光完全失效**）；修后 `n_pairs=1590`、`B:60P=0.8956`，
-      且"只加一个无关组"的观测量变化 = **0.0000**（物理预期）。
-    → **怎么第一时间发现**：跑完看 `get_diag(scope='pairs')`——**有光场波形却看不到光场对**
-      就是它；另一个指纹是"观测量与不加光**逐位相同**"。
-    → **记住这条纪律**：**性能阈值（稠密/稀疏、成本窗、M）绝不能改模型**。
-    → 受影响面：**两体 + 光学场且 dim > 2200** 的运行（微波/纯 V_dd 不受影响）。
-      修复见 `evolve_mixed._build_pair_geometry`（稠密缺失时回落到稀疏 `Kc_ext`，
-      稠密区逐位不变）；回归锚 `checks/e1_pair_forensics.py`（7 项）。
-24. **逐子能级裁剪（2026-09-12 加）：只留组内特定子能级**——`dim = N²·P` 直接受益
-    （含光学场 P=3）。三种写法等价（`set_groups` 都吃）：
-    ```python
-    set_groups([(60,0,0.5), (60,1,1.5, [-0.5, 1.5]), (6,1,1.5)])          # (n,l,j,ms)
-    set_groups([{'n':60,'l':1,'j':1.5,'ms':[-0.5,1.5]}, {'n':60,'l':0,'j':0.5}])
-    set_groups([{'n':6,'l':1,'j':1.5,'Fs':[[3.0,0.0],[3.0,1.0]]}])        # 超精细 (F,m_F)
-    ```
-    · **组的身份仍是 (n,l,j)**（配色/图例/身份键/两体配对几何都不变）；
-      `ms` 与 `Fs` **互斥**，`ms=[mJ,…]`、`Fs=[[F,m_F],…]`；
-    · **不写 = 全展开**（默认路径与改前**逐位一致**——这是硬要求）；
-    · 返回里 **`resolved`** 给每组**实际**子能级数与身份键 ⇒ **裁剪是否真生效可自检**
-      （落实坑 19）；`retrimmed` 列出被改裁剪的组；
-    · GUI：入口 = **能级组列表（左栏彩色条目那张）右键菜单的「子能级…」**
-      —— 2026-09-14 用户裁决**删掉了**工具条上的同名按钮（重复 + 那一行太挤）；
-      菜单作用于**右键命中的那一行**（每行都够得着），勾选框**默认全选**，
-      行内显示 `60P₃/₂ (2/4)`。
-      （工具条上那一行「基组预设 + 维数提示」2026-09-14 已**整行删除**——代价信息改由
-      **运行前成本报告 / `estimate_cost()`** 给，基组收敛靠逐组增删 + 状态保存。）
-      ⚠ "选中"指**左栏能级组列表**，**不是**右栏 `level_table`（逐子能级列 mJ/E 那张）；
-    · ⚠ **口径（用户原话）**：裁剪是为**省算力/做收敛检验**，**不是**把观测量调好看——
-      **判据是"裁掉之后观测量不变"**；变了说明那个子能级承载物理（或基组没收敛），
-      **要老实报告**，不能拿"裁剪后更漂亮"当成果。
-    · ⚠ **不能按"6P 只留两三个"来裁**（反证在案）：mixed 引擎的光移**只**来自
-      "基组内态对的 ARC 矩阵元 + 精确传播"，**没有任何 ARC 伙伴态注入**
-      （`field_build.build_fields_exact` docstring：全部偶极允许对都进耦合矩阵、
-      无近/远分流、不注入静态能移；`evolve_mixed` 不调 `real_field`）
-      ⇒ **基组里没有 6P，6P 对频移光的贡献就是缺失的（漏算），ARC 不会补上**。
-      实测锚（原文已并入 `docs/历史-任务报告汇编.md` §四，可用 `git show` 取全文）：
-      **F=1+F=2 合计占光移 60.7%**（F=0 2.7% / F=1 27.9% / F=2 32.8% / F=3 36.6%，
-      与 F=3 同量级，"没有天然弱耦合子集"）⇒ Julia 交接 §16.3 那条
-      "6P 只留两三个（保留 F=3 子集）"的旧建议 **已被推翻，勿照做**。
-    · 护栏：被裁掉的子能级若正被 `dynamic.psi_*` 引用（按**变更前**取值判！）
-      → `psi_warnings` 点名；若它是已配置场需要的耦合伙伴
-      （|Δl|=1、|Δm|≤1、跃迁落在波形 `freq ± engine.BW_OPT` 内）→ `field_warnings` 点名。
-    · 自检 `checks/sublevel_trim_selfcheck.py`（**7 个不变式包 / 35 子条件**：向后兼容/
-      过滤(含静态·几何侧 `apply_trim` 那条路)/存档往返/三写法幂等+resolved/护栏/
-      合法裁剪⇒观测量不变/**存档 round-trip 逐项还原裁剪+配色**）。
-    - **你现在就该做的**：① 大两体作业先读 `estimate_cost()` 的
-      `est_peak_gb / avail_ram_gb / mem_advice`（锚点 dim=4624→1.36 GB，dim² 外推，
-      **偏保守上界**；软建议峰值 ≤ 可用内存 40%）；
-      ② 作业一完成**摘要 + 全量 npz 已自动落盘**（`runtime/ai_results/job_<jid>.json`、
-      `scripts/tmp/ai_job<jid>_*.npz`），进程随后死掉也拿得到；
-      ③ 仍建议跑完立刻 `job_result(jid, save_npz=True)` 再存一份并记路径。
-25. **`get_activity` 的 `detail` 可能是"摘要"（2026-09-14 加的体积闸）**：写入侧对
-    `detail` 有 **4 KB 上限**——超限的值只留**形状/长度/前 8 项**，并附
-    `detail_slim{orig_bytes, slim_bytes, sha1, keys}`。触发它最多的是
-    `set_param('dynamic.waves_*')`（old/new 曾带整条波形包络，**单条实测 748 KB**，
-    一天写掉 37 MB）。所以：
-    · **别指望从 `detail.old/new` 里读回完整波形**——要看现状用 `get_state('dynamic')`，
-      要曲线用 `get_envelope(path, index)`；
-    · `detail.path` / `detail.job` 这类**顶层标量键一定保留**（归因不受影响）；
-    · 想核对"是不是同一次变更"，比 `detail_slim.sha1`（原始内容的 sha1 前 16 位）。
-    历史流水已用 `scripts/slim_journal.py` 按同一把闸迁移（39.8 MB → 0.83 MB）；
-    回归闸 = `checks/journal_size_cap_selfcheck.py`（21 项）。
-26. **自检的计数口径：不变式包（2026-09-14 用户裁决"一个测出好几项"）**：
-    `checks/selftest_all.py` 的默认摘要是 `item=不变式包数`、`subs=包内子条件数`——
-    **看 `subs` 才知道覆盖面**（包是"一件物理"，子条件才是断言）。
-    用法：`--jobs 4`（默认档约 2 分钟）/ `--tier fast`（提交前快筛）/ `--tier all`
-    （连"重对拍"档）/ `--verbose`（展开子条件）。Qt/线程时序类脚本固定**先串行**跑。
-    你若要跑检查，先 `python checks/selftest_all.py --tier fast`；报"全绿"时请带上
-    `##SELFTEST_SUMMARY` 那一行（含 items/subs/fail），别只说"通过了"。
+1. **mixed 纯微波亦可**：没光场时光子维退化 P=1，等价 hard 同物理。会强制改道的只有
+   **任意波形（完整驱动）**；光强包络（FileEnv）是普通 Wave，不受影响。
+2. **run_sim 同步预处理可能久**：两体 V_dd 预计算可达数十秒。长任务改用 `submit_job`
+   异步 + `read_job` 轮询，别同步干等。
+3. **双原子模式**：`dynamic.pair.*` 仅双原子模式生效；切模式
+   `set_config('dynamic.mode', 0|1)`。
+4. **两体纠缠初态暗态**：`psi_pair` 对称组合 `(|ab⟩+|ba⟩)/√2` 只吃全局相位、布居不动。
+   想看交换摆动，要么给相对相位（如 `[0,1]`=i），要么用逐原子直积初态。分量按
+   (n,l,j,m) 解析（不是索引），缺项报错列出，绝不静默丢。
+5. **初态键别凭能量猜**：`psi` 用身份键（query_levels 的 `key`）。猜错能量会**静默选到
+   别的能级**（实测落到 59D_3/2 却报 ok）。
+6. **🚨 基组裁剪要给"观测量收敛证据"，否则结论不可引用（灾难级）**：同一脉冲，7 组
+   → C=0.006、13 组 → C=0.9982（差在缺 59D_3/2/60D_5/2 时某双光子通道不被抵消）。
+   做法：≥3 个基组（如 7/10/13 组）跑同一脉冲，观测量变化 ≤1% 才敢下结论。**主判据
+   永远是观测量；配对数只是诊断线索**。逐子能级裁剪：`groups.list` 元素可带
+   `ms:[mJ,…]`（与 `Fs:[[F,m_F],…]` 互斥）只留组内特定子能级；不写=全展开（逐位一致）。
+   ⚠ 不能按"6P 只留两三个"裁——mixed 的光移只来自基组内态对的 ARC 矩阵元，
+   **没有 ARC 伙伴态注入** ⇒ 基组里没有 6P，6P 的贡献就是缺失的（漏算）。
+7. **多光子通道要求中间态在基组里**：做 60P→58G 三光子踢出，基组里必须有 59D 与 58F
+   作中间态；只放 60P/58G 会"频率对、强度对，却一点都踢不动"。
+8. **结果反直觉时的诊断套路**：① 布居**完全不动** → 看目标跃迁在不在保留集里（多为
+   基组缺中间态，或成本窗砍了远失谐梯级）；② 跑得**异常慢** → 光强过大 Ω≫失谐 →
+   步长被钉死，先降 intensity 别硬等。
+9. **零波形 = 跑不了**：没波形也没实际耗散通道时，演化**拒绝启动**（既有设计，空演化
+   没意义，不是缺陷）。静止类验收（只验初态/基底）必须加一个"不落在时间窗内"的脉冲
+   （中心远在 t_max 外的窄高斯）。
+10. **`solve.MAX_STEP` 只是"初始步长上限"**：之后步长由误差控制自由增长。要**真**压
+    步长用 `solve.MAX_STEP_HARD`（默认关；只对 mixed/hard 的 DOP853 生效，sambe 走自带传播子）。
+11. **软件实例的生命周期归人管**：不自己 `python main.py`、不杀 python 进程；需要新代码
+    生效就报"需要重启"，由人重启。
+12. **教训：写入侧通了 ≠ 引擎侧通了——验收必须打到引擎**：任何"接口已实现"的结论，
+    必须用**真引擎跑一次**（哪怕合成小基组）才算数。
 
-27. **大包络会把 MCP 响应撑爆——三条路径只瘦身了一条**（2026-09-16 实测）：
-    用 12001 点的 `env=['file', t, amp]` 下发一条光场波形后，实测
-    · `list_params('dynamic.waves_A')`：`value` = **292 B**（已摘要化）但
-      **`last_committed` = 241041 B** ⇒ **单条响应 825×**。根因：`_slim_params`
-      只处理 `value` 键，没有 `last_committed`；
-    · `get_state('dynamic')`：走 `to_dict → archive.snapshot(reg)`（v3 就是
-      `reg.collect()` 的**原始值**）⇒ **整个 FileEnv 采样数组照原样回传**，
-      从未过 `_slim_env`；
-    · `run_python` 的返回值：`_diff_changes` 只截断 `params` **条数**（40 条），
-      **不截断单条 old/new 的值** ⇒ 脚本里 `set_waves` 一条大包络，响应里就带
-      整份新旧数组（本次实测该响应被 DSH 截掉 **576589 B**；对照：`journal`
-      同一操作有 4 KB 闸，AI 回程**没有**）。
-    **结论（省回合也省 context）**：要曲线**只在需要时**用
-    `get_envelope(path, index)` 单独取一次；别把大 `FileEnv` 塞进
-    `run_python`/`get_state`/`list_params` 的观察路径；分段包络用**少量折点**
-    表达（本次用户配置只有 6 个点，够了）。
-    **建议修法**（开发者）：`_slim_params` 也摘要 `last_committed`；
-    `_diff_changes` 给单值加与 journal 同源的 4 KB 闸（超限留形状 + sha1）；
-    或 `get_state` 对 `dynamic.waves_*` 一并 `_slim_env`。
+## v2 暂缺的能力（v1 有、v2 未接线——别按 v1 名字调）
 
-28. **⚠ `app_entry.py` 的 `_init_ai` 尾部曾有 5 行死代码 —— 工具面不受影响，
-    但状态栏会假报"端点启动失败"**（2026-09-16 读码定位）：
-    `app_entry.py:197-201`（`self._ai_job_btn.clicked.connect(_ai_job_cancel)`、
-    `self._ai_job_timer = _QT(self)` 等）引用了**未定义**的 `_ai_job_cancel` 与
-    `_QT`（本文件、`import` 里都不存在；`HEAD` 版本同样如此）⇒
-    `_init_ai` 执行到这里抛 `NameError`，被 `except Exception` 兜住、打出一条
-    `[AI] 端点启动失败（软件功能不受影响）: …`，**看起来像端点挂了**。
-    实际不影响 AI：MCP server 在此之前**已经起好**，且
-    `_install_ai_job_indicator()`（`app_entry.py:99-151`）已把 **同样的**
-    `clicked.connect(_cancel)` 与 QTimer 装好 ⇒ 这 5 行是重复且必错的。
-    ✅ **已修（2026-09-16）**：这 5 行连同 `_install_ai_job_indicator()` 与
-    状态栏「取消AI作业」按钮**一并删除**（用户裁决"统一渠道"：运行中
-    「运行演化」即「取消计算」，人与 AI 同走 `_on_run_clicked → _cancel_run`）。
-    回归 = `checks/gui_ai_job_indicator_test.py` 的 **E 包**（stub 假 port →
-    断言 `_init_ai()` 真返回它 + 「● AI 在线」标签 + op 订阅都装上）。
-    **教训（仍未处理的那半）**：`except Exception` 太宽会把**真 bug 伪装成环境
-    问题**——`_init_ai` 的兜底至少该区分 `ImportError`（无 SDK）与
-    `AttributeError/NameError`（编程错误应吵出来）；目前消息里带 `{e}`
-    （能看到 NameError 原文）但前缀仍是"端点启动失败"。见登记区 #15。
+以下在 v1 的 GUI 内嵌 AI 服务里存在，**v2 的 MCP 面不提供**，需要时走"下一步"：
 
-## 人机协同约定
+- **`run_python` / 任意代码执行**：v2 用 `run_actions`（结构化动作，不 eval）。
+  要真跑 Python 是宿主 code-runtime 的权力，不在库面。
+- **`submit_sweep` 并行扫描**（多进程网格）：v2 未接线。当前用 `run_actions` 串多步
+  或循环 `submit_job`。多进程扫描器属 Provider 接线推迟项。
+- **`get_diag` 运行诊断**（pairs/steps/sectors/traj/H）：v2 未接线。诊断信息暂从
+  `run_sim` 回执的 `warnings` + `preview_run` 读。
+- **`screenshot` / `get_activity` / `undo` / 存档面**：
+  - `get_activity`——操作者行为史归宿主 dsh 按 call_id 记，域当前态用 `read_config`；
+  - `undo`——v2 史 append-only，撤销=反向 set 记新事件，等接 GUI 撤销按钮（ADR 已定设计）；
+  - 存档面——journal 即存档，要读历史直接开 `.mecha-v2/journal.jsonl`；
+  - `screenshot`——GUI 侧能力，非 MCP 工具。
+- **`set_groups`/`set_superposition`/`set_pair_superposition`/`add_level_group` 等具名写工具**：
+  v2 统一走 `set_config`（写 `groups.list`/`dynamic.psi_*`）。裁剪/叠加态的写法见上"配置键"与坑 6。
 
-- 你的每次写操作 GUI 实时反映（控件闪紫框 + 状态栏流水），人可随时
-  点"撤销AI"回滚你的最近一步——**操作带 reason 是好习惯**。
-- 人可能在你两次调用之间改了参数：动手前 `get_activity(since_seq)`
-  或 `summary` 复核现状，别基于过期认知写入。
-- 长计算期间人可能取消（GUI 取消按钮）：`job_status.error='cancelled'`
-  即此情形，不要重试同一配置。
+> **权威源**：本文件 = `skills/energy-level/SKILL.md`（git 里这份为真）。工作区副本
+> `.dsh/skills/energy-level/SKILL.md` 应与之一致；发现漂移以本文件为准。
