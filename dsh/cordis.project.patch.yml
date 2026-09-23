@@ -1,0 +1,34 @@
+# 项目实例隔离 overlay（launcher 经 `--patch` 加载，组合链**最后一层**）
+#
+# 解决两件事（机制详见 mecha-sdk《DSH-实例并存原理》§3）：
+#
+# ① 禁用 remote-web-ui 插件
+#    profile 补丁里该插件的托管块把 webserver 钉死成字面量 port，
+#    且它每次启动都把**实际端口回写**进共享的 `~/.dsh/profiles/web/cordis.patch.yml`
+#    （last-writer-wins）⇒ 项目实例若加载它，会把官方 dsh 的端口一起带跑。
+#    项目实例本就不需要它（驾驶舱 iframe 的是 :8766，与 dsh web 端口无关），
+#    故在 overlay 里 `disabled: true` 关掉 ⇒ 项目实例不再回写共享 profile。
+#    ⚠ 这只影响**项目实例**；官方 dsh 不带本 overlay，remote-web-ui 照常可用。
+#
+# ② 恢复 webserver 的端口表达式
+#    关掉托管块后仍需把 bundle 原始行还原（同 id 的 patch 是**整块替换** config，
+#    不是深合并，故逐字段照抄 bundle 的 `dsh-web-app/cordis.patch.yml`，含 compression 三件）。
+#    还原后 `--port` 重新生效 ⇒ launcher 能把项目实例绑到 3081+，把 :3080 让给官方 dsh。
+#
+# 效果：项目实例与官方 dsh **并存**，且项目实例**不污染官方配置**；使用者零额外操作。
+# ⚠ name 必须与目标行一致（cordis-plugin-include 对 name 不匹配的 patch 跳过并告警）。
+
+# ① 关掉 remote-web-ui（仅本 overlay 作用的项目实例）
+- id: remote-web-ui
+  disabled: true
+
+# ② 还原 webserver 端口表达式（让 --port 生效）
+- id: webserver
+  name: '@deepseek-ai/dsh-host-webserver'
+  inject: [webStartup]
+  config:
+    host: !!js ctx.webStartup.host ?? '127.0.0.1'
+    port: !!js ctx.webStartup.port ?? 3080
+    compression: gzip
+    compressionLevel: 1
+    compressionThresholdBytes: 1024

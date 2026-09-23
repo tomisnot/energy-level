@@ -505,7 +505,29 @@ def run_ai():
     print(' 就绪' if ready else ' 超时（dsh 会退回默认 :8765）')
 
     dsh_exe = shutil.which('dsh')
-    dsh_args = 'web --patch ./dsh/cordis.source.patch.yml'
+
+    # 端口策略：项目实例**永不占 3080**（那是官方 dsh 的默认端口）。
+    # profile 补丁里 remote-web-ui 托管块把 webserver 钉死在字面量 3080，
+    # `--port` 会静默失效，且该插件每次启动把实际端口回写共享 profile（机制见
+    # mecha-sdk《DSH-实例并存原理》§3）；cordis.project.patch.yml 经 `--patch`
+    # （组合链最后一层）关掉该插件并恢复端口表达式 ⇒ --port 生效、官方配置
+    # 不被污染、两实例并存，使用者零额外操作。
+    def _pick_dsh_port(preferred=3081, tries=10):
+        """从 preferred 起找第一个可绑定的回环端口（3080 永不入选）。"""
+        import socket
+        for p in range(preferred, preferred + tries):
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.bind(('127.0.0.1', p))
+                return p
+            except OSError:
+                continue
+        return preferred
+
+    dsh_port = _pick_dsh_port()
+    dsh_args = ('web --patch ./dsh/cordis.source.patch.yml'
+                ' --patch ./dsh/cordis.project.patch.yml'
+                ' --port %d' % dsh_port)
     dsh_dir = os.path.join(here, 'dsh')
 
     # 依赖预检：dsh/node_modules 缺失（新检出/清理后）→ 自动 npm install。
@@ -522,6 +544,7 @@ def run_ai():
     print('=' * 70)
     print('  AI 模式：Hub(:8765)+驾驶舱(:8766) 已后台起（各自独立窗、可最小化）')
     print('  下面**前台启动 dsh**（较慢，启动输出直接显示在本窗，请等它起来）：')
+    print('  · 本实例绑定 :%d（避开官方 dsh 的 :3080，两实例可并存）' % dsh_port)
     print('  · dsh 起来后会**自动打开浏览器** = AI 界面（URL 也在下面打印）')
     print('  · 驾驶舱不用单独开——它是 dsh 插件，在 dsh 网页头部「◈ 驾驶舱」按钮里')
     print('  · 停：本窗 Ctrl+C（一并收尾 Hub/驾驶舱）')
