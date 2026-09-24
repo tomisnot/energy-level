@@ -66,12 +66,18 @@ GUI 菜单），旧的 `:8767/switch_mode` + token 已退役。AI 面改不了�
 | 参数扫描、批量对比、多步组合 | `run_actions`（CodeAct 结构化动作） | 一次调用=多步，省回合 |
 
 `run_actions` 约定：
-- 每步是 `{"op": 名称, "args": 对象}`。op 可为内置 `estimate`/`summary`/`run`/`schema`，
+- 每步是 `{"op": 名称, "args": 对象}`。op 可为内置 `estimate`/`summary`/`run`/`schema`
+  （顶层工具名 `estimate_run`/`run_sim` 也可直接当 op 用），
   或只读查询名 `read_config`/`query_params`/`preview_run`/`query_levels`/`read_waves`。
 - **不 eval 任意代码**（库只编排自家工具，任意代码是宿主 code-runtime 的权力）。
+- run/estimate 的配置三种给法：`args.spec` 整表替换；**`args.spec_patch` 只改列出的键、
+  其余沿用当前配置（扫描首选——别每点重抄全量）**；都不给=当前配置。顶层 `spec_patch`
+  同义（步没给才生效）。
+- **`pick`**：键路径列表（如 `["final_top_pop.60P_{3/2} m_J=-0.5","method"]`，点分层、
+  整键优先匹配），投影每步 output 只回关注量——多点扫描控体积用它；写错的键如实列进
+  `_missing`（不静默 null）。
 - 回执 `{ok, steps:[{index,op,ok,detail,output}], stopped_at}`——**每步自带
   output**（不用再按位置对齐）与 detail（成功=短摘要，失败=原因）；`stopped_at=-1` = 全成。
-- `run`/`estimate` 步缺省 spec 时用当前配置（顶层 `spec` 参数可覆写）。
 - 每步留可追溯记录（逐子调用审计，不污染域状态史）。
 
 **失败长什么样**（机器可判别）：工具失败时回执 `isError=true`，正文是
@@ -118,8 +124,10 @@ hint 给下一步指引。成功回执才是普通 JSON 正文。
 → `set_config('dynamic.mode', 1)` → `submit_job` 异步跑。注意对称组合（两 amp 都 1）
 是**暗态**，布居不摆（坑 4）。
 
-**参数扫描**：`run_actions` 串多步（逐点 `set_config` + `run`），或循环调 `submit_job`
-+ `read_job` 轮询。别往 context 灌大数组（run_sim 只回摘要，全量在 artifact）。
+**参数扫描**：`run_actions` 串多步，每步 `{"op":"run","args":{"spec_patch":{只写变化量}}}`，
+顶层带 `pick` 只回关注量（如 `["final_top_pop.<目标态label>"]`）——别每点重抄全量 spec、
+也别把 50 点全量布居灌进上下文。或循环调 `submit_job` + `read_job` 轮询。
+别往 context 灌大数组（run_sim 只回摘要，全量在 artifact）。
 
 ## 波形格式（`set_drive` 建、`read_waves` 读；手搓 `set_config` 时的元素形状）
 
@@ -197,6 +205,14 @@ env 采样   = √[ (1 + δ(t)) / (1 + b) ]    # 峰值恰为 1
     生效就报"需要重启"，由人重启。
 12. **教训：写入侧通了 ≠ 引擎侧通了——验收必须打到引擎**：任何"接口已实现"的结论，
     必须用**真引擎跑一次**（哪怕合成小基组）才算数。
+13. **π 脉冲标定别手搓方波**（实测第二轮 §2）：手搓 20 ns 沿的方波在同一时长给
+    0.993839，而 `set_drive` 自动算的 π 脉冲（1 ns 沿）给 1.000000——**脉冲沿吃掉
+    有效面积**。做标定必须用 `set_drive`（或显式控制沿），否则把"沿的锅"读成物理。
+14. **t_max 不跟随脉冲时长——实验设计陷阱**（实测第二轮 4-3）：`run_sim` 回的是
+    **演化窗口末端**的布居。t_max 晚于脉冲结束 ⇒ 读到的是"脉冲后又自由演化了一段"；
+    周期恰好整除时看不出来，换个 Ω 就读错。`set_drive` 回执带 `pulse_end_ns` 与
+    `t_max_note` 对账提示（不拦止——自由演化可能是故意的）；扫描时长时把 t_max
+    与脉冲时长一起 patch。
 
 ## v2 暂缺的能力（v1 有、v2 未接线——别按 v1 名字调）
 
