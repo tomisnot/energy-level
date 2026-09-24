@@ -134,7 +134,7 @@ def make_v2_bridge(el_root, *, data_root=None, data_dir_name=".mecha-v2",
     服务（判据 in-process 用，避免与活实例抢端口/抢 .mcp-port——2026-09-12
     事故的同款防线）。
     """
-    from examples.energy_level.bridge import V2Bridge
+    from mecha_v2.bridge import V2Bridge
     from mecha.authority import Mode
     data_root = (data_root or os.environ.get("RE0_V2_DATA_ROOT") or el_root)
     if os.environ.get("EL_NO_AI_SERVER"):

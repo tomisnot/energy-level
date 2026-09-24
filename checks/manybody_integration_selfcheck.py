@@ -31,8 +31,8 @@ from checks.checklib import Checker                            # noqa: E402
 from src.core import protocol as CP                            # noqa: E402
 from src.core import runspec as RS                             # noqa: E402
 
-from examples.energy_level.engine import ElEngine, make_validator  # noqa: E402
-from examples.energy_level.bridge import V2Bridge                  # noqa: E402
+from mecha_v2.engine import ElEngine, make_validator  # noqa: E402
+from mecha_v2.bridge import V2Bridge                  # noqa: E402
 from mecha.authority import Authority, Mode                      # noqa: E402
 from mecha.errors import MechaError                              # noqa: E402
 from mecha.gate import Channel, Gate                             # noqa: E402

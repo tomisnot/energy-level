@@ -19,7 +19,7 @@ _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
 
 # mecha 仓根从已安装的 mecha 包反推（editable 安装 = 仓根的 mecha/）——
-# 不硬编码绝对路径；examples 与 scripts 都在仓根下。
+# 不硬编码绝对路径；mecha_v2 与 scripts 都在 EL 仓根下。
 import mecha as _mecha  # noqa: E402
 _MECHA_ROOT = Path(_mecha.__file__).resolve().parent.parent
 if str(_MECHA_ROOT) not in sys.path:
@@ -41,7 +41,7 @@ OUT = _ROOT / "docs" / "capabilities.md"
 def el_entries():
     """EL 真运行时图的角色条目（出厂声明 + 项目注册项）。"""
     from src.core import protocol as P
-    from examples.energy_level.tools import build_tool_registry
+    from mecha_v2.tools import build_tool_registry
 
     class ElEngine:
         """map 生成期的 ElEngine 替身（只喂 schema()，不 run/estimate、不建 cache）。

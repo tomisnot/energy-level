@@ -21,7 +21,7 @@ sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 from PyQt5.QtWidgets import QApplication, QDoubleSpinBox    # noqa: E402
 from checks.checklib import Checker                         # noqa: E402
-from examples.energy_level.bridge import V2Bridge           # noqa: E402
+from mecha_v2.bridge import V2Bridge           # noqa: E402
 from src.ui import _mecha_bind as MB                        # noqa: E402
 
 app = QApplication.instance() or QApplication(sys.argv)     # offscreen

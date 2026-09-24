@@ -32,7 +32,7 @@ os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 from checks.checklib import Checker                        # noqa: E402
-from examples.energy_level.bridge import V2Bridge          # noqa: E402
+from mecha_v2.bridge import V2Bridge          # noqa: E402
 
 EL_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 

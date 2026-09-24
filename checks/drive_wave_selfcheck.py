@@ -34,7 +34,7 @@ from mecha.authority import Mode                           # noqa: E402
 from mecha.errors import GateDenied, MechaError            # noqa: E402
 from mecha.gate import Channel                             # noqa: E402
 
-from examples.energy_level.bridge import V2Bridge, _build_gui_tools  # noqa: E402
+from mecha_v2.bridge import V2Bridge, _build_gui_tools  # noqa: E402
 
 EL_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 C = Checker('drive_wave')

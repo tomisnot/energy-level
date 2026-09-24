@@ -31,7 +31,7 @@ from mecha.errors import GateDenied                        # noqa: E402
 from mecha.gate import Channel, Gate, accept_all           # noqa: E402
 from mecha.history import History                          # noqa: E402
 
-from examples.energy_level.bridge import V2Bridge, _ACTOR_CHANNEL  # noqa: E402
+from mecha_v2.bridge import V2Bridge, _ACTOR_CHANNEL  # noqa: E402
 
 C = Checker('authority')
 

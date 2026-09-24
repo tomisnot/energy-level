@@ -34,7 +34,7 @@ from mecha.errors import GateDenied                        # noqa: E402
 from mecha.gate import Gate, accept_all                    # noqa: E402
 from mecha.history import History                          # noqa: E402
 
-from examples.energy_level.bridge import V2Bridge          # noqa: E402
+from mecha_v2.bridge import V2Bridge          # noqa: E402
 from src.v2_bind import start_monitor_endpoint             # noqa: E402
 
 C = Checker('human_control')

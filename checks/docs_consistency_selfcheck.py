@@ -5,7 +5,7 @@
 spec 里各写一遍，改代码时漏改文档，人只能靠肉眼发现。属纲领 I6/D4 同族：
 **声明与实现不一致时，没有任何东西会响**。
 
-v2 权威工具面 = `examples/energy_level/tools.build_tool_registry` 注册的
+v2 权威工具面 = `mecha_v2/tools.build_tool_registry` 注册的
 `ToolRegistry.schemas()` 名单（不维护手写 TOOL_NAMES，消 D-25）。本守卫只做一件
 有界的事，但把它做死：
 
@@ -44,7 +44,7 @@ def _registered_tool_names():
     里派生的纯查询项 get_waves——它不是顶层工具）。
     """
     from src.core import protocol as P
-    from examples.energy_level.tools import build_tool_registry
+    from mecha_v2.tools import build_tool_registry
     from mecha.authority import Authority, Mode
     from mecha.gate import Channel, Gate, accept_all
     from mecha.history import History

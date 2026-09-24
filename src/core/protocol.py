@@ -5,7 +5,7 @@
 "领域知识回 core"的落点：原先散在 v1 `mecha/registry`（CONFIG_SCHEMA/SOLVE_META/
 engine_params 扫描/wave_list 校验/runspec_read_keys）与 `mecha/ops`（estimate/preview/
 list_levels）里的**物理/引擎知识**，全部收归此处。`mecha` v2 是**领域无关框架**，
-经 mecha 仓 `examples/energy_level/engine.py` 的 ElEngine（import 本协议）消费；
+经本仓 `mecha_v2/engine.py` 的 ElEngine（import 本协议）消费；
 本协议**不 import mecha**（守 `core ↛ mecha`）。
 
 单位与 core 一致：B=Gauss、E=V/cm、t=ns、微波 freq=MHz、光频=Hz、Γ=MHz。
