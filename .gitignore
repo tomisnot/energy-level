@@ -16,8 +16,11 @@ runtime/
 .mecha-v2/
 scripts/tmp/
 
-# MCP 写通道端口发现文件（人运行的 launcher 写、harness attach 用）
+# MCP 写通道端口发现文件（权威进程写、dsh 插件 attach 用）
 .mcp-port
+# 看门人（launcher.py）的进程交接文件：切换意图 / 当前模式（运行时状态，不入库）
+.mode-request
+.mode-state
 
 # 周边项目（不进主干）/ PyInstaller 构建产物 / 各工具运行时状态
 .dsh-vision-toolkit/
