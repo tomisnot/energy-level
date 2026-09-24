@@ -1,7 +1,7 @@
 ---
 name: energy-level
 description: 通过 MCP 操控 Rb-87 里德堡原子仿真软件 Energy Level（mecha v2）——管理能级组、场与微波/光波形，运行含时演化，并解读布居转移结果。含单位约定、v2 工具面、典型工作流与已知物理坑。
-whenToUse: 当需要操控 Energy Level 软件（改参数、加能级组、配波形、跑演化计算、取布居结果）或解读其计算结果时。软件需处于运行状态（`python 能级.py` 起 GUI 即 v2 同门），MCP 端点见项目根 .mcp-port。
+whenToUse: 当需要操控 Energy Level 软件（改参数、加能级组、配波形、跑演化计算、取布居结果）或解读其计算结果时。软件需处于 **AI 模式**（人经 `python launcher.py` 选 AI，或 GUI 里点「切换至 AI 模式」），MCP 端点见项目根 .mcp-port；GUI 模式下 AI 物理不可见（无端点）。
 ---
 
 # SKILL: Energy Level — Rb-87 里德堡原子仿真（AI 操作指南 · mecha v2）
@@ -15,16 +15,25 @@ whenToUse: 当需要操控 Energy Level 软件（改参数、加能级组、配�
 
 ## 连接
 
-软件启动后（`python 能级.py` 选 GUI，或 `python app_entry.py --ai` 由启动器代起）
-自动开放 streamable HTTP 端点：GUI 与 MCP 服务器**同进程共一道 Gate**，实际端口写入
-项目根 `.mcp-port`（裸端口，兼容 dsh `resolveHubUrl`）。你 attach 到
-`http://127.0.0.1:<port>/mcp`。
+**两模式启动**（人经看门人 `python launcher.py` 选一次，随时可切换）：
+
+- **AI 模式**（你要的状态）：headless 权威进程（无 GUI 窗口）+ dsh。权威进程
+  起 MCP 服务器，端口写项目根 `.mcp-port`（裸端口，兼容 dsh `resolveHubUrl`），
+  你 attach 到 `http://127.0.0.1:<port>/mcp`。**写权自动在 AI 侧**（人授权了
+  这个模式）。
+- **GUI 模式**：纯本地软件，**不起任何端点**——AI 物理看不见它。你连不上就是
+  人切去了 GUI 模式，等人在菜单点「切换至 AI 模式」即可（进程交接，journal
+  状态不断档）。
+
+**监控面**：权威进程另起**只读**监控端点 `:8767`（`/status`、`/activity`、
+`/history`、`/config`），dsh 右侧栏「机甲监控」面板消费它——飞行记录仪
+（每笔写 seq/actor/before→after/reason，逐行可折叠）+ 配置态（族→前缀分层树）。
+**控制权不经端点**：人的夺权/交权由看门人编排进程交接（dsh 里「→ GUI」按钮 /
+GUI 菜单），旧的 `:8767/switch_mode` + token 已退役。AI 面改不了写权模式、
+伪造不了 human 归因（Authority 的通道判定，与端点无关）。
 
 **Trae IDE 接入**：项目根 `.trae/mcp.json` 指向该端点。需在 Trae 设置 → MCP 打开
 "启用项目级 MCP"，然后**新开会话**生效（工具在会话启动时加载）。
-
-人的夺权/交权/写走**人工控制端点** `:8767`（`/switch_mode`、`/write`、
-`/write_many`，token 在 `.human-token`）——AI 面改不了写权模式、伪造不了 human 归因。
 
 ## 工具清单（v2 实际面 = 12）
 
@@ -186,8 +195,10 @@ env 采样   = √[ (1 + δ(t)) / (1 + b) ]    # 峰值恰为 1
   或循环 `submit_job`。多进程扫描器属 Provider 接线推迟项。
 - **`get_diag` 运行诊断**（pairs/steps/sectors/traj/H）：v2 未接线。诊断信息暂从
   `run_sim` 回执的 `warnings` + `preview_run` 读。
-- **`screenshot` / `get_activity` / `undo` / 存档面**：
-  - `get_activity`——操作者行为史归宿主 dsh 按 call_id 记，域当前态用 `read_config`；
+- **`screenshot` / `undo` / 存档面**：
+  - 操作流水（v1 的 `get_activity`）——**不在 MCP 工具面**，在只读监控端点
+    `:8767/history`（dsh 右侧栏「机甲监控」面板消费它，飞行记录仪页逐笔可折叠）；
+    域当前态用 `read_config`；
   - `undo`——v2 史 append-only，撤销=反向 set 记新事件，等接 GUI 撤销按钮（ADR 已定设计）；
   - 存档面——journal 即存档，要读历史直接开 `.mecha-v2/journal.jsonl`；
   - `screenshot`——GUI 侧能力，非 MCP 工具。
