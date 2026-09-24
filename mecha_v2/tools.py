@@ -321,18 +321,27 @@ def build_tool_registry(engine: ElEngine, gate: Gate, surface: Surface,
         name="run_actions",
         description=(
             "一次提交一串动作按序执行（省往返）。每步是 {op, args}：op 可为 "
-            "estimate（探规模）、summary（读引擎概况）、run（跑一次演化，args "
-            "带 spec），或只读查询名（" + " / ".join(DOMAIN_QUERY_OPS) + "）。"
+            "estimate（探规模）、summary（读引擎概况）、run（跑一次演化）、"
+            "schema，或只读查询名（" + " / ".join(DOMAIN_QUERY_OPS) + "）。"
+            "estimate/run 也接受顶层工具名 estimate_run/run_sim 作别名。"
+            "run/estimate 的配置三种给法：args.spec 整表替换；args.spec_patch "
+            "只改列出的键、其余沿用当前配置（扫描首选，顶层 spec_patch 同义）；"
+            "都不给=当前配置。pick=只回关注量（键路径列表，如 "
+            "[\"final_top_pop.60P_{3/2} m_J=-0.5\"]），投影每步 output 控体积。"
             "任一步失败即停在该步并如实返回失败原因，之前的步不回滚。"
             "每步都留可追溯记录。"
         ),
         parameters={"actions": {"type": "array",
                     "description": "动作列表，每项 {\"op\": 名称, \"args\": 对象}"},
                     "spec": {"type": "object",
-                             "description": "run/estimate 缺省 spec 时用当前配置"}},
+                             "description": "run/estimate 缺省 spec 时用的整表配置"},
+                    "spec_patch": {"type": "object",
+                                   "description": "run/estimate 缺省 spec 时在现有配置上覆写这几键（扫描只写变化量）"},
+                    "pick": {"type": "array",
+                             "description": "只回这些键路径（点分层；整键优先匹配），投影每步 output"}},
         output_schema={"type": "object", "required": ["ok", "steps", "stopped_at"]},
-        execute=lambda actions, spec=None: _run_actions(
-            surface, gate, channel, actions, spec),
+        execute=lambda actions, spec=None, spec_patch=None, pick=None: _run_actions(
+            surface, gate, channel, actions, spec, spec_patch, pick),
         banned_words=("eval", "解释器", "dispatch"),
     ))
 
@@ -340,26 +349,52 @@ def build_tool_registry(engine: ElEngine, gate: Gate, surface: Surface,
 
 
 def _run_actions(surface: Surface, gate: Gate,
-                 channel: Channel, actions, spec=None):
+                 channel: Channel, actions, spec=None, spec_patch=None,
+                 pick=None):
     """把一串结构化动作交给 CodeAct 编排（逐子调用记日志，可归因）。
 
     **审计落一份进程内临时 History，不混进域状态史**（总纲 §5.2②：域状态史
     与操作者行为史是两份资产）。若把 `codeact.N` 写进域史，Gate 重启折叠快照
     会把这些审计事件当域状态吃进去 ⇒ read_config 出噪声、存档 load 被 validate
     当场拒。操作者行为史归宿主（dsh 按 call_id 记），这里逐步随回执如实返回。
+
+    实测第二轮 §4 的三处顺手感（都在编排入口做适配，CodeAct 内核不动）：
+    - **spec_patch**（4-1）：run/estimate 的配置支持"在现有配置上只改几个键"
+      （顶层或每步 args 均可，步级优先）——扫描不必每点重抄全量 spec。
+    - **op 别名**（4-2）：`estimate_run`/`run_sim` 直接映射到内置 `estimate`/`run`，
+      工具名与 op 名不再两套账。
+    - **pick**（4-4）：只回关注量（键路径投影每步 output），扫描 50 点不撑爆上下文。
     """
     if not isinstance(actions, (list, tuple)):
         raise MechaError("actions 必须是列表", kind="bad_action",
                          hint='形如 [{"op": "estimate"}, {"op": "run"}]')
+    if pick is not None and not isinstance(pick, (list, tuple)):
+        raise MechaError("pick 必须是键路径列表", kind="bad_action",
+                         hint='如 ["final_top_pop", "method"]；一层键用点分层')
     acts = []
     for a in actions:
         if not isinstance(a, Mapping) or "op" not in a:
             raise MechaError(f"动作项 {a!r} 缺 op", kind="bad_action",
                              hint='每项须是 {"op": 名称, "args": 对象}')
+        op = str(a["op"])
+        if op in _OP_ALIAS:
+            op = _OP_ALIAS[op]
         args = dict(a.get("args") or {})
-        if a["op"] in ("run", "estimate") and "spec" not in args:
-            args["spec"] = dict(spec) if spec else dict(gate.snapshot)
-        acts.append(Action(op=str(a["op"]), args=args))
+        if op in ("run", "estimate"):
+            if "spec" not in args:
+                base = dict(spec) if spec else dict(gate.snapshot)
+                step_patch = args.pop("spec_patch", None)
+                if step_patch is None and spec is None and spec_patch:
+                    step_patch = spec_patch        # 顶层 patch（步没给才生效）
+                if step_patch is not None:
+                    if not isinstance(step_patch, Mapping):
+                        raise MechaError("spec_patch 必须是对象", kind="bad_action",
+                                         hint='形如 {"dynamic.t_max": 500}')
+                    base.update(step_patch)
+                args["spec"] = base
+            else:
+                args.pop("spec_patch", None)       # 整表优先，patch 不掺和
+        acts.append(Action(op=op, args=args))
     actor = channel.actor                      # 恒为 'ai'（通道钉死，改不了）
     audit = History()                          # 临时审计史（不进域史，见 docstring）
     codeact = CodeAct(surface, audit, lambda: actor)
@@ -370,12 +405,48 @@ def _run_actions(surface: Surface, gate: Gate,
     steps = []
     for s in res.steps:
         out = res.outputs[s.index] if s.index < len(res.outputs) else None
+        if pick and s.ok:
+            out = _pick(out, pick)
         detail = s.detail or _step_digest(out)
         steps.append({"index": s.index, "op": s.op, "ok": s.ok,
                       "detail": detail, "output": out})
     return {"ok": res.stopped_at == -1,
             "steps": steps,
             "stopped_at": res.stopped_at}
+
+
+#: op 别名（实测第二轮 4-2）：顶层工具名直接当 op 用，消"每次试一次"。
+_OP_ALIAS = {"estimate_run": "estimate", "run_sim": "run"}
+
+
+def _pick(out, paths):
+    """把 output 投影成只含关注键的 dict（实测第二轮 4-4）。
+
+    每个路径**整键优先**（JSON 键可以含点，如 `final_top_pop.60P_{3/2} m_J=-0.5`
+    本身就是一个键），匹配不到再按点分层下钻。缺失键**如实列进 `_missing`**
+    （绝不静默给 null——写错键名当场看得见）。
+    """
+    if not isinstance(out, Mapping):
+        return out
+    picked, missing = {}, []
+    for path in paths:
+        p = str(path)
+        if p in out:
+            picked[p] = out[p]
+            continue
+        node = out
+        for part in p.split("."):
+            if isinstance(node, Mapping) and part in node:
+                node = node[part]
+            else:
+                missing.append(p)
+                break
+        else:
+            picked[p] = node
+    result = dict(picked)
+    if missing:
+        result["_missing"] = missing
+    return result
 
 
 def _step_digest(out) -> str:
@@ -450,7 +521,31 @@ def _set_drive(engine: ElEngine, gate: Gate, channel: Channel, src, tgt, **kw):
     waves = ([dict(w) for w in cur] if mode == "append" else []) + [wave]
     gate.set(channel, key, waves, reason=reason,
              call_id=CURRENT_CALL_ID.get())
-    return {"ok": True, "key": key, "wave": wave, "n_waves": len(waves)}
+    out = {"ok": True, "key": key, "wave": wave, "n_waves": len(waves)}
+    # 实测第二轮 4-3：t_max 不跟随脉冲时长是**实验设计陷阱**（终态布居读的是
+    # "脉冲结束后又自由演化了一段"或"脉冲被掐断"）。回执如实对账：波结束时刻
+    # =offset+平台长，与当前 t_max 不等就给一句提示（不拦止——自由演化/截断
+    # 都可能是故意设计，提示让人/AI 自己确认）。
+    env = wave.get("env")
+    if isinstance(env, (list, tuple)) and len(env) >= 5:
+        pulse_end = float(wave.get("offset_ns") or 0.0) + float(env[4])
+        out["pulse_end_ns"] = round(pulse_end, 6)
+        t_max = gate.snapshot.get("dynamic.t_max")
+        try:
+            tm = float(t_max)
+        except (TypeError, ValueError):
+            tm = None
+        if tm is not None and abs(tm - pulse_end) > 1e-9:
+            if tm > pulse_end:
+                out["t_max_note"] = (
+                    f"当前 dynamic.t_max={tm} ns 晚于本波结束 {out['pulse_end_ns']} ns"
+                    "——run_sim 终态布居含脉冲后的自由演化；要读脉冲结束瞬间的"
+                    "布居，把 t_max 调到≈波结束")
+            else:
+                out["t_max_note"] = (
+                    f"当前 dynamic.t_max={tm} ns 早于本波结束 {out['pulse_end_ns']} ns"
+                    "——演化窗口内脉冲被截断（只跑到平台中途）")
+    return out
 
 
 def _reset(gate: Gate, channel: Channel, reason: str):
