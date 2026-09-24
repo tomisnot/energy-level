@@ -94,8 +94,9 @@ function recPage(evs: Ev[]): string {
       `<span class="seq">#${e.seq}</span>` +
       `<span class="${e.actor === 'ai' ? 'actor-ai' : ''}">${esc(e.actor)}</span>` +
       `<span class="re0-tag">${esc(e.kind)}</span>` +
-      `<span class="re0-reason" title="${esc(e.target)} ${esc(e.reason || '')}">${esc(e.target)}</span>` +
+      `<span class="re0-reason" title="${esc(e.target)}">${esc(e.reason || e.target)}</span>` +
       `</summary><div class="body">` +
+      `<div><i>target</i>${esc(e.target)}</div>` +
       `<div><i>before → after</i>${esc(fmtVal(e.before))} → ${esc(fmtVal(e.after))}</div>` +
       `<div><i>reason</i>${esc(e.reason || '')}</div>` +
       `</div></details>`

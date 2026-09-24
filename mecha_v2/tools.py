@@ -58,10 +58,28 @@ def build_tool_registry(engine: ElEngine, gate: Gate, surface: Surface,
     schema = engine.schema()
     settable = list(schema["settable_keys"])
 
-    def _set(key: str, value):
+    def _coerce(rec: dict, value):
+        """数值/整型键：把数字字符串收编回数值（使用者 AI 坑 1 的根治）。
+
+        dsh 宿主对**未声明 type 的参数**（set_config 的 value 是任意 JSON 形态）
+        会把标量数值统一转成 str ⇒ 引擎严格校验当场拒。这里在过门**之前**按该键
+        的 schema 类型把"看起来是数字的字符串"转回 int/float——**只收编数字串**，
+        真·字符串键（str 类型）绝不误伤。非数字串原样交给 validate（仍会拒且教学）。
+        """
+        tname = (rec or {}).get("type")
+        if isinstance(value, str) and tname in ("int", "float"):
+            s = value.strip()
+            try:
+                return int(s) if tname == "int" else float(s)
+            except ValueError:
+                return value          # 非纯数字串：交 validate 如实拒（不猜）
+        return value
+
+    def _set(key: str, value, reason: str = "ai tool"):
         # call_id 从请求作用域读（审查 2.7）：hub 的 MCP 层在 execute 前 set，
         # 把这次工具调用与 dsh 行为史钉在一起（总纲 §5.2②互引）。
-        gate.set(channel, key, value, reason="ai tool",
+        rec = dict(schema["config"]).get(key) or dict(schema["solve"]).get(key) or {}
+        gate.set(channel, key, _coerce(rec, value), reason=reason,
                  call_id=CURRENT_CALL_ID.get())
         return {"ok": True, "key": key, "applied": True}
 
@@ -71,11 +89,14 @@ def build_tool_registry(engine: ElEngine, gate: Gate, surface: Surface,
         description=(
             "设置一个配置键的值。键必须是可写配置键（见 query_params 的清单）。"
             "改引擎内部常量会被拒。设置后立即可被 estimate_run/preview_run/run_sim 读到。"
+            "reason 用一句中文写清这次改动的目的（会进操作留痕、供人监控）。"
         ),
         parameters={"key": {"type": "string", "description": "可写配置键，如 dynamic.t_max"},
-                    "value": {"description": "新值（任意 JSON 形态），类型须匹配该键（见 query_params）"}},
+                    "value": {"description": "新值（任意 JSON 形态），类型须匹配该键（见 query_params）"},
+                    "reason": {"type": "string",
+                               "description": "一句话中文说明改动目的（进留痕，如'把演化时长拉到 200ns 看完整拉比振荡'）"}},
         output_schema={"type": "object", "required": ["ok", "key"]},
-        execute=lambda key, value: _set(key, value),
+        execute=lambda key, value, reason="ai tool": _set(key, value, reason),
         banned_words=("gate", "choke", "读回面", "session", "channel"),
     ))
 
@@ -217,28 +238,33 @@ def build_tool_registry(engine: ElEngine, gate: Gate, surface: Surface,
             "时长用 pulse='pi'/'pi2'（按拉比频率自动定时长）或 duration_ns 显式"
             "给。偏振 pol 取 π/σ+/σ-。默认追加到现有驱动清单，mode='replace' "
             "则整组替换。两体演化用 atom='A'/'B' 分别设两侧驱动。设完可 run_sim 演化。"
+            "reason 用一句中文写清这条驱动的目的（进操作留痕）。"
         ),
         parameters={
             "src": {"description": "源态身份键（query_levels 的 key）"},
             "tgt": {"description": "目标态身份键（query_levels 的 key）"},
-            "rabi_mhz": {"type": "number", "description": "拉比频率 MHz（与 intensity_mwcm2 二选一）"},
-            "intensity_mwcm2": {"type": "number", "description": "光强 mW/cm²（与 rabi_mhz 二选一）"},
+            # 可选数值参数**不声明 type**（坑 2 根治）：宿主对声明了 type:number
+            # 的可选参数在缺省时 float(null) 崩（到达 execute 之前）。下游 drive_wave
+            # 一律 float() 兜底，null/数字/数字串都安全，故不声明 type 更稳。
+            "rabi_mhz": {"description": "拉比频率 MHz（与 intensity_mwcm2 二选一）"},
+            "intensity_mwcm2": {"description": "光强 mW/cm²（与 rabi_mhz 二选一）"},
             "pol": {"type": "string", "description": "偏振：π / σ+ / σ-（默认 π）"},
             "pulse": {"type": "string", "description": "脉冲形状 pi / pi2（自动定时长）；省略则用 duration_ns"},
-            "duration_ns": {"type": "number", "description": "脉冲时长 ns（pulse 省略时必填）"},
-            "detuning_mhz": {"type": "number", "description": "相对共振的失谐 MHz（默认 0）"},
+            "duration_ns": {"description": "脉冲时长 ns（pulse 省略时必填）"},
+            "detuning_mhz": {"description": "相对共振的失谐 MHz（默认 0）"},
             "mode": {"type": "string", "description": "append（默认追加）/ replace（整组替换）"},
             "atom": {"type": "string", "description": "单体 single（默认）；两体 A / B"},
             "name": {"type": "string", "description": "波形名（默认 drive；多条波时用可辨的名字）"},
+            "reason": {"type": "string", "description": "一句话中文说明这条驱动的目的（进留痕）"},
         },
         output_schema={"type": "object", "required": ["ok", "key", "wave"]},
         execute=lambda src, tgt, rabi_mhz=None, intensity_mwcm2=None,
         pol="π", pulse="", duration_ns=None, detuning_mhz=0.0,
-        mode="append", atom="single", name="drive": _set_drive(
+        mode="append", atom="single", name="drive", reason="ai set_drive": _set_drive(
             engine, gate, channel, src, tgt, pol=pol, rabi_mhz=rabi_mhz,
             intensity_mwcm2=intensity_mwcm2, pulse=pulse,
             duration_ns=duration_ns, detuning_mhz=detuning_mhz, mode=mode,
-            atom=atom, name=name),
+            atom=atom, name=name, reason=reason),
         banned_words=("gate", "dipole", "dme", "serialize", "wave_list 结构"),
     ))
 
@@ -363,6 +389,7 @@ def _set_drive(engine: ElEngine, gate: Gate, channel: Channel, src, tgt, **kw):
     """
     atom = kw.pop("atom", "single")
     mode = kw.pop("mode", "append")
+    reason = kw.pop("reason", "ai set_drive")   # 不进 drive_wave（它只吃物理参数）
     key = _WAVE_KEY.get(atom)
     if key is None:
         raise MechaError(f"atom={atom!r} 非法", kind="bad_drive",
@@ -370,7 +397,7 @@ def _set_drive(engine: ElEngine, gate: Gate, channel: Channel, src, tgt, **kw):
     wave = engine.drive_wave(gate.snapshot, src=src, tgt=tgt, **kw)
     cur = list(gate.snapshot.get(key) or [])
     waves = ([dict(w) for w in cur] if mode == "append" else []) + [wave]
-    gate.set(channel, key, waves, reason="ai set_drive",
+    gate.set(channel, key, waves, reason=reason,
              call_id=CURRENT_CALL_ID.get())
     return {"ok": True, "key": key, "wave": wave, "n_waves": len(waves)}
 
