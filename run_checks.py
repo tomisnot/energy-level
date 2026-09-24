@@ -87,6 +87,7 @@ FAST_KNOWN_SEC = {
     'gui_app_entry_selfcheck.py': 8.3,
     'gui_run_flow_selfcheck.py': 10.0,
     'drive_wave_selfcheck.py': 10.4,
+    'launcher_selfcheck.py': 1.5,
     'hard_dedup_selfcheck.py': 11.0,
     'gui_inspector_selfcheck.py': 11.2,
     'manybody_integration_selfcheck.py': 11.3,

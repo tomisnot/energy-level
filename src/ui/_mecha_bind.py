@@ -89,7 +89,7 @@ class Binder:
         """
         mode = getattr(self.bridge, 'mode', '?')
         msg = ('写权在 %s 侧（当前 %s 模式）：人对「%s」的修改被拒。'
-               '要接管：用人工控制端点切回人工模式（token 在 .human-token）'
+               '要接管：经看门人切回 GUI 模式（菜单「切换至 AI/GUI 模式」）'
                % (mode, mode, key))
         if msg == self._last_reject:
             return

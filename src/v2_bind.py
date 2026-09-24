@@ -1,12 +1,18 @@
 # -*- coding: utf-8 -*-
-"""EL ↔ mecha v2 的接线层：GUI 与 AI 过同一道 v2 门（v1 门面已退役）。
+"""EL ↔ mecha v2 的接线层：两模式收拢后的装配点（v1 门面已退役）。
 
-app_entry 用它装配 V2Bridge.for_shared：同时服务 GUI（主线程直接读写）与
-AI（后台 MCP 服务器线程），**共一 Gate、一份 History**。cache 经 CacheProxy
+app_entry 用它装配 V2Bridge.for_shared。**两模式**（用户裁决 2026-09-24）：
+- GUI 模式：`start_services=False`——纯本地软件，不起 MCP/监控端点，AI 物理
+  看不见（写权恒 human）。
+- AI 模式：headless 权威（run_authority）用默认 True——起 MCP 服务器线程 +
+  只读监控端点，写权自动落 AI（看门人代理人意图开闸）。
+
+无论哪种模式，所有写都经**同一道 Gate、同一份 History**。cache 经 CacheProxy
 汇流到引擎线程（ARC SQLite 认线程，B-1①）。
 
-另起一个**人工控制端点**：人的夺权/交权/写走它、actor 由服务端固定为 human，
-AI 面（MCP）改不了 mode 也伪造不了 human 归因——这是"AI 不能自授权"的护栏。
+监控端点是**只读**的（/status + /activity）：给 dsh 右侧栏面板轮询"谁改了什么"。
+控制权切换不经它——人的夺权/交权由看门人（launcher.py）编排进程交接；"AI 不能
+自授权"的护栏靠 Authority 的 side 判定（AI 通道改不了 mode），不靠端点鉴权。
 
 ## Known Limitations and Deferred Work
 
@@ -25,7 +31,6 @@ import http.server
 import json
 import os
 import pickle
-import secrets
 import threading
 from pathlib import Path
 
@@ -50,98 +55,37 @@ def gc_report(root, *, dry_run=True, **_kw):
             "note": "mecha v2 未接 gc（保留策略等第二项目，见 D-9）；本目录未清理"}
 
 
-# ---------------- 人工控制端点（actor 服务端固定 human）----------------
+# ---------------- 监控端点（只读：dsh 侧边栏面板轮询用）----------------
+#
+# 两模式收拢（2026-09-24）后，人的控制权切换改由**看门人**（launcher.py）编排，
+# 本端点**降级为只读监控面**：只暴露"当前写权模式 + AI 最近做了什么"，供 dsh
+# 右侧栏面板轮询。写操作 / 切模式的 POST 路由与 token 鉴权一并退役——
+# "AI 不能自授权"的护栏不靠这个端点（靠 Authority 的 side 判定：AI 通道改不了
+# mode，见 mecha/authority.py）。loopback-only（绑 127.0.0.1），读的是操作流水。
 
-#: 控制台网页（浏览器打开 :8767/ 即用；与 GUI 按钮同一效果、同一道门）。
-_CONTROL_HTML = """<!doctype html><html lang="zh"><head><meta charset="utf-8">
-<title>Energy Level · 人工控制</title><style>
-body{font-family:system-ui,'Microsoft YaHei';max-width:560px;margin:40px auto;
-     padding:0 16px;color:#222}
-.card{border:1px solid #d6d9de;border-radius:10px;padding:16px;margin:12px 0}
-#mode{font-size:1.4em;font-weight:600}
-button{padding:8px 18px;margin:4px 8px 4px 0;border-radius:6px;cursor:pointer;
-       border:1px solid #8fa6e8;background:#eef2ff;font-size:1em}
-button:disabled{opacity:.4;cursor:default}
-input{width:100%;box-sizing:border-box;padding:6px;font-family:monospace}
-#log{font-size:.85em;color:#666;white-space:pre-wrap}
-.hint{color:#888;font-size:.85em}</style></head><body>
-<h2>Energy Level · 人工控制端点</h2>
-<div class="card">当前写权模式：<span id="mode">连接中…</span>
-<div id="who" class="hint"></div></div>
-<div class="card">Token（在本机 <code>.human-token</code> 文件里）：<br>
-<input id="tok" type="password" placeholder="粘贴 token"></div>
-<div class="card">
-<button onclick="sw('human')">人接管（HUMAN）</button>
-<button onclick="sw('ai')">交给 AI（AI）</button>
-<button onclick="sw('locked')">全员禁写（LOCKED）</button></div>
-<div class="card"><div id="log"></div></div>
-<script>
-function log(s){const e=document.getElementById('log');
-  e.textContent=new Date().toLocaleTimeString()+'  '+s+'\\n'+e.textContent}
-async function refresh(){try{const r=await fetch('/status');const j=await r.json();
-  const m=document.getElementById('mode');m.textContent=j.mode;
-  m.style.color=j.mode==='ai'?'#b3261e':(j.mode==='locked'?'#8a6d1a':'#1a7f37');
-  document.getElementById('who').textContent=
-    j.mode==='ai'?'此刻只有 AI 能写；你的界面是只读的':
-    j.mode==='locked'?'此刻谁都写不了（维护态）':'此刻你可以写';
-  }catch(e){document.getElementById('mode').textContent='连不上（软件没在跑？）'}}
-async function sw(mode){const tok=document.getElementById('tok').value;
-  try{const r=await fetch('/switch_mode',{method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({token:tok,mode:mode,reason:'web 控制台'})});
-    const j=await r.json();
-    log(j.ok?('已切到 '+j.mode):('被拒：'+JSON.stringify(j.error||j)));
-  }catch(e){log('请求失败：'+e)}
-  refresh()}
-setInterval(refresh,2000);refresh();
-</script></body></html>"""
-
-
-class _HumanHandler(http.server.BaseHTTPRequestHandler):
+class _MonitorHandler(http.server.BaseHTTPRequestHandler):
     bridge = None
-    token = None
 
     def do_GET(self):
-        if self.path in ("/", "/index.html"):
-            data = _CONTROL_HTML.encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(data)))
-            self.end_headers()
-            self.wfile.write(data)
-            return
         if self.path == "/status":
-            # 只回协调态（mode），不回任何键值——网页不需要域数据
             return self._json(200, {"ok": True, "mode": type(self).bridge.mode})
+        if self.path.startswith("/activity"):
+            # 增量拉事件流：?since_seq=N 返回 seq>=N 的写事件（dsh 面板轮询用）。
+            since = 0
+            q = self.path.partition("?")[2]
+            for kv in q.split("&"):
+                k, _, v = kv.partition("=")
+                if k == "since_seq" and v.isdigit():
+                    since = int(v)
+            events = type(self).bridge.activity(since)
+            return self._json(200, {"ok": True, "events": events,
+                                    "mode": type(self).bridge.mode})
+        # 退役面如实 404：无网页控制台、无写/切模式路由（控制权走看门人）
         self._json(404, {"ok": False, "error": "unknown endpoint"})
 
     def do_POST(self):
-        n = int(self.headers.get("Content-Length") or 0)
-        try:
-            body = json.loads(self.rfile.read(n) or b"{}")
-        except ValueError:
-            return self._json(400, {"ok": False, "error": "bad json"})
-        if body.get("token") != type(self).token:
-            return self._json(403, {"ok": False, "error": "bad token"})
-        br = type(self).bridge
-        reason = body.get("reason", "human write")
-        try:
-            if self.path == "/switch_mode":
-                br.switch_mode(body.get("mode"), actor="human")
-                return self._json(200, {"ok": True, "mode": br.mode})
-            if self.path == "/write":
-                rec = br.write(body.get("key"), body.get("value"),
-                               reason=reason, actor="human")
-                return self._json(200, rec)
-            if self.path == "/write_many":
-                br.write_many(body.get("patch") or {}, reason=reason, actor="human")
-                return self._json(200, {"ok": True})
-            return self._json(404, {"ok": False, "error": "unknown endpoint"})
-        except Exception as e:                              # noqa: BLE001
-            kind = getattr(e, "kind", "")
-            hint = getattr(e, "hint", "")
-            return self._json(400, {"ok": False, "error": {
-                "message": str(e), "kind": kind, "hint": hint}})
+        # 只读端点：一切写/切模式 POST 退役（404）。人的控制权经看门人交接。
+        self._json(404, {"ok": False, "error": "read-only monitor endpoint"})
 
     def _json(self, code, obj):
         data = json.dumps(obj, ensure_ascii=False, default=str).encode("utf-8")
@@ -155,24 +99,26 @@ class _HumanHandler(http.server.BaseHTTPRequestHandler):
         pass
 
 
-def start_human_control(bridge, host="127.0.0.1", port=8767, token_file=".human-token"):
-    """起人工控制端点；token 写文件（人夺权用）。返回 (port, token)。"""
-    token = os.environ.get("RE0_HUMAN_TOKEN") or secrets.token_urlsafe(16)
-    _HumanHandler.bridge = bridge
-    _HumanHandler.token = token
-    srv = http.server.ThreadingHTTPServer((host, port), _HumanHandler)
+def start_monitor_endpoint(bridge, host="127.0.0.1", port=8767):
+    """起只读监控端点（/status + /activity?since_seq=）。返回端口。
+
+    绑回环、无鉴权——读的是"谁改了什么"的操作流水，非域数据覆写面；写与切
+    模式不经这里（控制权归看门人）。dsh 右侧栏面板按 seq 增量轮询。
+    """
+    _MonitorHandler.bridge = bridge
+    srv = http.server.ThreadingHTTPServer((host, port), _MonitorHandler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
-    Path(token_file).write_text(token, encoding="utf-8")
-    return srv.server_address[1], token
+    return srv.server_address[1]
 
 
 # ---------------- 装配：给 app_entry 用 ----------------
 
 def make_v2_bridge(el_root, *, data_root=None, data_dir_name=".mecha-v2",
                    start_services=True, mcp_port_file=None):
-    """构造共享 Gate 的 V2Bridge；可选起 MCP 服务器 + 人工控制端点。
+    """构造共享 Gate 的 V2Bridge；可选起 MCP 服务器 + 只读监控端点。
 
-    app_entry 的 v2 分支调它，拿到的对象即 v1 AppBridge 的 drop-in。
+    app_entry 调它：GUI 模式传 `start_services=False`（纯本地，不起任何端点）；
+    headless 权威（run_authority）用默认 True（起 MCP + 监控端点，供 dsh 连与轮询）。
     数据根优先级：显式参数 > `RE0_V2_DATA_ROOT`（判据/测试用临时目录，
     不污染仓内权威 journal）> el_root。`EL_NO_AI_SERVER` 置位 → 不起后台
     服务（判据 in-process 用，避免与活实例抢端口/抢 .mcp-port——2026-09-12
@@ -191,9 +137,8 @@ def make_v2_bridge(el_root, *, data_root=None, data_dir_name=".mecha-v2",
         pf = mcp_port_file or str(Path(el_root) / ".mcp-port")
         _t, server, port = bridge.serve_mcp(port_file=pf)
         bridge._mcp_thread, bridge._mcp_server, bridge._mcp_port = _t, server, port
-        hc_port, token = start_human_control(
-            bridge, token_file=str(Path(el_root) / ".human-token"))
-        bridge._human_port = hc_port
+        mon_port = start_monitor_endpoint(bridge)
+        bridge._monitor_port = mon_port
         print(f"[v2_bind] MCP 服务器 :{port}/mcp（工具经同一道 Gate）；"
-              f"人工控制 :{hc_port}/switch_mode（token 在 .human-token）")
+              f"只读监控 :{mon_port}/activity（dsh 面板轮询）")
     return bridge
