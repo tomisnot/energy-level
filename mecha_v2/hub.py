@@ -90,10 +90,32 @@ def to_mcp(stack: dict):
 
 
 def _register(server, tools, schema: dict) -> None:
+    import inspect
+
     name = schema["name"]
     parameters = schema["parameters"]
 
+    # required 从 execute 闭包签名派生（**无默认值=必填**，单一来源）——接管
+    # 报告 P1-8：旧写法从 parameters 节点读 required 标记，但无人声明 ⇒ 全部
+    # 工具的必填项在 MCP 面静默消失，模型以为 set_config 可以只给 key。
+    tool_def = tools.get(name)
+    exec_params = list(inspect.signature(tool_def.execute).parameters.values())
+    required = [p.name for p in exec_params
+                if p.default is inspect.Parameter.empty
+                and p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)]
+    # 实测报告 P0-1 根治：合成签名把所有可选参数给 default=None，宿主 pydantic
+    # 对**省略的参数填显式 null** 传进来 ⇒ 盖掉闭包的真实默认（pol="π"、
+    # mode="append" 等），"说明书说默认 X 但必须显式传"的根源就在这。记下
+    # "闭包默认非 None"的参数名：null 到达时丢弃该键，让闭包真默认生效。
+    # 闭包默认本就是 None 的参数（set_config 的 value 无默认=必填、清空语义
+    # 走显式 null）不受影响。
+    defaulted = {p.name for p in exec_params
+                 if p.default is not inspect.Parameter.empty
+                 and p.default is not None}
+
     def _fn(ctx: Context = None, **kwargs):
+        kwargs = {k: v for k, v in kwargs.items()
+                  if v is not None or k not in defaulted}
         # 请求作用域 call_id（审查 2.7）：MCP wire request id 作为本次工具调用的
         # 关联标识，写进 History 事件（gate.set 经 CURRENT_CALL_ID 读）。dsh 侧
         # 行为史按同一 id 记录 ⇒ "AI 做了什么"↔"域变成了什么"双向可走查（§5.2②）。
@@ -104,28 +126,19 @@ def _register(server, tools, schema: dict) -> None:
         finally:
             CURRENT_CALL_ID.reset(token)
         if res["is_error"]:
-            err = res["error"]
-            info = err.get("info", {})
-            text = err["message"]
-            if info.get("hint"):
-                text += f"\n提示：{info['hint']}"
-            if info.get("suggest"):
-                text += f"\n替代：{info['suggest']}"
-            # 抛框架指定的 ToolError ⇒ mcp 把结果标 is_error=True 且走"预期
-            # 失败"路径（不刷 exception traceback）。教学文本原样给模型。
-            from mcp.server.mcpserver.exceptions import ToolError
-            raise ToolError(text)
+            # 实测报告 P0-3/P2-8：失败必须**机器可判别且形态统一**。直接返回
+            # is_error=True 的 CallToolResult（mcp 对它是透传，不加
+            # "Error executing tool" 前缀）——正文就是 {ok:false, error:{message,
+            # info:{kind,hint,suggest}}} 的 JSON，AI 读 kind 决定怎么改，不再
+            # 从散文里猜（"成功文本里写着错误"= 静默错答案，D5 大忌）。
+            from mcp.types import CallToolResult, TextContent
+            return CallToolResult(
+                content=[TextContent(
+                    type="text",
+                    text=json.dumps({"ok": False, "error": res["error"]},
+                                    ensure_ascii=False))],
+                is_error=True)
         return json.dumps(res["value"], ensure_ascii=False, default=str)
-
-    # required 从 execute 闭包签名派生（**无默认值=必填**，单一来源）——接管
-    # 报告 P1-8：旧写法从 parameters 节点读 required 标记，但无人声明 ⇒ 全部
-    # 工具的必填项在 MCP 面静默消失，模型以为 set_config 可以只给 key。
-    import inspect
-    tool_def = tools.get(name)
-    exec_params = list(inspect.signature(tool_def.execute).parameters.values())
-    required = [p.name for p in exec_params
-                if p.default is inspect.Parameter.empty
-                and p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)]
 
     # MCP 从函数签名建 pydantic 入参模型；**kwargs 会得到一个名为 kwargs 的必填
     # 字段（错）。先给闭包一个"真实命名参数"的合成签名，让模型字段=参数名；
