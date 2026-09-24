@@ -58,13 +58,21 @@ export interface Config {
 /** 挂载 host 桥：连 Hub、注册工具、状态信号；teardown 时注销工具并关桥。 */
 export async function apply(ctx: Context, config: Config = {}): Promise<void> {
   await ctx.effect(async () => {
-    const url = await resolveHubUrl(config)
     const serverName = config.serverName || 're0-mecha'
     let disposers: ToolDisposers = new Map()
+    // 端点**每次建会话现解**（不固化）：权威重启换端口（实测报告 §0，如
+    // 56093→52755）后，桥的重连工厂重读 .mcp-port 即连上新端口——老会话
+    // 不再静默失效。显式 hubUrl（远程设备）在 resolveHubUrl 里优先级最高，
+    // 行为不变。lastUrl 仅供日志展示最近一次解析结果。
+    let lastUrl = ''
+    const resolveUrl = async (): Promise<string> => {
+      lastUrl = await resolveHubUrl(config)
+      return lastUrl
+    }
 
     const bridge = new MechaMcpBridge({
       // requestInit：远程 Hub 鉴权头（需求③接缝；本地 hubToken 空 → 不带头）。
-      sessionFactory: httpSessionFactory({ url, requestInit: buildRequestInit(config) }),
+      sessionFactory: httpSessionFactory({ url: resolveUrl, requestInit: buildRequestInit(config) }),
       reconnect: {
         initialDelayMs: config.reconnectInitialDelayMs ?? 300,
         maxDelayMs: config.reconnectMaxDelayMs ?? 15000,
@@ -82,12 +90,12 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
       // 断联显式信号（报告 §4.3.1）：状态迁移落日志，人/AI 不再面对"工具在但静默坏"。
       onStatus: status => {
         if (status === 'offline') ctx.logger?.warn?.('[re0-mecha] Hub 离线：工具暂不可用，后台重连中')
-        else if (status === 'ready') ctx.logger?.info?.(`[re0-mecha] 已连上 Hub MCP：${url}`)
+        else if (status === 'ready') ctx.logger?.info?.(`[re0-mecha] 已连上 Hub MCP：${lastUrl}`)
         else if (status === 'reconnecting') ctx.logger?.warn?.('[re0-mecha] 与 Hub 的连接中断，重连中…')
       },
     })
 
-    ctx.logger?.info?.(`[re0-mecha] 连接 Hub MCP：${url}（只 connect，不 spawn 权威）`)
+    ctx.logger?.info?.('[re0-mecha] 挂载 Hub MCP 桥（端点每次建会话现解 .mcp-port，只 connect 不 spawn 权威）')
     await bridge.start()   // Hub 未起也不抛：插件照常加载，桥后台重连，起来后自动注册工具
 
     // /re0-gui：dsh 界面「切换至 GUI」按钮的落点——写 .mode-request（'gui'），

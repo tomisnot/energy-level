@@ -17,6 +17,11 @@ dsh 的 MCP 桥只在 `transport.onclose` 时重连；streamable-http 的 POST �
 调用遇 session 失效/连不上 → 拆旧连接 → 重新 `initialize`（拿**新** session）→ 重试；并有
 后台退避重连、健康信号、软件未起时不阻塞加载。
 
+**端口漂移自愈**（实测报告 §0：权威重启换端口 56093→52755 曾致老会话永久失联）：桥的
+会话工厂**每次建会话现读 `.mcp-port`**（`resolveHubUrl` 不在加载时固化），所以重连循环
+的下一拍就落在新端口上——软件重启换端口**无需重启 dsh**。显式 `hubUrl`（远程设备）仍
+固化，行为不变。单测 F 组钉这个组合（旧连接炸→重连→现解→连上新端口）。
+
 ## 架构（分层，核心可独立单测）
 
 ```
@@ -76,9 +81,9 @@ npm test                            # node --test：自愈重连桥单测（含 
 **已在本地确定性验证**（无需 dsh / 无需网络）：
 - `npm run typecheck`：host 胶水 + shim 全量 `tsc --noEmit` 零错误（已开
   `erasableSyntaxOnly`，见下方约束）。
-- `npm test`：**11/11 绿**——自愈桥 6 项（**头号验收**"软件重启→旧 session 404→自愈
-  重连(新 session)→恢复"，含致死性对照）+ config 5 项（buildRequestInit 鉴权头 /
-  resolveHubUrl）。
+- `npm test`：**13/13 绿**——自愈桥 7 项（**头号验收**"软件重启→旧 session 404→自愈
+  重连(新 session)→恢复"，含致死性对照；F 组=端口漂移自愈）+ config 6 项
+  （buildRequestInit 鉴权头 / resolveHubUrl 含现读端口文件）。
 - **Node strip-types 加载 host 入口**：`node -e "import('./src/index.ts')"` → `HOST_LOAD_OK`。
   这**复刻了 dsh 加载 host 半的机制**（Node 原生 type-stripping），本地即可确认 host 能加载。
 

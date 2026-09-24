@@ -78,13 +78,13 @@ export function isSessionInvalidError(err: unknown): boolean {
   return /session not found|session expired|invalid session|stale session|\b404\b|bad request/i.test(msg)
 }
 
-/** 鸭子类型判"连不上"：node 网络错误码 / fetch failed / 5xx。 */
+/** 鸭子类型判"连不上"：node 网络错误码 / fetch failed / 5xx / 请求超时。 */
 export function isConnectionError(err: unknown): boolean {
   const e = err as { code?: unknown; message?: unknown; cause?: unknown } | null
   const cause = (e?.cause ?? {}) as { code?: unknown; message?: unknown }
   const parts = [e?.message, e?.code, cause.message, cause.code, err]
   const msg = parts.map(p => String(p ?? '')).join(' ')
-  return /ECONNREFUSED|ECONNRESET|ENOTFOUND|EPIPE|EAI_AGAIN|socket hang up|fetch failed|network|terminated|\b50[0-9]\b/i.test(msg)
+  return /ECONNREFUSED|ECONNRESET|ENOTFOUND|EPIPE|EAI_AGAIN|socket hang up|fetch failed|network|terminated|timed out|\b50[0-9]\b/i.test(msg)
 }
 
 const defaultSleep = (ms: number): Promise<void> => new Promise(r => setTimeout(r, ms))
@@ -228,7 +228,7 @@ export class MechaMcpBridge {
       } catch (reconnectErr) {
         throw new Error(
           `[re0-mecha] Hub 离线：调用 ${name} 时连接失效且重连未成功（${msgOf(reconnectErr)}）。`
-          + '请确认 launcher（python -m src.adapter.serve）在跑；工具仍在列表但暂不可用。',
+          + '请确认软件在 AI 模式（人经 launcher.py 启动）；工具仍在列表但暂不可用。',
         )
       }
       return await this.session!.callTool(name, args, signal)

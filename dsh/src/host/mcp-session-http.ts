@@ -14,8 +14,13 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import type { McpSession, SessionFactory, ToolDef } from './mcp-bridge.ts'
 
 export interface HttpSessionOptions {
-  /** Hub 的 MCP 端点，如 `http://127.0.0.1:8765/mcp`。 */
-  url: string
+  /**
+   * Hub 的 MCP 端点，如 `http://127.0.0.1:8765/mcp`。**也可以是异步解析器**：
+   * 每次建会话（首连与每次重连）都重新求值 ⇒ 权威重启换端口后，工厂重读
+   * `.mcp-port` 就连上新端口（实测报告 §0：56093→52755 漂移曾致老会话永久失联）。
+   * 传字符串则固化——只有显式 hubUrl（远程设备）才该这样用。
+   */
+  url: string | (() => Promise<string>)
   /** 客户端标识（initialize 时上报）。 */
   clientInfo?: { name: string; version: string }
   /** 额外请求头（如远程只读鉴权 token）。 */
@@ -27,7 +32,9 @@ export interface HttpSessionOptions {
 /** 造一个"每次调用都新建 streamable-http 会话"的工厂。 */
 export function httpSessionFactory(opts: HttpSessionOptions): SessionFactory {
   return async (): Promise<McpSession> => {
-    const transport = new StreamableHTTPClientTransport(new URL(opts.url), {
+    // 动态 URL：每次建会话现解（端口漂移自愈的关键一环；见 HttpSessionOptions.url）。
+    const url = typeof opts.url === 'function' ? await opts.url() : opts.url
+    const transport = new StreamableHTTPClientTransport(new URL(url), {
       requestInit: opts.requestInit,
       fetch: opts.fetch,
       // 刻意不传 sessionId：让服务端下发新的（重连恢复=新 session，不复用旧 id）。

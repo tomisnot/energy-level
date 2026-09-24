@@ -158,3 +158,52 @@ test('E Hub 未起时 start() 不抛（不阻塞 dsh 插件加载）', async () 
   assert.equal(br.isReady(), false)
   await br.close()
 })
+
+test('F 端口漂移（实测报告 §0）：重启换端口 → 旧连接炸 → 重连工厂现读 .mcp-port → 连上新端口', async () => {
+  // 生产接线的忠实模拟：sessionFactory 每次建会话经**真 resolveHubUrl** 现读端口文件；
+  // 每个 session 记住自己的端口，端口漂移后旧 session 的 callTool 抛"连不上"（旧进程已死）。
+  // 桥的重连循环 + 每次现解的 URL 两者配合，漂移才自愈——缺一即红（对照见下）。
+  const { writeFile, rm } = await import('node:fs/promises')
+  const { join } = await import('node:path')
+  const { resolveHubUrl } = await import('../src/host/config.ts')
+  const pf = join(process.cwd(), '.__reconnect_port_drift__.mcp-port')
+  let livePort = '56093'
+  const created: string[] = []
+  const sessionFactory = async (): Promise<McpSession> => {
+    const url = await resolveHubUrl({ mcpPortFile: pf })   // 真解析器，每次现读
+    const port = url.match(/:(\d+)\//)?.[1] ?? ''
+    if (port !== livePort) throw connErr()                 // 建会话时端口已变 → 连不上
+    created.push(port)
+    const session: McpSession = {
+      sessionId: `s-${port}`,
+      async listTools() { return { tools: [{ name: 'run_sim' }] } },
+      async callTool(name: string) {
+        if (port !== livePort) throw connErr()             // 漂移后旧 session 调用炸
+        return { ok: true, called: name, port }
+      },
+      async close() { /* noop */ },
+    }
+    return session
+  }
+  try {
+    await writeFile(pf, livePort, 'utf8')
+    const br = new MechaMcpBridge({ sessionFactory, sleep: fastSleep })
+    await br.start()
+    assert.equal(br.isReady(), true)
+    const r1 = await br.callTool('run_sim', {}) as { port: string }
+    assert.equal(r1.port, '56093')
+
+    // —— 软件重启：新端口写进端口文件，旧端口进程已死 ——
+    livePort = '52755'
+    await writeFile(pf, livePort, 'utf8')
+
+    // 下一次调用命中旧 session → 抛"连不上" → 桥重连 → 工厂现读端口文件 → 连上 52755。
+    const r2 = await br.callTool('run_sim', {}) as { ok: boolean; port: string }
+    assert.equal(r2.ok, true)
+    assert.equal(r2.port, '52755', '重连后必须落在新端口（工厂每次现解 URL）')
+    assert.deepEqual(created, ['56093', '52755'])
+    await br.close()
+  } finally {
+    await rm(pf, { force: true })
+  }
+})

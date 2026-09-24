@@ -34,3 +34,17 @@ test('resolveHubUrl：无 hubUrl 且端口文件不存在 → 回落默认 8765'
   const url = await resolveHubUrl({ mcpPortFile: '.__nonexistent_port_file__' })
   assert.equal(url, 'http://127.0.0.1:8765/mcp')
 })
+
+test('resolveHubUrl：每次调用现读端口文件（权威重启换端口 → 解析跟着变）', async () => {
+  const { writeFile, rm } = await import('node:fs/promises')
+  const { join } = await import('node:path')
+  const pf = join(process.cwd(), '.__port_drift_test__.mcp-port')
+  try {
+    await writeFile(pf, '56093', 'utf8')
+    assert.equal(await resolveHubUrl({ mcpPortFile: pf }), 'http://127.0.0.1:56093/mcp')
+    await writeFile(pf, '52755', 'utf8')   // —— 软件重启，端口漂移 ——
+    assert.equal(await resolveHubUrl({ mcpPortFile: pf }), 'http://127.0.0.1:52755/mcp')
+  } finally {
+    await rm(pf, { force: true })
+  }
+})
