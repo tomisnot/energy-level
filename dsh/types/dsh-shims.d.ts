@@ -62,6 +62,23 @@ declare module '@deepseek-ai/cordis' {
     readonly tools: ToolRuntime
     readonly slots: SlotsRuntime
     readonly logger: Logger
+    /** host 侧：slash command 注册（/re0-gui 交权切换）。 */
+    readonly commands?: {
+      register(def: {
+        name: string
+        description: string
+        handler: (inv: { agent: any; rawInput: string }) =>
+          unknown | Promise<unknown>
+      }): () => void
+    }
+    /** client 侧：远程服务代理（发 command 到 host）。 */
+    readonly remote?: {
+      commands?: {
+        execute(agentId: string, line: string, attachments: readonly unknown[],
+          signal?: AbortSignal): Promise<
+          { ok: true; value: unknown } | { ok: false; error: { message: string; code?: string } }>
+      }
+    }
     /** 布局控制（ui-layout 提供，对齐运行版 dsh 0.1.5-rc.2 的 ILayout）。 */
     readonly layout: {
       toggleSidebar(): void
@@ -116,10 +133,15 @@ declare module '@deepseek-ai/dsh-host-webserver' {
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   /** 组件在某 slot 收到的 props（框架 hook + 注入值）。本插件不用 props，故宽松。 */
   export type PropsRuntime<K extends string = string> = Record<string, any>
+  /** register({ inject }) 注入到组件 props 的业务面（与 PropsRuntime 交叉即得完整 props）。 */
+  export type InjectFace<T> = T
+  export type PropsLocale<NS extends string = string> = Record<string, any>
   export interface SlotRegisterOptions {
     name: string
-    id: string
+    id?: string
+    key?: string
     order?: number
+    label?: string | (() => string)
     locale?: string
     inject?: (...args: any[]) => unknown
   }
@@ -129,4 +151,8 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
     /** 注册一个组件到 slot；返回 disposer。 */
     register(opts: SlotRegisterOptions, component: unknown): () => void
   }
+}
+
+declare module '@deepseek-ai/dsh-session/types' {
+  export type SessionId = string
 }

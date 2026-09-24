@@ -1,12 +1,15 @@
 import { defineConfig } from 'tsdown'
 
 /**
- * 单产物（对应 package.json 的 "." 导出）：
- *  · lib/index.js —— HOST 半（node 平台）：把 @modelcontextprotocol/sdk + ws **打进** bundle
+ * 两个产物（对应 package.json 的 "." 与 "./client" 导出）：
+ *  · lib/index.js   —— HOST 半（node 平台）：把 @modelcontextprotocol/sdk + ws **打进** bundle
  *    （自包含，运行时不依赖 dsh 解析我们的 node_modules）；只 @deepseek-ai/* peer 外置（宿主提供）。
+ *  · lib/client.js  —— CLIENT 半（browser 平台）：react 外置（dsh web client 提供，避免双 React）。
  * dts 关（类型走 src + types/shim；--patch 源加载本就直读 src）。
  *
- * v1 的 client 半（驾驶舱面板，lib/client.js）已随库替换退役——监控面在 GUI 侧边栏。
+ * client 半 = 两模式收拢后重建的 dsh 界面：◈监控 按钮（开右栏 tab）+ 监控面板
+ * （轮询权威 :8767 的只读 /activity）+ 「切换至 GUI」按钮（经 /re0-gui command
+ * 让 host 写 .mode-request，看门人接手交接）。
  */
 const dshExternal = [/^@deepseek-ai\//]
 
@@ -21,5 +24,29 @@ export default defineConfig([
     dts: false,
     sourcemap: true,
     clean: true,
+  },
+  {
+    entry: { client: 'src/client/index.ts' },
+    outDir: 'lib',
+    // dsh 的 web client 把所有插件的 client.js 合成一个 **classic-script 合并包**，每个模块
+    // 必须自注册到 `window.__ModuleLoader__.load({id, factory:(require)=>{...}})`（见 dsh
+    // packages/client/tsdown.client.ts 的 clientConfig）。普通 ESM（顶层 import/export）在合并包里
+    // 是 SyntaxError → 整包崩。故这里精确复刻该格式：cjs + banner/intro/footer 包裹。
+    format: 'cjs',
+    platform: 'browser',
+    target: 'es2022',
+    // react / react/jsx-runtime 是 dsh 的 PLATFORM_MODULES（模块表提供）→ 外置，经注入的
+    // require 解析，共享 dsh 的 React 实例（避免双 React）。@deepseek-ai/* 在 client 侧全是
+    // 类型导入（已擦除），一并外置以防万一。
+    external: ['react', 'react/jsx-runtime', ...dshExternal],
+    dts: false,
+    sourcemap: true,
+    clean: false,   // 别清掉上一步的 host 产物
+    outputOptions: {
+      entryFileNames: 'client.js',
+      banner: 'window.__ModuleLoader__.load({ id: "re0-mecha-dsh", factory: (require) => {',
+      intro: 'var module = { exports: {} }; var exports = module.exports;',
+      footer: 'return module.exports; } });',
+    },
   },
 ])

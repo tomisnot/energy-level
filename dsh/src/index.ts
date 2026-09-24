@@ -11,20 +11,22 @@
  * 安全红线：**只 connect、绝不 spawn 权威**（人启动 launcher = 权威，T4）。
  * 依赖方向：本文件 import dsh 的 `@deepseek-ai/*`（peer，宿主提供）+ 本地纯逻辑模块。
  *
- * **v1 的 client 半（驾驶舱面板）已随库替换退役**：cockpit-server（:8766）不复存在，
- * 人监控 AI 的面改由 GUI 侧边栏（Monitor 面板）承担；本插件只剩 host 半（MCP 桥）。
+ * **client 半（dsh 界面：◈监控 按钮 + 右栏监控面板 + 「切换至 GUI」按钮）随
+ * 两模式收拢重建**（2026-09-24）：面板轮询权威 :8767 的只读 /activity；切换按钮
+ * 经本文件注册的 /re0-gui command 写 .mode-request，看门人接手进程交接。
  */
 import type { Context } from '@deepseek-ai/cordis'
 import { MechaMcpBridge } from './host/mcp-bridge.ts'
 import { httpSessionFactory } from './host/mcp-session-http.ts'
 import { resolveHubUrl, buildRequestInit } from './host/config.ts'
 import { syncTools, type ToolDisposers } from './host/register-tools.ts'
+import { elRootFromPortFile, writeModeRequest } from './host/mode-request.ts'
 
 /** Cordis 插件显示名（诊断用）。 */
 export const name = 're0-mecha'
 
-/** 等待 dsh 的 tools 服务就绪再激活（工具注册需要它）。 */
-export const inject = ['tools']
+/** 等待 dsh 的 tools 服务就绪再激活（工具注册需要它）；commands 供 /re0-gui 切换。 */
+export const inject = ['tools', 'commands']
 
 /**
  * 插件配置（用户在 cordis.patch.yml 的 entry `config:` 里给；全部可选，缺省在 apply 里兜）。
@@ -88,7 +90,25 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
     ctx.logger?.info?.(`[re0-mecha] 连接 Hub MCP：${url}（只 connect，不 spawn 权威）`)
     await bridge.start()   // Hub 未起也不抛：插件照常加载，桥后台重连，起来后自动注册工具
 
+    // /re0-gui：dsh 界面「切换至 GUI」按钮的落点——写 .mode-request（'gui'），
+    // 看门人轮询到就 terminate 权威+dsh、起 GUI 模式。插件只留意图、不 spawn/kill。
+    const root = elRootFromPortFile(config.mcpPortFile)
+    const disposeCmd = ctx.commands!.register({
+      name: 're0-gui',
+      description: '把控制权交还人类：请求看门人切换到 GUI 模式（本 dsh 实例将退出）',
+      handler: async () => {
+        try {
+          const path = await writeModeRequest(root, 'gui')
+          return { kind: 'success' as const,
+            text: `已请求切换至 GUI 模式（${path}）。本 dsh 实例即将随交接退出。` }
+        } catch (e) {
+          return { kind: 'error' as const, text: `写 .mode-request 失败：${(e as Error).message}` }
+        }
+      },
+    })
+
     return async () => {
+      try { disposeCmd() } catch { /* ignore */ }
       for (const dispose of disposers.values()) {
         try { dispose() } catch { /* ignore */ }
       }

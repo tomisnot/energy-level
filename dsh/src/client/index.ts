@@ -1,0 +1,76 @@
+/**
+ * re0-mecha dsh 插件 —— **CLIENT 入口**（浏览器侧 Cordis 插件）。
+ *
+ * 两模式收拢（2026-09-24）后重建的 dsh 界面，三件事：
+ *  1. ◈监控 按钮（会话头部）→ 开右栏 + 打开 `re0-cockpit` tab（旧覆盖层重布局
+ *     已弃，右栏 tab 由 dsh 自管开合，按钮只负责"打开"，最轻）。
+ *  2. 右栏 tab body（`MonitorTabBody`）→ 轮询权威 :8767 的只读 /activity + /status，
+ *     显示"当前写权模式 + AI/人最近改了什么"。
+ *  3. 切换至 GUI 按钮（会话头部）→ 经 `/re0-gui` command 让 host 写 .mode-request，
+ *     看门人接手 terminate 权威+dsh、起 GUI。client 不能直接调 MCP 工具/写文件，
+ *     只能发 command（dsh 事实：ui-plan 的 exitPlanMode 同款，经 sessionId 注入）。
+ *
+ * ⚠ client 半经 tsdown 打成 CJS + `__ModuleLoader__.load` 包装；改本目录源码后须
+ * `npm run bundle` 并重启 dsh 才生效。
+ */
+import type { Context } from '@deepseek-ai/cordis'
+import type { SessionId } from '@deepseek-ai/dsh-session/types'
+import { MonitorTabBody } from './MonitorTabBody.tsx'
+import { CockpitButton, SwitchToGuiButton, type CockpitInjected, type SwitchInjected } from './buttons.tsx'
+
+/** Cordis 插件名（与 host 半一致）。 */
+export const name = 're0-mecha'
+
+/** slots（按钮+tab body）+ layout（开右栏）+ 右栏 tab 服务 + remote.commands（发 /re0-gui）。 */
+export const inject = ['slots', 'layout', 'sidebarRight', 'sidebarRightTabs', 'remote', 'remote.commands']
+
+export async function apply(ctx: Context): Promise<void> {
+  await ctx.effect(() => {
+    // 会话头部：◈监控 按钮（开右栏 + 打开我们的 tab）。sessionId 是组件 standardProp，
+    // inject 只暴露"无状态动作"，组件用自己的 props.sessionId 调需要它的动作。
+    const disposeCockpit = ctx.slots.inject('conversation.session.header.actions', () =>
+      ctx.slots.register(
+        { name: 'conversation.session.header.actions', id: 're0-cockpit', order: 200, label: '◈ 监控',
+          inject: (): CockpitInjected => ({
+            openCockpit: () => {
+              ctx.layout?.openRightbar?.(true, false)
+              try { (ctx as any).sidebarRight?.openTab?.('re0-cockpit') } catch { /* 降级 */ }
+            },
+          }) },
+        CockpitButton,
+      ))
+
+    // 会话头部：切换至 GUI 按钮（发 /re0-gui command，host 写 .mode-request）。
+    // switchToGui 收 sessionId（组件传自己的 props.sessionId）。
+    const disposeSwitch = ctx.slots.inject('conversation.session.header.actions', () =>
+      ctx.slots.register(
+        { name: 'conversation.session.header.actions', id: 're0-to-gui', order: 201, label: '→ GUI',
+          inject: (): SwitchInjected => ({
+            switchToGui: async (sessionId: SessionId) => {
+              const r = await ctx.remote!.commands!.execute(sessionId, '/re0-gui', [])
+              if (!r.ok) return r.error.message
+              if (r.value === undefined) return 'unknown command: /re0-gui'
+              return null
+            },
+          }) },
+        SwitchToGuiButton,
+      ))
+
+    // 右栏 tab 类型 + body（body 由 dsh 在该 tab 打开时渲染）
+    const relType = (ctx as any).sidebarRightTabs?.register?.({
+      id: 're0-cockpit', kind: 're0-cockpit', title: () => '机甲监控',
+    }) || null
+    const disposeBody = ctx.slots.inject('sidebar.right.pane.tab', () =>
+      ctx.slots.register(
+        { name: 'sidebar.right.pane.tab', key: 're0-cockpit' } as any,
+        MonitorTabBody,
+      ))
+
+    return () => {
+      if (disposeBody) { try { disposeBody() } catch { /* ignore */ } }
+      if (typeof relType === 'function') { try { relType() } catch { /* ignore */ } }
+      try { disposeSwitch?.() } catch { /* ignore */ }
+      try { disposeCockpit?.() } catch { /* ignore */ }
+    }
+  }, 're0-mecha: client monitor UI')
+}
