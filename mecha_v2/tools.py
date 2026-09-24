@@ -36,10 +36,10 @@ from .engine import ElEngine
 #: run_actions 声明的只读查询名（**单一来源**：description 由它生成、Surface
 #: QUERY 注册由它驱动、判据按它逐个验真——审查②a：声明与能力面不许两套账）。
 #: CodeAct 内置 op（estimate/summary/run/schema）不在此列，见 providers/codeact。
-#: get_waves 是纯查询项（②b：读不占顶层工具，走 Surface QUERY），注册时走独立
-#: 函数而非复用工具 execute。
+#: read_waves 既是顶层工具（实测报告 P1-7：常见查询该一步问到），也保留为
+#: 查询项复用同一份 execute（一份实现两处用，不造第二真值）。
 DOMAIN_QUERY_OPS = ("read_config", "query_params", "preview_run", "query_levels",
-                    "get_waves")
+                    "read_waves")
 
 #: set_drive 的 atom 参数 → 写回的配置键（②b，ADR 2026-09-23-EL驱动手感）。
 _WAVE_KEY = {"single": "dynamic.waves_single",
@@ -79,9 +79,15 @@ def build_tool_registry(engine: ElEngine, gate: Gate, surface: Surface,
         # call_id 从请求作用域读（审查 2.7）：hub 的 MCP 层在 execute 前 set，
         # 把这次工具调用与 dsh 行为史钉在一起（总纲 §5.2②互引）。
         rec = dict(schema["config"]).get(key) or dict(schema["solve"]).get(key) or {}
-        gate.set(channel, key, _coerce(rec, value), reason=reason,
-                 call_id=CURRENT_CALL_ID.get())
-        return {"ok": True, "key": key, "applied": True}
+        before = gate.snapshot.get(key)          # 写前旧值（回读对照用）
+        ev = gate.set(channel, key, _coerce(rec, value), reason=reason,
+                      call_id=CURRENT_CALL_ID.get())
+        # 实测报告 P1-4（v1 有、v2 退化的"写一次就自证"）：回执自带回读——
+        # resolved=引擎实际落地的值、readback=从快照读回的值、before=写前旧值。
+        # AI 不用二次查询即可核对"我声称写的"与"域里真存的"是否一致。
+        return {"ok": True, "key": key, "applied": True,
+                "before": before, "resolved": ev.value,
+                "readback": gate.snapshot.get(key)}
 
     # ---- set_config ----
     reg.register(define_tool(
@@ -268,17 +274,45 @@ def build_tool_registry(engine: ElEngine, gate: Gate, surface: Surface,
         banned_words=("gate", "dipole", "dme", "serialize", "wave_list 结构"),
     ))
 
+    # ---- read_waves（实测报告 P1-7：常见查询升顶层，一步问到）----
+    # 命名守卫禁 get_ 前缀（架构不让步）⇒ 用 read_ 动词，与 read_config 同族。
+    reg.register(define_tool(
+        name="read_waves",
+        description=(
+            "看当前挂了哪些驱动波（逐波摘要：名字/频率 MHz/光强/偏振/包络形状/"
+            "时长/起始时刻），不内联大数组。确认驱动配置、排查遗留驱动用它。"
+            "两体演化 atom 取 A / B 分别看，单体默认 single。"
+        ),
+        parameters={"atom": {"type": "string",
+                    "description": "single（默认）/ A / B"}},
+        output_schema={"type": "object", "required": ["ok", "atom", "waves"]},
+        execute=lambda atom="single": _read_waves(gate, atom),
+        banned_words=("gate", "wave_list 结构", "snapshot"),
+    ))
+
+    # ---- reset_config（实测报告 P1-5：上手前先能"收拾台面"）----
+    # 清空 = 对当前快照每个已写键写回 None（validate 已放行 None=清空回默认，
+    # 与 GUI"留空=默认"同一语义、同一条门）——不另造第二条落地路径。
+    reg.register(define_tool(
+        name="reset_config",
+        description=(
+            "把当前所有已设置的配置键清空回默认（含驱动波形清单）。开始一轮新"
+            "实验前用它收拾台面，不必逐键清。清空同样留痕可追溯；回执列出清了"
+            "哪些键。reason 用一句中文说明目的。"
+        ),
+        parameters={"reason": {"type": "string",
+                    "description": "一句话中文说明清空目的（进留痕）"}},
+        output_schema={"type": "object", "required": ["ok", "cleared", "n"]},
+        execute=lambda reason="ai reset_config": _reset(
+            gate, channel, reason),
+        banned_words=("gate", "snapshot 内部", "journal"),
+    ))
+
     # ---- run_actions（CodeAct 编排，审查 §1.2②：机制已建、消费方接上）----
     # 只读查询 op 的真身 = Surface 的 QUERY 注册项（审查②a：description 里
     # "或已注册的只读查询名"必须为真）。注册驱动自 DOMAIN_QUERY_OPS 单一来源，
     # 分派直接复用上面各工具已注册的 execute（一份实现两处用，不造第二真值）。
-    # get_waves 是纯查询项（②b：读不占顶层工具），无对应工具，注册独立闭包。
     for _qn in DOMAIN_QUERY_OPS:
-        if _qn == "get_waves":
-            surface.register(EntryKind.QUERY, _qn,
-                             lambda atom="single": _get_waves(gate, atom),
-                             called_by="framework:CodeAct.run_actions")
-            continue
         _tool = reg.get(_qn)
         surface.register(EntryKind.QUERY, _qn, _tool.execute,
                          called_by="framework:CodeAct.run_actions")
@@ -330,11 +364,28 @@ def _run_actions(surface: Surface, gate: Gate,
     audit = History()                          # 临时审计史（不进域史，见 docstring）
     codeact = CodeAct(surface, audit, lambda: actor)
     res = codeact.run(acts, call_id=CURRENT_CALL_ID.get())
+    # 实测报告 P1-6：结果要**带名字、可自读**——每步回执 {index, op, ok,
+    # detail, output}（output 直接挂进步里，不再靠 index 与位置数组对齐）；
+    # 成功步 detail 给短摘要（回执首个标量键值），失败步 detail 是教学原因。
+    steps = []
+    for s in res.steps:
+        out = res.outputs[s.index] if s.index < len(res.outputs) else None
+        detail = s.detail or _step_digest(out)
+        steps.append({"index": s.index, "op": s.op, "ok": s.ok,
+                      "detail": detail, "output": out})
     return {"ok": res.stopped_at == -1,
-            "steps": [{"index": s.index, "op": s.op, "ok": s.ok,
-                       "detail": s.detail} for s in res.steps],
-            "outputs": res.outputs,
+            "steps": steps,
             "stopped_at": res.stopped_at}
+
+
+def _step_digest(out) -> str:
+    """成功步的短摘要：回执 dict 的首个标量键值（无则 ok）。"""
+    if isinstance(out, Mapping):
+        for k, v in out.items():
+            if isinstance(v, (str, int, float, bool)) and k != "ok":
+                return f"{k}={v}"
+        return "ok" if out.get("ok") else ""
+    return "ok" if out is not None else ""
 
 
 def _submit_job(jobs: JobRegistry, surface: Surface, gate: Gate):
@@ -402,8 +453,21 @@ def _set_drive(engine: ElEngine, gate: Gate, channel: Channel, src, tgt, **kw):
     return {"ok": True, "key": key, "wave": wave, "n_waves": len(waves)}
 
 
-def _get_waves(gate: Gate, atom: str = "single"):
-    """get_waves：读某原子侧的驱动波摘要（不内联大数组）。
+def _reset(gate: Gate, channel: Channel, reason: str):
+    """reset_config：把当前快照里每个已写键写回 None（=清空回默认）。
+
+    走与单键写同一条门（validate 放行 None 是既有语义），逐键留痕可追溯；
+    回执列出清了哪些键——"台面收没收拾干净"一眼可核对。
+    """
+    keys = sorted(gate.snapshot)
+    call_id = CURRENT_CALL_ID.get()
+    for k in keys:
+        gate.set(channel, k, None, reason=reason, call_id=call_id)
+    return {"ok": True, "cleared": keys, "n": len(keys)}
+
+
+def _read_waves(gate: Gate, atom: str = "single"):
+    """read_waves：读某原子侧的驱动波摘要（不内联大数组）。
 
     纯读快照里的 wave_list，逐波回 name/频率/光强/偏振/包络形状/时长。要完整
     演化数据走 run_sim 回执，要原始波形对象是 GUI 的事——查询面只给可概览的摘要。
