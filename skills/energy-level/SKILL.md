@@ -1,7 +1,7 @@
 ---
 name: energy-level
 description: 通过 MCP 操控 Rb-87 里德堡原子仿真软件 Energy Level（mecha v2）——管理能级组、场与微波/光波形，运行含时演化，并解读布居转移结果。含单位约定、v2 工具面、典型工作流与已知物理坑。
-whenToUse: 当需要操控 Energy Level 软件（改参数、加能级组、配波形、跑演化计算、取布居结果）或解读其计算结果时。软件需处于运行状态（RE0_V2=1），MCP 端点见项目根 .mcp-port。
+whenToUse: 当需要操控 Energy Level 软件（改参数、加能级组、配波形、跑演化计算、取布居结果）或解读其计算结果时。软件需处于运行状态（`python 能级.py` 起 GUI 即 v2 同门），MCP 端点见项目根 .mcp-port。
 ---
 
 # SKILL: Energy Level — Rb-87 里德堡原子仿真（AI 操作指南 · mecha v2）
@@ -15,9 +15,10 @@ whenToUse: 当需要操控 Energy Level 软件（改参数、加能级组、配�
 
 ## 连接
 
-软件以 v2 模式启动后自动开放 streamable HTTP 端点：`RE0_V2=1 python 能级.py`
-→ GUI 与 MCP 服务器**同进程共一道 Gate**，实际端口写入项目根 `.mcp-port`
-（裸端口，兼容 dsh `resolveHubUrl`）。你 attach 到 `http://127.0.0.1:<port>/mcp`。
+软件启动后（`python 能级.py` 选 GUI，或 `python app_entry.py --ai` 由启动器代起）
+自动开放 streamable HTTP 端点：GUI 与 MCP 服务器**同进程共一道 Gate**，实际端口写入
+项目根 `.mcp-port`（裸端口，兼容 dsh `resolveHubUrl`）。你 attach 到
+`http://127.0.0.1:<port>/mcp`。
 
 **Trae IDE 接入**：项目根 `.trae/mcp.json` 指向该端点。需在 Trae 设置 → MCP 打开
 "启用项目级 MCP"，然后**新开会话**生效（工具在会话启动时加载）。

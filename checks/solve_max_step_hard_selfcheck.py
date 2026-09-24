@@ -132,13 +132,15 @@ check('C2 更紧的硬上限（0.02 ns）也一致（< 1e-4）',
 
 print('D) 接线：solve.MAX_STEP_HARD 在册 + 映射 + 入参')
 from src.core import runspec as _rs                             # noqa: E402
-from mecha import registry as _reg                          # noqa: E402
-from mecha import runtime as _rt                            # noqa: E402
-from src.adapter import EngineAdapter as _EA                     # noqa: E402
-_rt.set_engine(_EA())      # registry.solve_schema/describe 需引擎（config_schema 来自 engine）
+from src.core import protocol as _proto                         # noqa: E402
 from src.core.evolve_mixed import evolve_mixed_pair as _emp      # noqa: E402
 from src.core.hard import evolve_hard_pair as _ehp               # noqa: E402
 import inspect                                                   # noqa: E402
+
+
+def _rs_solve():
+    """v2 派生面：solve schema（键从 SOLVE_KWARG 派生，不手抄；无需建 cache）。"""
+    return dict(_proto.solve_schema())
 
 group('D 接线：在册 + 映射 + 两体入口入参 + 说明书')
 check('D1 SOLVE_KWARG 含 MAX_STEP_HARD',
@@ -151,7 +153,7 @@ check('D3 mixed 两体入口有 max_step_hard',
 check('D4 hard 两体入口有 max_step_hard',
         'max_step_hard' in inspect.signature(_ehp).parameters)
 check('D5 MAX_STEP 说明含"起步"（只约束起步、非全程硬上限；说明书即 prompt）',
-        '起步' in (_reg.solve_schema().get('solve.MAX_STEP') or {}).get('desc', ''))
+        '起步' in (_rs_solve().get('solve.MAX_STEP') or {}).get('desc', ''))
 
 flush()
 ok = C.summary()

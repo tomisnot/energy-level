@@ -21,17 +21,15 @@ sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 from PyQt5.QtWidgets import QApplication, QDoubleSpinBox    # noqa: E402
 from checks.checklib import Checker                         # noqa: E402
-from mecha.app_bridge import AppBridge                  # noqa: E402
+from examples.energy_level.bridge import V2Bridge           # noqa: E402
 from src.ui import _mecha_bind as MB                        # noqa: E402
-from mecha import runtime                               # noqa: E402
-from src.adapter import EngineAdapter                       # noqa: E402
 
-runtime.set_engine(EngineAdapter())   # 注入领域引擎（mecha 零领域 import）
 app = QApplication.instance() or QApplication(sys.argv)     # offscreen
 C = Checker('gui_bind')
 
 tmp = tempfile.mkdtemp(prefix='guibind_')
-br = AppBridge(root=tmp, mode='human')
+EL_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+br = V2Bridge.for_gui(el_root=EL_ROOT, data_root=tmp, mode='human')
 binder = MB.Binder(br)
 
 # ---------------- A. 标准件工厂 ----------------
@@ -55,7 +53,7 @@ C.group('B 人工模式：改 widget → 经 choke point 写 bridge + 发事件'
 ])
 
 # ---------------- C. AI 模式：外部写→刷新 + 只读门控 ----------------
-br.switch_mode('ai', reason='交给 AI 开车')
+br.switch_mode('ai', actor='human')
 binder.set_readonly(not br.can_write('gui'))
 br.write('field.B_gauss', 42.0, reason='AI 调磁场', actor='ai')   # 外部写
 refreshed = abs(sb.value() - 42.0) < 1e-9
@@ -69,14 +67,14 @@ C.group('C AI 模式：外部写→widget 实时刷新 + GUI 只读门控（§2 
 ])
 
 # ---------------- D. register_external（非标参数） ----------------
-br.switch_mode('human', reason='夺回控制')
+br.switch_mode('human', actor='human')
 binder.set_readonly(False)
 holder = {'v': [{'gamma_mhz': 1.0}]}
 binder.register_external('dynamic.decays', read_fn=lambda: holder['v'],
                          write_fn=lambda val: holder.__setitem__('v', val))
 seeded = br.read('dynamic.decays')
 # 外部（AI）改 external 键 → 面板 apply（切 ai 模式测刷新）
-br.switch_mode('ai', reason='再交 AI')
+br.switch_mode('ai', actor='human')
 br.write('dynamic.decays', [{'gamma_mhz': 2.0}], reason='AI 改衰变', actor='ai')
 applied = holder['v'] == [{'gamma_mhz': 2.0}]
 C.group('D register_external：面板值 ↔ bridge（种子 + 外部改回刷面板）', [
