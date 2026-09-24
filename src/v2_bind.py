@@ -66,6 +66,15 @@ def gc_report(root, *, dry_run=True, **_kw):
 class _MonitorHandler(http.server.BaseHTTPRequestHandler):
     bridge = None
 
+    def do_OPTIONS(self):
+        # 浏览器（dsh 页 :3081）轮询本端点（:8767）是跨源请求——预检放行。
+        # 只读端点 + 绑回环，允许任意源不构成风险面。
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
+
     def do_GET(self):
         if self.path == "/status":
             return self._json(200, {"ok": True, "mode": type(self).bridge.mode})
@@ -92,6 +101,7 @@ class _MonitorHandler(http.server.BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
+        self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(data)
 
