@@ -77,8 +77,11 @@ def _wait_mcp_port(timeout=90):
 
 
 def _pick_dsh_port(preferred=3081, tries=10):
-    """从 preferred 起找第一个可绑定回环端口（3080 永不入选——那是官方 dsh）。"""
+    """从 preferred 起找第一个可绑定回环端口；**3080 硬跳过**（官方 dsh 的端口，
+    项目实例永不占——注释即机制，不靠默认值兜底）。"""
     for p in range(preferred, preferred + tries):
+        if p == 3080:
+            continue
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.bind(("127.0.0.1", p))
