@@ -24,18 +24,20 @@
 
 判据目录：默认依次找 `checks/`、`old/checks/`（沙盒被重排过，两处都认，
 同一批判据的两份拷贝 → 只跑第一处）。
+
+⚠ 2026-09-24 代替 v1：一批测 v1 库内核（Session/Bus/Ops/registry/cockpit/
+Fields/interlock/gc）的判据已退役，处置清单见 mecha 仓 ADR
+`docs/v2/notes/implemented/2026-09-24-代替v1-判据迁移与落地.md`；
+v2 库本身的守卫在 mecha 仓 `checks/run_all.py`，不跨仓重复。
 """
 import argparse
 import os
 import re
 import subprocess
-
-# 判据一律 in-process GUI（不连活 Hub）：仓库 cwd 可能有活 Hub 写的 .mcp-port，
-# 若 GUI 判据连了活 Hub 会断言 in-process cache 非 None 失败。
-os.environ.setdefault('RE0_GUI_INPROC', '1')
 import sys
 import time
 
+# 判据一律 in-process（v2：GUI 判据自建 V2Bridge，不连活实例）。
 sys.stdout.reconfigure(encoding='utf-8')
 ROOT = os.path.dirname(os.path.abspath(__file__))
 
@@ -64,16 +66,11 @@ TIER_FAST_SEC = 15.0      # --fast：提交前
 # 单判据实测耗时（秒；2026-09-22 由 scripts/check_profile.py 测得）。
 FAST_KNOWN_SEC = {
     'docs_consistency_selfcheck.py': 0.4,
-    'mecha_toyengine_selfcheck.py': 0.1,
-    'mecha_purity_selfcheck.py': 0.2,
-    'mecha_domain_words_selfcheck.py': 0.3,
-    'interlock_selfcheck.py': 0.1,
     'checks_sentinel.py': 0.5,
     'cleanliness_guard_selfcheck.py': 1.6,
     'field_loss_selfcheck.py': 1.7,
     'human_control_selfcheck.py': 1.7,
     'authority_selfcheck.py': 2.6,
-    'app_bridge_selfcheck.py': 2.6,
     'engine_contract_selfcheck.py': 2.9,
     'runspec_contract_selfcheck.py': 2.4,
     'field_loss_engine_selfcheck.py': 2.7,
@@ -82,8 +79,6 @@ FAST_KNOWN_SEC = {
     'mw_pair_keep_selfcheck.py': 2.1,
     'gui_bind_selfcheck.py': 1.9,
     'manybody_m1_ed_selfcheck.py': 1.1,
-    'mecha_codeact_selfcheck.py': 5.1,
-    'mecha_mcp_selfcheck.py': 6.3,
     'sweep_gui_selfcheck.py': 6.4,
     'gui_run_worker_selfcheck.py': 6.6,
     'mixed_arb_mw_selfcheck.py': 6.9,
@@ -91,7 +86,7 @@ FAST_KNOWN_SEC = {
     'ai_h_snapshot_guard_selfcheck.py': 2.3,
     'gui_app_entry_selfcheck.py': 8.3,
     'gui_run_flow_selfcheck.py': 10.0,
-    'fields_selfcheck.py': 10.4,
+    'drive_wave_selfcheck.py': 10.4,
     'hard_dedup_selfcheck.py': 11.0,
     'gui_inspector_selfcheck.py': 11.2,
     'manybody_integration_selfcheck.py': 11.3,
@@ -197,6 +192,11 @@ def main():
     env.setdefault('QT_QPA_PLATFORM', 'offscreen')
     env.setdefault('EL_NO_AI_SERVER', '1')
     env.setdefault('PYTHONIOENCODING', 'utf-8')
+    # v2 判据的 GUI 装配（MainWindow→make_v2_bridge）写临时数据根，
+    # 不污染仓内权威 journal（v1 时代 RE0_GUI_INPROC+临时 root 的同款纪律）。
+    if not env.get('RE0_V2_DATA_ROOT'):
+        import tempfile
+        env['RE0_V2_DATA_ROOT'] = tempfile.mkdtemp(prefix='re0v2-checks-')
 
     print('判据目录：%s' % CHECKS)
     _tier = '（内循环档 --core）' if a.core else ('（提交前档 --fast）' if a.fast else '')

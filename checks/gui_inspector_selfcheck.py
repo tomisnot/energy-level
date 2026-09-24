@@ -10,10 +10,12 @@ offscreen；os._exit 绕过 teardown 噪声。
 """
 import os
 import sys
+import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 os.environ.setdefault('EL_NO_AI_SERVER', '1')
+os.environ.setdefault('RE0_V2_DATA_ROOT', tempfile.mkdtemp(prefix='guiinsp_'))
 
 from PyQt5.QtWidgets import QApplication                  # noqa: E402
 from checks.checklib import Checker                        # noqa: E402

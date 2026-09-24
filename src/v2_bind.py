@@ -114,10 +114,16 @@ def make_v2_bridge(el_root, *, data_root=None, data_dir_name=".mecha-v2",
     """构造共享 Gate 的 V2Bridge；可选起 MCP 服务器 + 人工控制端点。
 
     app_entry 的 v2 分支调它，拿到的对象即 v1 AppBridge 的 drop-in。
+    数据根优先级：显式参数 > `RE0_V2_DATA_ROOT`（判据/测试用临时目录，
+    不污染仓内权威 journal）> el_root。`EL_NO_AI_SERVER` 置位 → 不起后台
+    服务（判据 in-process 用，避免与活实例抢端口/抢 .mcp-port——2026-09-12
+    事故的同款防线）。
     """
     from examples.energy_level.bridge import V2Bridge
     from mecha.authority import Mode
-    data_root = data_root or el_root
+    data_root = (data_root or os.environ.get("RE0_V2_DATA_ROOT") or el_root)
+    if os.environ.get("EL_NO_AI_SERVER"):
+        start_services = False
     bridge = V2Bridge.for_shared(el_root=el_root, data_root=data_root,
                                  data_dir_name=data_dir_name, mode=Mode.HUMAN)
     bridge._mcp_thread = None

@@ -778,9 +778,10 @@ class SolverInspector(QDialog):
     def _make_tab_gc(self):
         """数据回收页：**只做"列出 + 勾选 + 触发 + 显示回执"**，不自己删任何文件。
 
-        边界（工单 P4-3 已定，且 `checks/cockpit_selfcheck.py` 把"不得 remove/unlink/rmtree"
-        钉成判据——同一纪律适用于 GUI）：**删除逻辑一律在库侧** `mecha.gc.gc`；
-        本页只调它、只显示它算出来的计划。
+        边界（工单 P4-3 已定）：**删除逻辑一律在库侧** `mecha.gc.gc`（v2 未接 gc，
+        走 v2_bind.gc_report 如实报告"未接线"，见 D-9）；本页只调它、只显示它
+        算出来的计划——同一"GUI 不自己删文件"纪律（原 checks/cockpit_selfcheck
+        的 E 组反向断言已随 v1 退役，纪律本身仍成立）。
         """
         w = QWidget()
         lay = QVBoxLayout(w)

@@ -71,10 +71,10 @@ def _as_state(s):
 
 
 _S = [s for s in _lv['states'] if s['kind'] == 'mJ' and s['l'] == 0]   # 60S
-_P = [s for s in _lv['states'] if s['kind'] == 'mJ' and s['l'] == 1]   # 60P
+_P_STATES = [s for s in _lv['states'] if s['kind'] == 'mJ' and s['l'] == 1]   # 60P
 _src, _tgt = None, None
 for _a in _S:
-    for _b in _P:
+    for _b in _P_STATES:
         if abs(_a['m'] - _b['m']) < 1e-9:                    # Δm=0（π）
             _d = abs(SA.dipole_amplitude(br._engine._cache,
                                          _as_state(_a), _as_state(_b), 0))
@@ -94,7 +94,7 @@ w0 = _call('set_drive', src=SRC_K, tgt=TGT_K, rabi_mhz=50.0, pulse='pi',
 # list_levels 的 E_mhz 按 6 位小数舍入（协议层展示口径）；drive_wave 用未舍入
 # 态能 ⇒ 对拍容差取舍入误差界（2×5e-7）。
 bare = abs(float(_tgt['E_mhz']) - float(_src['E_mhz']))
-_alt = next((s for s in _P if s is not _tgt
+_alt = next((s for s in _P_STATES if s is not _tgt
              and abs(s['E_mhz'] - _tgt['E_mhz']) > 1e-6), None)
 C.group('A set_drive 频率 == |ΔE_mhz| + 失谐（致死性：换能级→freq 不同）', [
     ('detuning=0 时 freq == 手算裸能级差（舍入容差内）',
