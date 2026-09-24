@@ -1,19 +1,18 @@
 # -*- coding: utf-8 -*-
-"""EL ↔ mecha v2 的接线层（Phase 5 第 2 步：GUI 与 AI 过同一道 v2 门）。
+"""EL ↔ mecha v2 的接线层：GUI 与 AI 过同一道 v2 门（v1 门面已退役）。
 
-设 `RE0_V2=1` 时 app_entry 用它取代 v1 的 AppBridge：一个 V2Bridge.for_shared
-同时服务 GUI（主线程直接读写）与 AI（后台 MCP 服务器线程），**共一 Gate、一份
-History**。cache 经 CacheProxy 汇流到引擎线程（ARC SQLite 认线程，B-1①）。
+app_entry 用它装配 V2Bridge.for_shared：同时服务 GUI（主线程直接读写）与
+AI（后台 MCP 服务器线程），**共一 Gate、一份 History**。cache 经 CacheProxy
+汇流到引擎线程（ARC SQLite 认线程，B-1①）。
 
-另起一个**人工控制端点**（镜像 v1 src/adapter/serve 的形状）：人的夺权/交权/
-写走它、actor 由服务端固定为 human，AI 面（MCP）改不了 mode 也伪造不了 human
-归因——这两条与 v1 同源，是"AI 不能自授权"的护栏。
+另起一个**人工控制端点**：人的夺权/交权/写走它、actor 由服务端固定为 human，
+AI 面（MCP）改不了 mode 也伪造不了 human 归因——这是"AI 不能自授权"的护栏。
 
 ## Known Limitations and Deferred Work
 
-- 依赖 mecha v2 在 sys.path 上（app_entry 的 v2 分支负责插入；或由 editable
-  安装 mecha==0.2 顶掉 v1）。v1/v2 同名 mecha，**同进程只能有一个**——本层
-  假设 v2 已生效，不兼容同进程 import v1 的 mecha.ops/session 等。
+- 依赖 mecha v2 已安装（editable 安装 mecha==0.2）。v1/v2 同名 mecha，
+  **同进程只能有一个**——本层假设 v2 已生效，不兼容同进程 import v1 的
+  mecha.ops/session 等。
 - gc（数据回收）在 v2 未实现（D-9 保留策略等第二项目）；GUI 的回收按钮在
   v2 下会显示"未接线"而非静默，见 load_artifact 旁的 gc 垫片。
 - undo/redo 未接：v2 History 是 append-only 事件流，撤销按"反向 set 记一条
@@ -27,34 +26,8 @@ import json
 import os
 import pickle
 import secrets
-import sys
 import threading
 from pathlib import Path
-
-# v2 仓根：环境变量优先；否则试两个已知布局（并列目录 / code-nosync）
-def _find_v2_root() -> str:
-    env = os.environ.get("MECHA_V2_ROOT")
-    if env:
-        return env
-    candidates = [
-        str(Path(__file__).resolve().parents[2] / "mecha"),      # .../python/mecha
-        r"D:\code-nosync\mecha",
-    ]
-    for c in candidates:
-        if (Path(c) / "mecha" / "gate.py").exists():
-            return c
-    return candidates[0]
-
-
-_MECHA_V2 = _find_v2_root()
-
-
-def _ensure_v2_path() -> None:
-    if _MECHA_V2 and _MECHA_V2 not in sys.path:
-        sys.path.insert(0, _MECHA_V2)
-
-
-_ensure_v2_path()
 
 
 def load_artifact(root, aid):

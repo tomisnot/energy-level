@@ -13,6 +13,7 @@ save_state/
 # （存档归本地数据，历史上曾短暂入库，现已改回"只在磁盘侧"）。
 runtime/
 .mecha/
+.mecha-v2/
 scripts/tmp/
 
 # MCP 写通道端口发现文件（人运行的 launcher 写、harness attach 用）

@@ -50,14 +50,8 @@ from src.ui import _mecha_bind
 from src.ui.ui_group import EnergyGroupPanel
 from src.ui.ui_spectrum import LevelAnalysisPanel
 
-# RE0_V2=1 → 走 mecha v2（同一道门：GUI + AI 共一 Gate）；否则 v1（默认不变）。
-_V2 = os.environ.get('RE0_V2') == '1'
-if _V2:
-    from src.v2_bind import make_v2_bridge, load_artifact as _v2_load_artifact
-    AppBridge = EngineAdapter = None            # v2 分支不 import v1 门面
-else:
-    from mecha.app_bridge import AppBridge
-    from src.adapter import EngineAdapter
+# mecha v2：GUI 与 AI（MCP 服务器线程）共一 Gate、一份 History（v1 门面已退役）。
+from src.v2_bind import make_v2_bridge
 
 matplotlib.rcParams['font.family'] = 'sans-serif'
 matplotlib.rcParams['font.sans-serif'] = ['Microsoft YaHei', 'SimHei', 'DejaVu Sans']
@@ -72,25 +66,10 @@ _MODE_QSS = (
     'QPushButton:hover { background: #f3f5f9; }'
 )
 
-# 项目根（= 本文件所在目录）：运行时数据根 `<PROJ_ROOT>/.mecha` 的**唯一定义点**。
-# 三处消费，必须指向同一个 journal，否则"起得来但看不见"（假绿）：
-#   ① in-process `AppBridge(root=PROJ_ROOT)`（GUI 自己读写 session/artifact）；
-#   ② `run_ai()` 起 Hub（`--root PROJ_ROOT`）——Hub 落的 journal 是权威事件流；
-#   ③ `run_ai()` 起驾驶舱（`--root JOURNAL_ROOT`）——只读**同一个** journal（T5）。
-# P0-1 之后 mecha/cockpit 都**不再从 __file__ 倒推**，必须显式给（不猜路径）。
+# 项目根（= 本文件所在目录）：v2 数据根（`.mecha-v2/` journal+artifacts）与
+# `.mcp-port` / `.human-token` 的**唯一定义点**——GUI 进程内装配（make_v2_bridge）
+# 与 run_ai() 等的 .mcp-port 必须同源，否则"起得来但看不见"（假绿）。
 PROJ_ROOT = os.path.dirname(os.path.abspath(__file__))
-
-# ⚠ 两个服务的 `--root` **语义不同**（实测 2026-09-22，勿"顺手统一"）：
-#   · `src/adapter/serve.py:95`  `root = a.root or MECHA_ROOT or cwd` → 再 `resolve_root`
-#     **拼 `.mecha`** ⇒ 传**项目根**；
-#   · `cockpit.server.create_app(root=…)`  `root = root or _default_root()` ——
-#     `--root` **原样使用、不拼 `.mecha`**（只有走 `MECHA_ROOT` 的 `_default_root`
-#     才拼）⇒ 必须传 **journal 目录本身**。
-#   实测证据：`--root <repo>` → `/api/history` 返回 **n_events=0**（起得来但看不见任何
-#   事件 = 假绿）；`--root <repo>/.mecha` → **n_events=246**（与盘上 journal 行数一致）。
-#   ⇒ 本常量就是驾驶舱该给的那个值。**若 cockpit 侧把 `--root` 归一成项目根
-#   （与 serve.py 一致），本处须改回 `PROJ_ROOT`**——已作为跨模块待办报给主代理。
-JOURNAL_ROOT = os.path.join(PROJ_ROOT, '.mecha')
 
 
 class MainWindow(QMainWindow):
@@ -106,37 +85,10 @@ class MainWindow(QMainWindow):
             app.setStyleSheet(ui_theme.QSS)
         self.statusBar().showMessage('就绪', 3000)
 
-        # mecha 门面：若已有 Hub 在跑（.mcp-port）→ GUI 作 **Hub 客户端**（与 AI 同 session，
-        # Phase 1 GUI Hub 客户端化）；否则 in-process 自托管内核（人工模式默认）。
-        # 连接失败 graceful 回落 in-process，不让 GUI 起不来。
-        #
-        # P0-1 配合（mecha 侧 `bus.resolve_root` 已改为**必须显式给根**，不再从
-        # __file__ 倒推）：in-process 分支必须注入本项目根，否则 `Bus(root=None)`
-        # 直接抛 MechaError ⇒ MainWindow 起不来。根 = 模块级 `PROJ_ROOT`
-        # （**唯一定义点**，与 `run_ai()` 给 Hub/驾驶舱的 `--root` 同源）；
-        # `resolve_root` 会拼成 `<repo>/.mecha`（正是 .gitignore 里那一项，
-        # 也修掉"产物落到库上级目录"的旧 bug）。
-        # ⚠ `.mcp-port`（下一行 discover_hub）属 P0-2，按主代理要求**本轮不动**。
-        _proj_root = PROJ_ROOT
-        self._hub_connected = False
-        if _V2:
-            # v2：GUI 与 AI（MCP 服务器线程）共享一个 Gate；人工控制端点供夺权。
-            self.app_bridge = make_v2_bridge(_proj_root)
-        else:
-            from mecha.hub_client import discover_hub
-            from mecha.hub_bridge import HubBridge
-            # RE0_GUI_INPROC=1 → 强制 in-process（判据/离线用）；否则有活 Hub（.mcp-port）就连它
-            hub_url = None if os.environ.get('RE0_GUI_INPROC') else discover_hub()
-            if hub_url:
-                try:
-                    self.app_bridge = HubBridge(hub_url)
-                    self._hub_connected = True
-                except Exception:                              # noqa: BLE001
-                    self.app_bridge = AppBridge(root=_proj_root, engine=EngineAdapter(),
-                                                mode='human')
-            else:
-                self.app_bridge = AppBridge(root=_proj_root, engine=EngineAdapter(),
-                                            mode='human')
+        # mecha v2 门面：GUI 与 AI（本进程后台 MCP 服务器线程）**共享一个 Gate、
+        # 一份 History**；另起人工控制端点供夺权/交权（actor 服务端固定 human）。
+        # 根 = 模块级 `PROJ_ROOT`（唯一定义点，与 run_ai() 等的 .mcp-port 同源）。
+        self.app_bridge = make_v2_bridge(PROJ_ROOT)
         self.cache = self.app_bridge.cache
         # 面板控件 ↔ session。**notify=self.log**：写权被拒等"必须让人看见"的反馈
         # 走状态栏（P2-4）——没有它，`Binder._reject` 就只是"声明了没人接"的空机制。
@@ -157,11 +109,10 @@ class MainWindow(QMainWindow):
         # app_bridge.switch_mode。engine.* 只读（点1），故不再有引擎覆写状态。
         self.god_mode = False
         self._build_ui()
-        if _V2:
-            # 第一交付物（总纲 §1.2 事实 2）：人监控 AI 的侧边栏，两层信任。
-            # 须在 _build_ui 之后挂（menuBar 那时才存在）。
-            from src.ui.monitor_panel import attach_monitor_dock
-            attach_monitor_dock(self)
+        # 第一交付物（总纲 §1.2 事实 2）：人监控 AI 的侧边栏，两层信任。
+        # 须在 _build_ui 之后挂（menuBar 那时才存在）。
+        from src.ui.monitor_panel import attach_monitor_dock
+        attach_monitor_dock(self)
 
     def log(self, msg, timeout=8000):
         """统一信息出口：状态栏显示。"""
@@ -420,7 +371,7 @@ class MainWindow(QMainWindow):
         if not path:
             return
         try:
-            self.app_bridge.save(path, reason='GUI 保存状态')   # session 快照（mecha-session-v1）
+            self.app_bridge.save(path, reason='GUI 保存状态')   # v2 快照 dict（{键:值}）
         except Exception as e:                          # noqa: BLE001
             QMessageBox.warning(self, '保存失败', str(e))
             return
@@ -431,7 +382,7 @@ class MainWindow(QMainWindow):
         if not path:
             return
         try:
-            self.app_bridge.load(path, reason='GUI 恢复状态')   # 写 session→bus→面板自动刷新
+            self.app_bridge.load(path, reason='GUI 恢复状态')   # 经 Gate 原子批量写→订阅刷新
         except Exception as e:                          # noqa: BLE001
             QMessageBox.warning(self, '恢复失败', str(e))
             return
@@ -463,12 +414,13 @@ def run_gui(app):
 
 
 def run_ai():
-    """AI 模式：后台起 Hub(:8765)+驾驶舱服务(:8766)，**前台跑 dsh**（AI harness）。
+    """AI 模式：后台起 GUI（v2 同进程权威装配），**前台跑 dsh**（AI harness）。
 
-    为何这样分：驾驶舱是 **dsh 插件**（dsh 网页头部「◈ 驾驶舱」按钮 iframe :8766），
-    所以**不单独开浏览器**——AI 界面和监控都在 dsh 网页里，你只需面对 dsh 一个。Hub/
-    驾驶舱是 dsh 背后的服务，后台起（各自独立窗、可最小化）。dsh 启动慢 → 放**前台**，
-    它的启动输出/进度直接进本控制台，你能看着它起来。dsh 退出或 Ctrl+C → 收尾后台服务。
+    v2 没有独立的 Hub/驾驶舱进程：GUI 进程本身就是权威装配（Gate/History +
+    MCP 服务器线程 + 人工控制端点），写 `<PROJ_ROOT>/.mcp-port`；AI 经 MCP
+    协议连它，与 GUI 过**同一道门**。监控 = GUI 侧边栏（驾驶舱的职责由
+    Monitor 面板接替）。dsh 启动慢 → 放**前台**，它的启动输出/进度直接进本
+    控制台，你能看着它起来。dsh 退出或 Ctrl+C → 收尾 GUI。
     """
     import atexit
     import shutil
@@ -497,19 +449,15 @@ def run_ai():
                 pass
     atexit.register(_cleanup)
 
-    # 后台服务：Hub（权威·MCP 写通道 :8765）+ 驾驶舱（:8766，dsh 插件「◈驾驶舱」右栏 tab）
-    # ★ 两者必须读**同一个 journal**（T5/I2）：Hub 写 `<PROJ_ROOT>/.mecha/journal.jsonl`，
-    #   驾驶舱只读它。注意 `--root` 语义不同（见模块顶部 JOURNAL_ROOT 的说明）：
-    #   Hub 要**项目根**（serve 侧拼 `.mecha`），驾驶舱要**journal 目录**（原样使用）。
-    #   显式 `--root` 优先于环境变量（命令行可见、日志可查，符合"数据在哪要说得清"）。
-    _spawn('Hub', [py, '-m', 'src.adapter.serve', '--root', PROJ_ROOT])
-    _spawn('驾驶舱', [py, '-m', 'cockpit.server', '--root', JOURNAL_ROOT])
+    # 后台服务：GUI（--gui 跳过模式弹窗）。它就是权威本体：MCP 端点与人工
+    # 控制端点都在它的进程里，journal/artifacts 落 `<PROJ_ROOT>/.mecha-v2/`。
+    _spawn('GUI', [py, os.path.join(here, 'app_entry.py'), '--gui'])
 
-    # 等 Hub 写好 .mcp-port（dsh 插件据此发现并连 Hub）——带进度点
+    # 等 GUI 写好 .mcp-port（dsh 的 re0-mecha 插件据此发现并连 MCP 端点）——带进度点
     pf = os.path.join(here, '.mcp-port')
-    print('[launcher] 等 Hub 就绪（.mcp-port）', end='', flush=True)
+    print('[launcher] 等 GUI 就绪（.mcp-port）', end='', flush=True)
     ready = False
-    for _ in range(80):                                  # 最多 ~20s
+    for _ in range(160):                                 # cache 构建 + 装配，最多 ~40s
         try:
             if os.path.exists(pf) and open(pf, encoding='utf-8').read().strip():
                 ready = True
@@ -558,12 +506,12 @@ def run_ai():
             print('[launcher] ⚠ npm install 失败：%s（dsh 可能起不来）' % e)
 
     print('=' * 70)
-    print('  AI 模式：Hub(:8765)+驾驶舱(:8766) 已后台起（各自独立窗、可最小化）')
+    print('  AI 模式：GUI（含 MCP 端点 + 人工控制端点）已后台起（独立窗、可最小化）')
     print('  下面**前台启动 dsh**（较慢，启动输出直接显示在本窗，请等它起来）：')
     print('  · 本实例绑定 :%d（避开官方 dsh 的 :3080，两实例可并存）' % dsh_port)
     print('  · dsh 起来后会**自动打开浏览器** = AI 界面（URL 也在下面打印）')
-    print('  · 驾驶舱不用单独开——它是 dsh 插件，在 dsh 网页头部「◈ 驾驶舱」按钮里')
-    print('  · 停：本窗 Ctrl+C（一并收尾 Hub/驾驶舱）')
+    print('  · 监控不用单独开——AI 动作实时进 GUI 侧边栏（Monitor 面板）')
+    print('  · 停：本窗 Ctrl+C（一并收尾 GUI）')
     print('=' * 70, flush=True)
 
     try:
@@ -593,9 +541,9 @@ def _choose_mode():
     box.setIcon(QMessageBox.Question)
     box.setText('请选择本次启动的模式：')
     box.setInformativeText(
-        'AI 模式：起 Hub（MCP 写通道 :8765）+ 驾驶舱（web 监控 :8766）+ dsh harness，'
-        'AI 在 dsh 里驱动引擎、你在浏览器监控（可随时夺权）。\n\n'
-        'GUI 模式：本地操控面板（进程内自托管内核），人自己开车。')
+        'AI 模式：后台起 GUI（MCP 端点 + 人工控制端点都在里面）+ dsh harness，'
+        'AI 在 dsh 里驱动引擎、你在 GUI 侧边栏监控（可随时夺权）。\n\n'
+        'GUI 模式：本地操控面板（同一道门，人自己开车）。')
     b_ai = box.addButton('AI 模式', QMessageBox.AcceptRole)
     b_gui = box.addButton('GUI 模式', QMessageBox.ActionRole)
     box.addButton('取消', QMessageBox.RejectRole)
@@ -610,12 +558,19 @@ def _choose_mode():
 
 
 def main():
-    """入口：弹窗选 AI 模式 / GUI 模式，自动运行对应的。"""
+    """入口：弹窗选 AI 模式 / GUI 模式，自动运行对应的。
+
+    `--gui`（或 `--ai`）命令行参数跳过弹窗——run_ai() 后台起 GUI 用。
+    """
     app = QApplication.instance() or QApplication(sys.argv)
     try:
         app.setStyleSheet(ui_theme.QSS)
     except Exception:                                      # noqa: BLE001
         pass
+    if '--gui' in sys.argv:
+        return run_gui(app)
+    if '--ai' in sys.argv:
+        return run_ai()
     mode = _choose_mode()
     if mode == 'gui':
         return run_gui(app)
