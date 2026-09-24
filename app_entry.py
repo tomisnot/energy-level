@@ -542,8 +542,13 @@ def _choose_mode():
     box.setText('请选择本次启动的模式：')
     box.setInformativeText(
         'AI 模式：后台起 GUI（MCP 端点 + 人工控制端点都在里面）+ dsh harness，'
-        'AI 在 dsh 里驱动引擎、你在 GUI 侧边栏监控（可随时夺权）。\n\n'
-        'GUI 模式：本地操控面板（同一道门，人自己开车）。')
+        'AI 在 dsh 里驱动引擎、你在 GUI 侧边栏监控。\n\n'
+        'GUI 模式：本地操控面板（同一道门），人自己开车。\n\n'
+        '──── 写权模式（两种启动都从这里开始）────\n'
+        '· 启动即「人写」：只有你能改参数。\n'
+        '· 侧边栏「交给 AI」按钮（或浏览器开人工控制台 http://127.0.0.1:8767/）'
+        '→ 切到「AI 写」：界面变只读，AI 的每笔写都记 actor=ai 进史。\n'
+        '· 随时「人接管」夺回；「全员禁写」是维护态。AI 不能给自己解锁。')
     b_ai = box.addButton('AI 模式', QMessageBox.AcceptRole)
     b_gui = box.addButton('GUI 模式', QMessageBox.ActionRole)
     box.addButton('取消', QMessageBox.RejectRole)

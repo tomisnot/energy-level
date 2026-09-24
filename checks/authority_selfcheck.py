@@ -140,6 +140,37 @@ C.check('F v2 无 undo 口（撤销=反向 set 记新事件，ADR EL能力面取
         '写权门的覆盖面因此不需要 undo 分支）',
         not hasattr(br, 'undo'))
 
+# F2. watch_mode：mode 不落史 ⇒ UI 实时反映"此刻谁能写"靠订阅（GUI 按钮/网页控制台）
+_seen = []
+_unwatch = br.watch_mode(lambda m: _seen.append(m))
+br.switch_mode(Mode.AI, actor='human')          # 真变化 → 通知
+br.switch_mode(Mode.AI, actor='human')          # 同模式重复 → 幂等不通知
+br.switch_mode(Mode.HUMAN, actor='human')       # 真变化 → 通知
+got = list(_seen)
+_unwatch()
+br.switch_mode(Mode.AI, actor='human')          # 退订后 → 不再收
+br.switch_mode(Mode.HUMAN, actor='human')
+
+# 坏订阅者：回调抛错必须被吞，模式机照常切换
+_seen2 = []
+br.watch_mode(lambda m: (_ for _ in ()).throw(RuntimeError('坏订阅者')))
+br.watch_mode(lambda m: _seen2.append(m))       # 正常订阅者仍应收到
+_crashed = False
+try:
+    br.switch_mode(Mode.LOCKED, actor='human')
+    br.switch_mode(Mode.HUMAN, actor='human')
+except Exception:                                        # noqa: BLE001
+    _crashed = True
+
+C.group('F2 watch_mode 订阅：真变化才通知、幂等不重复、退订即止、坏订阅者不拖垮', [
+    ('两次真切换各收一条（回调收 mode 字符串）', got == ['ai', 'human']),
+    ('同模式重复切换不通知（UI 不吃重复刷新）', len(_seen) == 2),
+    ('disposer 退订后不再收（切换仍生效）',
+     len(_seen) == 2 and br.mode == 'human'),
+    ('坏订阅者抛错被吞、模式机照常切换（正常订阅者仍收到）',
+     _crashed is False and _seen2 == ['locked', 'human']),
+])
+
 # G. 致死性：B 的 LOCKED 拒一切 + C/D 的越权被拒 ⇒ 门是载重的
 C.check('G 致死性：无门可写（human 模式人写成功）对照越权必拒——门不是哑门',
         rec_human['ok'] and rec_ai['ok'] and _c_ai and _d_gui

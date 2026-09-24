@@ -50,11 +50,70 @@ def gc_report(root, *, dry_run=True, **_kw):
             "note": "mecha v2 未接 gc（保留策略等第二项目，见 D-9）；本目录未清理"}
 
 
-# ---------------- 人工控制端点（镜像 v1，actor 服务端固定 human）----------------
+# ---------------- 人工控制端点（actor 服务端固定 human）----------------
+
+#: 控制台网页（浏览器打开 :8767/ 即用；与 GUI 按钮同一效果、同一道门）。
+_CONTROL_HTML = """<!doctype html><html lang="zh"><head><meta charset="utf-8">
+<title>Energy Level · 人工控制</title><style>
+body{font-family:system-ui,'Microsoft YaHei';max-width:560px;margin:40px auto;
+     padding:0 16px;color:#222}
+.card{border:1px solid #d6d9de;border-radius:10px;padding:16px;margin:12px 0}
+#mode{font-size:1.4em;font-weight:600}
+button{padding:8px 18px;margin:4px 8px 4px 0;border-radius:6px;cursor:pointer;
+       border:1px solid #8fa6e8;background:#eef2ff;font-size:1em}
+button:disabled{opacity:.4;cursor:default}
+input{width:100%;box-sizing:border-box;padding:6px;font-family:monospace}
+#log{font-size:.85em;color:#666;white-space:pre-wrap}
+.hint{color:#888;font-size:.85em}</style></head><body>
+<h2>Energy Level · 人工控制端点</h2>
+<div class="card">当前写权模式：<span id="mode">连接中…</span>
+<div id="who" class="hint"></div></div>
+<div class="card">Token（在本机 <code>.human-token</code> 文件里）：<br>
+<input id="tok" type="password" placeholder="粘贴 token"></div>
+<div class="card">
+<button onclick="sw('human')">人接管（HUMAN）</button>
+<button onclick="sw('ai')">交给 AI（AI）</button>
+<button onclick="sw('locked')">全员禁写（LOCKED）</button></div>
+<div class="card"><div id="log"></div></div>
+<script>
+function log(s){const e=document.getElementById('log');
+  e.textContent=new Date().toLocaleTimeString()+'  '+s+'\\n'+e.textContent}
+async function refresh(){try{const r=await fetch('/status');const j=await r.json();
+  const m=document.getElementById('mode');m.textContent=j.mode;
+  m.style.color=j.mode==='ai'?'#b3261e':(j.mode==='locked'?'#8a6d1a':'#1a7f37');
+  document.getElementById('who').textContent=
+    j.mode==='ai'?'此刻只有 AI 能写；你的界面是只读的':
+    j.mode==='locked'?'此刻谁都写不了（维护态）':'此刻你可以写';
+  }catch(e){document.getElementById('mode').textContent='连不上（软件没在跑？）'}}
+async function sw(mode){const tok=document.getElementById('tok').value;
+  try{const r=await fetch('/switch_mode',{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({token:tok,mode:mode,reason:'web 控制台'})});
+    const j=await r.json();
+    log(j.ok?('已切到 '+j.mode):('被拒：'+JSON.stringify(j.error||j)));
+  }catch(e){log('请求失败：'+e)}
+  refresh()}
+setInterval(refresh,2000);refresh();
+</script></body></html>"""
+
 
 class _HumanHandler(http.server.BaseHTTPRequestHandler):
     bridge = None
     token = None
+
+    def do_GET(self):
+        if self.path in ("/", "/index.html"):
+            data = _CONTROL_HTML.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        if self.path == "/status":
+            # 只回协调态（mode），不回任何键值——网页不需要域数据
+            return self._json(200, {"ok": True, "mode": type(self).bridge.mode})
+        self._json(404, {"ok": False, "error": "unknown endpoint"})
 
     def do_POST(self):
         n = int(self.headers.get("Content-Length") or 0)
