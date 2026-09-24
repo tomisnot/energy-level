@@ -8,8 +8,8 @@ whenToUse: 当需要操控 Energy Level 软件（改参数、加能级组、配�
 
 > 本文件是 AI harness 的 skill 说明书：连接方式、工具清单、工作流、单位约定、
 > 物理坑。AI 使用中若发现文档与实态不符，应回头修正本文件（自我迭代）。
-> **本版对齐 mecha v2**：工具面 = `mecha_v2/tools.py` 注册的 12 个
-> MCP 工具（用 `list_tools` 以实际返回为准）。v1 的 GUI 内嵌 AI 面
+> **本版对齐 mecha v2**：工具面 = `mecha_v2/tools.py` 注册的 MCP 工具
+> （用 `list_tools` 以实际返回为准）。v1 的 GUI 内嵌 AI 面
 > （run_python/submit_sweep/get_diag/screenshot/set_groups…）**在 v2 不存在**，
 > 见末节"v2 暂缺的能力"。
 
@@ -25,6 +25,9 @@ whenToUse: 当需要操控 Energy Level 软件（改参数、加能级组、配�
   人切去了 GUI 模式，等人在菜单点「切换至 AI 模式」即可（进程交接，journal
   状态不断档）。
 
+**端点换端口/换进程 = 老会话静默失效**（实测报告 §0）：权威重启后端口会变
+（自动选空闲口），已建立的 MCP 连接不会自愈——须新开会话才拿到新 `.mcp-port`。
+
 **监控面**：权威进程另起**只读**监控端点 `:8767`（`/status`、`/activity`、
 `/history`、`/config`），dsh 右侧栏「机甲监控」面板消费它——飞行记录仪
 （每笔写 seq/actor/before→after/reason，逐行可折叠）+ 配置态（族→前缀分层树）。
@@ -35,15 +38,17 @@ GUI 菜单），旧的 `:8767/switch_mode` + token 已退役。AI 面改不了�
 **Trae IDE 接入**：项目根 `.trae/mcp.json` 指向该端点。需在 Trae 设置 → MCP 打开
 "启用项目级 MCP"，然后**新开会话**生效（工具在会话启动时加载）。
 
-## 工具清单（v2 实际面 = 12）
+## 工具清单
 
 | 工具 | 作用 | 关键参数 |
 |---|---|---|
 | `query_params` | 可写配置键的元数据：type/unit/lo/hi/enum/desc/default | — |
 | `query_levels` | 基组每个子能级：**label + 身份键 key + 能量 MHz** | — |
 | `read_config` | 当前所有已设配置键（快照）——确认改动是否生效 | — |
-| `set_config` | 写一个配置键（过 Gate 校验；类型/枚举/值域/wave_list 当场判） | `key, value` |
-| `set_drive` | **在跃迁上建驱动**：给 Rabi/光强 + 脉冲形状 → 自动算频率/光强/时长 | `src, tgt, rabi_mhz｜intensity_mwcm2, pulse("pi"/"pi2")｜duration_ns, pol, detuning_mhz, atom("single"/"A"/"B"), mode("append"/"replace"), name` |
+| `read_waves` | 当前驱动波清单（逐波摘要，不内联大数组） | `atom("single"/"A"/"B")` |
+| `set_config` | 写一个配置键（过门校验；类型/枚举/值域/wave_list 当场判）。回执自带回读：`before`（写前旧值）+`resolved`（落地的值）+`readback`（读回的值）——写一次就自证，不必再查 | `key, value, reason`（中文摘要进留痕） |
+| `reset_config` | 把当前所有已设键清空回默认（含驱动波）——**上手先收拾台面用它**。回执列 `cleared` 清单 | `reason` |
+| `set_drive` | **在跃迁上建驱动**：给 Rabi/光强 + 脉冲形状 → 自动算频率/光强/时长。可选参数（pol/detuning_mhz/mode/atom/name）**不传即用默认**（π/0/append/single/drive） | `src, tgt, rabi_mhz｜intensity_mwcm2, pulse("pi"/"pi2")｜duration_ns, pol, detuning_mhz, atom("single"/"A"/"B"), mode("append"/"replace"), name` |
 | `estimate_run` | dry-run 成本（不跑演化）；单体回 `est_sec` 粗估 | — |
 | `preview_run` | 行为预览：驱动哪些跃迁 / **基组够不够**（`basis_enough`） | — |
 | `run_sim` | 跑演化，回终态布居摘要（不含大数组） | `cancel_after_sec`（可选超时取消） |
@@ -60,11 +65,17 @@ GUI 菜单），旧的 `:8767/switch_mode` + token 已退役。AI 面改不了�
 
 `run_actions` 约定：
 - 每步是 `{"op": 名称, "args": 对象}`。op 可为内置 `estimate`/`summary`/`run`/`schema`，
-  或只读查询名 `read_config`/`query_params`/`preview_run`/`query_levels`/`get_waves`。
+  或只读查询名 `read_config`/`query_params`/`preview_run`/`query_levels`/`read_waves`。
 - **不 eval 任意代码**（库只编排自家工具，任意代码是宿主 code-runtime 的权力）。
-- 回执 `{ok, steps:[{index,op,ok,detail}], outputs, stopped_at}`；`stopped_at=-1` = 全成。
+- 回执 `{ok, steps:[{index,op,ok,detail,output}], stopped_at}`——**每步自带
+  output**（不用再按位置对齐）与 detail（成功=短摘要，失败=原因）；`stopped_at=-1` = 全成。
 - `run`/`estimate` 步缺省 spec 时用当前配置（顶层 `spec` 参数可覆写）。
 - 每步留可追溯记录（逐子调用审计，不污染域状态史）。
+
+**失败长什么样**（机器可判别）：工具失败时回执 `isError=true`，正文是
+`{"ok": false, "error": {"message", "info": {"kind", "hint", "suggest"}}}` 的
+JSON——**读 `info.kind` 决定怎么改**（如 `unknown_key`/`bad_enum`/`bad_value`），
+hint 给下一步指引。成功回执才是普通 JSON 正文。
 
 ## 配置键（`set_config` 的 key）
 
@@ -77,7 +88,7 @@ GUI 菜单），旧的 `:8767/switch_mode` + token 已退役。AI 面改不了�
 - `dynamic.psi_single` / `psi_A` / `psi_B`：初态**身份键**（query_levels 的 `key`，非索引，跨 B 稳定）
 - `dynamic.psi_pair`：两体纠缠初态 spec（见坑 4），两体模式下**取代** psi_A/psi_B
 - `dynamic.decays`：自定义衰变通道 list，元素 `{'from':态键,'to':态键|None,'gamma_mhz':Γ}`（见坑 5）
-- `dynamic.waves_single` / `waves_A` / `waves_B`：波形——**用 `set_drive` 建、`get_waves` 读，别手搓**
+- `dynamic.waves_single` / `waves_A` / `waves_B`：波形——**用 `set_drive` 建、`read_waves` 读，别手搓**
 - `solve.*`：运行级旋钮（`MAX_STEP`/`MAX_STEP_HARD`/`PER_FREQ_M`/`FROZEN_H_NS`/`COST_BUDGET`）
 - `engine.*`：**只读引擎常量**，`set_config` 会被当场拒（`readonly_key`）——改模型不是运行级的事
 
@@ -108,7 +119,7 @@ GUI 菜单），旧的 `:8767/switch_mode` + token 已退役。AI 面改不了�
 **参数扫描**：`run_actions` 串多步（逐点 `set_config` + `run`），或循环调 `submit_job`
 + `read_job` 轮询。别往 context 灌大数组（run_sim 只回摘要，全量在 artifact）。
 
-## 波形格式（`set_drive` 建、`get_waves` 读；手搓 `set_config` 时的元素形状）
+## 波形格式（`set_drive` 建、`read_waves` 读；手搓 `set_config` 时的元素形状）
 
 ```json
 {"name":"波形1","freq_mhz":6800.0,"intensity":0.05,"pol":"π",

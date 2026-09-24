@@ -40,8 +40,8 @@ def _registered_tool_names():
     """真注册表投影：build_tool_registry(engine, gate, surface, authority, ch, jobs)。
 
     build 期只调 engine.schema()（工具闭包不执行、QUERY 注册只存表）⇒ 用 schema-only
-    引擎即可，无需建 ARC cache（省 ~10s）。名单 = 注册的 MCP 工具（不含 run_actions
-    里派生的纯查询项 get_waves——它不是顶层工具）。
+    引擎即可，无需建 ARC cache（省 ~10s）。名单 = 注册的 MCP 顶层工具（read_waves
+    已升顶层，实测报告 P1-7；它同时是 run_actions 可达的查询项，但那里只是复用）。
     """
     from src.core import protocol as P
     from mecha_v2.tools import build_tool_registry

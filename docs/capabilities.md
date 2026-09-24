@@ -24,11 +24,11 @@
 | `provider.skills` | provider | catalog | — |
 | `provider.spill` | definition | energy-level | — |
 | `provider.spill.local` | provider | local-file | — |
-| `query:get_waves` | consumer | get_waves | framework:CodeAct.run_actions |
 | `query:preview_run` | consumer | preview_run | framework:CodeAct.run_actions |
 | `query:query_levels` | consumer | query_levels | framework:CodeAct.run_actions |
 | `query:query_params` | consumer | query_params | framework:CodeAct.run_actions |
 | `query:read_config` | consumer | read_config | framework:CodeAct.run_actions |
+| `query:read_waves` | consumer | read_waves | framework:CodeAct.run_actions |
 | `surface` | definition | energy-level | — |
 | `surface.engine` | provider | ElEngine | surface |
 | `tools.registry` | consumer | energy-level | adapter.ai |

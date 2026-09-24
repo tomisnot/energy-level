@@ -13,7 +13,7 @@ v1 的 Fields 门面（src/adapter/fields.py）随 adapter 退役；驱动换算
   D 非法波形**写门当场**被拒（validate_wave_list 经 Gate）：pol 非法 / square
      env 缺第 5 元素 / freq 非数值；被拒后快照未写入（不拖到 build_run 才炸）。
   E append/replace 语义：默认追加、replace 整组替换（扫描忘清空的 P0 坑的机制面）。
-  F get_waves 摘要不内联大数组：file 包络（12001 点）经查询面只回形状摘要，
+  F read_waves 摘要不内联大数组：file 包络（12001 点）经查询面只回形状摘要，
      回执里无 t_ns/amp（I3 大载荷不内联）。
 
 真建基组（B=21.7 Gauss 使子能级 Zeeman 分裂，供 A 的致死性）；临时数据根。
@@ -178,18 +178,17 @@ C.group('E append（默认）/ replace（整组替换）语义（扫描 P0 坑�
                                 br.read('dynamic.waves_single')] == ['e3']),
 ])
 
-# ---------------- F. get_waves 摘要不内联大数组（I3） ----------------
+# ---------------- F. read_waves 摘要不内联大数组（I3） ----------------
 _t = np.linspace(0, 100, 12001)
 _a = np.cos(2 * np.pi * _t / 50.0)
 br.write('dynamic.waves_single',
          [{'name': 'big', 'freq_mhz': 2e4, 'intensity': 1.0, 'pol': 'π',
            'offset_ns': 0.0, 'env': ['file', _t.tolist(), _a.tolist()]}],
          reason='判据大 file 包络', actor='ai')
-gw = tools.execute('run_actions', {'actions': [{'op': 'get_waves',
-                                                'args': {'atom': 'single'}}]})
+gw = tools.execute('read_waves', {'atom': 'single'})
 assert not gw.get('is_error'), gw
-_sum = gw['value']['outputs'][0]['waves'][0]
-C.group('F get_waves 摘要不内联大数组（file 包络只回形状，I3）', [
+_sum = gw['value']['waves'][0]
+C.group('F read_waves 摘要不内联大数组（file 包络只回形状，I3）', [
     ('摘要 envelope.kind=file', _sum['envelope']['kind'] == 'file'),
     ('摘要无 t_ns/amp 大数组', 't_ns' not in _sum and 'amp' not in _sum
      and 't_ns' not in _sum['envelope'] and 'amp' not in _sum['envelope']),
