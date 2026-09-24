@@ -55,6 +55,67 @@ def gc_report(root, *, dry_run=True, **_kw):
             "note": "mecha v2 未接 gc（保留策略等第二项目，见 D-9）；本目录未清理"}
 
 
+# ---------------- 只读投影（v1 驾驶舱形状，数据源换成活桥）----------------
+#
+# 用户裁决 2026-09-24：v1 驾驶舱的呈现（飞行记录仪/配置态两页、折叠、分层）
+# 原样整回 dsh 监控面板——这里按 v1 `src/cockpit/backend.py` 的**输出形状**
+# 投影 v2 的活桥数据（v1 读磁盘 journal，v2 读进程内 History；形状逐字段对齐，
+# 前端才能逐像素复用）。
+
+def _history_records(bridge, since_seq=0):
+    """飞行记录仪事件：v1 形状 {seq,kind,actor,target,before,after,reason}。
+
+    v2 史只记 after（value）；before 由全史 fold 重建（同键上一条的值，首写=None）。
+    """
+    last: dict = {}
+    out = []
+    for e in bridge.history.events():
+        before = last.get(e.key)
+        last[e.key] = e.value
+        if e.seq >= since_seq:
+            out.append({"seq": e.seq, "kind": "set", "actor": e.actor,
+                        "target": e.key, "value": e.value,
+                        "before": before, "after": e.value,
+                        "reason": e.reason, "call_id": e.call_id})
+    return out
+
+
+def _config_tree(bridge):
+    """配置态结构树：v1 形状 {has_schema, groups:{族:[{prefix,rows}]}, orphans}。
+
+    schema 行（params 含 engine 族裸名）join 现值（effective）+ 每键最后写入
+    归因（史重建）。无引擎的纯内存桥（判据装配）→ has_schema=False，快照键
+    全归 orphans（如实投影，不凭空造树）。
+    """
+    snap = bridge.effective()
+    last: dict = {}
+    for e in bridge.history.events():
+        last[e.key] = {"reason": e.reason, "actor": e.actor, "seq": e.seq}
+    try:
+        rows = bridge.params(include_internal=True, page_size=100000)["params"]
+    except Exception:                                      # noqa: BLE001
+        rows = []                                          # 无引擎桥：无 schema
+    groups: dict = {}
+    for r in rows:
+        name = r["name"]
+        fam = r.get("family") or "other"
+        head, _, rest = name.partition(".")
+        prefix = head if rest else ""
+        node = {"name": name, "short": rest if rest else name, "prefix": prefix,
+                "value": snap.get(name), "unit": r.get("unit") or "",
+                "type": r.get("type") or "", "desc": r.get("desc") or "",
+                "set": last.get(name)}
+        groups.setdefault(fam, {}).setdefault(prefix, []).append(node)
+    out_groups = {fam: [{"prefix": p, "rows": byp} for p, byp in sorted(sub.items())]
+                  for fam, sub in sorted(groups.items())}
+    known = {r["name"] for r in rows}
+    orphans = sorted(({"name": k, "value": v, "set": last.get(k)}
+                      for k, v in snap.items() if k not in known),
+                     key=lambda r: r["name"])
+    return {"has_schema": bool(rows), "groups": out_groups,
+            "orphans": orphans, "n_keys": len(rows)}
+
+
 # ---------------- 监控端点（只读：dsh 侧边栏面板轮询用）----------------
 #
 # 两模式收拢（2026-09-24）后，人的控制权切换改由**看门人**（launcher.py）编排，
@@ -89,6 +150,21 @@ class _MonitorHandler(http.server.BaseHTTPRequestHandler):
             events = type(self).bridge.activity(since)
             return self._json(200, {"ok": True, "events": events,
                                     "mode": type(self).bridge.mode})
+        if self.path.startswith("/history"):
+            # v1 驾驶舱形状（飞行记录仪页数据源）：带 before→after 与 reason。
+            since = 0
+            q = self.path.partition("?")[2]
+            for kv in q.split("&"):
+                k, _, v = kv.partition("=")
+                if k == "since_seq" and v.isdigit():
+                    since = int(v)
+            return self._json(200, {"ok": True,
+                                    "events": _history_records(type(self).bridge, since),
+                                    "mode": type(self).bridge.mode})
+        if self.path == "/config":
+            # v1 驾驶舱形状（配置态页数据源）：族→前缀二级树 + 现值 + 最后归因。
+            return self._json(200, {"ok": True,
+                                    **_config_tree(type(self).bridge)})
         # 退役面如实 404：无网页控制台、无写/切模式路由（控制权走看门人）
         self._json(404, {"ok": False, "error": "unknown endpoint"})
 

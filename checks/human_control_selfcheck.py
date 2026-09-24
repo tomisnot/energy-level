@@ -130,6 +130,35 @@ def main():
          br.effective().get('x') is None),
     ])
 
+    # ---- E. v1 驾驶舱形状投影（用户裁决：呈现整回来，数据源换活桥） ----
+    # 再写一次 field.B_gauss（制造 before→after 链：5.0 → 7.5）
+    br.switch_mode(Mode.HUMAN, actor='human')
+    br.write('field.B_gauss', 7.5, reason='人再调磁场', actor='gui')
+    st, hb = _get(base + '/history?since_seq=0')
+    hevs = hb.get('events', [])
+    bg = [e for e in hevs if e['target'] == 'field.B_gauss']
+    C.group('E GET /history：v1 飞行记录仪形状（before→after 史重建）', [
+        ('200 且带 events/mode', st == 200 and hevs and 'mode' in hb),
+        ('事件带 v1 全字段（seq/kind/actor/target/before/after/reason）',
+         all({'seq', 'kind', 'actor', 'target', 'before', 'after', 'reason'}
+             <= set(e) for e in hevs)),
+        ('同键二次写：后一条 before=前一条 after（史重建对账）',
+         len(bg) == 2 and bg[0]['before'] is None and bg[1]['before'] == 5.0
+         and bg[1]['after'] == 7.5),
+        ('since_seq 增量生效',
+         _get(base + '/history?since_seq=%d' % hevs[-1]['seq'])[1]['events']
+         == hevs[-1:]),
+    ])
+    st, cb = _get(base + '/config')
+    C.group('E GET /config：v1 配置态树形状（纯内存桥无 schema → 如实降级）', [
+        ('200 且带 groups/orphans/has_schema 键',
+         st == 200 and {'groups', 'orphans', 'has_schema'} <= set(cb)),
+        ('无引擎桥如实 has_schema=False（不凭空造树）', cb.get('has_schema') is False),
+        ('快照键全进 orphans（契约外如实投影，含现值）',
+         any(o['name'] == 'field.B_gauss' and o['value'] == 7.5
+             for o in cb.get('orphans', []))),
+    ])
+
     ok = C.summary()
     sys.exit(0 if ok else 1)
 
