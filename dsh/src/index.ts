@@ -2,17 +2,19 @@
  * re0-mecha dsh 插件 —— **HOST 入口**（Cordis 插件，函数形态）。
  *
  * 职责（AI 侧集成轨）：
- *  1. 建自愈 MCP 桥连到 Hub（`httpSessionFactory` + `MechaMcpBridge`）——接管 dsh stock HTTP
+ *  1. 建自愈 MCP 桥连到软件（`httpSessionFactory` + `MechaMcpBridge`）——接管 dsh stock HTTP
  *     桥缺的重连（治《DSH-MCP现状》§2.3 的"重启即永久 404"）。
  *  2. 桥发现工具 → `syncTools` 原生注册进 `ctx.tools`（`mcp__re0-mecha__<tool>`）；重连后
  *     工具集变化会再同步。
- *  3. 断联显式信号：状态迁移写日志；Hub 离线时工具调用抛**可读**离线错误（桥内已实现）。
+ *  3. 断联显式信号：状态迁移写日志；软件离线时工具调用抛**可读**离线错误（桥内已实现）。
  *
- * 安全红线：**只 connect、绝不 spawn Hub**（人启动 launcher = 权威，T4）。
+ * 安全红线：**只 connect、绝不 spawn 权威**（人启动 launcher = 权威，T4）。
  * 依赖方向：本文件 import dsh 的 `@deepseek-ai/*`（peer，宿主提供）+ 本地纯逻辑模块。
+ *
+ * **v1 的 client 半（驾驶舱面板）已随库替换退役**：cockpit-server（:8766）不复存在，
+ * 人监控 AI 的面改由 GUI 侧边栏（Monitor 面板）承担；本插件只剩 host 半（MCP 桥）。
  */
 import type { Context } from '@deepseek-ai/cordis'
-import type { IndexInjection } from '@deepseek-ai/dsh-host-webserver'
 import { MechaMcpBridge } from './host/mcp-bridge.ts'
 import { httpSessionFactory } from './host/mcp-session-http.ts'
 import { resolveHubUrl, buildRequestInit } from './host/config.ts'
@@ -39,8 +41,6 @@ export interface Config {
   mcpPortFile?: string
   /** 工具命名空间：`mcp__<serverName>__<tool>`。 */
   serverName?: string
-  /** cockpit-server 只读 web UI 地址（client 面板 iframe 它）。 */
-  cockpitUrl?: string
   /** 远程 Hub 鉴权 token（→ Authorization: Bearer）；本地默认空。需求③远程接缝。 */
   hubToken?: string
   /** 额外请求头。 */
@@ -58,7 +58,6 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
   await ctx.effect(async () => {
     const url = await resolveHubUrl(config)
     const serverName = config.serverName || 're0-mecha'
-    const cockpitUrl = config.cockpitUrl || 'http://127.0.0.1:8766/'
     let disposers: ToolDisposers = new Map()
 
     const bridge = new MechaMcpBridge({
@@ -86,18 +85,10 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
       },
     })
 
-    // 向 web client 的 index.html 注入 bootstrap（client 面板据此 iframe cockpit-server）。
-    // 只**监听**事件、不 inject webServer：headless（无 web）时事件不触发，MCP 桥照常工作。
-    const offInject = ctx.on('webserver/index-inject', (table: IndexInjection[]) => {
-      table.push({ kind: 'global', name: '__RE0_MECHA__',
-        value: { cockpitUrl } })
-    })
-
     ctx.logger?.info?.(`[re0-mecha] 连接 Hub MCP：${url}（只 connect，不 spawn 权威）`)
     await bridge.start()   // Hub 未起也不抛：插件照常加载，桥后台重连，起来后自动注册工具
 
     return async () => {
-      offInject()
       for (const dispose of disposers.values()) {
         try { dispose() } catch { /* ignore */ }
       }

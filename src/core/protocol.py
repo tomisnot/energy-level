@@ -2,11 +2,11 @@
 """引擎调用协议（core 侧）——「引擎接受什么配置、怎么跑、能预估/预览什么、波形怎么校验」
 的**唯一领域声明点**。
 
-"领域知识回 core"的落点：原先散在 `mecha/registry`（CONFIG_SCHEMA/SOLVE_META/
+"领域知识回 core"的落点：原先散在 v1 `mecha/registry`（CONFIG_SCHEMA/SOLVE_META/
 engine_params 扫描/wave_list 校验/runspec_read_keys）与 `mecha/ops`（estimate/preview/
-list_levels）里的**物理/引擎知识**，全部收归此处。`mecha` 是**领域无关框架**，只经
-`adapter.EngineAdapter`（实现 `mecha.protocol.EngineProtocol`）消费本协议；本协议
-**不 import mecha**（守 `core ↛ mecha`）。
+list_levels）里的**物理/引擎知识**，全部收归此处。`mecha` v2 是**领域无关框架**，
+经 mecha 仓 `examples/energy_level/engine.py` 的 ElEngine（import 本协议）消费；
+本协议**不 import mecha**（守 `core ↛ mecha`）。
 
 单位与 core 一致：B=Gauss、E=V/cm、t=ns、微波 freq=MHz、光频=Hz、Γ=MHz。
 """

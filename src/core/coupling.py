@@ -13,7 +13,7 @@ import numpy as np
 
 from .evolve_util import CONV
 from .static_atom import MW_MAX_MHZ
-from .param import Param   # 就地参数声明（值+元数据同处；mecha.registry 扫出全表）
+from .param import Param   # 就地参数声明（值+元数据同处；protocol.engine_params() 扫出全表）
 
 # ==== 本模块的参数（就地定义；Param 声明值+元数据同处，透明子类读点免改）====
 R_CRIT = Param(0.0135, 'AC 化边界 r=Ω/ω；r > 本值的远强对从光子块剔除，位移走 far_sos 注入', tier='run')   # AC 化边界

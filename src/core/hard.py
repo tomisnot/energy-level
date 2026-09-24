@@ -43,7 +43,7 @@ from . import static_atom as core
 from .evolve_util import (_single_loss_rates, _loss_and_norm,
                           as_vector, env_at, pair_psi0_vector, CONV)
 from .coupling import static_phase_keep  # t78：V_dd 统一判据（与 mixed 共用）
-from .param import Param   # 就地参数声明（值+元数据同处；mecha.registry 扫出全表）
+from .param import Param   # 就地参数声明（值+元数据同处；protocol.engine_params() 扫出全表）
 
 # 包络查表点数（620ns → h≈0.0047ns；插值误差 ~3e-10）
 

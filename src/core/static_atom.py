@@ -53,7 +53,7 @@
 import numpy as np
 from scipy.constants import physical_constants as pc, h, hbar, c, epsilon_0
 
-from .param import Param   # 就地参数声明（值+元数据同处；mecha.registry 扫出全表）
+from .param import Param   # 就地参数声明（值+元数据同处；protocol.engine_params() 扫出全表）
 
 
 # ==== 本模块的参数（就地定义；Param 声明值+元数据同处，透明子类读点免改）====

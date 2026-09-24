@@ -26,7 +26,7 @@ from .field_build import (group_by_freq, _validate_fields,
 from .tensor import (_pair_loss_vectors, _as_product_psi,
                      _reduce_A, _reduce_B)
 from .tensor_fields import _pair_groups
-from .param import Param   # 就地参数声明（值+元数据同处；mecha.registry 扫出全表）
+from .param import Param   # 就地参数声明（值+元数据同处；protocol.engine_params() 扫出全表）
 
 
 def _group_mats(g):
@@ -617,7 +617,7 @@ from .sambe import gl_nodes as _gl_nodes, _GL_CACHE  # noqa: E402
 from .static_atom import MW_MAX_MHZ
 
 
-# ==== 本模块的参数（就地定义；Param 声明“值+元数据”同处，mecha.registry 扫出全表）====
+# ==== 本模块的参数（就地定义；Param 声明“值+元数据”同处，protocol.engine_params() 扫出全表）====
 # 透明子类：下列名字**本身就是那个值**（int/float/tuple），读点无需改（见 param.py）。
 M_EST_BW_MHZ = Param(2e4, 'M 估计的 r 取样窗', unit='MHz', tier='run')
 _DENSE_MAX = Param(2200, '稠密 eigh 上限；扩展维 ≤ 本值走稠密 eigh，否则稀疏 expm_multiply', tier='internal')

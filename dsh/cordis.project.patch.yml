@@ -6,7 +6,7 @@
 #    profile 补丁里该插件的托管块把 webserver 钉死成字面量 port，
 #    且它每次启动都把**实际端口回写**进共享的 `~/.dsh/profiles/web/cordis.patch.yml`
 #    （last-writer-wins）⇒ 项目实例若加载它，会把官方 dsh 的端口一起带跑。
-#    项目实例本就不需要它（驾驶舱 iframe 的是 :8766，与 dsh web 端口无关），
+#    项目实例本就不需要它（监控面在 GUI 侧边栏，与 dsh web 端口无关），
 #    故在 overlay 里 `disabled: true` 关掉 ⇒ 项目实例不再回写共享 profile。
 #    ⚠ 这只影响**项目实例**；官方 dsh 不带本 overlay，remote-web-ui 照常可用。
 #

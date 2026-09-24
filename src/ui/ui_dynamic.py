@@ -252,7 +252,7 @@ class DynamicPanel(QWidget):
         self._psi_box.setVisible(False)
         # 人在下拉里选了**具体能级** → 丢弃该原子的叠加态 spec（#3/#5 裁决 A：
         # 叠加态是持久真值，但人显式重选能级时必须让位，且要记账）。
-        # 连接必须早于 pm_setup 的 touch_sig（register 在面板构造之后）——
+        # 连接必须早于 binder 的 touch_sig（register_external 在面板构造之后）——
         # 那时 read_fn 已看到 spec 被清掉，落账的才是"人选的键"。
         for _w, _cb in (('single', self.psi_combo),
                         ('A', self.psi_combo_A),
@@ -1453,10 +1453,7 @@ class DynamicPanel(QWidget):
         # 从 artifact 取回演化数组（人机同产物；I3 大载荷不内联）
         res = None
         try:
-            try:
-                from mecha.ops import load_artifact
-            except ImportError:                       # mecha v2：无 mecha.ops
-                from src.v2_bind import load_artifact
+            from src.v2_bind import load_artifact
             aid = (result or {}).get('artifact_id')
             _ops = self.main.app_bridge.ops
             loaded = load_artifact(_ops.root, aid) if aid else None

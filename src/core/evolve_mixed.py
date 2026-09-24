@@ -37,7 +37,7 @@ from .sambe import (_SambeSetup, _m_analytic, embed,
 
 from .static_atom import MW_MAX_MHZ
 from .coupling import PHASE_TOL, R_CRIT, _RHS_ENV_TAB_N
-from .param import Param   # 就地参数声明（值+元数据同处；mecha.registry 扫出全表）
+from .param import Param   # 就地参数声明（值+元数据同处；protocol.engine_params() 扫出全表）
 
 
 # ==== 本模块的参数（就地定义；Param 声明值+元数据同处，透明子类读点免改）====

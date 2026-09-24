@@ -1,16 +1,16 @@
 # -*- coding: utf-8 -*-
-"""GUI widget ↔ mecha 绑定层——取代外部 `param_manager` 框架 + `pm_setup`。
+"""GUI widget ↔ mecha 绑定层——取代外部 `param_manager` 框架 + `pm_setup`（均已退役）。
 
 旧 GUI 的标准件（spinbox/combo/…）经 `pm_setup`→外部 `param_manager.ParamRegistry`
 绑定；那套 registry 是**独立于 mecha 的第二状态源**（违反 I2）。本层用 **mecha 原生**
-绑定取代它：widget 读初值自 `AppBridge`、写经 `bridge.write`（choke point）、订阅 bus
-实时刷新（AI 写入即时反映 + 归因高亮）、按 `can_write` 只读门控（两模式）。
+绑定取代它：widget 读初值自 bridge（v2 的 V2Bridge）、写经 `bridge.write`（choke point）、
+订阅史实时刷新（AI 写入即时反映 + 归因高亮）、按 `can_write` 只读门控（两模式）。
 
 **设计成 `pm` 的近 drop-in**（`spinbox/combobox/lineedit/checkbox/ParamSpec` 同名同签名），
 面板移植≈机械替换：`from .. import pm_setup as pm` → `from . import _mecha_bind as MB`；
 `pm.spinbox(_reg, ...)` → `MB.spinbox(_binder, ...)`；`self.page.param_reg` → `self.page.binder`。
 
-只用 PyQt5 + AppBridge，不依赖 param_manager。
+只用 PyQt5 + bridge 门面，不依赖 param_manager。
 """
 from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import (QDoubleSpinBox, QSpinBox, QComboBox, QLineEdit,
@@ -19,7 +19,7 @@ from PyQt5.QtWidgets import (QDoubleSpinBox, QSpinBox, QComboBox, QLineEdit,
 __all__ = ['ParamSpec', 'Binder', 'spinbox', 'intbox', 'combobox', 'lineedit',
            'checkbox']
 
-# AI 侧 actor（归因高亮判定；与 mecha.authority.side_of 一致）
+# AI 侧 actor（归因高亮判定；与 V2Bridge 的 _ACTOR_CHANNEL 映射表一致）
 _AI_SIDE = ('ai', 'codeact', 'job', 'mcp')
 _FLASH_QSS = 'border: 2px solid #a855f7;'      # 归因高亮：AI 刚改的（来源紫）
 

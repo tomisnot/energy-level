@@ -48,13 +48,10 @@ from .evolve_mixed import DEFAULT_RTOL
 
 SPEC_VERSION = 1
 
-# solve.* → 下游 kwarg。**本表是唯一声明点**——GUI 侧
-# （`pm_setup._SOLVE_SPECS` 的最后一列）应当**从本表派生**，不要再手抄一份。
-#
-# ⚠ 现状：产品侧仍是手抄（源仓的 `checks/sweep_spec_selfcheck.py` 把两边钉着），
-#   而**那个判据不在本沙盒**（依赖 `src.sweep`/`pm_setup`）⇒
-#   "两处必须一致"这条不变式在沙盒内**无人在守**。
-#   迁移项见 `docs/引擎重构总览与调用说明书.md` §三。
+# solve.* → 下游 kwarg。**本表是唯一声明点**——`protocol.solve_schema()` 的
+# solve.* 记录与 GUI 检视器都从本表派生，没有第二份手抄。
+# （v1 时代 GUI 侧 `pm_setup._SOLVE_SPECS` 曾手抄一份、靠判据钉镜像；
+#   pm_setup 已退役，单一真源后那面守卫随 v1 清洗移除——见 sweep_spec H 段注释。）
 SOLVE_KWARG = {
     'MAX_STEP': 'max_step',
     'MAX_STEP_HARD': 'max_step_hard',

@@ -13,7 +13,7 @@
     per_freq_M）、sambe+任意波形改道 hard 而 mixed 不改道、per_freq_M 解析
   G **架构守卫**：`import src.core.runspec` 不得拉起 PyQt5 / param_manager
     （runner 子进程要真正 headless；这条是本轮 src/__init__ 惰性化的回归闸）
-  H SOLVE_KWARG 与 GUI 侧 `pm_setup._SOLVE_KWARG` 一致（镜像不许漂）
+  H 并发读写 status.json 不抛（Windows WinError 5 回归）
 
 用法：python checks/sweep_spec_selfcheck.py
 """
@@ -231,65 +231,12 @@ C.group('G src.core 导入的 Qt 洁净度（runner 真 headless 的根据）', 
 ], detail)
 
 # ---------------------------------------------------------------
-print('H) SOLVE_KWARG 镜像一致性（GUI 侧定义点 vs 无 Qt 侧）')
-# ⚠ 2026-09-15 改（拷贝环境实测）：原来 `import src.pm_setup` 需要兄弟目录
-# 'Param manager'（pm_setup 逐级向上找 6 层）⇒ **项目一旦离开原始父目录**
-# （拷贝/分发/换机器）就导入失败 ⇒ 这条"镜像不许漂"的守卫**永久 SKIP**，
-# 即零覆盖（项目最忌的假绿）。改为 **AST 解析源码**取常量：不需要导入、
-# 不需要 Qt/param_manager ⇒ 任何环境下守卫都活着；导入仅作兜底。
-import ast as _ast                                               # noqa: E402
-
-
-def _solve_kwarg_from_source(path):
-    """从源码取 `_SOLVE_KWARG`（**不导入 pm_setup**）。
-
-    实测该常量不是纯字面量（`literal_eval` 报 malformed node）⇒ 用
-    `ast.get_source_segment` 取右值源码片段，再在**受限命名空间**里求值：
-    `__builtins__` 只放行 `dict`，因此只能构造字典/字面量，无法执行任意代码。
-    """
-    _txt = open(path, encoding='utf-8').read()
-    _tree = _ast.parse(_txt)
-    _ns = {'__builtins__': {'dict': dict}}
-    # 两遍：`_SOLVE_KWARG` 的右值会引用别的模块级常量（实测 `_SOLVE_SPECS`），
-    # 故先把模块级可受限求值的常量都收进命名空间，再取目标。
-    for _pass in range(2):
-        for _n in _tree.body:
-            if not isinstance(_n, _ast.Assign):
-                continue
-            for _t in _n.targets:
-                if not isinstance(_t, _ast.Name):
-                    continue
-                _rhs = _ast.get_source_segment(_txt, _n.value)
-                if _rhs is None:
-                    continue
-                try:
-                    _ns[_t.id] = eval(_rhs, dict(_ns))        # noqa: S307
-                except Exception:                             # noqa: BLE001
-                    pass
-    if '_SOLVE_KWARG' not in _ns:
-        raise LookupError('源码里取不到 _SOLVE_KWARG')
-    return dict(_ns['_SOLVE_KWARG'])
-
-
-gui_kw, gui_how, _err = None, '', ''
-try:
-    gui_kw = _solve_kwarg_from_source(os.path.join(ROOT, 'src', 'pm_setup.py'))
-    gui_how = '源码 AST（无需导入）'
-except Exception as _e1:                           # noqa: BLE001
-    # Re0：pm_setup 已废（单一真值源，无 GUI 侧 _SOLVE_KWARG 镜像）→ 本镜像守卫
-    # 已 obsolete；AST 取不到即优雅 SKIP。Phase E 清洗时整组移除。
-    _err = str(_e1)[:80]
-if gui_kw is None:
-    C.skip('H SOLVE_KWARG 镜像一致性',
-           '源码与导入都取不到（%s）' % _err)
-else:
-    same = dict(RS.SOLVE_KWARG) == dict(gui_kw)
-    C.group('H solve.* → kwarg 映射不许漂（两处必须一致）', [
-        ('与 pm_setup._SOLVE_KWARG 完全相同（取自%s）' % gui_how, same),
-    ], 'gui=%s runner=%s' % (dict(gui_kw), dict(RS.SOLVE_KWARG)))
+# （H 段 SOLVE_KWARG 镜像守卫已随 v1 清洗移除：它比对的 GUI 侧定义点
+#  `src/pm_setup.py` 在 Re0 重构中已删（单一真值源，无第二处 _SOLVE_KWARG 镜像），
+#  守卫恒 SKIP = 零覆盖。solve.* → kwarg 映射的现守卫在 F 段（runspec 纯函数）。）
 
 # ---------------------------------------------------------------
-print('I) 并发读写 status.json 不抛（Windows WinError 5 回归）')
+print('H) 并发读写 status.json 不抛（Windows WinError 5 回归）')
 # 由来（2026-09-15 聚合回归抓到）：runner 每秒 `os.replace` status.json，而
 # GUI/MCP 每秒读同一份 → 撞上时 `os.replace` 抛 PermissionError(WinError 5)，
 # **整轮扫描被标 failed**（4 点里已完成 3 点）。修法 = 重试 + 退路直写；

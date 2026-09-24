@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "dsh (Cordis) plugin for the Re0 mecha Hub: takes over the MCP connection lifecycle (self-healing reconnect past dsh's streamable-http dead-zone) and surfaces the cockpit config-state panel.",
+  "description": "dsh (Cordis) plugin for the Re0 mecha v2 software: takes over the MCP connection lifecycle (self-healing reconnect past dsh's streamable-http dead-zone) and registers the domain tools natively into ctx.tools.",
   "main": "lib/index.mjs",
   "types": "src/index.ts",
   "exports": {
@@ -11,20 +11,8 @@
       "types": "./src/index.ts",
       "default": "./lib/index.mjs"
     },
-    "./client": {
-      "types": "./src/client/index.ts",
-      "default": "./lib/client.js"
-    },
     "./src/*": "./src/*",
     "./package.json": "./package.json"
-  },
-  "dsh": {
-    "client": {
-      "inject": [
-        "@deepseek-ai/dsh-client-ui-slots"
-      ],
-      "platform": "web"
-    }
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

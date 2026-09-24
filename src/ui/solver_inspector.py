@@ -47,33 +47,25 @@ from . import ui_theme
 
 
 class _GcWorker(QThread):
-    """数据回收（P4-3）：在**工作线程**里跑 `mecha.gc.gc`（扫目录/读 journal 会卡住主线程）。
+    """数据回收（P4-3）：在**工作线程**里跑回收扫描（扫目录/读 journal 会卡住主线程）。
 
-    本仓教训：Qt 槽里抛异常 = `qFatal`/`0xc0000409` ⇒ 线程内一律 try/except，
-    结果经 `done(rep, err)` 回主线程；**删除逻辑全在库侧**，本类不碰文件系统。
+    v2 未接 gc（保留策略等第二项目，见 D-9）⇒ 这里走 `v2_bind.gc_report` 的**如实
+    报告**垫片（不静默、不假装删）。本仓教训：Qt 槽里抛异常 = `qFatal`/`0xc0000409`
+    ⇒ 线程内一律 try/except，结果经 `done(rep, err)` 回主线程；**删除逻辑全在库侧**，
+    本类不碰文件系统。
     """
 
     done = pyqtSignal(object, object)          # (report | None, error_str | None)
 
-    def __init__(self, root, dry_run, bus=None, triggered_by=None,
-                 reason=None, parent=None):
+    def __init__(self, root, dry_run, parent=None):
         super().__init__(parent)
         self.root = root
         self.dry_run = bool(dry_run)
-        self.bus = bus
-        self.triggered_by = triggered_by
-        self.reason = reason
 
     def run(self):
         try:
-            try:
-                from mecha import gc as _gc
-                rep = _gc.gc(self.root, dry_run=self.dry_run, bus=self.bus,
-                             triggered_by=self.triggered_by,
-                             reason=self.reason or 'GUI 数据回收')
-            except ImportError:                   # mecha v2：gc 未实现，如实报告
-                from src.v2_bind import gc_report
-                rep = gc_report(self.root, dry_run=self.dry_run)
+            from src.v2_bind import gc_report
+            rep = gc_report(self.root, dry_run=self.dry_run)
             self.done.emit(rep, None)
         except Exception as e:                              # noqa: BLE001
             self.done.emit(None, '%s: %s' % (type(e).__name__, e))
@@ -768,18 +760,19 @@ class SolverInspector(QDialog):
                 ('solve.* 已改 %d 项 / 共 %d 项可写' % (n, writable)) if n
                 else '当前无覆写（%d 项可写，全部用默认值）' % writable)
 
-    # ---------- Tab 存档/产物（P4-3：数据回收，删除逻辑全在库侧 mecha.gc） ----------
+    # ---------- Tab 存档/产物（P4-3：数据回收；v2 未接 gc，页走如实报告垫片） ----------
     def _gc_root(self):
-        """本机数据根（`<repo>/.mecha`）。Hub 模式无本地根 → None（本机不做回收）。"""
+        """数据根：v2 = `.mecha-v2`（artifacts 目录的父级）；无 v1 bus 概念。"""
         br = getattr(getattr(self, 'win', None), 'app_bridge', None)
-        bus = getattr(br, 'bus', None)
-        return getattr(bus, 'root', None)
+        ops = getattr(br, 'ops', None)
+        root = getattr(ops, 'root', None)
+        return str(root.parent) if root else None
 
     def _make_tab_gc(self):
         """数据回收页：**只做"列出 + 勾选 + 触发 + 显示回执"**，不自己删任何文件。
 
-        边界（工单 P4-3 已定）：**删除逻辑一律在库侧** `mecha.gc.gc`（v2 未接 gc，
-        走 v2_bind.gc_report 如实报告"未接线"，见 D-9）；本页只调它、只显示它
+        边界（工单 P4-3 已定）：**删除逻辑一律在库侧**（v2 未接 gc，走
+        v2_bind.gc_report 如实报告"未接线"，见 D-9）；本页只调它、只显示它
         算出来的计划——同一"GUI 不自己删文件"纪律（原 checks/cockpit_selfcheck
         的 E 组反向断言已随 v1 退役，纪律本身仍成立）。
         """
@@ -788,14 +781,11 @@ class SolverInspector(QDialog):
         lay.setContentsMargins(10, 8, 10, 8)
         lay.setSpacing(6)
         info = QLabel(
-            '数据回收（真值源 = `mecha.gc`）。<b>干跑优先</b>：先看"将删/将归档/保留"三份清单，'
-            '确认后再执行。<br>'
-            '· <b>删除</b>＝确定无引用（artifacts 未 pinned、超窗口、不在最新 N 个内；'
-            'payloads 三源均无引用；jobs 终态且超窗口）；<br>'
-            '· <b>归档</b>＝journal 轮转段**移动到 `archive/`（不删除）**——journal 是唯一真值日志；<br>'
-            '· <b>保留</b>＝pinned / 窗口内 / 最新 N 个 / running / 状态未知（拿不准就不删并报出来）。<br>'
-            '执行时库侧会<b>重算计划</b>（本页展示的是上次干跑结果），并落一条 '
-            '<code>kind="gc"</code> 事件留痕。')
+            '数据回收（v2 尚未接 gc，见 D-9 保留策略——本页点"干跑"会**如实报告'
+            '"未接线、本目录未清理"**，不静默、不假装删）。<br>'
+            '· 待 gc 落地后：干跑列"将删/将归档/保留"三份清单，确认后再执行；'
+            '删除逻辑一律在库侧，本页只触发与显示。<br>'
+            '· 归档＝journal 轮转段**移动到 `archive/`（不删除）**——journal 是唯一真值日志。')
         info.setWordWrap(True)
         lay.addWidget(info)
 
@@ -806,7 +796,7 @@ class SolverInspector(QDialog):
         self.gc_dry_btn.clicked.connect(self._gc_start_dry)
         bar.addWidget(self.gc_dry_btn)
         self.gc_real_btn = QPushButton('执行回收…')
-        self.gc_real_btn.setToolTip('真删：需二次确认；删除逻辑全在库侧 mecha.gc')
+        self.gc_real_btn.setToolTip('真删：需二次确认；删除逻辑全在库侧（v2 未接 gc）')
         self.gc_real_btn.setEnabled(False)          # 先干跑看过计划才允许真跑
         self.gc_real_btn.clicked.connect(self._gc_start_real)
         bar.addWidget(self.gc_real_btn)
@@ -861,17 +851,12 @@ class SolverInspector(QDialog):
     def _gc_start(self, dry_run):
         root = self._gc_root()
         if not root:
-            self.gc_receipt.setText(
-                'Hub 模式：数据根在 Hub 侧，本机不执行回收（请在人启动 Hub 的那台机上做，'
-                '或用 mecha.gc 直接跑）。')
+            self.gc_receipt.setText('取不到数据根（app_bridge.ops 未就绪）：本机不执行回收。')
             return
-        br = getattr(getattr(self, 'win', None), 'app_bridge', None)
         self.gc_dry_btn.setEnabled(False)
         self.gc_real_btn.setEnabled(False)
         self.gc_sum.setText('干跑中…' if dry_run else '执行中…')
-        self._gc_worker = _GcWorker(
-            root, dry_run, bus=getattr(br, 'bus', None),
-            triggered_by='human:gui', reason='GUI 数据回收（存档/产物页）', parent=self)
+        self._gc_worker = _GcWorker(root, dry_run, parent=self)
         self._gc_worker.done.connect(
             lambda rep, err, d=dry_run: self._gc_finish(rep, err, d))
         self._gc_worker.start()
@@ -884,6 +869,12 @@ class SolverInspector(QDialog):
             self.gc_receipt.setText('回收失败：%s' % err)
             return
         self._gc_fill_table(rep)
+        if rep is not None and rep.get('ok') is False:
+            # v2 gc 未接线（gc_report 垫片如实报告）：不渲染"0 项"的误导空表，直说未接线。
+            self.gc_real_btn.setEnabled(False)
+            self.gc_sum.setText('未接线')
+            self.gc_receipt.setText(rep.get('note') or 'v2 未接 gc（见 D-9）')
+            return
         self.gc_real_btn.setEnabled(bool(rep.get('plan')))     # 没有可删项就不给真跑
         if dry_run:
             self.gc_sum.setText('将删 %d 项 / %s　将归档 %d 项 / %s　保留 %d 项'

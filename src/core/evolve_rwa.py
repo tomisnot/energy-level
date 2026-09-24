@@ -16,7 +16,7 @@ from .evolve_util import CONV             # t74：常量单源
 from .evolve_util import (_POL_Q, _onehot, as_vector, decay, auto_decays,
                           resolve_state_idx, decay_ops)  # t74 工具归位
 from .field_build import field_geometry  # t74：ip4 场格式归一归位场层
-from .param import Param   # 就地参数声明（值+元数据同处；mecha.registry 扫出全表）
+from .param import Param   # 就地参数声明（值+元数据同处；protocol.engine_params() 扫出全表）
 
 
 # ==== 本模块的参数（就地定义；Param 声明值+元数据同处，透明子类读点免改）====
