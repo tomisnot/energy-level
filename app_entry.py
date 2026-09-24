@@ -85,10 +85,11 @@ class MainWindow(QMainWindow):
             app.setStyleSheet(ui_theme.QSS)
         self.statusBar().showMessage('就绪', 3000)
 
-        # mecha v2 门面：GUI 与 AI（本进程后台 MCP 服务器线程）**共享一个 Gate、
-        # 一份 History**；另起人工控制端点供夺权/交权（actor 服务端固定 human）。
-        # 根 = 模块级 `PROJ_ROOT`（唯一定义点，与 run_ai() 等的 .mcp-port 同源）。
-        self.app_bridge = make_v2_bridge(PROJ_ROOT)
+        # mecha v2 门面：GUI 模式 = 纯本地软件，**不起 MCP/监控端点**（AI 物理
+        # 看不见这台软件；想动 AI 走看门人切到 AI 模式）。同一道 Gate、同一份
+        # History 的机制照旧（写权恒 human，Binder/只读门控保留待库语义）。
+        # 根 = 模块级 `PROJ_ROOT`（唯一定义点，与权威进程的 .mcp-port 同源）。
+        self.app_bridge = make_v2_bridge(PROJ_ROOT, start_services=False)
         self.cache = self.app_bridge.cache
         # 面板控件 ↔ session。**notify=self.log**：写权被拒等"必须让人看见"的反馈
         # 走状态栏（P2-4）——没有它，`Binder._reject` 就只是"声明了没人接"的空机制。
@@ -407,165 +408,44 @@ class MainWindow(QMainWindow):
 
 
 def run_gui(app):
-    """GUI 模式：本地操控面板（进程内自托管 mecha 内核），人自己开车。"""
+    """GUI 模式：纯本地操控面板，写权在人，AI 物理看不见（不起任何端点）。
+
+    看门人（launcher.py）spawn 本模式时带 `--gui`；弹窗选模式归看门人管。
+    """
     window = MainWindow()
     window.showMaximized()
     return app.exec_()
 
 
-def run_ai():
-    """AI 模式：后台起 GUI（v2 同进程权威装配），**前台跑 dsh**（AI harness）。
+def run_authority():
+    """AI 模式：headless 权威进程（**不建 GUI 窗口**）。
 
-    v2 没有独立的 Hub/驾驶舱进程：GUI 进程本身就是权威装配（Gate/History +
-    MCP 服务器线程 + 人工控制端点），写 `<PROJ_ROOT>/.mcp-port`；AI 经 MCP
-    协议连它，与 GUI 过**同一道门**。监控 = GUI 侧边栏（驾驶舱的职责由
-    Monitor 面板接替）。dsh 启动慢 → 放**前台**，它的启动输出/进度直接进本
-    控制台，你能看着它起来。dsh 退出或 Ctrl+C → 收尾 GUI。
+    v2 栈照装（Gate/History + MCP 服务器线程 + 监控端点），写权自动落 AI：
+    装配出厂 HUMAN 后 `switch_mode(AI, actor='human')`——看门人**代理人的启动
+    意图**开闸（人选了 AI 模式即授权 AI 写），不是 AI 自解锁（护栏仍在：AI 面
+    改不了 mode）。ADR `两模式启动-看门人交接与写权自动落位`。
+
+    阻塞直到 Ctrl+C / terminate；journal 写租约随进程退出释放（看门人等退出
+    后才 spawn 新模式，交接不断档）。
     """
-    import atexit
-    import shutil
-    import subprocess
-    import time
-    here = os.path.dirname(os.path.abspath(__file__))
-    py = sys.executable
-    flags = getattr(subprocess, 'CREATE_NEW_CONSOLE', 0) if os.name == 'nt' else 0
-    procs = []
-
-    def _spawn(name, args):
-        try:
-            p = subprocess.Popen(args, cwd=here, creationflags=flags)
-            procs.append((name, p))
-            return p
-        except Exception as e:                          # noqa: BLE001
-            print('[launcher] %s 启动失败：%s' % (name, e))
-            return None
-
-    def _cleanup():
-        for _n, p in procs:
-            try:
-                if p.poll() is None:
-                    p.terminate()
-            except Exception:                          # noqa: BLE001
-                pass
-    atexit.register(_cleanup)
-
-    # 后台服务：GUI（--gui 跳过模式弹窗）。它就是权威本体：MCP 端点与人工
-    # 控制端点都在它的进程里，journal/artifacts 落 `<PROJ_ROOT>/.mecha-v2/`。
-    _spawn('GUI', [py, os.path.join(here, 'app_entry.py'), '--gui'])
-
-    # 等 GUI 写好 .mcp-port（dsh 的 re0-mecha 插件据此发现并连 MCP 端点）——带进度点
-    pf = os.path.join(here, '.mcp-port')
-    print('[launcher] 等 GUI 就绪（.mcp-port）', end='', flush=True)
-    ready = False
-    for _ in range(160):                                 # cache 构建 + 装配，最多 ~40s
-        try:
-            if os.path.exists(pf) and open(pf, encoding='utf-8').read().strip():
-                ready = True
-                break
-        except OSError:
-            pass
-        time.sleep(0.25)
-        print('.', end='', flush=True)
-    print(' 就绪' if ready else ' 超时（dsh 会退回默认 :8765）')
-
-    dsh_exe = shutil.which('dsh')
-
-    # 端口策略：项目实例**永不占 3080**（那是官方 dsh 的默认端口）。
-    # profile 补丁里 remote-web-ui 托管块把 webserver 钉死在字面量 3080，
-    # `--port` 会静默失效，且该插件每次启动把实际端口回写共享 profile（机制见
-    # mecha-sdk《DSH-实例并存原理》§3）；cordis.project.patch.yml 经 `--patch`
-    # （组合链最后一层）关掉该插件并恢复端口表达式 ⇒ --port 生效、官方配置
-    # 不被污染、两实例并存，使用者零额外操作。
-    def _pick_dsh_port(preferred=3081, tries=10):
-        """从 preferred 起找第一个可绑定的回环端口（3080 永不入选）。"""
-        import socket
-        for p in range(preferred, preferred + tries):
-            try:
-                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                    s.bind(('127.0.0.1', p))
-                return p
-            except OSError:
-                continue
-        return preferred
-
-    dsh_port = _pick_dsh_port()
-    dsh_args = ('web --patch ./dsh/cordis.source.patch.yml'
-                ' --patch ./dsh/cordis.project.patch.yml'
-                ' --port %d' % dsh_port)
-    dsh_dir = os.path.join(here, 'dsh')
-
-    # 依赖预检：dsh/node_modules 缺失（新检出/清理后）→ 自动 npm install。
-    # 否则 re0-mecha 插件 import @modelcontextprotocol/sdk 失败，dsh 启动即崩。
-    if dsh_exe and os.path.isdir(dsh_dir) \
-            and not os.path.isdir(os.path.join(dsh_dir, 'node_modules')):
-        print('[launcher] dsh/node_modules 缺失 → 自动 npm install（首次约 15-60s）…',
-              flush=True)
-        try:
-            subprocess.run('npm install', shell=True, cwd=dsh_dir)
-        except Exception as e:                          # noqa: BLE001
-            print('[launcher] ⚠ npm install 失败：%s（dsh 可能起不来）' % e)
-
-    print('=' * 70)
-    print('  AI 模式：GUI（含 MCP 端点 + 人工控制端点）已后台起（独立窗、可最小化）')
-    print('  下面**前台启动 dsh**（较慢，启动输出直接显示在本窗，请等它起来）：')
-    print('  · 本实例绑定 :%d（避开官方 dsh 的 :3080，两实例可并存）' % dsh_port)
-    print('  · dsh 起来后会**自动打开浏览器** = AI 界面（URL 也在下面打印）')
-    print('  · 监控不用单独开——AI 动作实时进 GUI 侧边栏（Monitor 面板）')
-    print('  · 停：本窗 Ctrl+C（一并收尾 GUI）')
-    print('=' * 70, flush=True)
-
+    import threading
+    bridge = make_v2_bridge(PROJ_ROOT)
+    bridge.switch_mode('ai', actor='human')
+    print('[authority] headless 权威就绪：MCP 端点 + 监控端点已起，写权在 AI。'
+          'Ctrl+C 或看门人交接时退出。', flush=True)
+    stop = threading.Event()
     try:
-        if dsh_exe:
-            # 前台跑 dsh：输出继承本控制台（启动进度/URL 可见），阻塞到 dsh 退出
-            rc = subprocess.run('"%s" %s' % (dsh_exe, dsh_args), shell=True,
-                                cwd=here).returncode
-            if rc not in (0, None):
-                print('[launcher] ⚠ dsh 退出码 %s（崩溃？）——看上面的报错。' % rc)
-                print('           常见：dsh/node_modules 缺依赖（删掉它重跑会自动 npm'
-                      ' install）、patch 路径错、或端口冲突。')
-        else:
-            print('[launcher] ⚠ 没在 PATH 找到 dsh——请手动运行：dsh %s' % dsh_args)
-            print('[launcher] Hub/驾驶舱保持后台运行；本窗回车结束（并收尾后台服务）…')
-            input()
+        stop.wait()
     except KeyboardInterrupt:
-        print('\n[launcher] Ctrl+C —— 收尾 Hub/驾驶舱…')
-    finally:
-        _cleanup()
+        print('[authority] 收到 Ctrl+C，退出（租约释放）。')
     return 0
 
 
-def _choose_mode():
-    """弹窗选启动模式 → 'ai' / 'gui' / None（取消/关窗）。"""
-    box = QMessageBox()
-    box.setWindowTitle('Rb-87 能级计算 · 选择启动模式')
-    box.setIcon(QMessageBox.Question)
-    box.setText('请选择本次启动的模式：')
-    box.setInformativeText(
-        'AI 模式：后台起 GUI（MCP 端点 + 人工控制端点都在里面）+ dsh harness，'
-        'AI 在 dsh 里驱动引擎、你在 GUI 侧边栏监控。\n\n'
-        'GUI 模式：本地操控面板（同一道门），人自己开车。\n\n'
-        '──── 写权模式（两种启动都从这里开始）────\n'
-        '· 启动即「人写」：只有你能改参数。\n'
-        '· 侧边栏「交给 AI」按钮（或浏览器开人工控制台 http://127.0.0.1:8767/）'
-        '→ 切到「AI 写」：界面变只读，AI 的每笔写都记 actor=ai 进史。\n'
-        '· 随时「人接管」夺回；「全员禁写」是维护态。AI 不能给自己解锁。')
-    b_ai = box.addButton('AI 模式', QMessageBox.AcceptRole)
-    b_gui = box.addButton('GUI 模式', QMessageBox.ActionRole)
-    box.addButton('取消', QMessageBox.RejectRole)
-    box.setDefaultButton(b_gui)
-    box.exec_()
-    c = box.clickedButton()
-    if c is b_ai:
-        return 'ai'
-    if c is b_gui:
-        return 'gui'
-    return None
-
-
 def main():
-    """入口：弹窗选 AI 模式 / GUI 模式，自动运行对应的。
+    """入口：`--gui` 纯 GUI / `--authority` headless 权威（看门人 spawn 用）。
 
-    `--gui`（或 `--ai`）命令行参数跳过弹窗——run_ai() 后台起 GUI 用。
+    无参数 = 用户直接跑本文件 → 转发看门人 launcher.main()（弹窗选模式、
+    编排两模式与交接）。打包入口 main.py 走 `--gui` 之外的路径时同样经这里。
     """
     app = QApplication.instance() or QApplication(sys.argv)
     try:
@@ -574,14 +454,10 @@ def main():
         pass
     if '--gui' in sys.argv:
         return run_gui(app)
-    if '--ai' in sys.argv:
-        return run_ai()
-    mode = _choose_mode()
-    if mode == 'gui':
-        return run_gui(app)
-    if mode == 'ai':
-        return run_ai()
-    return 0
+    if '--authority' in sys.argv:
+        return run_authority()
+    import launcher
+    return launcher.main()
 
 
 if __name__ == '__main__':
