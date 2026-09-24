@@ -1,18 +1,21 @@
 # -*- coding: utf-8 -*-
-"""多体接入集成自检：语义层全链（schema/校验/build_run 路由/Result/查询/产物/线程拆分）。
+"""多体接入集成自检（v2）：语义层全链（schema/校验/Gate 往返/build_run 路由/Result/Surface.run/线程拆分）。
 
-用**真实** EngineAdapter + Session + Ops（碰 ARC 标定，首跑建表可能 10–30 s）。
-守的是"manybody 作为第 7 引擎家族接入语义层后，上层零改动即可驱动"这条主线：
+用**真实** ElEngine（碰 ARC 标定，首跑建表可能 10–30 s）。守的是"manybody 作为
+第 7 引擎家族接入 v2 语义层后，上层零改动即可驱动"这条主线：
   A schema 合并（config_schema/settable_keys 含 manybody.*，solve_schema 不膨胀）
   B engine_params 扫到 manybody 就地 Param（扫描器递归子包）
-  C I6 交叉：runspec_mb 实读的 manybody.* 都在 config_schema（防漂）
-  D registry.validate atom_list 真契约（拒非法结构）
-  E session choke point 往返 → effective 快照
+  C I6 交叉：runspec_mb 实读的 manybody.* 都在 schema（防漂）
+  D v2 validate（make_validator）对 atom_list 真契约：拒非法结构、放行合法
+  E Gate choke point 往返 → effective 快照（写经门、记事件）
   F build_run(mode=2) → 多体 RunSpec（携带紧凑 calib，不带 H）
   G evolve_run 唯一分派 → Result 契约 + result_summary/labels/summarize/check
   H estimate/preview/list_levels 走多体分支
-  I ops.run 端到端（人机同路径 I5）+ 内容寻址产物缓存命中
+  I Surface.run 端到端（run_output_required 契约校验：ok+method 缺一即红）
   J prepare(主线程碰 cache)/execute(工作线程纯数值) 线程拆分（B-1① 铁律）
+
+v1 的 ops.run(use_cache=…) 内容寻址缓存在 v2 不存在（诚实退役，不假绿）；
+产物缓存等真实调用方出现再按 ADR 流程加。
 """
 import os
 import sys
@@ -25,18 +28,21 @@ sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 import numpy as np                                             # noqa: E402
 
 from checks.checklib import Checker                            # noqa: E402
-from mecha import runtime                                  # noqa: E402
-from src.adapter import EngineAdapter                          # noqa: E402
-
-runtime.set_engine(EngineAdapter())       # 注入领域引擎（判据在开头做）
-
-from mecha.session import Session                          # noqa: E402
-from mecha.ops import Ops                                  # noqa: E402
-from mecha import registry                                 # noqa: E402
 from src.core import protocol as CP                            # noqa: E402
 from src.core import runspec as RS                             # noqa: E402
 
+from examples.energy_level.engine import ElEngine, make_validator  # noqa: E402
+from examples.energy_level.bridge import V2Bridge                  # noqa: E402
+from mecha.authority import Authority, Mode                      # noqa: E402
+from mecha.errors import MechaError                              # noqa: E402
+from mecha.gate import Channel, Gate                             # noqa: E402
+from mecha.history import History                                # noqa: E402
+from mecha.surface import ExecutionContext, Surface              # noqa: E402
+
 C = Checker('manybody_integration')
+
+EL_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+engine = ElEngine(EL_ROOT, own_thread=False)   # cache 建在主线程（判据线程）
 
 G = (60, 0, 0.5, 0.5)                     # 60S_1/2 m=+1/2
 R = (60, 1, 1.5, 1.5)                     # 60P_3/2 m=+3/2
@@ -84,26 +90,28 @@ C.group('B engine_params 扫到 manybody 就地 Param（扫描器递归子包）
 
 # ---------------- C. I6 交叉 ----------------
 lit, _dyn = CP.runspec_read_keys()
-fam = registry.families()
+_declared = set(cs) | set(CP.solve_schema())
 mb_lit = [k for k in lit if k.startswith('manybody.')]
-C.group('C I6：runspec_mb 实读的 manybody.* 都在 config_schema（防漂）', [
+C.group('C I6：runspec_mb 实读的 manybody.* 都在 schema（防漂）', [
     ('扫到 manybody.* 实读键 >= 8（含 mb_get 口）', len(mb_lit) >= 8),
-    ('无漏声明（所有实读键都在 families）', all(k in fam for k in lit)),
+    ('无漏声明（所有实读键都在 config+solve schema）',
+     all(k in _declared for k in lit)),
 ])
 
-# ---------------- D. registry.validate atom_list ----------------
+# ---------------- D. v2 validate 对 atom_list 真契约 ----------------
+validate = make_validator(engine)
+
+
 def _bad(v):
     try:
-        registry.validate('manybody.atoms', v)
+        validate('manybody.atoms', v)
         return False
-    except Exception:                                          # noqa: BLE001
+    except MechaError:                                          # noqa: BLE001
         return True
 
 
-ok_atoms = registry.validate('manybody.atoms', MB['manybody.atoms'])
-C.group('D registry.validate atom_list 真契约（拒非法结构）', [
-    ('合法 atoms 通过（归一为 list）',
-     isinstance(ok_atoms, list) and len(ok_atoms) == 2),
+C.group('D v2 validate（make_validator）atom_list 真契约（拒非法结构）', [
+    ('合法 atoms 通过（不抛）', _bad(MB['manybody.atoms']) is False),
     ('空 list 拒', _bad([])),
     ('g 非四元组拒', _bad([{'g': [60, 0, 0.5], 'r': list(R), 'pos': [0, 0, 0]}])),
     ('pos 非三元组拒', _bad([{'g': list(G), 'r': list(R), 'pos': [0, 0]}])),
@@ -112,21 +120,25 @@ C.group('D registry.validate atom_list 真契约（拒非法结构）', [
      _bad([{'g': list(G), 'r': list(R), 'pos': [0, 0, 0], 'Omega_mhz': 'big'}])),
 ])
 
-# ---------------- E. session choke point 往返 ----------------
+# ---------------- E. Gate choke point 往返 ----------------
 tmp = tempfile.mkdtemp(prefix='mb_int_')
-sess = Session(root=tmp)
+auth = Authority(mode=Mode.HUMAN)
+hist = History()
+gate = Gate(auth, hist, validate=validate)
+br = V2Bridge(gate, hist, auth, engine=engine, cache=engine._cache,
+              artifact_root=os.path.join(tmp, 'artifacts'))
+chan = Channel('test', 'human')
 for k, v in MB.items():
-    sess.set(k, v, actor='test', reason='mb integration')
-snap = sess.effective()
-C.group('E session 往返 → effective 快照（choke point）', [
+    gate.set(chan, k, v, reason='mb integration')
+snap = br.effective()
+C.group('E Gate 往返 → effective 快照（choke point，写经门记事件）', [
     ('manybody.atoms 写后可读回', len(snap.get('manybody.atoms') or []) == 2),
     ('dynamic.mode=2 落快照', snap.get('dynamic.mode') == 2),
-    ('写入各产生事件（seq 递增）', sess.bus.last_seq >= len(MB)),
+    ('写入各产生事件（seq 递增）', hist.last_seq >= len(MB)),
 ])
 
 # ---------------- F. build_run(mode=2) 路由 ----------------
-ops = Ops(sess)
-cache = ops.session.cache()
+cache = engine._cache
 run = RS.build_run(cache, snap)
 C.group('F build_run(mode=2) → 多体 RunSpec', [
     ('nbody=many', run.get('nbody') == 'many'),
@@ -166,24 +178,24 @@ C.group('H estimate/preview/list_levels 走多体分支', [
      lv.get('n_atoms') == 2 and 'psi0_hint' in lv),
 ])
 
-# ---------------- I. ops.run 端到端 + 内容寻址缓存 ----------------
-r_sync = ops.run(actor='test', reason='mb run')
-r_cache = ops.run(actor='test', reason='mb run again', use_cache=True)
-C.group('I ops.run 端到端（人机同路径 I5）+ 内容寻址缓存', [
+# ---------------- I. Surface.run 端到端（v2 ops 管道） ----------------
+surface = Surface(engine)
+r_sync = surface.run(snap, context=ExecutionContext())
+C.group('I Surface.run 端到端（人机同路径；run_output_required 契约）', [
     ('run ok', r_sync.get('ok') is True),
     ('run 走 manybody（method=ed）', r_sync.get('method') == 'ed'),
-    ('产物已落（artifact_id）', bool(r_sync.get('artifact_id'))),
-    ('二次 use_cache 零算力命中', r_cache.get('cached') is True),
+    ('回执含 EL 声明的必填键（ok/method）',
+     all(k in r_sync for k in engine.schema()['run_output_required'])),
 ])
 
 # ---------------- J. prepare/execute 线程拆分 ----------------
-prepared = ops.prepare(actor='test', reason='mb prepare')
+prepared = br.ops.prepare(actor='gui', reason='mb prepare')
 err = {}
 
 
 def _worker():
     try:
-        ops.execute(prepared, actor='test', reason='mb execute')
+        err['r'] = br.ops.execute(prepared, actor='gui', reason='mb execute')
     except Exception as e:                                      # noqa: BLE001
         err['e'] = '%s: %s' % (type(e).__name__, e)
 
@@ -193,8 +205,13 @@ th.start()
 th.join()
 C.group('J prepare(主线程碰 cache)/execute(工作线程纯数值) 线程拆分', [
     ('prepare 成功（calibrate 在主线程，产出 run handle）',
-     bool(prepared.get('run')) or bool(prepared.get('cached'))),
-    ('execute 在工作线程成功（不碰线程亲和的 ARC cache）', 'e' not in err),
+     bool(prepared.get('run'))),
+    ('execute 在工作线程成功（不碰线程亲和的 ARC cache）%s'
+     % ('' if 'e' not in err else ' [%s]' % err['e']), 'e' not in err),
+    ('execute 结果 ok + artifact 落盘',
+     bool(err.get('r')) and err['r'].get('ok') is True
+     and bool(err['r'].get('artifact_id'))),
 ])
 
+br.close()
 sys.exit(0 if C.summary() else 1)

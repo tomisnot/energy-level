@@ -34,7 +34,7 @@ whenToUse: 当需要操控 Energy Level 软件（改参数、加能级组、配�
 | `query_levels` | 基组每个子能级：**label + 身份键 key + 能量 MHz** | — |
 | `read_config` | 当前所有已设配置键（快照）——确认改动是否生效 | — |
 | `set_config` | 写一个配置键（过 Gate 校验；类型/枚举/值域/wave_list 当场判） | `key, value` |
-| `set_drive` | **在跃迁上建驱动**：给 Rabi/光强 + 脉冲形状 → 自动算频率/光强/时长 | `src, tgt, rabi_mhz｜intensity_mwcm2, pulse("pi"/"pi2")｜duration_ns, pol, detuning_mhz, atom("single"/"A"/"B"), mode("append"/"replace")` |
+| `set_drive` | **在跃迁上建驱动**：给 Rabi/光强 + 脉冲形状 → 自动算频率/光强/时长 | `src, tgt, rabi_mhz｜intensity_mwcm2, pulse("pi"/"pi2")｜duration_ns, pol, detuning_mhz, atom("single"/"A"/"B"), mode("append"/"replace"), name` |
 | `estimate_run` | dry-run 成本（不跑演化）；单体回 `est_sec` 粗估 | — |
 | `preview_run` | 行为预览：驱动哪些跃迁 / **基组够不够**（`basis_enough`） | — |
 | `run_sim` | 跑演化，回终态布居摘要（不含大数组） | `cancel_after_sec`（可选超时取消） |
