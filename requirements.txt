@@ -24,12 +24,17 @@ pyqtgraph==0.13.7
 # 仅状态栏提示 AI 接口未启用"的降级路径——那是 v1 时代 `src/ai` 的行为，
 # 而 `src/ai` 目录已不存在（2026-09-25 核实）。
 #
-# 框架本体 = 独立库 `mecha`（本机实测 0.2.0），editable 安装在 D:\code-nosync\mecha。
-# 用**绝对路径**：EL 与 mecha 已不在同一父目录（旧注释"两仓并列于 code/python/ 下"
-# 是错的）。0.2.0 的 [project.optional-dependencies] 是**空的**、没有任何 extra，
+# 框架本体 = 独立库 `mecha`（本机实测 0.2.0）。下面是**相对路径**：
+#   ../../../../../../code-nosync/mecha
+# = 从 EL 根上溯到盘符根、再进 `code-nosync/mecha`（两仓**不在同一父目录**——旧注释
+#   "两仓并列于 code/python/ 下"是错的；**同盘符**是它能写成相对路径的前提）。
+# ⚠ 相对路径的解析基准随 pip 版本/CWD 而异（本轮未验证）⇒ **请在 EL 根执行**
+#   `pip install -r requirements.txt`——两种基准下都成立。
+# 本机那条绝对路径**只**写在 README §4（一个事实一个家，别在声明文件里再抄一份）。
+# 0.2.0 的 [project.optional-dependencies] 是**空的**、没有任何 extra，
 # 也没有 cockpit 包 ⇒ 不能写 `mecha[...]`。也**不要**再指向 mecha-sdk（0.1.0，
 # 已退役：它没有 `mecha.authority.Mode`，而 src/v2_bind.py:214 需要它 ⇒ EL 跑不了它）。
--e D:\code-nosync\mecha
+-e ../../../../../../code-nosync/mecha
 
 # ── AI 写通道 / 只读监控端点（只有 AI 模式需要；GUI 模式不起任何端点）────
 # src/v2_bind.py:224 在进程内起 MCP 服务器线程（streamable-http，mcp 2.x）；

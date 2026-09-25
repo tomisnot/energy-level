@@ -75,8 +75,11 @@ D:\code-nosync\mecha                              (v0.2.0, editable 安装)
               providers/  approval / codeact / jobs / log_local / skills / spill
 ```
 
-- **依赖声明**：`requirements.txt` 用**绝对路径** `-e D:\code-nosync\mecha` 声明——EL 与
-  mecha 已**不在同一父目录**。0.2.0 的 `[project.optional-dependencies]` 是**空的**、
+- **依赖声明**：`requirements.txt` 用**相对路径** `-e ../../../../../../code-nosync/mecha`
+  声明（EL 与 mecha 已**不在同一父目录**；**同盘符**才使得相对路径成立）。本机绝对位置
+  是 `D:\code-nosync\mecha`（editable 装的就是它）——这个事实**只写在这里**，声明文件里
+  不再抄一份。⚠ 相对路径的解析基准随 pip 版本/CWD 而异 ⇒ **在 EL 根跑**
+  `pip install -r requirements.txt`。0.2.0 的 `[project.optional-dependencies]` 是**空的**、
   也没有 `cockpit` 包 ⇒ **不能**写 `mecha[...]`。
 - **它是硬依赖，不是"可选 AI 依赖"**：`app_entry.py:53-54` 顶层
   `from src.v2_bind import make_v2_bridge` → `mecha_v2.bridge` 顶层 `import mecha.*`
