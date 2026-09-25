@@ -13,7 +13,8 @@
 > 当前真值源：本仓 `docs/capabilities.md`（生成物）+ mecha 仓 `docs/v2/`。
 
 > **模块边界**：`app_entry.py`（仓根，546 行）+ `src/ui/*`（15 个 .py，8588 行，含 `__init__.py`）
-> + `main.py`/`能级.py`（转发入口）+ GUI 判据 6 个 + `dsh/src/client/*`（驾驶舱，仅在与界面体验相关时）。
+> + `能级.py`（转发入口）+ GUI 判据 6 个 + `dsh/src/client/*`（驾驶舱，仅在与界面体验相关时）。
+> （`main.py` 与打包路线已于 2026-09-25 删除；详见文首横幅。）
 > **不属本模块**：物理引擎（`src/core`）、AI 机甲框架（mecha-sdk）、sweep 的 runner 逻辑。
 >
 > **实测基线（2026-09-22 本机复核）**：`run_checks.py --only gui_` → **scripts=6 fail=0 seconds=31**
@@ -30,7 +31,7 @@
 
 1. **启动**：`python 能级.py` → `能级.py:12` `from app_entry import MainWindow, main` → `app_entry.main()`（`app_entry.py:530`）
    → **模态** `_choose_mode()`（`app_entry.py:507`）选 AI/GUI → `run_gui(app)`（`app_entry.py:403`）= `MainWindow()` + `showMaximized()`。
-   （打包：`main.py:5` → `app_entry.main()`；直接跑：`python app_entry.py`，`app_entry.py:545`。）
+   （直接跑：`python app_entry.py`。原「打包：`main.py:5`」一路已于 2026-09-25 随打包路线删除。）
 2. **`MainWindow.__init__`**（`app_entry.py:72`）：先定 transport（`_hub_connected` / `HubBridge` vs `AppBridge`，`:84-96`）→ `cache`/`binder`（`:97-98`）→ `_build_ui()`（`:185`）。
 3. **页面**：中央 `canvas_tabs` 两页 = **静态**（`analysis_panel.canvas` = `EnergyPlotPanel`）/ **动态**（`DynamicPanel`，`app_entry.py:238-247`）；
    右侧 `panel_scroll` = 能级组面板 + 场面板 + `page_stack`（静态/动态各自的参数区，`:235-236,259-264`）。
@@ -50,8 +51,8 @@
 
 | 跳 | 位置 | 说明 |
 |---|---|---|
-| 1 | `能级.py:12` / `main.py:5` | 都只转发 `app_entry.main`；`能级.py` 额外再导出 `MainWindow`（`能级.py:7-8` 注释：供 `import 能级 as main_mod` 的旧脚本） |
-| 2 | `app_entry.py:26-29` | 冻结 windowed 守卫：`sys.stdout/stderr is None` → 补 devnull（PyInstaller 前置） |
+| 1 | `能级.py:12` | 只转发 `app_entry.main`；`能级.py` 额外再导出 `MainWindow`（供 `import 能级 as main_mod` 的旧脚本）。**`main.py` 与打包路线已于 2026-09-25 删除** |
+| 2 | `app_entry.py` 顶部 | 无控制台启动守卫：`sys.stdout/stderr is None` → 补 devnull |
 | 3 | `app_entry.py:530-536` | `QApplication` + `ui_theme.QSS`（`ui_theme.py:60`，字体 10pt Microsoft YaHei） |
 | 4 | `app_entry.py:537` | `_choose_mode()` **模态** QMessageBox：AI 模式 / GUI 模式 / 取消 |
 | 5a | `app_entry.py:539` → `403` | GUI：`MainWindow()` + `showMaximized()` + `app.exec_()` |
@@ -439,9 +440,9 @@ git diff -- src/ui/ui_dynamic.py app_entry.py |
 
 - `checks/cleanliness_guard_selfcheck.py:27-31` 的 `FORBID_IDS` = `pm_setup/engine_overrides/god_split/god_write/god_read/sim_state/_SOLVE_SPECS/register_panel_params/new_registry/_P/archive`，
   用 `tokenize` **只扫 NAME token、跳过 COMMENT/STRING**（`:52-53,66-70`）⇒ **注释里出现这些词不算命中**（`_mecha_bind.py:2,10`、`ui_dynamic.py:251`、`solver_inspector.py:327,626` 等处都是注释，故意保留）。
-- 本轮实测：`run_checks.py --only cleanliness_guard` → **1 PASS / 0 FAIL**。`src/`、`checks/`、`app_entry.py`、`main.py` 零命中。
+- 本轮实测：`run_checks.py --only cleanliness_guard` → **1 PASS / 0 FAIL**。`src/`、`checks/`、`app_entry.py` 零命中。
 - **守卫的覆盖盲区（要记住）**：
-  1. 只扫 `src/` + `checks/` + 根 `app_entry.py`/`main.py`（`:35-48`）——**不扫 `能级.py`、`scripts/`、`dsh/`**（我 grep 过 `scripts/`，零命中，无实害）；
+  1. 只扫 `src/` + `checks/` + 根 `app_entry.py`（`:35-48`）——**不扫 `能级.py`、`scripts/`、`dsh/`**（我 grep 过 `scripts/`，零命中，无实害）；（原名单里的 `main.py` 已于 2026-09-25 删除，判据同步去掉）
   2. `'_archive' in dp` 整目录排除（`:39`）⇒ `src/_archive/*` 与 `checks/_archive/*` 里的旧名不算；
   3. `_P` 只在**模块别名**位置算脏，`self._P` 跳过（`:68-69`）；
   4. 只查这 11 个名字——**`src.ai` 不在名单里**（靠 `sim_state` 兜），而 `src/ai` 目录本身已删（`src/` 下无 `ai`）。

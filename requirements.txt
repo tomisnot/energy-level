@@ -2,8 +2,8 @@
 # 构建/使用：python -m pip install -r requirements.txt
 # 说明：
 #   - numba 为必需（ip4/lindblad 演化内核加速；缺失时自动 numpy 回退，但明确不要拆除）
-#   - torch / pairinteraction / qutip 均不需要，禁止装进构建环境（PyInstaller 会沿
-#     import 图收集，装了就会把巨量无关代码打进 exe）
+#   - torch / pairinteraction / qutip 均不需要，禁止装进环境（本项目用不到；
+#     装了只会拖慢导入并拉大依赖面）
 #   - ARC 在 PyPI 上的发行名是 arc_alkali_rydberg_calculator（导入名 arc）；
 #     不要 pip install arc（那是另一个无关小库）。其自带依赖 sympy/lmfit/rich/h5py
 #     由 pip 自动解析。

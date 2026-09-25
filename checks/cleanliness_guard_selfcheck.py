@@ -41,7 +41,7 @@ def _py_files():
             for fn in fns:
                 if fn.endswith('.py'):
                     out.append(os.path.join(dp, fn))
-    for fn in ('app_entry.py', 'main.py'):
+    for fn in ('app_entry.py',):
         p = os.path.join(ROOT, fn)
         if os.path.exists(p):
             out.append(p)

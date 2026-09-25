@@ -22,12 +22,9 @@ scripts/tmp/
 .mode-request
 .mode-state
 
-# 周边项目（不进主干）/ PyInstaller 构建产物 / 各工具运行时状态
+# 周边项目（不进主干）/ 各工具运行时状态
 .dsh-vision-toolkit/
 microwave_pulse/
-build_venv/
-build/
-dist/
 .agent-teams/
 .workbuddy/
 .dsh/

@@ -25,8 +25,7 @@ runner 崩了软件照常活着；runner 也能**脱离软件单跑**（headless
 
 ## 已知约束
 
-- 需要**非 frozen** 解释器（`sys.executable` 能执行 .py）。PyInstaller 分发包
-  下没有可用的 runner 入口，此时提交侧应明确报错而不是静默退化。
+- 需要 `sys.executable` 能执行 .py 的解释器（并行扫描靠起独立脚本进程）。
 - 子进程一律 `OMP/MKL/NUMBA/...=1`：否则 W 个 worker × 16 线程互相超订，
   比串行还慢。
 - ARC 的 SQLite 首访会 CREATE TABLE，多进程同时来会 `database is locked`

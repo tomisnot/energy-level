@@ -9,19 +9,17 @@
 
 模块内部业务逻辑由各自组件自行维护，主程序不做逐模块特例。
 
-入口关系（三者等价，命令不同）：
+入口关系（两者等价，命令不同）：
 - 开发：python 能级.py   （薄包装，转发本模块 main）
 - 直接：python app_entry.py（本模块自带 __main__ 守卫）
-- 打包：main.py（PyInstaller 入口，冻结模块方式 import 本模块后调 main；
-  冻结环境下磁盘脚本的 import 解析与常规模块不同，故不用 runpy 执行）
 """
 
 import os
 import sys
 
-# ── 冻结 windowed 模式标准守卫 ─────────────────────────────────────────
-# PyInstaller 窗口程序（console=False）下 sys.stdout/stderr 为 None，任何
-# 顶层 sys.stdout.reconfigure()/write 都会 AttributeError。启动即补成
+# ── 无控制台启动的标准守卫 ─────────────────────────────────────────────
+# 以 pythonw.exe（或任何无控制台方式）启动时 sys.stdout/stderr 为 None，
+# 任何顶层 sys.stdout.reconfigure()/write 都会 AttributeError。启动即补成
 # devnull，之后所有模块（含 pair_core/driver 的 utf-8 重配置）安全无脑。
 if sys.stdout is None:
     sys.stdout = open(os.devnull, 'w', encoding='utf-8', errors='replace')
@@ -478,7 +476,7 @@ def main():
     """入口：`--gui` 纯 GUI / `--authority` headless 权威（看门人 spawn 用）。
 
     无参数 = 用户直接跑本文件 → 转发看门人 launcher.main()（弹窗选模式、
-    编排两模式与交接）。打包入口 main.py 走 `--gui` 之外的路径时同样经这里。
+    编排两模式与交接）。
     """
     app = QApplication.instance() or QApplication(sys.argv)
     try:

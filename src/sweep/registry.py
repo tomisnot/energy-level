@@ -185,11 +185,6 @@ def submit(root, params, *, axes=None, points=None, workers=None, tag=None,
 
     # 起 runner：**独立进程**，与 GUI 无共享对象（见模块 docstring）
     if python is None:
-        if getattr(sys, 'frozen', False):
-            return {'ok': False, 'sweep_id': sid, 'dir': sdir,
-                    'msg': '打包(frozen)运行下没有可用的 runner 入口：'
-                           '并行扫描需要脚本模式（python 能执行 .py）。'
-                           '请用开发入口「python 能级.py」启动软件。'}
         python = sys.executable
     script = os.path.join(root, 'scripts', 'sweep_runner.py')
     if not os.path.isfile(script):
