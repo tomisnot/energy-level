@@ -84,8 +84,12 @@ def build_stack(el_root: str | Path, data_root: str | Path,
     """装配 Hub 侧的 v2 栈——**经 mecha.assembly.assemble() 具名装配点**
     （D-33：真实路径与判据同走 assemble，装配漂移在真引擎上即红）。
 
-    返回里带 ``toolhost``：框架的 MCP Provider 经 ``ToolHost.call`` 调工具
-    （调用唯一路径），EL 不自己再包一层。
+    返回里**只带真注册表**（``tools``），**不带** ``toolhost``：``assemble()`` 的
+    ``sw.toolhost`` 包的是装配点那个**空** ``sw.tools``，而 EL 的 14 个工具注册在
+    ``build_tool_registry`` 里、从不写进 ``sw.tools`` ⇒ 谁把它当 ``toolhost=`` 传进
+    MCP 端点，就会"工具列得出来、调不动"（2026-09-25 实发，见 A11）。调用唯一路径
+    仍是框架 handler 内的 ``ToolHost.call``；端点缺省
+    ``LocalToolHost(本函数返回的 tools)`` 才是对的。
     """
     from mecha.assembly import assemble
     from mecha_v2.bridge import el_summarizer
@@ -99,7 +103,7 @@ def build_stack(el_root: str | Path, data_root: str | Path,
                                 sw.jobs)
     return {"engine": engine, "history": sw.history, "authority": sw.authority,
             "gate": sw.gate, "surface": sw.surface, "ai": ai, "jobs": sw.jobs,
-            "tools": tools, "toolhost": sw.toolhost}
+            "tools": tools}
 
 
 def build_mcp_server(tools, *, toolhost=None, **kwargs):
