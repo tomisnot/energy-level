@@ -107,6 +107,9 @@ FAST_KNOWN_SEC = {
     # MCP 端到端（R10：全绿只对判据覆盖到的路径成立）——它守"装配→起 MCP→真调→落盘"
     # 这条第 3 段改过、而当时无判据覆盖的路径。
     'hub_mcp_e2e_selfcheck.py': 8.8,
+    # 2026-09-25 现测 2.0s。AI 可见面守卫（B8）：按**内容**扫 4 份 SKILL + 面板 client
+    # （`.dsh/` 两份 gitignored ⇒ git diff 看不见它们）；进 --core：改文档也要立刻知道。
+    'ai_surface_selfcheck.py': 2.0,
 }
 
 

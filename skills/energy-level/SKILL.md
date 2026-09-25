@@ -240,5 +240,23 @@ env 采样   = √[ (1 + δ(t)) / (1 + b) ]    # 峰值恰为 1
 - **`set_groups`/`set_superposition`/`set_pair_superposition`/`add_level_group` 等具名写工具**：
   v2 统一走 `set_config`（写 `groups.list`/`dynamic.psi_*`）。裁剪/叠加态的写法见上"配置键"与坑 6。
 
-> **权威源**：本文件 = `skills/energy-level/SKILL.md`（git 里这份为真）。工作区副本
-> `.dsh/skills/energy-level/SKILL.md` 应与之一致；发现漂移以本文件为准。
+## 副本与同步责任（三份 SKILL）
+
+同一套 AI 指南在本仓有**三份**，职责不同。**漂移了以本文件为准**：
+
+| 文件 | 角色 | 谁读 |
+|---|---|---|
+| `skills/energy-level/SKILL.md` | **权威**（入库） | 人 / 工具 |
+| `.dsh/skills/energy-level/SKILL.md` | **镜像**（须与权威**逐字节相同**） | dsh 加载 |
+| `.dsh/skills/re0-mecha/SKILL.md` | **工作副本**（另一份文档：独立坑列表 + v1→v2 工具名对照） | **AI 实际读的那份** |
+
+改法与纪律：
+
+- 先改**权威**，再同步镜像与工作副本。工具面的**唯一来源是注册表**
+  （`mecha_v2/tools.py`）；本文件的「工具清单」表与它互钉，**不许在别处再手抄一份**。
+- ⚠ **`.dsh/` 是 gitignored**：`git diff` / `git status` / 门禁**都看不见那两份**——
+  历史上正因此漏改过一处固定端口，而它恰是 AI 真正读的那份。查漂移要**按内容扫**：
+  `python run_checks.py --only ai_surface`（禁固定端口、禁退役工具名的活指令、
+  三份工具面一致、镜像逐字节一致）。
+- 新增第四份副本时**必须**登记进 `checks/ai_surface_selfcheck.py` 的 `SURFACES`：
+  未登记的文件会被该守卫判为违规（"漏登记"本身违规）。
