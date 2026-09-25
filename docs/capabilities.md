@@ -15,7 +15,7 @@
 | `history` | definition | energy-level | — |
 | `monitor` | definition | energy-level | — |
 | `monitor.transport` | definition | energy-level | — |
-| `monitor.transport.local` | provider | http-loopback | — |
+| `monitor.transport.local` | provider | http-loopback | adapter.gui |
 | `ops_pipeline` | consumer | — | Surface |
 | `provider.approval` | definition | energy-level | — |
 | `provider.approval.local` | provider | fail-closed | — |
@@ -31,7 +31,7 @@
 | `provider.spill.local` | provider | local-file | — |
 | `provider.toolhost` | definition | energy-level | — |
 | `provider.toolhost.local` | provider | in-process | — |
-| `provider.toolhost.mcp` | provider | mcp-streamable-http | — |
+| `provider.toolhost.mcp` | provider | mcp-streamable-http | adapter.ai |
 | `query:preview_run` | consumer | preview_run | framework:CodeAct.run_actions |
 | `query:query_levels` | consumer | query_levels | framework:CodeAct.run_actions |
 | `query:query_params` | consumer | query_params | framework:CodeAct.run_actions |
