@@ -78,7 +78,7 @@ MIRROR = '.dsh/skills/energy-level/SKILL.md'
 WORKSPACE = '.dsh/skills/re0-mecha/SKILL.md'
 SURFACES = {
     AUTHORITATIVE: '权威（入库；工具清单的被检对象 ⇄ 注册表互钉）',
-    MIRROR: '镜像（dsh 加载面；须与权威逐字节相同）',
+    MIRROR: '镜像（dsh 加载面；经 junction 指向权威 ⇒ 须解析到同一文件）',
     WORKSPACE: '工作副本（AI 实际读；含独立坑列表与 v1→v2 对照）',
     'skills/ui-design/SKILL.md': 'GUI 设计面技能（非运行面，同样禁固定端口/退役引用）',
 }
