@@ -56,7 +56,13 @@ WRITE_VALUE = 21.7
 
 
 async def _wire_roundtrip(url):
-    """真 MCP 客户端往返（streamable-http）→ (工具名表, 调用正文, isError)。"""
+    """真 MCP 客户端往返（streamable-http）→ (工具名表, 调用正文, is_error)。
+
+    ⚠ **字段名是 ``is_error``（snake_case）**——mcp 2.2 的 ``CallToolResult`` 只有这个名字
+    （``isError`` 只是序列化别名）。本判据第一版读 ``isError`` ⇒ ``getattr`` 兜默认 False
+    ⇒ 那一项**恒为假、是死的观测量**（全靠正文断言在抓）。这是 R9 的同族坑
+    （观测量本身失效），故这里两种名字都读、并以正文为主证据。
+    """
     from mcp import ClientSession
     from mcp.client.streamable_http import streamable_http_client
     async with streamable_http_client(url) as (read, write):
@@ -67,7 +73,10 @@ async def _wire_roundtrip(url):
                 "set_config", {"key": WRITE_KEY, "value": WRITE_VALUE,
                                "reason": "判据 E2E"})
             text = "".join(getattr(c, "text", "") or "" for c in (res.content or []))
-            return [t.name for t in listed], text, bool(getattr(res, "isError", False))
+            err = getattr(res, "is_error", None)
+            if err is None:
+                err = getattr(res, "isError", False)
+            return [t.name for t in listed], text, bool(err)
 
 
 def _journal(root, dir_name):
