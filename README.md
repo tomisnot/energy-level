@@ -4,8 +4,8 @@
 > 人用 GUI 开、AI 经 MCP 语义层开、两者共用**同一份**语义状态与同一条事件总线。
 >
 > **当前形态（2026-09-25 核对）**：新主干（Re0）已覆盖旧版；引擎 + GUI + sweep + 多体 + 机甲语义内核
-> 全在。**AI 机甲框架已提炼为独立库 `mecha`**（本机实测 **0.2.0**，editable 装于
-> `D:\code-nosync\mecha`），本仓不再持有 `src/mecha` / `src/cockpit`；EL 自己的 v2 领域层
+> 全在。**AI 机甲框架已提炼为独立库 `mecha`**（本机实测 **0.2.0**，本机位置见
+> `README.md` §4），本仓不再持有 `src/mecha` / `src/cockpit`；EL 自己的 v2 领域层
 > 住在 `mecha_v2/`。索引见 `docs/README.md`（**读文档前先看它**）。
 
 ---
@@ -144,7 +144,7 @@ AI 侧调用指南（两份**需手工同步**）：`skills/energy-level/SKILL.m
    pickle RunSpec）**在当时 mecha-sdk HEAD 仍成立**；Get Paper 已自建方案未用本库。
    ⇒ spec 的"两实例落地再冻 v1"这条验收**当时不成立**。
    > ⚠ **2026-09-25 注**：本条针对的是**已退役的 `mecha-sdk` 0.1.0**。EL 现运行的框架是
-   > `mecha` 0.2.0（`D:\code-nosync\mecha`，模块集完全不同，见 §4）。这六条指控在 0.2.0 上
+   > `mecha` 0.2.0（模块集完全不同，位置见 §4）。这六条指控在 0.2.0 上
    > **是否仍成立尚未复核**——本仓不做结论，只标注前提已变。
 2. **提炼守卫只守 import**：`checks/mecha_purity_selfcheck.py` 是 AST import 扫描，且 `numpy` 在
    白名单里 ⇒ 上面六条语义级偏差全在盲区（46/0 全绿与六条指控并存，不矛盾）。

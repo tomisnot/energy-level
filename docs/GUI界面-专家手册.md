@@ -2,7 +2,7 @@
 
 > ⚠ **历史件横幅（2026-09-25 加，主代理指令）**：本文记录的是**已退役的 `mecha-sdk` 0.1.0**
 > 时代（`D:\学\BaiduSyncdisk\编程\code\python\mecha-sdk`）。EL 现运行的框架是 **`mecha` 0.2.0**
-> （editable 装于 `D:\code-nosync\mecha`），**模块集完全不同**：0.1.0 的 `ops` / `session` /
+> （本机位置见 `README.md` §4），**模块集完全不同**：0.1.0 的 `ops` / `session` /
 > `bus` / `registry` / `codeact` / `server` / `cockpit` / `hub_bridge` / `hub_client` /
 > `archives` / `interlock` / `autonomy` / `gc` / `app_bridge` / `subscribe` / `hooks` 等在
 > 0.2.0 **都不存在**（改由 `gate` / `history` / `authority` / `surface` / `tools` /

@@ -80,6 +80,12 @@ SURFACES = {
 #: 面板取址面（TS）：不得硬编码监控地址。
 CLIENT_GLOB_DIR = os.path.join('dsh', 'src', 'client')
 
+#: **机器事实的唯一家**（DSH §3.1"一个事实一个家"）：框架在本机的安装位置只允许在
+#: `README.md` §4 出现，别处一律链接过去。事实本身**从家里解析**（R9），不在判据里
+#: 硬编码——换机器/换布局时，家里改了、判据自动跟随。
+FACT_HOME = 'README.md'
+FACT_ANCHOR = re.compile(r'Editable project location `([^`]+)`')
+
 #: v1 工具名（退役）。**只用无歧义的名字**——`query`/`undo` 会与 `query_params` 撞。
 RETIRED = ('set_param', 'list_params', 'get_state', 'list_levels', 'get_activity',
            'get_waves', 'estimate_cost', 'preview_behavior', 'run_compute',
@@ -174,6 +180,44 @@ def scan_text(text):
                             % (ls[0], tok))
             break
     return hard, soft
+
+
+def fact_offenders(fact, files):
+    """→ 复述该机器事实的文件（**纯函数**：喂合成映射即可证明它抓得住，R7）。
+
+    守的**承诺**是"一个事实一个家"（R13：不守"这个词只出现 N 次"这种实现痕迹——
+    事实本身由 :data:`FACT_HOME` 解析得到，换机器时它跟着变）。
+    """
+    if not fact:
+        return ['（事实为空：家里解析不到 ⇒ 无法判定）']
+    return sorted(rel for rel, text in files.items()
+                  if rel != FACT_HOME and fact in text)
+
+
+def _machine_path_from_home():
+    """从唯一持有该事实的家里解析出"框架装在哪"（R9：期望值来自被检对象之外）。"""
+    m = FACT_ANCHOR.search(_read(FACT_HOME))
+    return m.group(1).strip() if m else ''
+
+
+def _tracked_files():
+    """tracked 文件清单（`git ls-files` ⇒ 自动排除 gitignored 的探针与构建产物）。
+
+    ⚠ **必须带 `-c core.quotepath=false`**：git 默认对非 ASCII 路径**加引号转义**
+    （`"docs/\\344\\272\\244..."`），那样 `_read()` 全部抛错、文件被**静默跳过**——
+    而本仓文档大多中文名 ⇒ 守卫会对它们全体失明（实测：G 组红证据没红才发现）。
+    git 不可用**不静默通过**（"无法判定" ≠ "判定通过"）；返回空表由调用方判红。
+    """
+    import subprocess
+    try:
+        p = subprocess.run(['git', '-C', ROOT, '-c', 'core.quotepath=false', 'ls-files'],
+                           capture_output=True, text=True, encoding='utf-8',
+                           errors='replace', timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if p.returncode != 0:
+        return []
+    return [f for f in (p.stdout or '').splitlines() if f.strip()]
 
 
 def _slice(text, head_re, stop_re):
@@ -349,15 +393,49 @@ def main():
     subs.append(('登记表死项被抓：合成"登记集 - 发现集"非空 → 报出',
                  bool(sorted(set(SURFACES) - {'skills/energy-level/SKILL.md',
                                               'skills/ui-design/SKILL.md'}))))
-    C.group('F 致死性 + 反方向不误报（对照表/暂缺节/跨行引用必须放行）', subs)
+    subs.append(('机器事实复述被抓：合成映射里别处提到该事实 → 报出',
+                 fact_offenders('D:\\x\\mecha',
+                                {FACT_HOME: 'see `D:\\x\\mecha`',
+                                 'docs/a.md': '装于 D:\\x\\mecha'}) == ['docs/a.md']))
+    subs.append(('机器事实无复述 → **不误报**',
+                 fact_offenders('D:\\x\\mecha',
+                                {FACT_HOME: 'see `D:\\x\\mecha`',
+                                 'docs/a.md': '位置见 README §4'}) == []))
+    C.group('F 致死性 + 反方向不误报（对照表/暂缺节/跨行引用只链接、不复述）', subs)
+
+    # ---- G 机器事实只有一个家（R13：守"权威陈述只在一处"这个承诺）----
+    fact = _machine_path_from_home()
+    tracked = _tracked_files()
+    files, unreadable = {}, []
+    for rel in tracked:
+        try:
+            files[rel] = _read(rel)
+        except Exception:                                      # noqa: BLE001
+            unreadable.append(rel)
+    offenders = fact_offenders(fact, files)
+    stats['tracked 文件数'] = len(tracked)
+    stats['读到内容的文件数'] = len(files)
+    stats['读不到的'] = unreadable
+    stats['事实复述者'] = offenders
+    C.group('G 机器事实（框架装在哪）的权威陈述只在一处：只在 %s 里，别处一律链接'
+            % FACT_HOME, [
+        ('从 %s 解析到该事实：%r（R9：不硬编码在判据里）' % (FACT_HOME, fact), bool(fact)),
+        ('tracked 面 %d 个里有复述的文件：%s'
+         % (len(tracked), offenders or '无'),
+         bool(tracked) and not offenders),
+        ('R8 自证：tracked %d 个**全部读得到**（读不到 %s）——否则守卫会对它们静默失明'
+         % (len(tracked), unreadable or '无'),
+         bool(tracked) and not unreadable),
+    ])
 
     print('[ai_surface] 非退化自证：%s' % stats)
     C.group('R8 非退化自证：扫到的面/段/注册表工具都非空', [
-        ('SKILL 面 %d 份、client 文件 %d 个、注册表工具 %d 个、对照表 %d 行'
+        ('SKILL 面 %d 份、client 文件 %d 个、注册表工具 %d 个、对照表 %d 行、tracked %d 个'
          % (stats['SKILL 文件数'], stats['client 文件数'],
-            stats['注册表工具数'], stats['对照表行数']),
+            stats['注册表工具数'], stats['对照表行数'], stats.get('tracked 文件数', 0)),
          stats['SKILL 文件数'] > 0 and stats['client 文件数'] > 0
-         and stats['注册表工具数'] > 0 and stats['对照表行数'] > 0),
+         and stats['注册表工具数'] > 0 and stats['对照表行数'] > 0
+         and stats.get('tracked 文件数', 0) > 0),
     ])
 
     ok = C.summary()
