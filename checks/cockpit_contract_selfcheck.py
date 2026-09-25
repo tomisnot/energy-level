@@ -195,8 +195,15 @@ def build_minimal_fixture():
 
 
 # ---------------------------------------------------------------- HTTP
-def _http_call_once(method, url, payload=None):
-    """→ (status, headers_lower, text)。4xx/5xx 也如实返回（不抛）。"""
+def http_call(method, url, payload=None):
+    """→ (status, headers_lower, text)。4xx/5xx 也如实返回（不抛）。
+
+    单发，不重试：**带 body 的 POST 曾**在服务端不 drain 请求体就关连接时被 Windows
+    回 RST（WinError 10053）——那是 `mecha.cockpit` 的既有缺陷，已由框架 `4638519`
+    修根因（`do_POST` 先按 `Content-Length` 读净 body），**本判据的传输层重发补丁随之
+    撤除**（先修因、再撤补丁）。判别子见迁移报告：声明 `Content-Length: 1000` 只发 10
+    字节 ⇒ 修好的实现 `early=False`、补完 body 才回 404（3/3）；未修实现 `early=True`。
+    """
     data = None
     headers = {}
     if payload is not None:
@@ -210,24 +217,6 @@ def _http_call_once(method, url, payload=None):
     except urllib.error.HTTPError as e:
         return e.code, {k.lower(): v for k, v in (e.headers or {}).items()}, \
             e.read().decode('utf-8')
-
-
-def http_call(method, url, payload=None):
-    """传输层错误**原样重发**同一请求（最多 3 次）；断言与期望值一字不变。
-
-    为什么要重发：**带 body 的 POST** 在服务端不 drain 请求体就关连接时，Windows 回
-    RST（WinError 10053/10054），客户端可能在读到状态行前被打断。这是
-    `BaseHTTPRequestHandler` 的既有行为——2026-09-25 实测：**迁移前的 EL 实现同样
-    复现**（连续 6 次带 body POST × 30 轮里 4 轮命中），与端点契约无关，真实面板
-    （只 GET）不会遇到；但它会让基线偶发假红。真有问题的端点重发也照样失败 ⇒ 红。
-    """
-    last = None
-    for _ in range(3):
-        try:
-            return _http_call_once(method, url, payload)
-        except (ConnectionError, urllib.error.URLError, OSError) as e:
-            last = e
-    raise last
 
 
 def _route(method, base, path, payload=None):
