@@ -637,11 +637,11 @@ def list_levels(cache, snap):
                           for k, v in (s.get('amps') or {}).items()}
                          if s.get('amps') else None)
     res = {'n_states': len(out), 'states': out,
-           'hint': 'set_param("dynamic.psi_single", <key>) 设初态；'
-                   'set_drive 的 src/tgt 可用 label 或 key'}
+           'hint': 'set_config("dynamic.psi_single", <key>) 设初态；'
+                   'set_drive 的 src/tgt 用 query_levels 的身份键（label 不认）'}
     if cols == 'off':
         res['static_hint'] = (
-            '要 DC-Stark 位移 / qstr / amps：set_param("static.columns","basic")；'
+            '要 DC-Stark 位移 / qstr / amps：set_config("static.columns","basic")；'
             '再加 AC-Stark（**~13 s/次**，n_photon=4/window=3）："ac"')
         return res
     res['static_columns'] = cols
