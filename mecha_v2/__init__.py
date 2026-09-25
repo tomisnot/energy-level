@@ -10,8 +10,8 @@
   make_validator（委托 src.core.protocol 的领域校验）
 - `tools.py`   build_tool_registry——AI 的工具面（set_config/run_sim/set_drive…）
 - `bridge.py`  V2Bridge——GUI ↔ 同一道 Gate 的操作者适配器（+ ElOps 线程拆分）
-- `hub.py`     to_mcp——ToolRegistry → MCP 服务器的通用投影 + 独立进程入口
-  （`python -m mecha_v2.hub`，headless 部署）
+- `hub.py`     EL 侧 MCP 薄壳（服务名/说明 + 端点壳）——投影与传输在框架
+  `mecha.providers.mcp`（`python -m mecha_v2.hub`，headless 部署）
 
 **只 import `src.core.protocol`**（EL 的领域无关、框架无关纯领域层，docstring
 明写"本协议不 import mecha"），绝不碰 v1 的 `src.adapter`/`mecha.app_bridge`

@@ -6,6 +6,23 @@
 工具经 Gate 写、经 Surface 跑——**没有一条路径绕过写入门**（洞1/洞2 的
 Phase 5 侧证：AI 拿到的就是这些工具，物理演化只有 run_sim→Surface.run 一条）。
 
+## `default` 声明是**必填项**（R5 三分法，2026-09-25 第 3 段）
+
+框架的 null 垫片**只读声明里的 `default` 键**，**不读**闭包签名——写工具体常被
+`def wrapped(**kwargs)` 包一层，签名侧恒为空集（EL 的 `hub.py` 注释记过 P1-8 同款）。
+三分规则：
+
+- 声明有 `default` 且**非 None** ⇒ 客户端送显式 `null` 时**丢键**，让闭包真默认生效；
+- 声明有 `default` 且**为 None** ⇒ 保留 `null`（那是"清空"语义的唯一表达）；
+- 声明**没有** `default` 键 ⇒ 视同真默认 `None` ⇒ 同样保留 `null`。
+
+⇒ 凡闭包真默认**非 None** 的参数，**必须**在声明里写出该默认值（共 **10 个**：
+`set_config.reason`、`set_drive.{pol,pulse,detuning_mhz,mode,atom,name,reason}`、
+`read_waves.atom`、`reset_config.reason`）；真默认就是 `None` 的参数（8 个）
+**一律不声明**——声明成 `null` 会落进第二格，语义不同。
+判据 `checks/mcp_toolface_selfcheck.py` 守这条（**完备 + 唯一**），并断言
+"显式 null ⇒ 到达工具体的是真默认"。
+
 ## Known Limitations and Deferred Work
 
 - 工具函数是纯闭包工厂（build_tools 返回注册进宿主 ctx.tools 的形状）；真
@@ -99,7 +116,7 @@ def build_tool_registry(engine: ElEngine, gate: Gate, surface: Surface,
         ),
         parameters={"key": {"type": "string", "description": "可写配置键，如 dynamic.t_max"},
                     "value": {"description": "新值（任意 JSON 形态），类型须匹配该键（见 query_params）"},
-                    "reason": {"type": "string",
+                    "reason": {"type": "string", "default": "ai tool",
                                "description": "一句话中文说明改动目的（进留痕，如'把演化时长拉到 200ns 看完整拉比振荡'）"}},
         output_schema={"type": "object", "required": ["ok", "key"]},
         execute=lambda key, value, reason="ai tool": _set(key, value, reason),
@@ -254,14 +271,22 @@ def build_tool_registry(engine: ElEngine, gate: Gate, surface: Surface,
             # 一律 float() 兜底，null/数字/数字串都安全，故不声明 type 更稳。
             "rabi_mhz": {"description": "拉比频率 MHz（与 intensity_mwcm2 二选一）"},
             "intensity_mwcm2": {"description": "光强 mW/cm²（与 rabi_mhz 二选一）"},
-            "pol": {"type": "string", "description": "偏振：π / σ+ / σ-（默认 π）"},
-            "pulse": {"type": "string", "description": "脉冲形状 pi / pi2（自动定时长）；省略则用 duration_ns"},
+            # ↓ 真默认非 None ⇒ **必须**声明 default（框架的 null 垫片只读声明，
+            #   不读闭包签名）：否则客户端送显式 null 会以 None 到达工具体。
+            "pol": {"type": "string", "default": "π",
+                    "description": "偏振：π / σ+ / σ-（默认 π）"},
+            "pulse": {"type": "string", "default": "",
+                      "description": "脉冲形状 pi / pi2（自动定时长）；省略则用 duration_ns"},
             "duration_ns": {"description": "脉冲时长 ns（pulse 省略时必填）"},
-            "detuning_mhz": {"description": "相对共振的失谐 MHz（默认 0）"},
-            "mode": {"type": "string", "description": "append（默认追加）/ replace（整组替换）"},
-            "atom": {"type": "string", "description": "单体 single（默认）；两体 A / B"},
-            "name": {"type": "string", "description": "波形名（默认 drive；多条波时用可辨的名字）"},
-            "reason": {"type": "string", "description": "一句话中文说明这条驱动的目的（进留痕）"},
+            "detuning_mhz": {"default": 0.0, "description": "相对共振的失谐 MHz（默认 0）"},
+            "mode": {"type": "string", "default": "append",
+                     "description": "append（默认追加）/ replace（整组替换）"},
+            "atom": {"type": "string", "default": "single",
+                     "description": "单体 single（默认）；两体 A / B"},
+            "name": {"type": "string", "default": "drive",
+                     "description": "波形名（默认 drive；多条波时用可辨的名字）"},
+            "reason": {"type": "string", "default": "ai set_drive",
+                       "description": "一句话中文说明这条驱动的目的（进留痕）"},
         },
         output_schema={"type": "object", "required": ["ok", "key", "wave"]},
         execute=lambda src, tgt, rabi_mhz=None, intensity_mwcm2=None,
@@ -283,8 +308,8 @@ def build_tool_registry(engine: ElEngine, gate: Gate, surface: Surface,
             "时长/起始时刻），不内联大数组。确认驱动配置、排查遗留驱动用它。"
             "两体演化 atom 取 A / B 分别看，单体默认 single。"
         ),
-        parameters={"atom": {"type": "string",
-                    "description": "single（默认）/ A / B"}},
+        parameters={"atom": {"type": "string", "default": "single",
+                             "description": "single（默认）/ A / B"}},
         output_schema={"type": "object", "required": ["ok", "atom", "waves"]},
         execute=lambda atom="single": _read_waves(gate, atom),
         banned_words=("gate", "wave_list 结构", "snapshot"),
@@ -300,8 +325,8 @@ def build_tool_registry(engine: ElEngine, gate: Gate, surface: Surface,
             "实验前用它收拾台面，不必逐键清。清空同样留痕可追溯；回执列出清了"
             "哪些键。reason 用一句中文说明目的。"
         ),
-        parameters={"reason": {"type": "string",
-                    "description": "一句话中文说明清空目的（进留痕）"}},
+        parameters={"reason": {"type": "string", "default": "ai reset_config",
+                               "description": "一句话中文说明清空目的（进留痕）"}},
         output_schema={"type": "object", "required": ["ok", "cleared", "n"]},
         execute=lambda reason="ai reset_config": _reset(
             gate, channel, reason),

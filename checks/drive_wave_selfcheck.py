@@ -33,6 +33,7 @@ from src.core import atomic_levels as AL                   # noqa: E402
 from mecha.authority import Mode                           # noqa: E402
 from mecha.errors import GateDenied, MechaError            # noqa: E402
 from mecha.gate import Channel                             # noqa: E402
+from mecha.toolhost import LocalToolHost                   # noqa: E402
 
 from mecha_v2.bridge import V2Bridge, _build_gui_tools  # noqa: E402
 
@@ -51,11 +52,18 @@ br.write_many({'groups.list': [dict(n=60, l=0, j=0.5), dict(n=60, l=1, j=1.5)],
 # 工具面（AI 通道 + AI 模式——set_drive 走真门）
 ai = Channel("ai")
 tools = _build_gui_tools(br._engine, br._gate, br._authority, ai, br.jobs)
+_HOST = LocalToolHost(tools)          # 调用唯一路径（与 MCP 面同一层）
 br.switch_mode(Mode.AI, actor='human')
 
 
 def _call(tool, **kw):
-    r = tools.execute(tool, kw)
+    """经**工具宿主**调工具（`toolhost.call`）——与 MCP 面同一条调用路径。
+
+    2026-09-25 第 3 段：MCP Provider 的调用唯一路径是 `ToolHost.call`（`tools.execute`
+    只是它的 delegate），故判据也从这条路径走：多验一层宿主边界的回执校验
+    （畸形回执 → `bad_host_result`），少一分"判据走的路径与线上不同"的漂移。
+    """
+    r = _HOST.call(tool, kw)
     if r.get('is_error'):
         raise AssertionError('工具 %s 失败：%s' % (tool, r.get('error')))
     return r['value']

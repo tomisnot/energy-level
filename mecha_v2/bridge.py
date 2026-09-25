@@ -114,7 +114,7 @@ class V2Bridge:
                  summarizer=el_summarizer,
                  monitor: Monitor | None = None,
                  jobs: JobRegistry | None = None,
-                 surface=None) -> None:
+                 surface=None, toolhost=None) -> None:
         self._gate = gate
         self._history = history
         self._authority = authority
@@ -122,6 +122,10 @@ class V2Bridge:
         # 装配点建好的 Surface（带角色表）——serve_mcp 复用它，不再另建裸的
         # （审查缺口 B：运行时图必须 = 声明表）。测试注入缺省 None → 工具面自建。
         self._surface = surface
+        # 装配点建好的 ToolHost——MCP 侧的**调用唯一路径**（框架 handler 走
+        # `toolhost.call`，远端边界那层失败归一化留在路径上）。缺省 None ⇒
+        # 框架回退出厂 `LocalToolHost(registry)`（纯内存判据装配同构）。
+        self._toolhost = toolhost
         self._lock = threading.Lock()
         self.cache = cache if cache is not None else (engine._cache if engine else None)
         self._artifact_root = (Path(artifact_root) if artifact_root is not None
@@ -151,7 +155,8 @@ class V2Bridge:
                       project="energy-level")
         return cls(sw.gate, sw.history, sw.authority, engine=engine, cache=cache,
                    artifact_root=sw.layout.data_dir / "artifacts",
-                   monitor=sw.monitor, jobs=sw.jobs, surface=sw.surface)
+                   monitor=sw.monitor, jobs=sw.jobs, surface=sw.surface,
+                   toolhost=sw.toolhost)
 
     @classmethod
     def for_gui(cls, *, el_root: str | Path, data_root: str | Path,
@@ -186,26 +191,26 @@ class V2Bridge:
                               cache=CacheProxy(engine._cache, engine._on_engine))
 
     def serve_mcp(self, *, host: str = "127.0.0.1", port: int = 0,
-                  port_file: str | Path | None = None):
+                  port_file: str | Path | None = None, log=None):
         """在本进程后台线程起 MCP 服务器（AI 连它，写经**同一个** Gate）。
 
-        返回 (thread, server, actual_port)。GUI 与服务器共享 self._gate ⇒ 人机同门。
+        返回 ``(McpHost, actual_port)``：投影与传输都归框架
+        （``mecha.providers.mcp``，2026-09-25 第 3 段薄壳化）——本方法只做
+        "取本进程的工具面 + EL 的默认值 + 交给框架起"。GUI 与服务器共享
+        ``self._gate`` ⇒ 人机同门。
+
+        与旧实现的差别（都是**收严**）：① 实际端口是**回读**的（旧代码自己挑空闲
+        端口再 bind，有 TOCTOU 窗口）；② 等 uvicorn 真 listen 才返回（旧代码只等
+        线程起来）；③ 端口文件由框架按"启动前清 / 收尾按内容清"的规则管理。
         """
-        import threading
-        from .hub import to_mcp, _free_port
+        from .hub import McpHost
         ai = Channel("ai")
         tools = _build_gui_tools(self._engine, self._gate, self._authority,
                                  ai, self.jobs, surface=self._surface)
-        server = to_mcp({"tools": tools, "authority": self._authority})
-        actual = port or _free_port(host)
-        t = threading.Thread(
-            target=lambda: server.run(transport="streamable-http",
-                                      host=host, port=actual),
-            daemon=True, name="mecha-mcp")
-        t.start()
-        if port_file:
-            Path(port_file).write_text(str(actual), encoding="utf-8")
-        return t, server, actual
+        mcp_host = McpHost(tools, toolhost=self._toolhost, host=host, port=port,
+                           port_file=port_file, log=log)
+        actual = mcp_host.start()
+        return mcp_host, actual
 
     # ---- 写（经门）----
 

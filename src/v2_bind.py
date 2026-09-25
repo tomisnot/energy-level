@@ -172,12 +172,16 @@ def make_v2_bridge(el_root, *, data_root=None, data_dir_name=".mecha-v2",
         start_services = False
     bridge = V2Bridge.for_shared(el_root=el_root, data_root=data_root,
                                  data_dir_name=data_dir_name, mode=Mode.HUMAN)
-    bridge._mcp_thread = None
+    bridge._mcp_host = None
     bridge._mcp_server = None
     if start_services:
         pf = mcp_port_file or str(Path(el_root) / ".mcp-port")
-        _t, server, port = bridge.serve_mcp(port_file=pf)
-        bridge._mcp_thread, bridge._mcp_server, bridge._mcp_port = _t, server, port
+        # MCP 端点：框架实现（mecha.providers.mcp，第 3 段薄壳化）；实际端口回读、
+        # 起完即已 listen、端口文件由框架按"启动前清 / 收尾按内容清"管理。
+        mcp_host, port = bridge.serve_mcp(port_file=pf)
+        bridge._mcp_host = mcp_host
+        bridge._mcp_server = mcp_host.server
+        bridge._mcp_port = port
         # 监控端点：框架实现（mecha.cockpit）；**动态端口**（port=0）+ 端口文件
         # 发现。端点对象留给调用方取 .port / 收尾 .stop()。
         mpf = monitor_port_file or str(Path(el_root) / MONITOR_PORT_FILE)

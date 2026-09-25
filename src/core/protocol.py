@@ -623,7 +623,7 @@ def list_levels(cache, snap):
         raise ValueError('static.columns 只认 off/basic/ac，得到 %r' % cols)
     if not groups:
         return {'n_states': 0, 'states': [],
-                'note': '基组为空——先 set_param("groups.list", [{n,l,j}, ...])'}
+                'note': '基组为空——先 set_config("groups.list", [{n,l,j}, ...])'}
     states = _runspec.build_states(cache, groups, snap.get('field.B_gauss'),
                                    snap.get('field.E_vpcm'),
                                    with_static=(cols != 'off'))
@@ -708,7 +708,7 @@ def _static_rows(cache, snap, acfg):
     """快照 → (rows, coeffs, note)：静态能级行（AC 唯一后端 direct）。"""
     groups = _runspec.groups_from_params(snap)
     if not groups:
-        raise ValueError('基组为空：先 set_param("groups.list", [{n,l,j}, ...])'
+        raise ValueError('基组为空：先 set_config("groups.list", [{n,l,j}, ...])'
                          '——静态量无从算起')
     B = float((snap or {}).get('field.B_gauss') or 0.0)
     Ev = float((snap or {}).get('field.E_vpcm') or 0.0)
@@ -777,7 +777,7 @@ def static_ac_sweep(cache, snap, intensities_mwcm2):
                 'note': ac_note}
     groups = _runspec.groups_from_params(snap)
     if not groups:
-        raise ValueError('基组为空：先 set_param("groups.list", [{n,l,j}, ...])')
+        raise ValueError('基组为空：先 set_config("groups.list", [{n,l,j}, ...])')
     B = float((snap or {}).get('field.B_gauss') or 0.0)
     n_ph = (snap or {}).get('field.n_photon')
     win = (snap or {}).get('field.window')
@@ -818,11 +818,11 @@ def static_pair(cache, snap, what='exchange', with_evecs=False, n_window=None,
     from . import static_pair as _sp
     groups = _runspec.groups_from_params(snap)
     if not groups:
-        raise ValueError('基组为空：先 set_param("groups.list", [{n,l,j}, ...])')
+        raise ValueError('基组为空：先 set_config("groups.list", [{n,l,j}, ...])')
     B = float((snap or {}).get('field.B_gauss') or 0.0)
     # 两体几何**只认 registry 的三个扁平键**（与 `runspec.py:555-557` 同一真源）——
     # 旧版读 `snap.get('dynamic.pair')` 字典键，而该键**不在 registry 里**
-    # （`set_param("dynamic.pair", …)` 会被 UnknownKey 拒）⇒ 经 MCP/AI 调本查询
+    # （`set_config("dynamic.pair", …)` 会被 UnknownKey 拒）⇒ 经 MCP/AI 调本查询
     # 时 R 恒为 0、必报"需要 R_um > 0"；只有绕过 registry 直调 core 的合成快照
     # 能喂到那个字典键（判据因此假绿）。2026-09-22 修。
     R = float((snap or {}).get('dynamic.pair.R_um') or 0.0)

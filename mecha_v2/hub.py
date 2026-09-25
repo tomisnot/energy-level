@@ -1,20 +1,33 @@
-"""v2 MCP Hub：AI 操作者经这道门驱动 EL（Phase 5 第 1 步，独立进程）。
+"""mecha v2 MCP 端点（EL 侧**薄壳**）：投影与传输全在 ``mecha.providers.mcp``。
+
+归属：本文件住在 EL 仓，但只保留 **EL 词汇与 EL 策略**——服务名、服务说明。
+其余（三步投影、required 解析、null 垫片、失败归一化、uvicorn 后台线程与端口回读、
+SDK 私有面垫片、instructions 体积守卫、端口文件的启停清理）**逐条**已是框架行为
+（``mecha.providers.mcp``，mecha `4638519`），本文件不再有第二份实现。
+
+## 迁移记录（第 3 段：MCP 侧薄壳化，2026-09-25）
+
+迁移前本文件 **223 行**，自持 ``to_mcp`` / ``_register`` / ``_free_port`` 与
+"工具面覆写"那整套机制（闭包签名推 required、`defaulted` 垫片、私有面写回）。
+现按契约上提框架，EL 侧只剩默认值：
+
+- **调用路径**：``tools.execute`` → 框架 handler 内的 ``toolhost.call``（远端边界那层
+  失败归一化 ``toolhost_error`` / ``bad_host_result`` 留在路径上）⇒ 畸形回执从
+  "透传成怪响应"变成**当场归一化的失败**（更严，不是行为回归）。
+- **required**：框架按 ``注入来源 → 闭包签名`` 求；EL 的工具都是**命名 lambda**
+  （签名可用）⇒ **不需要**注入 ``RequiredSource``。
+- **null 垫片**：``defaulted`` 的唯一权威来源是**声明里的 ``default`` 键**（不读闭包
+  签名）——本段把 EL 的 10 个"真默认非 None"的参数补齐了声明（见 ``tools.py`` 的
+  R5 三分法），真默认就是 ``None`` 的 8 个一律不声明。
+- **wire 三条**：``required`` **恒回 ``[]``**、无 ``type`` 声明 ⇒ 注解 ``Any``
+  （``set_config.value`` 的任意 JSON 形态靠它）、**不声明 ``outputSchema``**。
 
 **两种部署形态，别混**（审查 2.3 纠偏）：
-- **独立进程 Hub（本文件的 main）**：无 GUI 的 headless 部署（跑在 A 机、
-  AI 从 B 机连）。写权威落 `--data-dir`（默认 `.mecha-v2-hub`）。
-- **同一道门（bridge.V2Bridge.serve_mcp，EL 默认部署路径）**：GUI 进程内
+- **独立进程 Hub（本文件的 ``main``）**：无 GUI 的 headless 部署（跑在 A 机、
+  AI 从 B 机连）。写权威落 ``--data-dir``（默认 ``.mecha-v2-hub``）。
+- **同一道门（``bridge.V2Bridge.serve_mcp``，EL 默认部署路径）**：GUI 进程内
   MCP 服务器线程与 GUI **共一 Gate**，一份真值一份史（v1 已退役，GUI 即默认）。
-  本文件的 `to_mcp`（工具→MCPServer 转换器）被 serve_mcp 复用。
-
-（历史：v1/v2 同名 `mecha` 并存期，本文件还承担"GUI 跑 v1、AI 连 v2 Hub"的
-并存部署；库替换后该形态退役，独立进程只剩 headless 一种语义。）
-
-- 工具面（tools.build_tool_registry 注册的全部工具，清单见其 schemas()）注册进
-  mcp 2.x MCPServer，写经 v2 Gate。
-- streamable-http 传输：dsh 插件 re0-mecha 读 .mcp-port → 连 http://host:port/mcp。
-- 工具入参 schema 直接投影 v2 声明（parameters 字段覆写——闭包 **kwargs 推不出
-  参数，不覆写就等于把 Phase 4 的 schema 成果在 MCP 层丢掉）。
+  两条路径都经 ``build_mcp_server`` 构造同一个投影。
 
 用法：python -m mecha_v2.hub --root <EL根> [--port 0]
       [--data-dir .mecha-v2-hub] [--open-gate] [--port-file 路径]
@@ -26,16 +39,16 @@
 - 未接 dsh ctx.approval：AI 写权由 Authority 模式机决定（出厂 LOCKED，
   --open-gate 或人工端点开闸）；细粒度每次写问人待 approval Provider 接线。
 - run_sim 只回摘要（pops/t 不过线）；完整数组走 Spill Provider（待接线）。
-- parameters 覆写是 mcp 2.2 的适配垫片（私有字段）；mcp 升级破坏时改这一处，
-  不外泄进库。
+- 服务名/说明是**宿主词汇**（dsh 侧要求名形如 ``[A-Za-z0-9_-]{1,32}`` 且跨实例唯一，
+  说明的字节上限由框架 ``check_instructions`` 在构造期守）——框架按设计不校验服务名。
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
+import threading
 from pathlib import Path
 
 # —— EL 根注入：本文件可被直跑（python -m mecha_v2.hub 或判据 subprocess），
@@ -46,20 +59,34 @@ if str(_EL_ROOT) not in sys.path:
 
 from mecha.authority import Mode  # noqa: E402
 from mecha.data_layout import resolve_data_dir  # noqa: E402
-from mecha.tools import CURRENT_CALL_ID  # noqa: E402
-
-# 模块级导入：`from __future__ import annotations` 下注解是字符串，mcp 的
-# get_type_hints 要能从 _fn.__globals__（= 本模块）解析出 Context 才注入得成。
-from mcp.server.mcpserver import Context  # noqa: E402
+from mecha.providers.mcp import McpEndpoint as _McpEndpoint  # noqa: E402
+from mecha.providers.mcp import (  # noqa: E402
+    build_mcp_server as _framework_build_mcp_server,
+)
 
 from mecha_v2.engine import ElEngine, make_validator  # noqa: E402
 from mecha_v2.tools import build_tool_registry  # noqa: E402
+
+#: MCP 服务名 → dsh 侧工具名形如 ``mcp__mecha-el__set_config``。
+MCP_SERVER_NAME = "mecha-el"
+
+#: 服务端说明（模型可见）。只含任务相关概念，不含 UI/传输/实现词汇；体积由框架的
+#: ``check_instructions`` 在构造期守卫（dsh 侧 maxInstructionBytes 默认 32768，
+#: 超出会让连接失败——报错离病因很远，所以要在构造期拦）。
+INSTRUCTIONS = (
+    "Rydberg 仿真软件的操作工具集。"
+    "先 query_params 看可写键，set_config 写，estimate_run 估时，run_sim 跑。"
+)
 
 
 def build_stack(el_root: str | Path, data_root: str | Path,
                 data_dir_name: str = ".mecha-v2") -> dict:
     """装配 Hub 侧的 v2 栈——**经 mecha.assembly.assemble() 具名装配点**
-    （D-33：真实路径与判据同走 assemble，装配漂移在真引擎上即红）。"""
+    （D-33：真实路径与判据同走 assemble，装配漂移在真引擎上即红）。
+
+    返回里带 ``toolhost``：框架的 MCP Provider 经 ``ToolHost.call`` 调工具
+    （调用唯一路径），EL 不自己再包一层。
+    """
     from mecha.assembly import assemble
     from mecha_v2.bridge import el_summarizer
     engine = ElEngine(el_root)
@@ -72,103 +99,66 @@ def build_stack(el_root: str | Path, data_root: str | Path,
                                 sw.jobs)
     return {"engine": engine, "history": sw.history, "authority": sw.authority,
             "gate": sw.gate, "surface": sw.surface, "ai": ai, "jobs": sw.jobs,
-            "tools": tools}
+            "tools": tools, "toolhost": sw.toolhost}
 
 
-def to_mcp(stack: dict):
-    """把 v2 ToolRegistry 投影成 mcp 2.x MCPServer（工具形状不降级）。"""
-    from mcp.server.mcpserver import MCPServer
+def build_mcp_server(tools, *, toolhost=None, **kwargs):
+    """按 EL 的默认值**纯构造** MCP 服务（不起线程、不碰端口；判据可直接调）。
 
-    tools = stack["tools"]
-    server = MCPServer(name="mecha-el",
-                       instructions="Rydberg 仿真软件的操作工具集。"
-                                    "先 query_params 看可写键，set_config 写，"
-                                    "estimate_run 估时，run_sim 跑。")
-    for schema in tools.schemas():
-        _register(server, tools, schema)
-    return server
+    EL 的默认值只有两样：服务名与服务说明；其余（投影、required、null 垫片、
+    失败归一化）走框架。``toolhost`` 缺省时框架用 ``LocalToolHost(tools)``。
+    """
+    return _framework_build_mcp_server(
+        tools, server_name=MCP_SERVER_NAME, instructions=INSTRUCTIONS,
+        toolhost=toolhost, **kwargs)
 
 
-def _register(server, tools, schema: dict) -> None:
-    import inspect
+class McpHost:
+    """在**权威进程后台线程**跑 MCP 服务（薄壳：委托框架 ``McpEndpoint``）。
 
-    name = schema["name"]
-    parameters = schema["parameters"]
+    - ``start()`` 返回**实际**端口（``port=0`` 由 OS 分配后**回读**，无 TOCTOU
+      窗口），并写 ``port_file`` 供发现；
+    - ``stop()`` 干净退出：置 uvicorn 的 ``should_exit`` → join → **按内容**清端口
+      文件（模式交接依赖"旧权威真退出、写租约释放、新权威再起"）；
+    - ``server`` 暴露底层 MCPServer（判据/调试用；**不是**第二条调用通道）。
+    """
 
-    # required 从 execute 闭包签名派生（**无默认值=必填**，单一来源）——接管
-    # 报告 P1-8：旧写法从 parameters 节点读 required 标记，但无人声明 ⇒ 全部
-    # 工具的必填项在 MCP 面静默消失，模型以为 set_config 可以只给 key。
-    tool_def = tools.get(name)
-    exec_params = list(inspect.signature(tool_def.execute).parameters.values())
-    required = [p.name for p in exec_params
-                if p.default is inspect.Parameter.empty
-                and p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)]
-    # 实测报告 P0-1 根治：合成签名把所有可选参数给 default=None，宿主 pydantic
-    # 对**省略的参数填显式 null** 传进来 ⇒ 盖掉闭包的真实默认（pol="π"、
-    # mode="append" 等），"说明书说默认 X 但必须显式传"的根源就在这。记下
-    # "闭包默认非 None"的参数名：null 到达时丢弃该键，让闭包真默认生效。
-    # 闭包默认本就是 None 的参数（set_config 的 value 无默认=必填、清空语义
-    # 走显式 null）不受影响。
-    defaulted = {p.name for p in exec_params
-                 if p.default is not inspect.Parameter.empty
-                 and p.default is not None}
+    def __init__(self, tools, *, toolhost=None, host: str = "127.0.0.1",
+                 port: int = 0, port_file=None, log=None) -> None:
+        self._endpoint = _McpEndpoint(
+            tools, server_name=MCP_SERVER_NAME, instructions=INSTRUCTIONS,
+            toolhost=toolhost, host=host, port=port, port_file=port_file, log=log)
 
-    def _fn(ctx: Context = None, **kwargs):
-        kwargs = {k: v for k, v in kwargs.items()
-                  if v is not None or k not in defaulted}
-        # 请求作用域 call_id（审查 2.7）：MCP wire request id 作为本次工具调用的
-        # 关联标识，写进 History 事件（gate.set 经 CURRENT_CALL_ID 读）。dsh 侧
-        # 行为史按同一 id 记录 ⇒ "AI 做了什么"↔"域变成了什么"双向可走查（§5.2②）。
-        # dsh 的 toolu_ 级 callId 若经 _meta 传，归 dsh 侧 Provider 接线（推迟项）。
-        token = CURRENT_CALL_ID.set(ctx.request_id if ctx is not None else "")
-        try:
-            res = tools.execute(name, kwargs)
-        finally:
-            CURRENT_CALL_ID.reset(token)
-        if res["is_error"]:
-            # 实测报告 P0-3/P2-8：失败必须**机器可判别且形态统一**。直接返回
-            # is_error=True 的 CallToolResult（mcp 对它是透传，不加
-            # "Error executing tool" 前缀）——正文就是 {ok:false, error:{message,
-            # info:{kind,hint,suggest}}} 的 JSON，AI 读 kind 决定怎么改，不再
-            # 从散文里猜（"成功文本里写着错误"= 静默错答案，D5 大忌）。
-            from mcp.types import CallToolResult, TextContent
-            return CallToolResult(
-                content=[TextContent(
-                    type="text",
-                    text=json.dumps({"ok": False, "error": res["error"]},
-                                    ensure_ascii=False))],
-                is_error=True)
-        return json.dumps(res["value"], ensure_ascii=False, default=str)
+    # ------------------------------------------------------------ 事实面
+    @property
+    def port(self) -> int | None:
+        return self._endpoint.port
 
-    # MCP 从函数签名建 pydantic 入参模型；**kwargs 会得到一个名为 kwargs 的必填
-    # 字段（错）。先给闭包一个"真实命名参数"的合成签名，让模型字段=参数名；
-    # 必填项不给默认值 ⇒ pydantic 层同样强制。
-    # ctx 走 __annotations__ 被 find_context_parameter 认出并注入（不进模型）。
-    sig_params = [
-        inspect.Parameter(
-            k, inspect.Parameter.KEYWORD_ONLY,
-            default=None if k not in required else inspect.Parameter.empty)
-        for k in parameters]
-    _fn.__signature__ = inspect.Signature(sig_params, return_annotation=str)
+    @property
+    def url(self) -> str:
+        return self._endpoint.url
 
-    server.add_tool(_fn, name=name, description=schema["description"])
-    # 再把对外声明覆写成 v2 的形状（带类型/描述；Phase 4 成果过线不丢）
-    props = {pk: (dict(pv) if isinstance(pv, dict) else {"type": "string"})
-             for pk, pv in parameters.items()}
-    input_schema = {"type": "object", "properties": props}
-    if required:
-        input_schema["required"] = required
-    tool = server._tool_manager._tools[name]     # mcp 2.2 适配垫片（见 Limitations）
-    tool.parameters = input_schema
+    @property
+    def server(self):
+        return self._endpoint.server
 
+    # ------------------------------------------------------------ 生命周期
+    def build_server(self):
+        return self._endpoint.build_server()
 
-def _free_port(host: str) -> int:
-    import socket
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.bind((host, 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port
+    def start(self, timeout: float = 30.0) -> int:
+        return self._endpoint.start(timeout)
+
+    def stop(self, timeout: float = 10.0) -> None:
+        self._endpoint.stop(timeout)
+
+    def __enter__(self) -> "McpHost":
+        self.start()
+        return self
+
+    def __exit__(self, *exc) -> bool:
+        self.stop()
+        return False
 
 
 def main(argv=None) -> int:
@@ -200,23 +190,28 @@ def main(argv=None) -> int:
         stack["authority"].switch_mode(Mode.AI, side="human")
         print("[hub] 写权已开到 ai 模式（--open-gate）")
 
-    server = to_mcp(stack)
-    port = args.port or _free_port(args.host)
     port_file = args.port_file or str(Path(args.root) / ".mcp-port")
-    Path(port_file).write_text(str(port), encoding="utf-8")
+    host = McpHost(stack["tools"], toolhost=stack["toolhost"], host=args.host,
+                   port=args.port, port_file=port_file, log=print)
+    port = host.start()
     print(f"[hub] {port_file} ← {port}；"
           f"工具 {len(stack['tools'].schemas())} 个；"
           f"journal={resolve_data_dir(Path(data_root), args.data_dir).data_dir}")
     try:
-        server.run(transport="streamable-http", host=args.host, port=port)
+        threading.Event().wait()                     # 阻塞到 Ctrl+C / terminate
+    except KeyboardInterrupt:
+        print("\n[hub] 收到 Ctrl+C，收尾（按内容清端口文件）。")
     finally:
-        try:
-            if Path(port_file).exists() \
-                    and Path(port_file).read_text(encoding="utf-8").strip() == str(port):
-                Path(port_file).unlink()
-        except OSError:
-            pass
+        host.stop()
     return 0
+
+
+#: 公开面**只有 EL 自己的东西**：装配、默认值壳、端点壳。框架的
+#: ``tool_input_schema`` / ``resolve_required`` / ``RequiredSource`` / ``MCP_PATH``
+#: 等**不在这里转手导出**——它们没有本仓的消费者（判据要直接
+#: ``from mecha.providers.mcp import …``），转一手只多一层要同步的转发面。
+__all__ = ["INSTRUCTIONS", "MCP_SERVER_NAME", "McpHost", "build_mcp_server",
+           "build_stack"]
 
 
 if __name__ == "__main__":
