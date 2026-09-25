@@ -17,6 +17,10 @@
 轻量装配：纯内存 V2Bridge（不建 EL cache）——测**端点机制与只读边界**；
 "装配点挂没挂 authority"由 authority_selfcheck 与 mecha 仓
 phase5_bridge_selfcheck（真 assemble 路径）守，不在此重复起 cache。
+
+**端点实现已归框架**（`mecha.cockpit`，2026-09-25 第 1 段）：本判据只断言**可观测
+契约**（路由/形状/归因/只读边界），不碰实现细节；调用的 `src.v2_bind.
+start_monitor_endpoint` 现为薄壳，首参仍是 V2Bridge、返回值改成 `MonitorEndpoint`。
 """
 import json
 import os
@@ -40,7 +44,7 @@ from src.v2_bind import start_monitor_endpoint             # noqa: E402
 C = Checker('human_control')
 
 
-def _get(path):
+def _get_once(path):
     try:
         with urllib.request.urlopen(path, timeout=10) as r:
             return r.status, json.loads(r.read().decode('utf-8'))
@@ -48,7 +52,7 @@ def _get(path):
         return e.code, json.loads(e.read().decode('utf-8'))
 
 
-def _post(url, obj):
+def _post_once(url, obj):
     req = urllib.request.Request(
         url, data=json.dumps(obj).encode('utf-8'),
         headers={'Content-Type': 'application/json'}, method='POST')
@@ -57,6 +61,30 @@ def _post(url, obj):
             return r.status, json.loads(r.read().decode('utf-8'))
     except urllib.error.HTTPError as e:
         return e.code, json.loads(e.read().decode('utf-8'))
+
+
+def _retry(fn):
+    """传输层错误原样重发同一请求（**断言与期望值不变**）。
+
+    为什么需要：**带 body 的 POST** 在服务端不 drain 请求体就关连接时，Windows 会
+    回 RST（WinError 10053/10054），客户端可能在读到状态行前被打断。这是
+    `BaseHTTPRequestHandler` 的既有行为（2026-09-25 实测：迁移前的实现同样复现
+    4/30），与端点契约无关、真实客户端（面板只 GET）也不会遇到；但它会让基线偶发
+    假红。故只重发传输层错误——若端点真的坏，重发同样失败 ⇒ 照样红。
+    """
+    def wrapper(*a, **kw):
+        last = None
+        for _ in range(3):
+            try:
+                return fn(*a, **kw)
+            except (ConnectionError, urllib.error.URLError, OSError) as e:
+                last = e
+        raise last
+    return wrapper
+
+
+_get = _retry(_get_once)
+_post = _retry(_post_once)
 
 
 def main():
@@ -81,8 +109,10 @@ def main():
          br.write('field.B_gauss', 5.0, reason='人写', actor='gui')['ok'] is True),
     ])
 
-    port = start_monitor_endpoint(br, port=0)
-    base = 'http://127.0.0.1:%d' % port
+    # 监控端点：实现 = `mecha.cockpit`（框架，2026-09-25 第 1 段迁移）；
+    # 返回的是 `MonitorEndpoint`（可 .port / .url / .stop()），**不是裸端口 int**。
+    endpoint = start_monitor_endpoint(br, port=0)
+    base = 'http://127.0.0.1:%d' % endpoint.port
 
     # ---- B. GET /status：只回协调态 ----
     st, body = _get(base + '/status')

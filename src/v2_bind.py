@@ -10,9 +10,12 @@ app_entry 用它装配 V2Bridge.for_shared。**两模式**（用户裁决 2026-0
 无论哪种模式，所有写都经**同一道 Gate、同一份 History**。cache 经 CacheProxy
 汇流到引擎线程（ARC SQLite 认线程，B-1①）。
 
-监控端点是**只读**的（/status + /activity）：给 dsh 右侧栏面板轮询"谁改了什么"。
-控制权切换不经它——人的夺权/交权由看门人（launcher.py）编排进程交接；"AI 不能
-自授权"的护栏靠 Authority 的 side 判定（AI 通道改不了 mode），不靠端点鉴权。
+监控端点是**只读**的（/status + /activity + /history + /config）：给 dsh 右侧栏
+面板轮询"谁改了什么"。**实现已上提到框架 `mecha.cockpit`**（2026-09-25 第 1 段，
+mecha `2722f58`）——本文件只留 EL 侧的两件事：把 `V2Bridge` 适配成框架的
+`MonitorSource`、以及端口由宿主传参。控制权切换不经它——人的夺权/交权由看门人
+（launcher.py）编排进程交接；"AI 不能自授权"的护栏靠 Authority 的 side 判定
+（AI 通道改不了 mode），不靠端点鉴权。
 
 ## Known Limitations and Deferred Work
 
@@ -24,14 +27,16 @@ app_entry 用它装配 V2Bridge.for_shared。**两模式**（用户裁决 2026-0
 - undo/redo 未接：v2 History 是 append-only 事件流，撤销按"反向 set 记一条
   新事件"实现（决策见 mecha 仓 ADR `EL能力面取舍` 第 3 条；语义与 v1 的
   session.undo 不同），实现挂起至接 GUI 撤销按钮（真实调用方出现）。
+- **监控端点端口仍默认 8767（宿主传参）**：本段只把"写死在源码里"改成"宿主给"，
+  行为逐字节不变。**动态端口 + 端口文件/描述符发现 + 前端取址是第 2 段**；
+  框架侧已备好 `port_file` / `runtime_writer` / `mecha.portfile`，本层届时接上。
+- 监控端点的契约（逐字段）冻结在 `_mecha-extraction/cockpit-contract.md`，
+  由 `checks/cockpit_contract_selfcheck.py` + `checks/cockpit_golden.json` 看守。
 """
 from __future__ import annotations
 
-import http.server
-import json
 import os
 import pickle
-import threading
 from pathlib import Path
 
 
@@ -55,146 +60,79 @@ def gc_report(root, *, dry_run=True, **_kw):
             "note": "mecha v2 未接 gc（保留策略等第二项目，见 D-9）；本目录未清理"}
 
 
-# ---------------- 只读投影（v1 驾驶舱形状，数据源换成活桥）----------------
+# ---------------- 监控端点（只读；路由/投影/生命周期归 mecha.cockpit）----------------
 #
-# 用户裁决 2026-09-24：v1 驾驶舱的呈现（飞行记录仪/配置态两页、折叠、分层）
-# 原样整回 dsh 监控面板——这里按 v1 `src/cockpit/backend.py` 的**输出形状**
-# 投影 v2 的活桥数据（v1 读磁盘 journal，v2 读进程内 History；形状逐字段对齐，
-# 前端才能逐像素复用）。
+# 2026-09-25 第 1 段（迁移）：本文件原来的 `_MonitorHandler` + `_history_records` +
+# `_config_tree` 整体换成**框架实现**（`mecha.cockpit`，mecha 2722f58）——两家下游
+# 各写一份逐字节同形的端点，现在归框架。EL 侧只剩：
+#   ① `_BridgeMonitorSource`：把 `V2Bridge` 适配成框架的五成员 MonitorSource；
+#   ② 端口由宿主传参（本段仍传 8767 ⇒ 与迁移前同址、行为不变）。
+# 顺带消失的还有旧实现的**类属性共享隐患**（`_MonitorHandler.bridge = bridge`：
+# 同进程起两个端点会互相覆盖）——框架按实例派生处理器子类。
+#
+# 为什么用显式适配器、而不是 `MonitorSource.from_software`：`V2Bridge` 只公开
+# `history`，没有公开 `gate`/`authority`（`_assembled` 里用过 assemble 的 Software
+# 但没留引用），而判据还会手搓没有 software 的纯内存桥。显式适配器让"真装配"与
+# "判据桥"走同一条路，不引入第二种形态；框架侧也明说鸭子类型即可。
+#
+# 契约（逐字段冻结）：/status、/activity(6 键)、/history(9 键，`before` 由**全史
+# fold** 重建)、/config(族→前缀树 + orphans + n_keys + n_snapshot_keys)、未知路径
+# 404、一切 POST 404、OPTIONS 204 + CORS、CORS 覆盖所有响应（含 404）、服务端不
+# 截断/不倒序。只读 + 绑回环 + 无鉴权是本层的全部安全模型。
 
-def _history_records(bridge, since_seq=0):
-    """飞行记录仪事件：v1 形状 {seq,kind,actor,target,before,after,reason}。
+def _el_schema_rows(bridge):
+    """EL 的配置 schema 行（`/config` 建树的输入）：键全名 + family/unit/type/desc。
 
-    v2 史只记 after（value）；before 由全史 fold 重建（同键上一条的值，首写=None）。
+    走 `V2Bridge.params(include_internal=True)`（= 引擎 `schema()` 的三族合成；
+    engine 族键是**裸名**如 `R_CRIT` ⇒ 树里落 prefix=""）。**无引擎的纯内存桥**
+    （判据手搓的那种）拿不到 schema ⇒ 如实空表，端点走"无 schema"分支
+    （has_schema=false + 快照全进 orphans）——那是可观测契约的一条分支，不是降级。
     """
-    last: dict = {}
-    out = []
-    for e in bridge.history.events():
-        before = last.get(e.key)
-        last[e.key] = e.value
-        if e.seq >= since_seq:
-            out.append({"seq": e.seq, "kind": "set", "actor": e.actor,
-                        "target": e.key, "value": e.value,
-                        "before": before, "after": e.value,
-                        "reason": e.reason, "call_id": e.call_id})
-    return out
-
-
-def _config_tree(bridge):
-    """配置态结构树：v1 形状 {has_schema, groups:{族:[{prefix,rows}]}, orphans}。
-
-    schema 行（params 含 engine 族裸名）join 现值（effective）+ 每键最后写入
-    归因（史重建）。无引擎的纯内存桥（判据装配）→ has_schema=False，快照键
-    全归 orphans（如实投影，不凭空造树）。
-    """
-    snap = bridge.effective()
-    last: dict = {}
-    for e in bridge.history.events():
-        last[e.key] = {"reason": e.reason, "actor": e.actor, "seq": e.seq}
     try:
-        rows = bridge.params(include_internal=True, page_size=100000)["params"]
+        return bridge.params(include_internal=True, page_size=100000)["params"]
     except Exception:                                      # noqa: BLE001
-        rows = []                                          # 无引擎桥：无 schema
-    groups: dict = {}
-    for r in rows:
-        name = r["name"]
-        fam = r.get("family") or "other"
-        head, _, rest = name.partition(".")
-        prefix = head if rest else ""
-        node = {"name": name, "short": rest if rest else name, "prefix": prefix,
-                "value": snap.get(name), "unit": r.get("unit") or "",
-                "type": r.get("type") or "", "desc": r.get("desc") or "",
-                "set": last.get(name)}
-        groups.setdefault(fam, {}).setdefault(prefix, []).append(node)
-    out_groups = {fam: [{"prefix": p, "rows": byp} for p, byp in sorted(sub.items())]
-                  for fam, sub in sorted(groups.items())}
-    known = {r["name"] for r in rows}
-    orphans = sorted(({"name": k, "value": v, "set": last.get(k)}
-                      for k, v in snap.items() if k not in known),
-                     key=lambda r: r["name"])
-    return {"has_schema": bool(rows), "groups": out_groups,
-            "orphans": orphans, "n_keys": len(rows)}
+        return []
 
 
-# ---------------- 监控端点（只读：dsh 侧边栏面板轮询用）----------------
-#
-# 两模式收拢（2026-09-24）后，人的控制权切换改由**看门人**（launcher.py）编排，
-# 本端点**降级为只读监控面**：只暴露"当前写权模式 + AI 最近做了什么"，供 dsh
-# 右侧栏面板轮询。写操作 / 切模式的 POST 路由与 token 鉴权一并退役——
-# "AI 不能自授权"的护栏不靠这个端点（靠 Authority 的 side 判定：AI 通道改不了
-# mode，见 mecha/authority.py）。loopback-only（绑 127.0.0.1），读的是操作流水。
+class _BridgeMonitorSource:
+    """`V2Bridge` → `mecha.cockpit.MonitorSource`（五项全是薄转调）。"""
 
-class _MonitorHandler(http.server.BaseHTTPRequestHandler):
-    bridge = None
+    def __init__(self, bridge):
+        self._b = bridge
 
-    def do_OPTIONS(self):
-        # 浏览器（dsh 页 :3081）轮询本端点（:8767）是跨源请求——预检放行。
-        # 只读端点 + 绑回环，允许任意源不构成风险面。
-        self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        self.end_headers()
+    def events(self):
+        """全史事件（升序）。框架按 seq/key/value/actor/reason/call_id 取字段。"""
+        return self._b.history.events()
 
-    def do_GET(self):
-        if self.path == "/status":
-            return self._json(200, {"ok": True, "mode": type(self).bridge.mode})
-        if self.path.startswith("/activity"):
-            # 增量拉事件流：?since_seq=N 返回 seq>=N 的写事件（dsh 面板轮询用）。
-            since = 0
-            q = self.path.partition("?")[2]
-            for kv in q.split("&"):
-                k, _, v = kv.partition("=")
-                if k == "since_seq" and v.isdigit():
-                    since = int(v)
-            events = type(self).bridge.activity(since)
-            return self._json(200, {"ok": True, "events": events,
-                                    "mode": type(self).bridge.mode})
-        if self.path.startswith("/history"):
-            # v1 驾驶舱形状（飞行记录仪页数据源）：带 before→after 与 reason。
-            since = 0
-            q = self.path.partition("?")[2]
-            for kv in q.split("&"):
-                k, _, v = kv.partition("=")
-                if k == "since_seq" and v.isdigit():
-                    since = int(v)
-            return self._json(200, {"ok": True,
-                                    "events": _history_records(type(self).bridge, since),
-                                    "mode": type(self).bridge.mode})
-        if self.path == "/config":
-            # v1 驾驶舱形状（配置态页数据源）：族→前缀二级树 + 现值 + 最后归因。
-            return self._json(200, {"ok": True,
-                                    **_config_tree(type(self).bridge)})
-        # 退役面如实 404：无网页控制台、无写/切模式路由（控制权走看门人）
-        self._json(404, {"ok": False, "error": "unknown endpoint"})
+    def snapshot(self):
+        """当前权威快照（`V2Bridge.effective()` = gate 快照的只读投影）。"""
+        return self._b.effective()
 
-    def do_POST(self):
-        # 只读端点：一切写/切模式 POST 退役（404）。人的控制权经看门人交接。
-        self._json(404, {"ok": False, "error": "read-only monitor endpoint"})
+    def mode(self):
+        """写权模式（EL 给字符串；框架投影时取 `.value` 兜底）。"""
+        return self._b.mode
 
-    def _json(self, code, obj):
-        data = json.dumps(obj, ensure_ascii=False, default=str).encode("utf-8")
-        self.send_response(code)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(data)))
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.end_headers()
-        self.wfile.write(data)
+    def schema_rows(self):
+        return _el_schema_rows(self._b)
 
-    def log_message(self, *a):                              # 静音
-        pass
+    def status_extra(self):
+        """`/status` 的附加键：EL 不给（保持与迁移前逐字节一致）。"""
+        return {}
 
 
 def start_monitor_endpoint(bridge, host="127.0.0.1", port=8767):
-    """起只读监控端点（/status + /activity?since_seq=）。返回端口。
+    """起只读监控端点（薄壳：实现 = `mecha.cockpit`）。返回 `MonitorEndpoint`。
 
-    绑回环、无鉴权——读的是"谁改了什么"的操作流水，非域数据覆写面；写与切
-    模式不经这里（控制权归看门人）。dsh 右侧栏面板按 seq 增量轮询。
+    绑回环、无鉴权——读的是"谁改了什么"的操作流水，非域数据覆写面；写与切模式
+    不经这里（控制权归看门人）。dsh 右侧栏面板按 seq 增量轮询 /history 与 /config。
+
+    **端口默认 8767 是宿主的选择**（第 1 段刻意保持与迁移前同址；框架侧零端口
+    字面量）。调用方取返回值的 `.port` / `.url`，收尾调 `.stop()`。
     """
-    _MonitorHandler.bridge = bridge
-    srv = http.server.ThreadingHTTPServer((host, port), _MonitorHandler)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
-    return srv.server_address[1]
+    from mecha.cockpit import MonitorEndpoint
+    endpoint = MonitorEndpoint(_BridgeMonitorSource(bridge), host=host, port=port)
+    endpoint.start()
+    return endpoint
 
 
 # ---------------- 装配：给 app_entry 用 ----------------
@@ -223,8 +161,11 @@ def make_v2_bridge(el_root, *, data_root=None, data_dir_name=".mecha-v2",
         pf = mcp_port_file or str(Path(el_root) / ".mcp-port")
         _t, server, port = bridge.serve_mcp(port_file=pf)
         bridge._mcp_thread, bridge._mcp_server, bridge._mcp_port = _t, server, port
-        mon_port = start_monitor_endpoint(bridge)
-        bridge._monitor_port = mon_port
+        # 监控端点：框架实现（mecha.cockpit）；端口仍由本层显式给 8767（第 1 段
+        # 行为不变）。端点对象留给调用方取 .port / 收尾 .stop()。
+        endpoint = start_monitor_endpoint(bridge)
+        bridge._monitor_endpoint = endpoint
+        bridge._monitor_port = endpoint.port
         print(f"[v2_bind] MCP 服务器 :{port}/mcp（工具经同一道 Gate）；"
-              f"只读监控 :{mon_port}/activity（dsh 面板轮询）")
+              f"只读监控 :{endpoint.port}/activity（dsh 面板轮询）")
     return bridge

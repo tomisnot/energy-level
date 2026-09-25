@@ -34,12 +34,13 @@
 `_SchemaOnlyEngine` 只回 `schema()`（秒级）。**不碰仓内 `.mecha-v2`**，也不调用
 `make_v2_bridge`（故不依赖 `EL_NO_AI_SERVER`，但在 run_checks 的隔离环境里同样安全）。
 
-## 无 schema 分支：为什么第二个端点必须**后**起
+## 两个端点：独立性（旧隐患已消失，改为**断言**它）
 
-本判据起**两个**端点（有 schema / 无 schema 两种 `/config` 分支）。当前实现把 bridge 绑在
-**类属性**上（`_MonitorHandler.bridge`，`src/v2_bind.py:128`）⇒ 起第二个端点会**改写第一个
-端点看到的 bridge**。故顺序固定：**夹具一的观测与 POST 只读验证全部做完，再起夹具二**。
-（框架化后该隐患按契约 §9-D5 应消失；本判据**不对它做断言**，以免迁移时反向变红。）
+本判据起**两个**端点（有 schema / 无 schema 两种 `/config` 分支）。迁移前 EL 的实现把
+bridge 绑在**类属性**上（`_MonitorHandler.bridge`）⇒ 起第二个端点会**改写第一个端点看到的
+bridge**。**2026-09-25 第 1 段起实现归框架（`mecha.cockpit`），按实例派生处理器子类**，
+该隐患消失 ⇒ 本判据**在夹具二起来之后重新读夹具一**，断言它仍在服务自己的桥（同一句断言
+在旧实现下必红）。
 
 ## 致死性
 
@@ -192,7 +193,7 @@ def build_minimal_fixture():
 
 
 # ---------------------------------------------------------------- HTTP
-def http_call(method, url, payload=None):
+def _http_call_once(method, url, payload=None):
     """→ (status, headers_lower, text)。4xx/5xx 也如实返回（不抛）。"""
     data = None
     headers = {}
@@ -207,6 +208,24 @@ def http_call(method, url, payload=None):
     except urllib.error.HTTPError as e:
         return e.code, {k.lower(): v for k, v in (e.headers or {}).items()}, \
             e.read().decode('utf-8')
+
+
+def http_call(method, url, payload=None):
+    """传输层错误**原样重发**同一请求（最多 3 次）；断言与期望值一字不变。
+
+    为什么要重发：**带 body 的 POST** 在服务端不 drain 请求体就关连接时，Windows 回
+    RST（WinError 10053/10054），客户端可能在读到状态行前被打断。这是
+    `BaseHTTPRequestHandler` 的既有行为——2026-09-25 实测：**迁移前的 EL 实现同样
+    复现**（连续 6 次带 body POST × 30 轮里 4 轮命中），与端点契约无关，真实面板
+    （只 GET）不会遇到；但它会让基线偶发假红。真有问题的端点重发也照样失败 ⇒ 红。
+    """
+    last = None
+    for _ in range(3):
+        try:
+            return _http_call_once(method, url, payload)
+        except (ConnectionError, urllib.error.URLError, OSError) as e:
+            last = e
+    raise last
 
 
 def _route(method, base, path, payload=None):
@@ -555,10 +574,71 @@ def audit(obs, *, fixture_mode):
         _bad(bad, r['status'] not in (200, 404),
              'P 探针 %s 状态码 %s（应为 200/404，路由不该崩）' % (name, r['status']))
 
+    # ---- Q 面板消费面（dsh 右侧栏「机甲监控」真正读的字段，逐个在位）----
+    _audit_panel_fields(bad, R)
+
     # ---- X 夹具相关（`--url` 活端点模式不适用）----
     if fixture_mode:
         _audit_fixture(bad, obs)
     return bad
+
+
+def _audit_panel_fields(bad, R):
+    """**面板消费面**：`dsh/src/client/MonitorTabBody.tsx` 实际读到的每个字段必须都在。
+
+    来源（逐行）：`:139` fetch `/history?since_seq=0` 与 `:140` fetch `/config`；
+    `:144-148` 取 `h.mode` / `h.events` / `c.groups` / `c.has_schema` / `c.orphans`；
+    `:91-101` 逐事件读 `seq/actor/kind/reason/target/before/after`；
+    `:108-118` 逐前缀节点读 `prefix/rows`、逐行读 `name/short/value/unit/set{.actor,.seq}`。
+    面板是**原样吃形状**的（形状一变面板就瞎且不报错），故这组断言是"面板未受影响"的
+    机器证据——第 2 段要动取址时它同样守着。
+    """
+    hb = R['GET /history']['json'] if isinstance(R['GET /history'].get('json'), dict) else {}
+    _bad(bad, not isinstance(hb.get('mode'), str), 'Q 面板：/history.mode 不是字符串（徽标读它）')
+    _bad(bad, not isinstance(hb.get('events'), list), 'Q 面板：/history.events 不是数组')
+    for e in (hb.get('events') or [])[:5]:
+        if not isinstance(e, dict):
+            _bad(bad, True, 'Q 面板：/history 事件不是对象')
+            break
+        for f, ok in (('seq', isinstance(e.get('seq'), int)),
+                      ('actor', isinstance(e.get('actor'), str)),
+                      ('kind', isinstance(e.get('kind'), str)),
+                      ('target', isinstance(e.get('target'), str)),
+                      ('reason', isinstance(e.get('reason'), str)),
+                      ('before', 'before' in e), ('after', 'after' in e)):
+            _bad(bad, not ok, 'Q 面板：事件缺/坏字段 %s（值 %r）' % (f, e.get(f)))
+            if not ok:
+                break
+        else:
+            continue
+        break
+    cb = R['GET /config']['json'] if isinstance(R['GET /config'].get('json'), dict) else {}
+    _bad(bad, not isinstance(cb.get('has_schema'), bool), 'Q 面板：/config.has_schema 不是 bool')
+    _bad(bad, not isinstance(cb.get('groups'), dict), 'Q 面板：/config.groups 不是对象')
+    _bad(bad, not isinstance(cb.get('orphans'), list), 'Q 面板：/config.orphans 不是数组')
+    for fam, subs in list((cb.get('groups') or {}).items())[:1]:
+        for sg in (subs or [])[:1]:
+            _bad(bad, not isinstance(sg, dict) or not isinstance(sg.get('prefix'), str),
+                 'Q 面板：groups[%s] 前缀不是字符串' % fam)
+            _bad(bad, not isinstance(sg, dict) or not isinstance(sg.get('rows'), list),
+                 'Q 面板：groups[%s] rows 不是数组' % fam)
+            for r in ((sg or {}).get('rows') or [])[:1]:
+                _bad(bad, not isinstance(r, dict), 'Q 面板：配置行不是对象')
+                for f, ok in (('name', isinstance((r or {}).get('name'), str)),
+                              ('short', isinstance((r or {}).get('short'), str)),
+                              ('unit', isinstance((r or {}).get('unit'), str)),
+                              ('value', 'value' in (r or {})), ('set', 'set' in (r or {}))):
+                    _bad(bad, not ok, 'Q 面板：配置行缺/坏字段 %s' % f)
+                st = (r or {}).get('set')
+                if st is not None:
+                    _bad(bad, not isinstance(st, dict)
+                         or not isinstance(st.get('actor'), str)
+                         or not isinstance(st.get('seq'), int),
+                         'Q 面板：行的 set 归因坏了（%r）' % (st,))
+    for o in (cb.get('orphans') or [])[:1]:
+        _bad(bad, not isinstance(o, dict) or not isinstance(o.get('name'), str)
+             or 'value' not in (o or {}),
+             'Q 面板：orphans 行缺 name/value')
 
 
 def _audit_fixture(bad, obs):
@@ -886,9 +966,10 @@ def main(argv=None):
                        % (len(probs), '（首条：%s）' % probs[0][:60] if probs else ''),
                        not probs))
     else:
-        # ---- 夹具一（有 schema）：观测 + POST 只读验证必须**全部做完**，再起夹具二 ----
+        # ---- 夹具一（有 schema）----
         br, hist = build_fixture()
-        base = 'http://127.0.0.1:%d' % start_monitor_endpoint(br, port=0)
+        ep1 = start_monitor_endpoint(br, port=0)                 # → MonitorEndpoint
+        base = 'http://127.0.0.1:%d' % ep1.port
         print('[cockpit_contract] 夹具一（有 schema）%s，史长 %d' % (base, hist.last_seq))
         obs1 = observe(base, fixture_mode=True, last_seq=hist.last_seq)
         probs = audit(obs1, fixture_mode=True)
@@ -896,15 +977,16 @@ def main(argv=None):
         subs_a.append(('夹具一（有 schema）：%d 条契约问题%s'
                        % (len(probs), '（首条：%s）' % probs[0][:60] if probs else ''),
                        not probs))
-        # 只读红线：POST 不得产生任何事件（此刻类属性仍指向夹具一，可安全反推史长）
+        # 只读红线：POST 不得产生任何事件（史长只读反推）
         http_call('POST', base + '/status', {'mode': 'ai'})
         after = _last_seq_of(base)
         subs_a.append(('只读红线：POST 之后史长 %s → %s（须不变）'
                        % (hist.last_seq, after), after == hist.last_seq))
 
-        # ---- 夹具二（无 schema）：后起（见 docstring 的类属性隐患）----
+        # ---- 夹具二（无 schema）：独立端点 ----
         br2, _h2 = build_minimal_fixture()
-        base2 = 'http://127.0.0.1:%d' % start_monitor_endpoint(br2, port=0)
+        ep2 = start_monitor_endpoint(br2, port=0)
+        base2 = 'http://127.0.0.1:%d' % ep2.port
         print('[cockpit_contract] 夹具二（无 schema）%s' % base2)
         obs2 = observe(base2, fixture_mode=False)
         probs2 = audit(obs2, fixture_mode=False)
@@ -915,6 +997,15 @@ def main(argv=None):
                        % (len(probs2 + nsb),
                           '（首条：%s）' % (probs2 + nsb)[0][:60] if (probs2 + nsb) else ''),
                        not (probs2 + nsb)))
+        # 端点独立性（旧 D5 类属性隐患的**反向断言**）：夹具二起来之后，夹具一必须
+        # 仍在服务自己的桥（有 schema、史长 5）。旧实现下这里必红。
+        indep = _route('GET', base, '/config')['json'] or {}
+        indep_hist = _route('GET', base, '/history?since_seq=0')['json'] or {}
+        subs_a.append(('端点独立：夹具二起后夹具一仍服务自己（schema=%r/史长 %d，旧类属性隐患已消失）'
+                       % (indep.get('has_schema'), len(indep_hist.get('events') or [])),
+                       indep.get('has_schema') is True
+                       and indep.get('n_keys') == SCHEMA_N_ROWS
+                       and len(indep_hist.get('events') or []) == FIXTURE_LAST_SEQ))
 
     C.group('A 契约断言（OPTIONS / 4 路由逐字段 / 404 逐字 / POST 只读 / CORS 全覆盖；'
             '共执行 %d 个断言点）' % _STATS['rules'], subs_a)
