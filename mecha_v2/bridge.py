@@ -114,7 +114,7 @@ class V2Bridge:
                  summarizer=el_summarizer,
                  monitor: Monitor | None = None,
                  jobs: JobRegistry | None = None,
-                 surface=None, toolhost=None) -> None:
+                 surface=None) -> None:
         self._gate = gate
         self._history = history
         self._authority = authority
@@ -122,10 +122,6 @@ class V2Bridge:
         # 装配点建好的 Surface（带角色表）——serve_mcp 复用它，不再另建裸的
         # （审查缺口 B：运行时图必须 = 声明表）。测试注入缺省 None → 工具面自建。
         self._surface = surface
-        # 装配点建好的 ToolHost——MCP 侧的**调用唯一路径**（框架 handler 走
-        # `toolhost.call`，远端边界那层失败归一化留在路径上）。缺省 None ⇒
-        # 框架回退出厂 `LocalToolHost(registry)`（纯内存判据装配同构）。
-        self._toolhost = toolhost
         self._lock = threading.Lock()
         self.cache = cache if cache is not None else (engine._cache if engine else None)
         self._artifact_root = (Path(artifact_root) if artifact_root is not None
@@ -155,8 +151,7 @@ class V2Bridge:
                       project="energy-level")
         return cls(sw.gate, sw.history, sw.authority, engine=engine, cache=cache,
                    artifact_root=sw.layout.data_dir / "artifacts",
-                   monitor=sw.monitor, jobs=sw.jobs, surface=sw.surface,
-                   toolhost=sw.toolhost)
+                   monitor=sw.monitor, jobs=sw.jobs, surface=sw.surface)
 
     @classmethod
     def for_gui(cls, *, el_root: str | Path, data_root: str | Path,
@@ -202,12 +197,18 @@ class V2Bridge:
         与旧实现的差别（都是**收严**）：① 实际端口是**回读**的（旧代码自己挑空闲
         端口再 bind，有 TOCTOU 窗口）；② 等 uvicorn 真 listen 才返回（旧代码只等
         线程起来）；③ 端口文件由框架按"启动前清 / 收尾按内容清"的规则管理。
+
+        ⛔ **不传 `toolhost`**：``assemble()`` 的 ``sw.toolhost`` 包的是**空注册表**
+        （``sw.tools``；EL 的工具注册在 ``build_tool_registry`` 里，从不写进它）——
+        2026-09-25 实测传它会"工具列得出来、调不动"（``unknown_tool`` + journal 不
+        落盘），由 mecha 的 `phase5_hub_selfcheck` 抓到、`hub_mcp_e2e_selfcheck` 守住。
+        框架缺省 ``LocalToolHost(<本方法刚建的真注册表>)`` 才是对的。
         """
         from .hub import McpHost
         ai = Channel("ai")
         tools = _build_gui_tools(self._engine, self._gate, self._authority,
                                  ai, self.jobs, surface=self._surface)
-        mcp_host = McpHost(tools, toolhost=self._toolhost, host=host, port=port,
+        mcp_host = McpHost(tools, host=host, port=port,
                            port_file=port_file, log=log)
         actual = mcp_host.start()
         return mcp_host, actual

@@ -103,6 +103,10 @@ FAST_KNOWN_SEC = {
     # MCP 工具面 `default` 声明守卫（R5 三分法）——漏一个声明的症状是"模型侧行为变差
     # 而不报错"，故进 --fast 内循环；>3s 故不进 --core（那是秒级档的纪律，不放宽阈值）。
     'mcp_defaults_selfcheck.py': 3.2,
+    # 2026-09-25 现测 8.8s（run_checks 口径：真 ElEngine + 两台 MCP 端点 + 真传输往返）。
+    # MCP 端到端（R10：全绿只对判据覆盖到的路径成立）——它守"装配→起 MCP→真调→落盘"
+    # 这条第 3 段改过、而当时无判据覆盖的路径。
+    'hub_mcp_e2e_selfcheck.py': 8.8,
 }
 
 

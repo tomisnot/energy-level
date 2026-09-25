@@ -161,6 +161,21 @@ class McpHost:
         return False
 
 
+def make_host(stack: dict, *, host: str = "127.0.0.1", port: int = 0,
+              port_file=None, log=None) -> "McpHost":
+    """由 ``build_stack`` 的产物造一台 MCP 端点壳（**真入口与判据同源**）。
+
+    ⚠ 这里**不再**传 ``toolhost=stack["toolhost"]``：``assemble()`` 建出的
+    ``sw.tools`` 是**空注册表**（EL 的工具注册在自己的 ``build_tool_registry`` 里，
+    从不写进 ``sw.tools``）⇒ ``sw.toolhost`` 包的是空表，传它会让
+    **工具列得出来、调不动**（`unknown_tool`，且 journal 不落盘——2026-09-25 实测，
+    由 mecha 的 `phase5_hub_selfcheck` 抓到）。缺省让框架用
+    ``LocalToolHost(stack["tools"])``，即绑**真的**那 14 个工具。
+    """
+    return McpHost(stack["tools"], host=host, port=port,
+                   port_file=port_file, log=log)
+
+
 def main(argv=None) -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -191,8 +206,8 @@ def main(argv=None) -> int:
         print("[hub] 写权已开到 ai 模式（--open-gate）")
 
     port_file = args.port_file or str(Path(args.root) / ".mcp-port")
-    host = McpHost(stack["tools"], toolhost=stack["toolhost"], host=args.host,
-                   port=args.port, port_file=port_file, log=print)
+    host = make_host(stack, host=args.host, port=args.port, port_file=port_file,
+                     log=print)
     port = host.start()
     print(f"[hub] {port_file} ← {port}；"
           f"工具 {len(stack['tools'].schemas())} 个；"
