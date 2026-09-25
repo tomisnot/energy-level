@@ -18,6 +18,8 @@ scripts/tmp/
 
 # MCP 写通道端口发现文件（权威进程写、dsh 插件 attach 用）
 .mcp-port
+# 只读监控端点的端口发现文件（权威进程写；dsh 插件 host 半经同源路由转给面板）
+.monitor-port
 # 看门人（launcher.py）的进程交接文件：切换意图 / 当前模式（运行时状态，不入库）
 .mode-request
 .mode-state

@@ -27,9 +27,11 @@ mecha `2722f58`）——本文件只留 EL 侧的两件事：把 `V2Bridge` 适�
 - undo/redo 未接：v2 History 是 append-only 事件流，撤销按"反向 set 记一条
   新事件"实现（决策见 mecha 仓 ADR `EL能力面取舍` 第 3 条；语义与 v1 的
   session.undo 不同），实现挂起至接 GUI 撤销按钮（真实调用方出现）。
-- **监控端点端口仍默认 8767（宿主传参）**：本段只把"写死在源码里"改成"宿主给"，
-  行为逐字节不变。**动态端口 + 端口文件/描述符发现 + 前端取址是第 2 段**；
-  框架侧已备好 `port_file` / `runtime_writer` / `mecha.portfile`，本层届时接上。
+- **监控端点：动态端口 + 端口文件发现**（第 2 段）：`port=0`（OS 分配，库内零端口
+  字面量），实际端口写进 `<EL 根>/.monitor-port`；dsh 插件 host 半经同源只读路由
+  `/re0-mecha/monitor-url` 把它转成 `{base}` 给面板，面板**每轮现读**。清理规则归
+  框架 `mecha.portfile`（启动前无条件清 / 收尾按内容清）。**要改端口请改 dsh 侧**，
+  Python 侧不再有任何端口字面量。
 - 监控端点的契约（逐字段）冻结在 `_mecha-extraction/cockpit-contract.md`，
   由 `checks/cockpit_contract_selfcheck.py` + `checks/cockpit_golden.json` 看守。
 """
@@ -66,7 +68,7 @@ def gc_report(root, *, dry_run=True, **_kw):
 # `_config_tree` 整体换成**框架实现**（`mecha.cockpit`，mecha 2722f58）——两家下游
 # 各写一份逐字节同形的端点，现在归框架。EL 侧只剩：
 #   ① `_BridgeMonitorSource`：把 `V2Bridge` 适配成框架的五成员 MonitorSource；
-#   ② 端口由宿主传参（本段仍传 8767 ⇒ 与迁移前同址、行为不变）。
+#   ② 端口与发现文件（第 2 段：**动态端口** + `mecha.portfile` 写 `.monitor-port`）。
 # 顺带消失的还有旧实现的**类属性共享隐患**（`_MonitorHandler.bridge = bridge`：
 # 同进程起两个端点会互相覆盖）——框架按实例派生处理器子类。
 #
@@ -79,6 +81,14 @@ def gc_report(root, *, dry_run=True, **_kw):
 # fold** 重建)、/config(族→前缀树 + orphans + n_keys + n_snapshot_keys)、未知路径
 # 404、一切 POST 404、OPTIONS 204 + CORS、CORS 覆盖所有响应（含 404）、服务端不
 # 截断/不倒序。只读 + 绑回环 + 无鉴权是本层的全部安全模型。
+#
+# **地址怎么被消费方发现**（第 2 段）：权威把**动态分配**的监控端口写进
+# `<EL 根>/.monitor-port`（裸端口，与 `.mcp-port` 同址同根）；dsh 插件的 host 半经
+# **同源只读路由** `/re0-mecha/monitor-url` 把它转成 `{base}` 交给面板，面板
+# **每轮轮询现读**（端口漂移自愈，不在模块加载时固化）。库内零端口字面量。
+
+#: 监控端口的发现文件（裸端口文本；与 `.mcp-port` 同在项目根）。
+MONITOR_PORT_FILE = ".monitor-port"
 
 def _el_schema_rows(bridge):
     """EL 的配置 schema 行（`/config` 建树的输入）：键全名 + family/unit/type/desc。
@@ -120,17 +130,21 @@ class _BridgeMonitorSource:
         return {}
 
 
-def start_monitor_endpoint(bridge, host="127.0.0.1", port=8767):
+def start_monitor_endpoint(bridge, host="127.0.0.1", port=0, port_file=None):
     """起只读监控端点（薄壳：实现 = `mecha.cockpit`）。返回 `MonitorEndpoint`。
 
     绑回环、无鉴权——读的是"谁改了什么"的操作流水，非域数据覆写面；写与切模式
     不经这里（控制权归看门人）。dsh 右侧栏面板按 seq 增量轮询 /history 与 /config。
 
-    **端口默认 8767 是宿主的选择**（第 1 段刻意保持与迁移前同址；框架侧零端口
-    字面量）。调用方取返回值的 `.port` / `.url`，收尾调 `.stop()`。
+    **端口默认 0（OS 分配）**：库内零端口字面量；发现靠 `port_file`（传了才写）。
+    清理规则由框架的 `mecha.portfile` 负责——**启动前无条件清**陈旧文件、
+    **收尾只在"内容仍是自己写的端口"时才清**（Windows 强杀不跑 `finally`，两条都要）。
+
+    调用方取返回值的 `.port` / `.url`，收尾调 `.stop()`。
     """
     from mecha.cockpit import MonitorEndpoint
-    endpoint = MonitorEndpoint(_BridgeMonitorSource(bridge), host=host, port=port)
+    endpoint = MonitorEndpoint(_BridgeMonitorSource(bridge), host=host, port=port,
+                               port_file=port_file)
     endpoint.start()
     return endpoint
 
@@ -138,7 +152,7 @@ def start_monitor_endpoint(bridge, host="127.0.0.1", port=8767):
 # ---------------- 装配：给 app_entry 用 ----------------
 
 def make_v2_bridge(el_root, *, data_root=None, data_dir_name=".mecha-v2",
-                   start_services=True, mcp_port_file=None):
+                   start_services=True, mcp_port_file=None, monitor_port_file=None):
     """构造共享 Gate 的 V2Bridge；可选起 MCP 服务器 + 只读监控端点。
 
     app_entry 调它：GUI 模式传 `start_services=False`（纯本地，不起任何端点）；
@@ -147,6 +161,9 @@ def make_v2_bridge(el_root, *, data_root=None, data_dir_name=".mecha-v2",
     不污染仓内权威 journal）> el_root。`EL_NO_AI_SERVER` 置位 → 不起后台
     服务（判据 in-process 用，避免与活实例抢端口/抢 .mcp-port——2026-09-12
     事故的同款防线）。
+
+    两个发现文件（都默认落在 EL 根，与 dsh 的 cwd 同源）：`.mcp-port`（MCP 端点）、
+    `.monitor-port`（只读监控端点）。要写别处（判据/一次性验证）就显式传路径。
     """
     from mecha_v2.bridge import V2Bridge
     from mecha.authority import Mode
@@ -161,11 +178,12 @@ def make_v2_bridge(el_root, *, data_root=None, data_dir_name=".mecha-v2",
         pf = mcp_port_file or str(Path(el_root) / ".mcp-port")
         _t, server, port = bridge.serve_mcp(port_file=pf)
         bridge._mcp_thread, bridge._mcp_server, bridge._mcp_port = _t, server, port
-        # 监控端点：框架实现（mecha.cockpit）；端口仍由本层显式给 8767（第 1 段
-        # 行为不变）。端点对象留给调用方取 .port / 收尾 .stop()。
-        endpoint = start_monitor_endpoint(bridge)
+        # 监控端点：框架实现（mecha.cockpit）；**动态端口**（port=0）+ 端口文件
+        # 发现。端点对象留给调用方取 .port / 收尾 .stop()。
+        mpf = monitor_port_file or str(Path(el_root) / MONITOR_PORT_FILE)
+        endpoint = start_monitor_endpoint(bridge, port_file=mpf)
         bridge._monitor_endpoint = endpoint
         bridge._monitor_port = endpoint.port
         print(f"[v2_bind] MCP 服务器 :{port}/mcp（工具经同一道 Gate）；"
-              f"只读监控 :{endpoint.port}/activity（dsh 面板轮询）")
+              f"只读监控 :{endpoint.port}（发现文件 {Path(mpf).name}；dsh 面板轮询）")
     return bridge

@@ -4,11 +4,17 @@
  * 两模式收拢（2026-09-24）后重建的 dsh 界面，三件事：
  *  1. ◈监控 按钮（会话头部）→ 开右栏 + 打开 `re0-cockpit` tab（旧覆盖层重布局
  *     已弃，右栏 tab 由 dsh 自管开合，按钮只负责"打开"，最轻）。
- *  2. 右栏 tab body（`MonitorTabBody`）→ 轮询权威 :8767 的只读 /activity + /status，
- *     显示"当前写权模式 + AI/人最近改了什么"。
+ *  2. 右栏 tab body（`MonitorTabBody`）→ 轮询权威**只读监控端点**的
+ *     `/history`（写事件，含 `mode`）+ `/config`（配置态树），显示"当前写权模式 +
+ *     AI/人最近改了什么"。
  *  3. 切换至 GUI 按钮（会话头部）→ 经 `/re0-gui` command 让 host 写 .mode-request，
  *     看门人接手 terminate 权威+dsh、起 GUI。client 不能直接调 MCP 工具/写文件，
  *     只能发 command（dsh 事实：ui-plan 的 exitPlanMode 同款，经 sessionId 注入）。
+ *
+ * **地址不再硬编码**（2026-09-25 第 2 段）：监控端点是**动态端口**，面板经注入的
+ * `resolveMonitorBase()` 去 host 半的**同源只读路由** `/re0-mecha/monitor-url`
+ * 取 `{base}`（host 读权威写的 `.monitor-port`）。每一轮轮询都现解析 ⇒ 权威重启
+ * 换端口后下一拍即落在新端口，不需要重启 dsh、更不会"面板空白但没人报错"。
  *
  * ⚠ client 半经 tsdown 打成 CJS + `__ModuleLoader__.load` 包装；改本目录源码后须
  * `npm run bundle` 并重启 dsh 才生效。
@@ -23,6 +29,32 @@ export const name = 're0-mecha'
 
 /** slots（按钮+tab body）+ layout（开右栏）+ 右栏 tab 服务 + remote.commands（发 /re0-gui）。 */
 export const inject = ['slots', 'layout', 'sidebarRight', 'sidebarRightTabs', 'remote', 'remote.commands']
+
+/** host 半注册的同源只读路由（监控地址查询）。 */
+export const ADDRESS_ROUTE = '/re0-mecha/monitor-url'
+
+/** tab body 的注入面：解析监控端点基址（由 host 半的同源路由提供）。 */
+export interface MonitorInjected {
+  resolveMonitorBase(): Promise<string>
+}
+
+/**
+ * 取监控端点基址：同源 `fetch` → `{base}`。
+ *
+ * 任何一步不对都**抛错**（面板按"连不上权威"显示）——**不回落到任何默认端口**：
+ * 回落会把"权威没起来"伪装成"连上了但空面板"。`doFetch` 可注入，判据在 Node 里
+ * 喂真形状与各种失败形状。
+ */
+export async function fetchMonitorBase(
+  doFetch: typeof fetch = fetch,
+): Promise<string> {
+  const res = await doFetch(ADDRESS_ROUTE, { cache: 'no-store' })
+  if (!res.ok) throw new Error(`地址路由返回 ${res.status}`)
+  const data: any = await res.json()
+  const base = data && typeof data.base === 'string' ? data.base : ''
+  if (!base) throw new Error('地址路由的返回里没有 base（形状不对？）')
+  return base.trim().replace(/\/+$/, '')
+}
 
 export async function apply(ctx: Context): Promise<void> {
   await ctx.effect(() => {
@@ -62,8 +94,10 @@ export async function apply(ctx: Context): Promise<void> {
     }) || null
     const disposeBody = ctx.slots.inject('sidebar.right.pane.tab', () =>
       ctx.slots.register(
-        { name: 'sidebar.right.pane.tab', key: 're0-cockpit' } as any,
-        MonitorTabBody,
+        { name: 'sidebar.right.pane.tab', key: 're0-cockpit',
+          // 注入面：面板拿它取监控地址（host 半的同源只读路由）。
+          inject: (): MonitorInjected => ({ resolveMonitorBase: fetchMonitorBase }) } as any,
+        MonitorTabBody as any,
       ))
 
     return () => {

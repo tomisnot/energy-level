@@ -4,9 +4,9 @@
 
 ## 为什么先建这个
 
-框架化迁移（`src/v2_bind.py` 的监控段 → `mecha.cockpit`）与"去硬编码 8767"要分两批落地，
-而**面板的"样子和内容"必须不变**（用户裁决）。人眼比对不可复现，所以在动任何源码之前
-先把"什么算没坏"钉死：
+框架化迁移（`src/v2_bind.py` 的监控段 → `mecha.cockpit`）与"去硬编码端口"**分两批落地**
+（第 1 段换实现、第 2 段换端口发现；两段都已完成），而**面板的"样子和内容"必须不变**
+（用户裁决）。人眼比对不可复现，所以在动任何源码之前先把"什么算没坏"钉死：
 
   1. **契约断言**：对着**正在跑的端点**（进程内起一个，端口 0）逐条验形状——OPTIONS /
      4 条基础路由 / 404 两条 / CORS / 键集 / 事件排序 / `before` 语义 / `/config` 树与归因口径。
@@ -48,9 +48,11 @@ C 组把 11 处**故意做坏的观测**喂给同一批探测器，必须逐条�
 只绿不红的守卫等于没有（同 `docs_consistency_selfcheck` 纪律）。
 
 用法：
-    python checks\\cockpit_contract_selfcheck.py                              # 契约 + golden diff
-    python checks\\cockpit_contract_selfcheck.py --url http://127.0.0.1:8767  # 拿活端点比对骨架
-    python checks\\cockpit_contract_selfcheck.py --record                     # 重新生成 golden
+    python checks\\cockpit_contract_selfcheck.py                    # 契约 + golden diff（夹具内起端点）
+    python checks\\cockpit_contract_selfcheck.py --url <BASE>        # 拿活端点比对骨架；
+        # BASE 从权威写的项目根 `.monitor-port` 取（第 2 段起端口是动态的）：
+        #   $p = Get-Content .monitor-port; --url "http://127.0.0.1:$p"
+    python checks\\cockpit_contract_selfcheck.py --record             # 重新生成 golden
 
 退出码：0 全过；1 有问题。
 """

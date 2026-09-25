@@ -11,9 +11,11 @@
  * 安全红线：**只 connect、绝不 spawn 权威**（人启动 launcher = 权威，T4）。
  * 依赖方向：本文件 import dsh 的 `@deepseek-ai/*`（peer，宿主提供）+ 本地纯逻辑模块。
  *
- * **client 半（dsh 界面：◈监控 按钮 + 右栏监控面板 + 「切换至 GUI」按钮）随
- * 两模式收拢重建**（2026-09-24）：面板轮询权威 :8767 的只读 /activity；切换按钮
- * 经本文件注册的 /re0-gui command 写 .mode-request，看门人接手进程交接。
+ * **client 半（dsh 界面：◈监控 按钮 + 右栏监控面板 + 「切换至 GUI」按钮）**：
+ * 面板轮询权威的**只读监控端点**（`/history` + `/config`）。端点端口是**动态**的，
+ * 故本文件另注册一条**同源只读路由** `/re0-mecha/monitor-url`（见 host/monitor-url.ts）：
+ * 读项目根 `.monitor-port` → 回 `{base}`，面板据此取址（**面板侧零端口字面量**）。
+ * 「切换至 GUI」按钮经本文件注册的 /re0-gui command 写 .mode-request，看门人接手进程交接。
  */
 import type { Context } from '@deepseek-ai/cordis'
 import { MechaMcpBridge } from './host/mcp-bridge.ts'
@@ -21,12 +23,16 @@ import { httpSessionFactory } from './host/mcp-session-http.ts'
 import { resolveHubUrl, buildRequestInit } from './host/config.ts'
 import { syncTools, type ToolDisposers } from './host/register-tools.ts'
 import { elRootFromPortFile, writeModeRequest } from './host/mode-request.ts'
+import { MONITOR_ROUTE_PATH, makeMonitorUrlHandler } from './host/monitor-url.ts'
 
 /** Cordis 插件显示名（诊断用）。 */
 export const name = 're0-mecha'
 
-/** 等待 dsh 的 tools 服务就绪再激活（工具注册需要它）；commands 供 /re0-gui 切换。 */
-export const inject = ['tools', 'commands']
+/**
+ * 等待 host 服务就绪再激活：tools（工具注册）、commands（/re0-gui 切换）、
+ * webServer（注册监控地址的同源只读路由）。
+ */
+export const inject = ['tools', 'commands', 'webServer']
 
 /**
  * 插件配置（用户在 cordis.patch.yml 的 entry `config:` 里给；全部可选，缺省在 apply 里兜）。
@@ -41,6 +47,8 @@ export interface Config {
   hubUrl?: string
   /** 端口文件路径（launcher 写；默认项目根 `.mcp-port`，相对 dsh 的 cwd）。 */
   mcpPortFile?: string
+  /** 监控端点端口文件（权威写；默认项目根 `.monitor-port`）。 */
+  monitorPortFile?: string
   /** 工具命名空间：`mcp__<serverName>__<tool>`。 */
   serverName?: string
   /** 远程 Hub 鉴权 token（→ Authorization: Bearer）；本地默认空。需求③远程接缝。 */
@@ -100,7 +108,21 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
 
     // /re0-gui：dsh 界面「切换至 GUI」按钮的落点——写 .mode-request（'gui'），
     // 看门人轮询到就 terminate 权威+dsh、起 GUI 模式。插件只留意图、不 spawn/kill。
+    // root 同时也是监控端口文件的所在地（两个发现文件同在项目根）。
     const root = elRootFromPortFile(config.mcpPortFile)
+
+    // 监控地址的同源只读路由：面板 fetch 它拿 `{base}`（读项目根 .monitor-port）。
+    // 每次被 fetch 都现读文件 ⇒ 权威重启换端口后下一拍自动落在新端口（漂移自愈）。
+    // 服务名 `webServer` 由 `@deepseek-ai/dsh-host-webserver` 提供（`inject` 已声明，
+    // 故 apply 跑到这里它必在）；本仓 host 半对 @deepseek-ai/* 只留**类型** import，
+    // 这里按既有风格（同 `sidebarRight`）走 any 取用，避免引入运行时 peer 依赖。
+    const disposeMonitorRoute = (ctx as any).webServer.register({
+      kind: 'exact',
+      path: MONITOR_ROUTE_PATH,
+      handler: makeMonitorUrlHandler({ root, portFile: config.monitorPortFile }),
+    })
+    ctx.logger?.info?.(`[re0-mecha] 注册监控地址路由 ${MONITOR_ROUTE_PATH}（读 ${root} 的监控端口文件，不回落默认端口）`)
+
     const disposeCmd = ctx.commands!.register({
       name: 're0-gui',
       description: '把控制权交还人类：请求看门人切换到 GUI 模式（本 dsh 实例将退出）',
@@ -116,6 +138,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
     })
 
     return async () => {
+      try { disposeMonitorRoute() } catch { /* ignore */ }
       try { disposeCmd() } catch { /* ignore */ }
       for (const dispose of disposers.values()) {
         try { dispose() } catch { /* ignore */ }

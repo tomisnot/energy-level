@@ -32,12 +32,14 @@ whenToUse: 当需要操控 Energy Level 软件（改参数、加能级组、配�
 连上新端口，无需重启 dsh。但**插件之外的客户端**（自写 MCP 客户端、写死 URL 的
 IDE 配置）不会自愈——那些须新开会话/改配置。
 
-**监控面**：权威进程另起**只读**监控端点 `:8767`（`/status`、`/activity`、
-`/history`、`/config`），dsh 右侧栏「机甲监控」面板消费它——飞行记录仪
-（每笔写 seq/actor/before→after/reason，逐行可折叠）+ 配置态（族→前缀分层树）。
+**监控面**：权威进程另起**只读**监控端点（`/status`、`/activity`、`/history`、
+`/config`），dsh 右侧栏「机甲监控」面板消费它——飞行记录仪（每笔写
+seq/actor/before→after/reason，逐行可折叠）+ 配置态（族→前缀分层树）。
+**端口是动态分配的**（OS 选，写在项目根 `.monitor-port`）；面板自己经 dsh 同源只读
+路由 `/re0-mecha/monitor-url` 取地址，**没有人需要抄端口**，也没有硬编码端口可漂移。
 **控制权不经端点**：人的夺权/交权由看门人编排进程交接（dsh 里「→ GUI」按钮 /
-GUI 菜单），旧的 `:8767/switch_mode` + token 已退役。AI 面改不了写权模式、
-伪造不了 human 归因（Authority 的通道判定，与端点无关）。
+GUI 菜单），v1 那种"固定端口 + `/switch_mode` + token"的人工控制端点已退役。
+AI 面改不了写权模式、伪造不了 human 归因（Authority 的通道判定，与端点无关）。
 
 **其他 IDE / 客户端接入**：本仓**当前没有** `.trae/mcp.json`（该配置曾存在，已不在
 仓内——2026-09-25 核实）。要用别的 MCP 客户端，请让它指向
@@ -229,9 +231,9 @@ env 采样   = √[ (1 + δ(t)) / (1 + b) ]    # 峰值恰为 1
 - **`get_diag` 运行诊断**（pairs/steps/sectors/traj/H）：v2 未接线。诊断信息暂从
   `run_sim` 回执的 `warnings` + `preview_run` 读。
 - **`screenshot` / `undo` / 存档面**：
-  - 操作流水（v1 的 `get_activity`）——**不在 MCP 工具面**，在只读监控端点
-    `:8767/history`（dsh 右侧栏「机甲监控」面板消费它，飞行记录仪页逐笔可折叠）；
-    域当前态用 `read_config`；
+  - 操作流水（v1 的 `get_activity`）——**不在 MCP 工具面**，在只读监控端点的
+    `/history`（端口见项目根 `.monitor-port`；dsh 右侧栏「机甲监控」面板消费它，
+    飞行记录仪页逐笔可折叠）；域当前态用 `read_config`；
   - `undo`——v2 史 append-only，撤销=反向 set 记新事件，等接 GUI 撤销按钮（ADR 已定设计）；
   - 存档面——journal 即存档，要读历史直接开 `.mecha-v2/journal.jsonl`；
   - `screenshot`——GUI 侧能力，非 MCP 工具。

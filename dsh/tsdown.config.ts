@@ -8,8 +8,9 @@ import { defineConfig } from 'tsdown'
  * dts 关（类型走 src + types/shim；--patch 源加载本就直读 src）。
  *
  * client 半 = 两模式收拢后重建的 dsh 界面：◈监控 按钮（开右栏 tab）+ 监控面板
- * （轮询权威 :8767 的只读 /activity）+ 「切换至 GUI」按钮（经 /re0-gui command
- * 让 host 写 .mode-request，看门人接手交接）。
+ * （**地址不硬编码**：经注入的 `resolveMonitorBase()` 打 host 半的同源只读路由
+ * `/re0-mecha/monitor-url` 取 base，再轮询其 `/history` + `/config`）+
+ * 「切换至 GUI」按钮（经 /re0-gui command 让 host 写 .mode-request，看门人接手交接）。
  */
 const dshExternal = [/^@deepseek-ai\//]
 

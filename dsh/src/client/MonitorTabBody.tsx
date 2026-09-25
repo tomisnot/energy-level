@@ -7,8 +7,10 @@
  * 族→前缀二级结构树（显示名去前缀）。CSS 逐字照搬 .re0-tab-native 那套。
  *
  * 唯一换的是**数据源**：v1 fetch :8766 的 /api/history、/api/config-tree（黑匣子
- * 读磁盘 journal）；v2 fetch 权威进程 :8767 的只读 /history、/config（活桥投影，
- * 输出形状与 v1 逐字段对齐——v1 backend.py 的 config_tree/read_events 语义）。
+ * 读磁盘 journal）；v2 取权威的只读 /history、/config（活桥投影，输出形状与 v1
+ * 逐字段对齐——v1 backend.py 的 config_tree/read_events 语义）。
+ * **地址不硬编码**（2026-09-25 第 2 段）：端口是动态的，经注入的
+ * `resolveMonitorBase()`（host 半同源路由 `/re0-mecha/monitor-url`）**每轮现取**。
  * 徽标：v1 是 alerts 级别（run 降级/失败/空演化规则在 v2 无对应事件流），换成
  * **写权模式**（human 绿 / ai 紫 / locked 黄）——同一位置、同一 CSS 类。
  *
@@ -16,8 +18,7 @@
  */
 import { useEffect, useRef, useState, type MouseEvent } from 'react'
 
-/** 权威只读监控端点（EL run_authority 起，固定 :8767；与 v2_bind 的默认端口同源）。 */
-const MONITOR_URL = 'http://127.0.0.1:8767'
+/** 轮询间隔（展示刷新，非正确性依赖）。 */
 const POLL_MS = 3000
 
 const TAB_CSS = `
@@ -120,7 +121,10 @@ function cfgPage(groups: Record<string, Sub[]>): string {
     '</details>').join('')
 }
 
-export function MonitorTabBody() {
+export function MonitorTabBody({ resolveMonitorBase }: {
+  /** 监控地址解析器（host 半注入：同源只读路由 → `{base}`）。**不硬编码端口。** */
+  resolveMonitorBase?: () => Promise<string>
+}) {
   const ref = useRef<HTMLDivElement>(null)
   const [page, setPage] = useState<Page>(savedPage)
   const [offline, setOffline] = useState(false)
@@ -130,14 +134,28 @@ export function MonitorTabBody() {
   const [hasSchema, setHasSchema] = useState(false)
   const [orphans, setOrphans] = useState<Row[]>([])
 
-  // 轮询：/history（v1 形状全量尾）+ /config（结构树）。3s 一次，展示刷新非正确性依赖。
+  // 轮询：**每拍现解析地址**（权威重启换端口 ⇒ 下一拍落在新端口，不重启 dsh 也自愈），
+  // 再取 /history（v1 形状全量尾）+ /config（结构树）。3s 一次，展示刷新非正确性依赖。
+  // 取址失败与"连不上权威"**同一档显示**（都落到既有的"权威离线"）——那是实情：地址解析
+  // 不出来就是软件没在 AI 模式跑；面板不新增显示状态，内容与迁移前保持一致。
   useEffect(() => {
     let dead = false
     const poll = async () => {
+      let base = ''
+      try {
+        if (!resolveMonitorBase) throw new Error('面板没有监控地址解析器（host 半没挂上？）')
+        base = await resolveMonitorBase()
+      } catch (err) {
+        if (!dead) {
+          console.warn('[re0-mecha] 监控地址解析失败：', (err as Error)?.message ?? err)
+          setOffline(true)
+        }
+        return
+      }
       try {
         const [h, c] = await Promise.all([
-          fetch(`${MONITOR_URL}/history?since_seq=0`).then(r => r.json()),
-          fetch(`${MONITOR_URL}/config`).then(r => r.json()),
+          fetch(`${base}/history?since_seq=0`).then(r => r.json()),
+          fetch(`${base}/config`).then(r => r.json()),
         ])
         if (dead) return
         setOffline(false)
@@ -153,7 +171,7 @@ export function MonitorTabBody() {
     poll()
     const t = setInterval(poll, POLL_MS)
     return () => { dead = true; clearInterval(t) }
-  }, [])
+  }, [resolveMonitorBase])
 
   // CSS 注入一次（v1 同款 data 属性防重）
   useEffect(() => {

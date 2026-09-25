@@ -25,7 +25,7 @@
 |---|---|---|
 | **GUI** | PyQt5，`app_entry.py` → `src/ui/*` | ⚠ 布局逐像素未动（M3 无偏离）；god-mode 检视器保留（引擎常量只读）。**已知失能**：「窗口/光子块」两控件静默失能（迁移后无人消费）；写权门控 `set_readonly` 有定义、MainWindow 从未调用。逐条见 `docs/待办-经复核的问题清单.md` §D1/§D2（该清单成文于 v1 期，部分条目随 v1 退役已失效，见其顶注） |
 | **AI** | MCP 写通道（权威进程内起服务器：`app_entry.py --authority`；或独立进程 `python -m mecha_v2.hub`），**14 个工具** | ✅ 语义寻址 / 可教学错误 / 体积闸 / 指针化 / async 作业 / CodeAct 编排 / 建场层 |
-| **远程跨设备** | 只读监控端点（权威进程内 `:8767`，仅 127.0.0.1 + CORS）；远程写未作正式能力验收 | ⚠ 只读监控可用（`/status` `/activity` `/history` `/config`）；写通道默认只 localhost（T6）。旧文档里的 cockpit `--host/--token` 随 v1 退役 |
+| **远程跨设备** | 只读监控端点（权威进程内，**动态端口** + 项目根 `.monitor-port` 发现，仅 127.0.0.1 + CORS）；远程写未作正式能力验收 | ⚠ 只读监控可用（`/status` `/activity` `/history` `/config`）；写通道默认只 localhost（T6）。旧文档里的 cockpit `--host/--token` 随 v1 退役 |
 
 ## 3. 目录（当前真实结构）
 
@@ -46,7 +46,7 @@ mecha_v2/          ★ EL 自己的 v2 领域层（唯一同时 import core 与 
     tools.py           build_tool_registry：AI 工具面（14 个 MCP 工具）
     bridge.py          V2Bridge：GUI ↔ 同一道 Gate 的操作者适配器（+ ElOps）
     hub.py             ToolRegistry → MCP 服务器的投影 + 独立进程入口
-src/v2_bind.py     装配点 make_v2_bridge + 只读监控端点 :8767（v1 形状垫片也在这）
+src/v2_bind.py     装配点 make_v2_bridge + 只读监控端点（动态端口；写 .monitor-port）
 src/ui/            GUI（16 个 .py，含 _mecha_bind.py：widget ↔ mecha 绑定层）
 src/sweep/         并行扫描（4 文件）
 src/_archive/      封存的 Floquet 权威锚（仍被判据引用）
@@ -101,8 +101,10 @@ $env:PYTHONPATH=''; $env:QT_QPA_PLATFORM='offscreen'; $env:PYTHONIOENCODING='utf
 # 等价单跑——GUI 模式：纯本地软件，不起任何端点，写权在人
 & D:\python310\python.exe app_entry.py --gui
 
-# 等价单跑——AI 模式：headless 权威，进程内起 MCP 服务器 + 只读监控端点 :8767
+# 等价单跑——AI 模式：headless 权威，进程内起 MCP 服务器 + 只读监控端点（动态端口）
 & D:\python310\python.exe app_entry.py --authority
+#   两个发现文件都写在项目根：.mcp-port（MCP 端点）/ .monitor-port（监控端点）；
+#   dsh 插件的面板自己经同源路由 /re0-mecha/monitor-url 取地址，人不用抄端口。
 
 # 独立进程 Hub（无 GUI 的 headless 部署；写权威落 --data-dir，默认 .mecha-v2-hub）
 & D:\python310\python.exe -m mecha_v2.hub --root .
