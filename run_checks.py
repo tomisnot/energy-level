@@ -96,6 +96,9 @@ FAST_KNOWN_SEC = {
     # 新增判据请在此登记**实测**耗时（跑 scripts/check_profile.py 现测），否则它不会进
     # --fast/--core 档——内循环就看不到它的红绿，只能等全档（数分钟）才发现。
     'narrow_pulse_env_selfcheck.py': 5.1,
+    # 2026-09-25 现测 0.5-0.6s（取大）。监控端点契约门（框架化迁移的前置夹具）——
+    # 必须进 --core/--fast：迁移时要"改一行马上知道面板契约破没破"。
+    'cockpit_contract_selfcheck.py': 0.6,
 }
 
 
