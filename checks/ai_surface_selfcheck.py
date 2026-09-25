@@ -23,8 +23,14 @@ EL 仓有 **4 份 SKILL**，其中 **2 份在 `.dsh/` 下、是 gitignored**—�
 
 - **A 登记完备**：仓内所有 `*/SKILL.md`（排除 vendor：`node_modules`/`.venv`/`__pycache__`）
   ⇄ `SURFACES` 登记表**双向相等**。
-- **B 权威 ⇄ 镜像逐字节**：`.dsh/skills/energy-level/SKILL.md` 必须与
-  `skills/energy-level/SKILL.md` 字节相同（期望值 = 权威文件，R9）。
+- **B 镜像的**结构**承诺**：`.dsh/skills/energy-level` 是指向 `skills/energy-level` 的
+  **目录 junction**（2026-09-25 实测：`realpath` 与 `(st_ino, st_dev)` 都相同）⇒
+  该路径与权威版**本来就是同一个文件**。所以"两份逐字节相同"是**同一律、不是证据**
+  （R8/R11 那一类：观测量恒定、不携带信息——本判据第一版就是那么写的，被主代理复现
+  纠正）。本组改断言**这个结构性质**：镜像路径必须**解析到权威文件**。它有真实信息量——
+  抓的是"**有人把 junction 换成真副本**"那一刻：换的那一刻起，"两份内容"才第一次
+  成为两个独立事实、才有可漂移的空间。⚠ 别再改回"逐字节相同"：那个措辞会把同一律
+  伪装成证据。
 - **C 工具面一致（期望值 = 真注册表）**：权威版「## 工具清单」表 == 注册表；
   `re0-mecha` 版「## 工具（v2 实际面）」表 == 注册表；
   其「v1 → v2 对照」表：**右列（v2 名）⊆ 注册表**、**左列（v1 名）∩ 注册表 = ∅**
@@ -300,14 +306,21 @@ def main():
         ('登记表全部存在（缺：%s）' % (missing_on_disk or '无'), not missing_on_disk),
     ])
 
-    # ---- B 权威 ⇄ 镜像逐字节（期望值 = 权威文件）----
+    # ---- B 镜像路径**解析到权威文件**（结构承诺；不是"逐字节相同"，见 docstring）----
     auth_text = _read(AUTHORITATIVE)
-    mirror_text = _read(MIRROR)
-    C.group('B 镜像与权威逐字节相同（期望值取自权威版，R9）', [
-        ('%s ≡ %s（%d 字节 vs %d 字节）'
-         % (MIRROR, AUTHORITATIVE, len(mirror_text.encode('utf-8')),
-            len(auth_text.encode('utf-8'))),
-         mirror_text == auth_text),
+    auth_path = os.path.join(ROOT, AUTHORITATIVE.replace('/', os.sep))
+    mirror_path = os.path.join(ROOT, MIRROR.replace('/', os.sep))
+    real_a, real_m = os.path.realpath(auth_path), os.path.realpath(mirror_path)
+    try:
+        sa, sm = os.stat(auth_path), os.stat(mirror_path)
+        same_file = (sa.st_ino, sa.st_dev) == (sm.st_ino, sm.st_dev)
+    except OSError:
+        same_file = False
+    stats['镜像 realpath'] = real_m
+    stats['镜像 = 权威文件'] = bool(real_a == real_m and same_file)
+    C.group('B 镜像路径解析到权威文件（junction 结构承诺：换成真副本 ⇒ 红）', [
+        ('realpath 相同（%s）' % real_m, real_a == real_m),
+        ('(st_ino, st_dev) 成对相同 ⇒ 同一个文件（非两份内容）', same_file),
     ])
 
     # ---- C 工具面一致（期望值 = 真注册表）----
