@@ -20,15 +20,13 @@
 | `provider.approval` | definition | energy-level | — |
 | `provider.approval.local` | provider | fail-closed | — |
 | `provider.artifacts` | definition | energy-level | — |
-| `provider.artifacts.local` | provider | local-file | — |
+| `provider.artifacts.local` | provider | local-file | adapter.ai |
 | `provider.codeact` | provider | actions-interp | adapter.ai |
 | `provider.jobs` | definition | energy-level | — |
 | `provider.jobs.local` | provider | thread | tools.registry |
 | `provider.log` | definition | energy-level | — |
 | `provider.log.local` | provider | jsonl | history |
 | `provider.skills` | provider | catalog | — |
-| `provider.spill` | definition | energy-level | — |
-| `provider.spill.local` | provider | local-file | — |
 | `provider.toolhost` | definition | energy-level | — |
 | `provider.toolhost.local` | provider | in-process | — |
 | `provider.toolhost.mcp` | provider | mcp-streamable-http | adapter.ai |
@@ -40,4 +38,3 @@
 | `surface` | definition | energy-level | — |
 | `surface.engine` | provider | ElEngine | surface |
 | `tools.registry` | consumer | energy-level | adapter.ai |
-| `visibility.policy` | definition | energy-level | — |
