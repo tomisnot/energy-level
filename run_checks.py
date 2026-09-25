@@ -99,6 +99,10 @@ FAST_KNOWN_SEC = {
     # 2026-09-25 现测 0.5-0.6s（取大）。监控端点契约门（框架化迁移的前置夹具）——
     # 必须进 --core/--fast：迁移时要"改一行马上知道面板契约破没破"。
     'cockpit_contract_selfcheck.py': 0.6,
+    # 2026-09-25 现测 3.1-3.2s（run_checks 口径：含 mcp SDK 导入；进程内纯逻辑约 0.4s）。
+    # MCP 工具面 `default` 声明守卫（R5 三分法）——漏一个声明的症状是"模型侧行为变差
+    # 而不报错"，故进 --fast 内循环；>3s 故不进 --core（那是秒级档的纪律，不放宽阈值）。
+    'mcp_defaults_selfcheck.py': 3.2,
 }
 
 
