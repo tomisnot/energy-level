@@ -1,5 +1,17 @@
 # GUI 界面模块 · 专家手册
 
+> ⚠ **历史件横幅（2026-09-25 加，主代理指令）**：本文记录的是**已退役的 `mecha-sdk` 0.1.0**
+> 时代（`D:\学\BaiduSyncdisk\编程\code\python\mecha-sdk`）。EL 现运行的框架是 **`mecha` 0.2.0**
+> （editable 装于 `D:\code-nosync\mecha`），**模块集完全不同**：0.1.0 的 `ops` / `session` /
+> `bus` / `registry` / `codeact` / `server` / `cockpit` / `hub_bridge` / `hub_client` /
+> `archives` / `interlock` / `autonomy` / `gc` / `app_bridge` / `subscribe` / `hooks` 等在
+> 0.2.0 **都不存在**（改由 `gate` / `history` / `authority` / `surface` / `tools` /
+> `assembly` / `data_layout` / `providers.*` 承担）。
+> ⇒ 本文所有 `mecha-sdk/...py:行号`、`src/adapter/*`、`cockpit *` 的路径与行号**均已失效**
+> （GUI 的 v1 侧栏监控、Hub 客户端模式等描述也已随 v1 退役），只作历史记录，
+> **请勿据以定位代码**（主代理要求：不机械替换，只加本横幅）。
+> 当前真值源：本仓 `docs/capabilities.md`（生成物）+ mecha 仓 `docs/v2/`。
+
 > **模块边界**：`app_entry.py`（仓根，546 行）+ `src/ui/*`（15 个 .py，8588 行，含 `__init__.py`）
 > + `main.py`/`能级.py`（转发入口）+ GUI 判据 6 个 + `dsh/src/client/*`（驾驶舱，仅在与界面体验相关时）。
 > **不属本模块**：物理引擎（`src/core`）、AI 机甲框架（mecha-sdk）、sweep 的 runner 逻辑。

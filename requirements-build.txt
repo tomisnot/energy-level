@@ -1,0 +1,13 @@
+# 打包期依赖（只在 build_venv 里用；软件本体运行时不需要）
+# 用法：build.bat 会执行
+#   build_venv\Scripts\python.exe -m pip install -i <镜像> -r requirements.txt -r requirements-build.txt
+#
+# 为什么单独一份：build.bat:20 一直引用本文件，但历史上它**不存在** ⇒ 打包脚本
+# 必然在第一步失败（2026-09-25 实测 Test-Path = False，本次补上）。
+# 版本按本机实测已装版本锁定（`pip show pyinstaller` → 6.22.2），与 requirements.txt
+# 同一套"锁定版本保证可复现构建"的纪律。
+#
+# 注意：本文件**不**声明 mecha / mcp / uvicorn —— 那些在 requirements.txt 里。
+# 打包能否正确收集 editable 安装的 mecha，见 EnergyLevel.spec 顶部与
+# docs 里的待裁决登记（当前 spec 未收集其 hiddenimports）。
+pyinstaller==6.22.2

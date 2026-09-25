@@ -1,7 +1,8 @@
 # 项目实例隔离 overlay（launcher 经 `--patch` 加载，组合链**最后一层**）
 #
-# 唯一职责：还原 webserver 的端口表达式，让 `--port` 生效（机制详见
-# mecha-sdk《DSH-实例并存原理》§3）。
+# 唯一职责：还原 webserver 的端口表达式，让 `--port` 生效（机制见《DSH-实例并存
+# 原理》——该文原文在**已退役**的 mecha-sdk 仓根 `DSH-实例并存原理.md`；本仓不再
+# 指向那个位置。2026-09-25：EL 现运行 mecha 0.2.0，dsh 侧结论未变）。
 #
 # profile 补丁（`~/.dsh/profiles/web/cordis.patch.yml`）把 webserver 的 `port`
 # 钉成字面量 3080。同 id 的 patch 是**整块替换** config，不是深合并，故本 overlay

@@ -1,5 +1,11 @@
 # re0-mecha-dsh —— Re0 软件的 dsh 集成插件
 
+> ⚠ **旧库引用横幅（2026-09-25 加，主代理指令）**：本文主体（插件架构/加载/配置）仍有效；
+> 其中提到 **`mecha-sdk`** 的地方只是**历史背景**（v1 的 client 半随该旧库一起消失）。
+> EL 现运行的框架是 **`mecha` 0.2.0**（editable 装于 `D:\code-nosync\mecha`），
+> 与 0.1.0 模块集完全不同，故凡引用 `mecha-sdk/...py:行号` 的段落**已失效**，
+> 请勿据以定位代码。当前真值源：本仓 `docs/capabilities.md` + mecha 仓 `docs/v2/`。
+
 一个 **out-of-tree** 的 dsh（Cordis）插件，把 Re0 软件（mecha v2）接进 dsh：**接管 MCP
 连接生命周期**（治好 dsh stock HTTP 桥"服务重启即永久 `Session not found`"的死区），并把
 工具**原生注册**进 dsh。设计依据见

@@ -33,7 +33,9 @@ PY = sys.executable
 APP = os.path.join(HERE, "app_entry.py")
 
 MODE_REQUEST = os.path.join(HERE, ".mode-request")   # 子进程写：切换意图（gui/ai）
-MODE_STATE = os.path.join(HERE, ".mode-state")       # 看门人写：当前模式（供人/判据看）
+MODE_STATE = os.path.join(HERE, ".mode-state")       # 看门人写：当前模式。**无代码读者**
+                                                     # ——它是给人看的运行时诊断文件
+                                                     # （2026-09-25 全仓核对：仅本文件写它）
 MCP_PORT = os.path.join(HERE, ".mcp-port")           # 权威写：dsh 插件据此发现端点
 
 GUI, AI = "gui", "ai"

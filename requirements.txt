@@ -14,15 +14,28 @@ PyQt5==5.15.9
 arc_alkali_rydberg_calculator==3.9.0
 numba==0.65.1
 pyqtgraph==0.13.7
-# ── AI 协同（src/ai，可选）─────────────────────────────────────────
-# 缺失时软件照常运行，仅状态栏提示 AI 接口未启用。
-# 注意：分发给无 AI 需求的用户打包 exe 时不要装（PyInstaller 会收集
-# pydantic/uvicorn/starlette/httpx 增大体积）；开发者/AI 协同环境安装：
-#   pip install "mcp>=2,<3" uvicorn
 
-# ── AI 机甲框架（mecha-sdk，独立库）────────────────────────────────
-# 之前**完全没声明**，纯靠 editable 安装 —— 换机器/打包即断（P0-3/P0-13）。
-# 库本体零重依赖；MCP 写通道与驾驶舱各是 extra。
-# 本仓用 [mcp,cockpit,numpy]：写通道 + 只读驾驶舱 + 数组产物落盘。
-# 路径按本机布局（两仓并列于 code/python/ 下）；换机器请改成本机实际路径。
--e ../mecha-sdk[mcp,cockpit,numpy]
+# ── AI 机甲框架 mecha（**硬依赖**，不是"可选的 AI 依赖"）──────────────
+# EL 的 GUI 与 AI 走**同一道 Gate**：app_entry.py:53-54 顶层
+# `from src.v2_bind import make_v2_bridge` → `mecha_v2.bridge` →
+# `mecha.authority / errors / gate / history / monitor / providers.jobs / surface /
+# assembly`，这些全是**无条件顶层导入、没有 try/except 兜底**。⇒ 缺 mecha 时
+# app_entry.py 直接 ImportError、软件起不来。**不存在**"缺失时软件照常运行、
+# 仅状态栏提示 AI 接口未启用"的降级路径——那是 v1 时代 `src/ai` 的行为，
+# 而 `src/ai` 目录已不存在（2026-09-25 核实）。
+#
+# 框架本体 = 独立库 `mecha`（本机实测 0.2.0），editable 安装在 D:\code-nosync\mecha。
+# 用**绝对路径**：EL 与 mecha 已不在同一父目录（旧注释"两仓并列于 code/python/ 下"
+# 是错的）。0.2.0 的 [project.optional-dependencies] 是**空的**、没有任何 extra，
+# 也没有 cockpit 包 ⇒ 不能写 `mecha[...]`。也**不要**再指向 mecha-sdk（0.1.0，
+# 已退役：它没有 `mecha.authority.Mode`，而 src/v2_bind.py:214 需要它 ⇒ EL 跑不了它）。
+-e D:\code-nosync\mecha
+
+# ── AI 写通道 / 只读监控端点（只有 AI 模式需要；GUI 模式不起任何端点）────
+# src/v2_bind.py:224 在进程内起 MCP 服务器线程（streamable-http，mcp 2.x）；
+# mecha_v2/hub.py:211 `server.run(transport="streamable-http")` 由 uvicorn 承载。
+# 这两项是**真声明**（旧版只写在注释里，`pip install -r requirements.txt` 装不到）。
+# 若要交付"无 AI 需求"的分发：可以裁掉这两项，但那是**牺牲需求**（AI 模式/MCP
+# 工具面/监控面板全部不可用），并且 mecha 本体**不能**裁（理由见上）。
+mcp>=2,<3
+uvicorn

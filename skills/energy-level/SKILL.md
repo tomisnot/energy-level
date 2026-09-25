@@ -8,8 +8,10 @@ whenToUse: 当需要操控 Energy Level 软件（改参数、加能级组、配�
 
 > 本文件是 AI harness 的 skill 说明书：连接方式、工具清单、工作流、单位约定、
 > 物理坑。AI 使用中若发现文档与实态不符，应回头修正本文件（自我迭代）。
-> **本版对齐 mecha v2**：工具面 = `mecha_v2/tools.py` 注册的 MCP 工具
-> （用 `list_tools` 以实际返回为准）。v1 的 GUI 内嵌 AI 面
+> **本版对齐 mecha v2**：工具面 = `mecha_v2/tools.py` 注册的 MCP 工具，共 **14 个**
+> （清单见下方「## 工具清单」表；该表由 `checks/docs_consistency_selfcheck.py` 与真
+> 注册表**双向互钉**，多一个/漏一个即判据红）。宿主 MCP 面**就是**这张注册表，
+> **没有**额外的 `list_tools` 工具可调。v1 的 GUI 内嵌 AI 面
 > （run_python/submit_sweep/get_diag/screenshot/set_groups…）**在 v2 不存在**，
 > 见末节"v2 暂缺的能力"。
 
@@ -27,8 +29,8 @@ whenToUse: 当需要操控 Energy Level 软件（改参数、加能级组、配�
 
 **端点换端口/换进程**（实测报告 §0）：权威重启后端口会变（自动选空闲口）。
 **re0-mecha dsh 插件已自愈**：每次重连现读 `.mcp-port`，漂移后下一次调用自动
-连上新端口，无需重启 dsh。但**插件之外的客户端**（Trae `.trae/mcp.json` 固定
-URL、自写 MCP 客户端）不会自愈——那些须新开会话/改配置。
+连上新端口，无需重启 dsh。但**插件之外的客户端**（自写 MCP 客户端、写死 URL 的
+IDE 配置）不会自愈——那些须新开会话/改配置。
 
 **监控面**：权威进程另起**只读**监控端点 `:8767`（`/status`、`/activity`、
 `/history`、`/config`），dsh 右侧栏「机甲监控」面板消费它——飞行记录仪
@@ -37,8 +39,10 @@ URL、自写 MCP 客户端）不会自愈——那些须新开会话/改配置�
 GUI 菜单），旧的 `:8767/switch_mode` + token 已退役。AI 面改不了写权模式、
 伪造不了 human 归因（Authority 的通道判定，与端点无关）。
 
-**Trae IDE 接入**：项目根 `.trae/mcp.json` 指向该端点。需在 Trae 设置 → MCP 打开
-"启用项目级 MCP"，然后**新开会话**生效（工具在会话启动时加载）。
+**其他 IDE / 客户端接入**：本仓**当前没有** `.trae/mcp.json`（该配置曾存在，已不在
+仓内——2026-09-25 核实）。要用别的 MCP 客户端，请让它指向
+`http://127.0.0.1:<.mcp-port 里的端口>/mcp`，并在该客户端里**新开会话**生效
+（工具在会话启动时加载）。注意这类写死 URL 的客户端**不会**像 dsh 插件那样自愈。
 
 ## 工具清单
 

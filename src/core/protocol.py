@@ -62,8 +62,10 @@ CONFIG_SCHEMA = {
                               '静态页显示精度，不参与演化'),
     # ---- P1-6（2026-09-22）：静态列的 opt-in 开关 ----
     # 为什么是**快照键**而不是函数形参：`list_levels` 这条链（server/ops/protocol/
-    # adapter）**四处都是无参的** ⇒ 没有 `**opts` 可透传。走快照键 ⇒ 零 mecha-sdk
+    # adapter）**四处都是无参的** ⇒ 没有 `**opts` 可透传。走快照键 ⇒ 零 mecha 库
     # 改动，且本键会出现在 list_params 里（带代价说明）⇒ 对 AI **可发现**。
+    # （2026-09-25 注：上面这条链说的是 v1 形状——server/ops/adapter 已随 v1 退役；
+    #   结论"走快照键、不走形参"在 v2 依然成立，故原文保留。）
     'static.columns': dict(
         type='str', enum=['off', 'basic', 'ac'], default='off',
         desc='list_levels 是否附静态列：off（默认，逐位不变）/ '
@@ -606,8 +608,11 @@ def list_levels(cache, snap):
     （`server.list_levels()` → `ops.list_levels()` → `protocol` → `adapter`）
     **四处都是无参的**（实测 `server.py:202` / `ops.py:199` / `mecha/protocol.py:81`
     / `adapter/__init__.py:261`）⇒ 没有 `**opts` 可透传。走快照键 ⇒
-    **零 `mecha-sdk` 改动**，且该键会出现在 `list_params` 里、带 desc 说明代价
+    **零 `mecha` 库改动**，且该键会出现在 `list_params` 里、带 desc 说明代价
     ——对 AI 反而**可发现**。（若将来库侧加了形参，本键可退回默认关。）
+
+    2026-09-25 注：上面引的 `server/ops/adapter` 是 **v1 形状**，已随 v1 退役
+    （那些 `文件:行号` 不再可查）；"走快照键"这一结论在 v2 未变，原文保留作决策史。
     """
     if _is_many(snap):
         return _mb_list_levels(cache, snap)
