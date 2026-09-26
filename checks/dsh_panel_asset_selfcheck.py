@@ -52,18 +52,24 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ASSET_DIR = os.path.join('dsh', 'src', 'dsh-panel')
 
 #: **出处说明**（只作说明，不参与比对——比对靠下面那组常量）。
-REFERENCE_REVISION = 'mecha/dsh-panel @ 58e2f8a（2026-09-25 逐字复制）'
+REFERENCE_REVISION = 'mecha/dsh-panel @ f516a99（2026-09-26 逐字复制；上一版 58e2f8a）'
 
 #: **行为载体**（代码 + 单测）→ 行尾归一 sha256。改这里 = "上游发新版后整份重新复制"。
+#: ⚠ `panel-config.ts` 不进表（它是参数块，必然不同）；`README.md` 不进表（prose）。
 CARRIERS = {
+    # 浏览器安全的共享常量（零 import）——client 半的 import 闭包靠它避开 node:*
+    'routes.ts':
+        'e2b5bc35d84d368548146a4c7d6c4a2ef733b3191480f6a9d0131045c1295963',
+    # node-only（host 半）
     'monitor-url.ts':
-        'c6a948106a480c67b76447d9e160f29519637a1ae5e3716a824552497efcf1ba',
-    'monitor-url.test.ts':
-        '62994cf218fc195890a7dc966f5159ee62aaf926a25a032d1a7f70bdf6d99c07',
+        '9808f71a7179857f56baa25652cfc77e2d109f3d92d643aaf2c3ebc42f95c2a3',
+    # 取数骨架（client 半）
     'monitor-client.ts':
-        'eec71f3f7e47cdbbafdece1c9649bd68f3a86e6631b486e9e8e3d18cac9260c9',
+        '200a7764f2d0139c17dd91294d02dd165ad0f51ad782ad39b3bb67708153e93c',
+    'monitor-url.test.ts':
+        '90db86e3b5217b89b18b082f37c502ef6750c54b2de58ad202fb71eecd9cfd29',
     'monitor-client.test.ts':
-        '754dee85d2a329a5da3c1425368e3c46595ac8605f4df88a0acc6bdf95f03616',
+        '01fe06988541e0dbb1dd2a06c84e4ac039ad9c6dd08492f0a0bcb138373cb794',
 }
 
 

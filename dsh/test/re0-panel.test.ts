@@ -88,6 +88,62 @@ test('参数块是本仓的事实：路由 / 端口文件 / 标题', () => {
     'PORT_FILE 留空 ⇒ 路由一律 503（共享资产的刻意设计）——本仓必须填')
 })
 
+// ---------------------------------------------------------------- 0 浏览器安全（结构）
+/**
+ * 沿**相对 import** 走一遍某入口的导入闭包（技法照资产 `monitor-client.test.ts` 那条，
+ * 但**根换成 EL 自己的 client 半入口**）：EL 的文件也可能哪天误 import node-only 的
+ * `monitor-url.ts`——那条链会把 `node:fs` 拖进浏览器 bundle。
+ */
+function closureOf(entry: string): { seen: string[]; nodeHits: string[] } {
+  const strip = (src: string) => src
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:])\/\/.*$/gm, '$1')
+  const seen = new Set<string>()
+  const nodeHits: string[] = []
+  const queue = [entry]
+  while (queue.length) {
+    const rel = queue.shift() as string
+    if (seen.has(rel)) continue
+    seen.add(rel)
+    const isPanel = rel.startsWith('dsh-panel/')
+    const abs = join(SRC, isPanel ? 'dsh-panel' : 'client',
+      isPanel ? rel.slice('dsh-panel/'.length) : rel)
+    for (const line of strip(readFileSync(abs, 'utf8')).split('\n')) {
+      if (/^\s*import\s+type\b/.test(line)) continue   // 类型导入会被剥掉，不是运行时依赖
+      const m = line.match(/from\s+'([^']+)'/)
+      if (!m) continue
+      const spec = m[1] ?? ''
+      if (spec.startsWith('node:')) { nodeHits.push(`${rel} → ${spec}`); continue }
+      if (!spec.startsWith('.')) continue              // 裸包名（react 等）由宿主提供
+      const parts = isPanel ? ['dsh-panel', ...rel.slice('dsh-panel/'.length).split('/')]
+        : ['client', ...rel.split('/')]
+      parts.pop()                                      // 去掉文件名 → 当前目录
+      for (const seg of spec.split('/')) {
+        if (seg === '.') continue
+        else if (seg === '..') parts.pop()
+        else parts.push(seg)
+      }
+      queue.push(parts.join('/'))
+    }
+  }
+  return { seen: [...seen], nodeHits }
+}
+
+test('⭐ EL client 半的 import 闭包里没有 node:*（浏览器安全靠结构，不靠树摇）', () => {
+  const { seen, nodeHits } = closureOf('panelData.ts')
+  assert.deepEqual(nodeHits, [],
+    `client 半闭包里出现 node 内建：${nodeHits.join('、')}`
+    + ' ⇒ 浏览器 bundle 会失败（node-only 的实现必须留在 dsh-panel/monitor-url.ts）')
+  // R8 自证：闭包必须**真的走过了几个文件**，否则"没命中"只是"什么都没读到"
+  assert.ok(seen.length >= 3, `闭包只走了 ${seen.length} 个文件 ⇒ 检查可能没生效：${seen}`)
+  assert.ok(seen.includes('dsh-panel/routes.ts'), `闭包里应当有 routes.ts：${seen}`)
+  assert.ok(!seen.includes('dsh-panel/monitor-url.ts'),
+    `client 半不许碰到 node-only 的 monitor-url.ts：${seen}`)
+  // 对偶（不许空洞）：node 半**必须**仍然依赖 node——否则上一条"没东西可抓"
+  assert.match(read('dsh-panel/monitor-url.ts'), /from 'node:fs'/,
+    'node 半应当 import node:fs（否则本检查没有可抓之物）')
+})
+
 // ---------------------------------------------------------------- 2 单一来源
 test('⭐ 单一来源：两半都引用参数块（路由字面量不在别处再抄一份）', () => {
   assert.match(read('index.ts'), /path:\s*PANEL_CONFIG\.ROUTE_PATH/,
