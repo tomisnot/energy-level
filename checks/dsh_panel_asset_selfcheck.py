@@ -52,10 +52,15 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ASSET_DIR = os.path.join('dsh', 'src', 'dsh-panel')
 
 #: **出处说明**（只作说明，不参与比对——比对靠下面那组常量）。
-REFERENCE_REVISION = 'mecha/dsh-panel @ f516a99（2026-09-26 逐字复制；上一版 58e2f8a）'
+REFERENCE_REVISION = 'mecha/dsh-panel @ 5ee78e4（2026-09-26 逐字复制；前几版 58e2f8a、f516a99、c44b01f）'
 
 #: **行为载体**（代码 + 单测）→ 行尾归一 sha256。改这里 = "上游发新版后整份重新复制"。
 #: ⚠ `panel-config.ts` 不进表（它是参数块，必然不同）；`README.md` 不进表（prose）。
+#: ✅ `panel-data.ts` / `panel-data.test.ts` 已随上游 `5ee78e4` 重抄（上游修了两处**只有消费者
+#: 才看得见**的缺陷：① `Ev`/`ConfigWire` 漏 `import type`，在严格 tsconfig 下 TS2304；
+#: ② `tabLabel` 用例把共享默认写死、却读项目参数块 ⇒ 照文档填 `TABS` 的项目必红）。
+#: ⚠ 教训：**资产自测只剥类型、不做类型检查**，所以那类缺陷**只有消费者的 `npm run typecheck` 能抓**；
+#: 上游现已把类型检查纳入它自己的门禁。
 CARRIERS = {
     # 浏览器安全的共享常量（零 import）——client 半的 import 闭包靠它避开 node:*
     'routes.ts':
@@ -63,13 +68,24 @@ CARRIERS = {
     # node-only（host 半）
     'monitor-url.ts':
         '9808f71a7179857f56baa25652cfc77e2d109f3d92d643aaf2c3ebc42f95c2a3',
-    # 取数骨架（client 半）
+    # client 半：取数骨架 + 数据层 + 纯字符串视图 + 薄壳（唯一需要 react 的地方）
     'monitor-client.ts':
         '200a7764f2d0139c17dd91294d02dd165ad0f51ad782ad39b3bb67708153e93c',
+    'panel-data.ts':
+        'cc32f9c7692fdbf2f0495d23f2f4bab2ac3e27620795e92f734132c96a0153bc',
+    'panel-view.ts':
+        '560103c18231df5bad3d18a77f16f0ed6cceab513928ef765dbdb2afec9a1aca',
+    'MonitorTabBody.tsx':
+        '8ed1233f18e32a9c4b6af37ebd69937fe63f5522ce2a410bb0dab8ec9339d3d6',
+    # 单测（随实现一起复制；由 C 组真跑）
     'monitor-url.test.ts':
         '90db86e3b5217b89b18b082f37c502ef6750c54b2de58ad202fb71eecd9cfd29',
     'monitor-client.test.ts':
-        '01fe06988541e0dbb1dd2a06c84e4ac039ad9c6dd08492f0a0bcb138373cb794',
+        '8dcff14f8fe5fb2f505ba7e9e845adab4f8c28c4af87c0234856817cecea4487',
+    'panel-data.test.ts':
+        'b3ece6c3f436f22b5abd3f7ffb295d3799f0fadf2628d4d791312bbd4445152a',
+    'panel-view.test.ts':
+        'bd2afe86800130e9ff8c03081a5696bd2c9f4c23fe71070c3fca57c72931d1b4',
 }
 
 

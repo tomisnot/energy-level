@@ -575,14 +575,17 @@ def audit(obs, *, fixture_mode):
 
 
 def _audit_panel_fields(bad, R):
-    """**面板消费面**：`dsh/src/client/MonitorTabBody.tsx` 实际读到的每个字段必须都在。
+    """**面板消费面**：`dsh/src/dsh-panel/MonitorTabBody.tsx`（mecha 共享资产，逐字复制）
+    实际读到的每个字段必须都在。
 
-    来源（逐行）：`:139` fetch `/history?since_seq=0` 与 `:140` fetch `/config`；
-    `:144-148` 取 `h.mode` / `h.events` / `c.groups` / `c.has_schema` / `c.orphans`；
-    `:91-101` 逐事件读 `seq/actor/kind/reason/target/before/after`；
-    `:108-118` 逐前缀节点读 `prefix/rows`、逐行读 `name/short/value/unit/set{.actor,.seq}`。
+    来源（**重抄资产后按新坐标**）：`panel-data.ts` 的 `loadPanel` 取
+    `/history?since_seq=0` 与 `/config`；`stateText/stateBadge/modeOf/eventsOf/configOf`
+    分别读 `mode` / `events` / `groups` / `has_schema` / `orphans`；
+    `panel-view.ts` 的 `recPageHtml/cfgPageHtml` 逐事件读
+    `seq/actor/kind/reason/target/before/after`、逐前缀节点读 `prefix/rows`、
+    逐行读 `name/short/value/unit/set{.actor,.seq}`。
     面板是**原样吃形状**的（形状一变面板就瞎且不报错），故这组断言是"面板未受影响"的
-    机器证据——第 2 段要动取址时它同样守着。
+    机器证据。
     """
     hb = R['GET /history']['json'] if isinstance(R['GET /history'].get('json'), dict) else {}
     _bad(bad, not isinstance(hb.get('mode'), str), 'Q 面板：/history.mode 不是字符串（徽标读它）')

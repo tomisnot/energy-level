@@ -25,7 +25,7 @@
  */
 import type { Context } from '@deepseek-ai/cordis'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
-import { MonitorTabBody } from './MonitorTabBody.tsx'
+import { MonitorTabBody } from '../dsh-panel/MonitorTabBody.tsx'
 import { CockpitButton, SwitchToGuiButton, type CockpitInjected, type SwitchInjected } from './buttons.tsx'
 import { PANEL_CONFIG } from '../dsh-panel/panel-config.ts'
 
@@ -76,9 +76,10 @@ export async function apply(ctx: Context): Promise<void> {
     }) || null
     const disposeBody = ctx.slots.inject('sidebar.right.pane.tab', () =>
       ctx.slots.register(
-        // 面板**自己取数**（原生形态）：取址/取数/归约走共享资产的 `monitor-client`
-        // （见 `./panelData.ts`）⇒ **不再有注入面**（原先那个 `resolveMonitorBase`
-        // 缝已被共享半边的 `fetchMonitorBase` 取代；留着就是"声明了却不被读"的死缝）。
+        // 面板**自己取数**（原生形态）：取址/取数/归约/渲染全在共享资产里
+        // （`dsh-panel/{panel-data,panel-view,MonitorTabBody}`）⇒ **没有注入面**
+        // （原先那个 `resolveMonitorBase` 缝已被兜住；留着就是"声明了却不被读"的死缝）。
+        // 本仓只提供**项目自己的东西**：参数块（路由/端口文件/标题）+ 下面的 tab 注册。
         { name: 'sidebar.right.pane.tab', key: 're0-cockpit' } as any,
         MonitorTabBody as any,
       ))

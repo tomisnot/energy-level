@@ -31,12 +31,15 @@ import type { PanelState } from '../src/dsh-panel/monitor-client.ts'
 import {
   CONFIG_PATH,
   HISTORY_PATH,
+  configOf,
+  eventsOf,
   loadPanel,
   okIsNonDegenerate,
   selfCheckLine,
   stateBadge,
   stateText,
-} from '../src/client/panelData.ts'
+} from '../src/dsh-panel/panel-data.ts'
+import { recPageHtml } from '../src/dsh-panel/panel-view.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const SRC = join(HERE, '..', 'src')
@@ -130,7 +133,7 @@ function closureOf(entry: string): { seen: string[]; nodeHits: string[] } {
 }
 
 test('⭐ EL client 半的 import 闭包里没有 node:*（浏览器安全靠结构，不靠树摇）', () => {
-  const { seen, nodeHits } = closureOf('panelData.ts')
+  const { seen, nodeHits } = closureOf('dsh-panel/MonitorTabBody.tsx')
   assert.deepEqual(nodeHits, [],
     `client 半闭包里出现 node 内建：${nodeHits.join('、')}`
     + ' ⇒ 浏览器 bundle 会失败（node-only 的实现必须留在 dsh-panel/monitor-url.ts）')
@@ -150,19 +153,18 @@ test('⭐ 单一来源：两半都引用参数块（路由字面量不在别处�
     'host 半注册的路由必须来自参数块')
   assert.match(read('index.ts'), /portFile:\s*PANEL_CONFIG\.PORT_FILE/,
     'host 半读的端口文件名必须来自参数块')
-  assert.match(read('client/panelData.ts'), /fetchMonitorBase\(doFetch,\s*PANEL_CONFIG\.ROUTE_PATH\)/,
+  assert.match(read('dsh-panel/panel-data.ts'), /fetchMonitorBase\(doFetch,\s*PANEL_CONFIG\.ROUTE_PATH\)/,
     '面板取址必须用参数块的路由')
   const offenders = literalOutsideParams(PANEL_CONFIG.ROUTE_PATH,
-    ['index.ts', 'client/index.ts', 'client/MonitorTabBody.tsx', 'client/buttons.tsx',
-      'client/panelData.ts'])
+    ['index.ts', 'client/index.ts', 'client/buttons.tsx', 'dsh-panel/MonitorTabBody.tsx'])
   assert.deepEqual(offenders, [], `路由字面量被抄进了：${offenders.join('、')}`)
 })
 
 // ---------------------------------------------------------------- 3 反面语料
 test('反面语料：历史默认端口 8767 不在面板源码里（端口早已动态发现）', () => {
   const offenders = literalOutsideParams('8767',
-    ['index.ts', 'client/index.ts', 'client/MonitorTabBody.tsx', 'client/buttons.tsx',
-      'client/panelData.ts', 'dsh-panel/panel-config.ts'])
+    ['index.ts', 'client/index.ts', 'client/buttons.tsx', 'dsh-panel/MonitorTabBody.tsx',
+      'dsh-panel/panel-config.ts'])
   assert.deepEqual(offenders, [], `面板源码里不该再出现 8767：${offenders.join('、')}`)
 })
 
@@ -204,10 +206,53 @@ test('② 面板不空白：每个非 ok 档都有非空可读文案；ok 档必
     ['http://127.0.0.1:54321' + CONFIG_PATH]: {
       status: 200, body: { has_schema: true, groups: { field: [] }, orphans: [] } },
   })
-  const ok = await loadPanel(doFetch)
+  const { state: ok } = await loadPanel(doFetch, [])
   assert.equal(ok.kind, 'ok')
   assert.ok(okIsNonDegenerate(ok), '真喂了数据 ⇒ 必须非退化')
   assert.equal(selfCheckLine(ok), '离线=false 事件行=1 配置族=1', '自证行必须真打出来')
+})
+
+// ---------------------------------------------------------------- 4④ 硬验收：飞行记录仪
+/**
+ * ⭐ **硬验收**（用户可见 bug 的封条）：有事件时「飞行记录仪」必须画**事件行**，
+ * 而不是空态文案"暂无写事件"。
+ *
+ * 由来：旧的自写面板拿**请求路径** `HISTORY_PATH`（`/history?since_seq=0`）去索引
+ * `payloads`，而 `payloads` 按**基础路由键** `/history` 存 ⇒ **页面永远"暂无写事件"**，
+ * 而自证行仍报"事件行=N"（自证真、渲染假——最难查的一类）。
+ * 资产把键收进 `eventsOf()` 一处；本判据守**渲染结果**这一层。
+ *
+ * 夹具是**真端点实测**（2026-09-26：起真监控端点 → 两条真写 → 抓
+ * `/history?since_seq=0` 与 `/config` 原文），不是手搓形状。
+ */
+const REAL_HISTORY = {
+  ok: true, mode: 'ai',
+  events: [
+    { seq: 1, kind: 'set', actor: 'mcp', target: 'field.B_gauss', value: 21.7, after: 21.7,
+      reason: '把磁场拉到 21.7 G（验收夹具）' },
+    { seq: 2, kind: 'set', actor: 'mcp', target: 'dynamic.t_max', value: 200.0, after: 200.0,
+      reason: '拉长演化时长到 200ns（验收夹具）' },
+  ],
+}
+const REAL_CONFIG = { ok: true, has_schema: true, n_keys: 85, n_snapshot_keys: 7,
+  orphans: [], groups: { config: [], engine: [], solve: [] } }
+
+test('⭐ 验收：有事件时「飞行记录仪」画事件行，不是"暂无写事件"（真端点夹具）', async () => {
+  const { doFetch, seen } = spyFetch({
+    [PANEL_CONFIG.ROUTE_PATH]: { status: 200, body: { base: 'http://127.0.0.1:54321' } },
+    ['http://127.0.0.1:54321' + HISTORY_PATH]: { status: 200, body: REAL_HISTORY },
+    ['http://127.0.0.1:54321' + CONFIG_PATH]: { status: 200, body: REAL_CONFIG },
+  })
+  const { state: st } = await loadPanel(doFetch, [])
+  assert.equal(st.kind, 'ok')
+  assert.equal(eventsOf(st).length, 2, '键对了才拿得到两条事件')
+  assert.ok(configOf(st), '配置态也拿得到')
+  const html = recPageHtml(eventsOf(st), () => false)
+  assert.ok(html.includes('field.B_gauss') && html.includes('dynamic.t_max'),
+    `事件行必须真出现在 HTML 里：${html.slice(0, 120)}`)
+  assert.ok(html.includes('把磁场拉到 21.7 G（验收夹具）'), 'reason 也要画出来')
+  assert.ok(!html.includes('暂无写事件'), '有事件时**不许**出现空态文案（这就是那个 bug）')
+  assert.ok(seen.length === 3, `一拍应当恰好三次请求（地址+两条基础路由）：${seen.join('、')}`)
 })
 
 // ---------------------------------------------------------------- 4③ 不指相对
@@ -215,7 +260,7 @@ test('③ 地址拿不到 ⇒ 一次都不取数（绝不拿空 base 拼相对�
   const { doFetch, seen } = spyFetch({
     [PANEL_CONFIG.ROUTE_PATH]: { status: 503, body: { error: '监控端点未知：…' } },
   })
-  const st = await loadPanel(doFetch)
+  const { state: st } = await loadPanel(doFetch, [])
   assert.equal(st.kind, 'address')
   assert.ok(stateText(st).length > 0)
   // 只问了**地址路由**（同源相对路径，那是它的本职）；**没有任何取数**发生。
@@ -228,7 +273,10 @@ test('③ 地址拿不到 ⇒ 一次都不取数（绝不拿空 base 拼相对�
     ['http://127.0.0.1:54321' + HISTORY_PATH]: { status: 200, body: { mode: 'ai', events: [{}] } },
     ['http://127.0.0.1:54321' + CONFIG_PATH]: { status: 200, body: { groups: { a: [] } } },
   })
-  await loadPanel(okSpy.doFetch)
+  // ⚠ 这行**不许**写成以 `(` 开头的表达式语句：上一行 `})` 没分号 ⇒ ASI 会把它解析成
+  // `spyFetch({...})(await loadPanel(okSpy...))`，于是在 `okSpy` 自己的初始化里读它（TDZ）。
+  const { state: okState } = await loadPanel(okSpy.doFetch, [])
+  assert.equal(okState.kind, 'ok')
   const dataCalls = okSpy.seen.slice(1)
   assert.equal(dataCalls.length, 2)
   for (const u of dataCalls) assert.match(u, /^https?:\/\//, `取数必须绝对 URL：${u}`)
