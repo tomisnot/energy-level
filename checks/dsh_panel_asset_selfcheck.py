@@ -60,6 +60,10 @@ CARRIERS = {
         'c6a948106a480c67b76447d9e160f29519637a1ae5e3716a824552497efcf1ba',
     'monitor-url.test.ts':
         '62994cf218fc195890a7dc966f5159ee62aaf926a25a032d1a7f70bdf6d99c07',
+    'monitor-client.ts':
+        'eec71f3f7e47cdbbafdece1c9649bd68f3a86e6631b486e9e8e3d18cac9260c9',
+    'monitor-client.test.ts':
+        '754dee85d2a329a5da3c1425368e3c46595ac8605f4df88a0acc6bdf95f03616',
 }
 
 

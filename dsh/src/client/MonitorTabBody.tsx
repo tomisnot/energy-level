@@ -9,15 +9,32 @@
  * 唯一换的是**数据源**：v1 fetch :8766 的 /api/history、/api/config-tree（黑匣子
  * 读磁盘 journal）；v2 取权威的只读 /history、/config（活桥投影，输出形状与 v1
  * 逐字段对齐——v1 backend.py 的 config_tree/read_events 语义）。
- * **地址不硬编码**（2026-09-25 第 2 段）：端口是动态的，经注入的
- * `resolveMonitorBase()`（host 半同源路由；路由字符串只写在参数块
- * `PANEL_CONFIG.ROUTE_PATH` 里，两半都引用它）**每轮现取**。
+ * **地址不硬编码**（2026-09-25 第 2 段）：端口是动态的，host 半的同源只读路由回 `{base}`
+ * （路由字符串只写在参数块 `PANEL_CONFIG.ROUTE_PATH` 里，两半都引用它），**每轮现取**。
+ * **取数与状态归约走 mecha 共享资产**（2026-09-25 第 3 段）：`./panelData.ts` 用
+ * `fetchMonitorBase` / `readJson` / `panelState` 把一拍取数归约成**唯一状态**——
+ * `address` / `offline` / `route` / `empty` / `ok` 五档分开，**没有"什么都不画"的档**
+ * （"取数成功但面板空白"由 `empty` 档显式表达，不再伪装成成功）。
+ *
  * 徽标：v1 是 alerts 级别（run 降级/失败/空演化规则在 v2 无对应事件流），换成
- * **写权模式**（human 绿 / ai 紫 / locked 黄）——同一位置、同一 CSS 类。
+ * **写权模式**（human 绿 / ai 紫 / locked 黄）——同一位置、同一 CSS 类；非 `ok` 档则显示
+ * 该档的徽标（权威离线 / 路由异常 / 连上但无数据）。
  *
  * 重渲染保留展开态（openSet 记 key）与当前页签（模块级，跨挂载不丢）。
+ *
+ * ⚠ client 半经 tsdown 打成 CJS + `__ModuleLoader__.load` 包装；改本目录源码后须
+ * `npm run bundle` 并重启 dsh 才生效。
  */
 import { useEffect, useRef, useState, type MouseEvent } from 'react'
+import type { PanelState } from '../dsh-panel/monitor-client.ts'
+import {
+  CONFIG_PATH,
+  HISTORY_PATH,
+  loadPanel,
+  selfCheckLine,
+  stateBadge,
+  stateText,
+} from './panelData.ts'
 
 /** 轮询间隔（展示刷新，非正确性依赖）。 */
 const POLL_MS = 3000
@@ -122,57 +139,30 @@ function cfgPage(groups: Record<string, Sub[]>): string {
     '</details>').join('')
 }
 
-export function MonitorTabBody({ resolveMonitorBase }: {
-  /** 监控地址解析器（host 半注入：同源只读路由 → `{base}`）。**不硬编码端口。** */
-  resolveMonitorBase?: () => Promise<string>
-}) {
+export function MonitorTabBody() {
   const ref = useRef<HTMLDivElement>(null)
   const [page, setPage] = useState<Page>(savedPage)
-  const [offline, setOffline] = useState(false)
-  const [mode, setMode] = useState('')
-  const [events, setEvents] = useState<Ev[]>([])
-  const [groups, setGroups] = useState<Record<string, Sub[]>>({})
-  const [hasSchema, setHasSchema] = useState(false)
-  const [orphans, setOrphans] = useState<Row[]>([])
+  // ⭐ **唯一状态**（共享资产的 `PanelState` 判别联合）：没有"取数失败就什么都不画"的分支
+  // ——每一档都带 `detail` 或数据，空白在类型上不可表达。`null` = 首拍还没回来。
+  const [state, setState] = useState<PanelState | null>(null)
 
-  // 轮询：**每拍现解析地址**（权威重启换端口 ⇒ 下一拍落在新端口，不重启 dsh 也自愈），
-  // 再取 /history（v1 形状全量尾）+ /config（结构树）。3s 一次，展示刷新非正确性依赖。
-  // 取址失败与"连不上权威"**同一档显示**（都落到既有的"权威离线"）——那是实情：地址解析
-  // 不出来就是软件没在 AI 模式跑；面板不新增显示状态，内容与迁移前保持一致。
+  // 轮询：**每拍现取**（`loadPanel` 内部先现解析地址 ⇒ 权威重启换端口后下一拍落在新端口，
+  // 不重启 dsh 也自愈），再取 /history（v1 形状全量尾）+ /config（结构树）。
+  // 3s 一次，展示刷新非正确性依赖。**失败不吞**：档位 + 可读 detail 进状态，渲染层必画。
   useEffect(() => {
     let dead = false
     const poll = async () => {
-      let base = ''
-      try {
-        if (!resolveMonitorBase) throw new Error('面板没有监控地址解析器（host 半没挂上？）')
-        base = await resolveMonitorBase()
-      } catch (err) {
-        if (!dead) {
-          console.warn('[re0-mecha] 监控地址解析失败：', (err as Error)?.message ?? err)
-          setOffline(true)
-        }
-        return
-      }
-      try {
-        const [h, c] = await Promise.all([
-          fetch(`${base}/history?since_seq=0`).then(r => r.json()),
-          fetch(`${base}/config`).then(r => r.json()),
-        ])
-        if (dead) return
-        setOffline(false)
-        setMode(h.mode ?? '')
-        setEvents(h.events ?? [])
-        setGroups(c.groups ?? {})
-        setHasSchema(!!c.has_schema)
-        setOrphans(c.orphans ?? [])
-      } catch {
-        if (!dead) setOffline(true)
-      }
+      const st = await loadPanel()
+      if (dead) return
+      setState(st)
+      // R8 非退化自证：判"面板正常"必须同时证明"数据真的到了"（否则"空 vs 空"同样通过）。
+      if (st.kind === 'ok') console.info('[re0-mecha] 监控面板：' + selfCheckLine(st))
+      else console.warn('[re0-mecha] 监控面板非 ok：' + selfCheckLine(st))
     }
     poll()
     const t = setInterval(poll, POLL_MS)
     return () => { dead = true; clearInterval(t) }
-  }, [resolveMonitorBase])
+  }, [])
 
   // CSS 注入一次（v1 同款 data 属性防重）
   useEffect(() => {
@@ -196,22 +186,32 @@ export function MonitorTabBody({ resolveMonitorBase }: {
     if (key) { if (openSet.has(key)) openSet.delete(key); else openSet.add(key) }
   }
 
-  const badge = offline
-    ? `<span class="re0-badge error">权威离线</span>`
-    : `<span class="re0-badge ${mode === 'ai' ? 'ai' : mode === 'locked' ? 'warn' : 'ok'}">` +
-      `${esc(mode === 'ai' ? '写权 AI' : mode === 'locked' ? '全员禁写' : mode === 'human' ? '写权在人' : '连接中…')}</span>`
+  // 徽标：`ok` 档显示写权模式，非 `ok` 档显示档位（权威离线 / 路由异常 / 连上但无数据）。
+  const b = stateBadge(state)
+  const badge = `<span class="re0-badge ${b.cls}">${esc(b.text)}</span>`
   const tabs = `<div class="re0-tabs">` +
     `<button data-page="rec" class="${page === 'rec' ? 'on' : ''}">飞行记录仪</button>` +
     `<button data-page="cfg" class="${page === 'cfg' ? 'on' : ''}">配置态</button>` +
     badge + `</div>`
-  const body = page === 'rec'
-    ? `<div class="re0-page">${events.length ? recPage(events) :
-        `<div class="re0-native-msg" style="color:#57606a">${offline ? '连不上权威（软件没在 AI 模式跑？）' : '暂无写事件——AI/人每改一个键都会出现在这里'}</div>`}</div>`
-    : `<div class="re0-page"><h4>配置态</h4>${
-        hasSchema ? cfgPage(groups) :
-        `<div class="re0-native-msg" style="color:#57606a">无 schema（纯内存装配？）——下方按快照直接列出现值</div>`}${
-        (orphans.length ? `<h4>契约外（orphans）</h4><table>${orphans.map(r =>
-          `<tr><td title="${esc(r.name)}">${esc(r.name)}</td><td>${esc(fmtVal(r.value))}</td></tr>`).join('')}</table>` : '')}</div>`
+
+  // 取数结果：`ok` 档才有 payloads；其余档**必画可读文案**（`stateText` 对任何非 ok 档
+  // 都返回非空文本 ⇒ 空白在实现上也不可达）。首拍未回 = 连接中…（不是空白）。
+  const payloads = state?.kind === 'ok' ? state.payloads : null
+  const evs = ((payloads?.[HISTORY_PATH] as { events?: Ev[] } | undefined)?.events) ?? []
+  const cfg = (payloads?.[CONFIG_PATH] as
+    { groups?: Record<string, Sub[]>; has_schema?: boolean; orphans?: Row[] } | undefined)
+  const msg = state ? stateText(state) : '连接中…'
+
+  const body = !payloads
+    ? `<div class="re0-page"><div class="re0-native-msg" style="color:#57606a">${esc(msg)}</div></div>`
+    : page === 'rec'
+      ? `<div class="re0-page">${evs.length ? recPage(evs) :
+          `<div class="re0-native-msg" style="color:#57606a">暂无写事件——AI/人每改一个键都会出现在这里</div>`}</div>`
+      : `<div class="re0-page"><h4>配置态</h4>${
+          cfg?.has_schema ? cfgPage(cfg.groups ?? {}) :
+          `<div class="re0-native-msg" style="color:#57606a">无 schema（纯内存装配？）——下方按快照直接列出现值</div>`}${
+          ((cfg?.orphans ?? []).length ? `<h4>契约外（orphans）</h4><table>${(cfg!.orphans ?? []).map(r =>
+            `<tr><td title="${esc(r.name)}">${esc(r.name)}</td><td>${esc(fmtVal(r.value))}</td></tr>`).join('')}</table>` : '')}</div>`
 
   return (
     <div ref={ref} onClick={onClick}

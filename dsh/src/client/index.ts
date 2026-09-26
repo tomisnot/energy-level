@@ -38,29 +38,6 @@ export const inject = ['slots', 'layout', 'sidebarRight', 'sidebarRightTabs', 'r
 /** host 半注册的同源只读路由（监控地址查询）。**来源 = 参数块**（两半同一常量）。 */
 export const ADDRESS_ROUTE = PANEL_CONFIG.ROUTE_PATH
 
-/** tab body 的注入面：解析监控端点基址（由 host 半的同源路由提供）。 */
-export interface MonitorInjected {
-  resolveMonitorBase(): Promise<string>
-}
-
-/**
- * 取监控端点基址：同源 `fetch` → `{base}`。
- *
- * 任何一步不对都**抛错**（面板按"连不上权威"显示）——**不回落到任何默认端口**：
- * 回落会把"权威没起来"伪装成"连上了但空面板"。`doFetch` 可注入，判据在 Node 里
- * 喂真形状与各种失败形状。
- */
-export async function fetchMonitorBase(
-  doFetch: typeof fetch = fetch,
-): Promise<string> {
-  const res = await doFetch(ADDRESS_ROUTE, { cache: 'no-store' })
-  if (!res.ok) throw new Error(`地址路由返回 ${res.status}`)
-  const data: any = await res.json()
-  const base = data && typeof data.base === 'string' ? data.base : ''
-  if (!base) throw new Error('地址路由的返回里没有 base（形状不对？）')
-  return base.trim().replace(/\/+$/, '')
-}
-
 export async function apply(ctx: Context): Promise<void> {
   await ctx.effect(() => {
     // 会话头部：◈监控 按钮（开右栏 + 打开我们的 tab）。sessionId 是组件 standardProp，
@@ -99,9 +76,10 @@ export async function apply(ctx: Context): Promise<void> {
     }) || null
     const disposeBody = ctx.slots.inject('sidebar.right.pane.tab', () =>
       ctx.slots.register(
-        { name: 'sidebar.right.pane.tab', key: 're0-cockpit',
-          // 注入面：面板拿它取监控地址（host 半的同源只读路由）。
-          inject: (): MonitorInjected => ({ resolveMonitorBase: fetchMonitorBase }) } as any,
+        // 面板**自己取数**（原生形态）：取址/取数/归约走共享资产的 `monitor-client`
+        // （见 `./panelData.ts`）⇒ **不再有注入面**（原先那个 `resolveMonitorBase`
+        // 缝已被共享半边的 `fetchMonitorBase` 取代；留着就是"声明了却不被读"的死缝）。
+        { name: 'sidebar.right.pane.tab', key: 're0-cockpit' } as any,
         MonitorTabBody as any,
       ))
 
