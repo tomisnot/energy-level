@@ -10,7 +10,8 @@
  * 读磁盘 journal）；v2 取权威的只读 /history、/config（活桥投影，输出形状与 v1
  * 逐字段对齐——v1 backend.py 的 config_tree/read_events 语义）。
  * **地址不硬编码**（2026-09-25 第 2 段）：端口是动态的，经注入的
- * `resolveMonitorBase()`（host 半同源路由 `/re0-mecha/monitor-url`）**每轮现取**。
+ * `resolveMonitorBase()`（host 半同源路由；路由字符串只写在参数块
+ * `PANEL_CONFIG.ROUTE_PATH` 里，两半都引用它）**每轮现取**。
  * 徽标：v1 是 alerts 级别（run 降级/失败/空演化规则在 v2 无对应事件流），换成
  * **写权模式**（human 绿 / ai 紫 / locked 黄）——同一位置、同一 CSS 类。
  *

@@ -12,9 +12,13 @@
  *     只能发 command（dsh 事实：ui-plan 的 exitPlanMode 同款，经 sessionId 注入）。
  *
  * **地址不再硬编码**（2026-09-25 第 2 段）：监控端点是**动态端口**，面板经注入的
- * `resolveMonitorBase()` 去 host 半的**同源只读路由** `/re0-mecha/monitor-url`
- * 取 `{base}`（host 读权威写的 `.monitor-port`）。每一轮轮询都现解析 ⇒ 权威重启
- * 换端口后下一拍即落在新端口，不需要重启 dsh、更不会"面板空白但没人报错"。
+ * `resolveMonitorBase()` 去 host 半的**同源只读路由**取 `{base}`
+ * （host 读权威写的端口文件）。每一轮轮询都现解析 ⇒ 权威重启换端口后下一拍即落在
+ * 新端口，不需要重启 dsh、更不会"面板空白但没人报错"。
+ *
+ * **路由与端口文件名不再是本仓常量**（2026-09-25 共享资产迁移）：两半都从参数块
+ * `./../dsh-panel/panel-config.ts` 的 `PANEL_CONFIG` 取——两半同源同包 ⇒ "单一来源"
+ * 在包内自动满足（参数块不 import `node:*`，故 client 半也能安全 import）。
  *
  * ⚠ client 半经 tsdown 打成 CJS + `__ModuleLoader__.load` 包装；改本目录源码后须
  * `npm run bundle` 并重启 dsh 才生效。
@@ -23,6 +27,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import { MonitorTabBody } from './MonitorTabBody.tsx'
 import { CockpitButton, SwitchToGuiButton, type CockpitInjected, type SwitchInjected } from './buttons.tsx'
+import { PANEL_CONFIG } from '../dsh-panel/panel-config.ts'
 
 /** Cordis 插件名（与 host 半一致）。 */
 export const name = 're0-mecha'
@@ -30,8 +35,8 @@ export const name = 're0-mecha'
 /** slots（按钮+tab body）+ layout（开右栏）+ 右栏 tab 服务 + remote.commands（发 /re0-gui）。 */
 export const inject = ['slots', 'layout', 'sidebarRight', 'sidebarRightTabs', 'remote', 'remote.commands']
 
-/** host 半注册的同源只读路由（监控地址查询）。 */
-export const ADDRESS_ROUTE = '/re0-mecha/monitor-url'
+/** host 半注册的同源只读路由（监控地址查询）。**来源 = 参数块**（两半同一常量）。 */
+export const ADDRESS_ROUTE = PANEL_CONFIG.ROUTE_PATH
 
 /** tab body 的注入面：解析监控端点基址（由 host 半的同源路由提供）。 */
 export interface MonitorInjected {

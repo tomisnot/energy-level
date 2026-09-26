@@ -13,9 +13,13 @@
  *
  * **client 半（dsh 界面：◈监控 按钮 + 右栏监控面板 + 「切换至 GUI」按钮）**：
  * 面板轮询权威的**只读监控端点**（`/history` + `/config`）。端点端口是**动态**的，
- * 故本文件另注册一条**同源只读路由** `/re0-mecha/monitor-url`（见 host/monitor-url.ts）：
- * 读项目根 `.monitor-port` → 回 `{base}`，面板据此取址（**面板侧零端口字面量**）。
+ * 故本文件另注册一条**同源只读路由**（`PANEL_CONFIG.ROUTE_PATH`）：读项目根的监控
+ * 端口文件（`PANEL_CONFIG.PORT_FILE`）→ 回 `{base}`，面板据此取址（**面板侧零端口字面量**）。
  * 「切换至 GUI」按钮经本文件注册的 /re0-gui command 写 .mode-request，看门人接手进程交接。
+ *
+ * 监控地址这一层**不再是本仓自有实现**：它取自 mecha 的共享资产
+ * `mecha/dsh-panel/`（参考实现，提交态 `58e2f8a`），逐字复制到 `./dsh-panel/`，
+ * **只有参数块 `panel-config.ts` 允许项目化**（见该目录 `README.md` 的复制约定）。
  */
 import type { Context } from '@deepseek-ai/cordis'
 import { MechaMcpBridge } from './host/mcp-bridge.ts'
@@ -23,7 +27,8 @@ import { httpSessionFactory } from './host/mcp-session-http.ts'
 import { resolveHubUrl, buildRequestInit } from './host/config.ts'
 import { syncTools, type ToolDisposers } from './host/register-tools.ts'
 import { elRootFromPortFile, writeModeRequest } from './host/mode-request.ts'
-import { MONITOR_ROUTE_PATH, makeMonitorUrlHandler } from './host/monitor-url.ts'
+import { PANEL_CONFIG } from './dsh-panel/panel-config.ts'
+import { makeMonitorUrlHandler } from './dsh-panel/monitor-url.ts'
 
 /** Cordis 插件显示名（诊断用）。 */
 export const name = 're0-mecha'
@@ -47,8 +52,6 @@ export interface Config {
   hubUrl?: string
   /** 端口文件路径（launcher 写；默认项目根 `.mcp-port`，相对 dsh 的 cwd）。 */
   mcpPortFile?: string
-  /** 监控端点端口文件（权威写；默认项目根 `.monitor-port`）。 */
-  monitorPortFile?: string
   /** 工具命名空间：`mcp__<serverName>__<tool>`。 */
   serverName?: string
   /** 远程 Hub 鉴权 token（→ Authorization: Bearer）；本地默认空。需求③远程接缝。 */
@@ -111,17 +114,19 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
     // root 同时也是监控端口文件的所在地（两个发现文件同在项目根）。
     const root = elRootFromPortFile(config.mcpPortFile)
 
-    // 监控地址的同源只读路由：面板 fetch 它拿 `{base}`（读项目根 .monitor-port）。
-    // 每次被 fetch 都现读文件 ⇒ 权威重启换端口后下一拍自动落在新端口（漂移自愈）。
+    // 监控地址的同源只读路由（**共享资产**：mecha/dsh-panel/monitor-url.ts，逐字复制）。
+    // 每次被 fetch 都现读端口文件 ⇒ 权威重启换端口后下一拍自动落在新端口（漂移自愈）。
+    // 端口文件名来自**参数块**（PANEL_CONFIG.PORT_FILE）——单一来源；库不替项目猜文件名，
+    // 留空时路由一律 503 且给可读错误（刻意的响亮失败）。
     // 服务名 `webServer` 由 `@deepseek-ai/dsh-host-webserver` 提供（`inject` 已声明，
     // 故 apply 跑到这里它必在）；本仓 host 半对 @deepseek-ai/* 只留**类型** import，
     // 这里按既有风格（同 `sidebarRight`）走 any 取用，避免引入运行时 peer 依赖。
     const disposeMonitorRoute = (ctx as any).webServer.register({
       kind: 'exact',
-      path: MONITOR_ROUTE_PATH,
-      handler: makeMonitorUrlHandler({ root, portFile: config.monitorPortFile }),
+      path: PANEL_CONFIG.ROUTE_PATH,
+      handler: makeMonitorUrlHandler({ root, portFile: PANEL_CONFIG.PORT_FILE }),
     })
-    ctx.logger?.info?.(`[re0-mecha] 注册监控地址路由 ${MONITOR_ROUTE_PATH}（读 ${root} 的监控端口文件，不回落默认端口）`)
+    ctx.logger?.info?.(`[re0-mecha] 注册监控地址路由 ${PANEL_CONFIG.ROUTE_PATH}（读 ${root} 的 ${PANEL_CONFIG.PORT_FILE}，不回落默认端口）`)
 
     const disposeCmd = ctx.commands!.register({
       name: 're0-gui',
