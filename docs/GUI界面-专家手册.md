@@ -311,7 +311,7 @@ QMainWindow(MainWindow, 1400×800, 标题 'Rb-87 能级计算')
 
 ## 7. 布局纪律与「布局红线清单」
 
-### 7.1 铁律（决策 M3，出处 `docs/_history/engine-refactor/AI机甲框架-回归主仓库-迁移计划.md:18,134-140`）
+### 7.1 铁律（决策 M3，出处 内部记录（未随仓发布，存档在仓外））
 
 > 控件**位置/尺寸/间距/排版/字体逐像素不变**；只允许精简**内部逻辑**。
 > 新增 UI（横幅/高亮/流水）**不得回流既有排版**：横幅走状态栏/overlay，流水走 dock 或**检视器新 tab**，**绝不重排**。
@@ -390,7 +390,7 @@ git diff -- src/ui/ui_dynamic.py app_entry.py |
 
 ## 9. 主代理五问 · 复核结论
 
-### Q1 `docs/dsh插件-发布骨架.md` 说"GUI 全量移植、布局不变"——实际差异在哪？有没有偏离 M3？
+### Q1 内部记录（未随仓发布，存档在仓外） 说"GUI 全量移植、布局不变"——实际差异在哪？有没有偏离 M3？
 
 **差异定位到提交**：迁移主提交 `25ff146`（"Re0重构覆盖父仓"），对 GUI 只动了 **6 个文件**：
 
@@ -528,7 +528,7 @@ $env:QT_QPA_PLATFORM='offscreen'; $env:RE0_GUI_INPROC='1'; $env:PYTHONIOENCODING
 
 | 声称 | 出处 | 实际 |
 |---|---|---|
-| "驾驶舱 iframe / 双模 native+iframe" | `dsh/README.md:125,129`、`docs/dsh插件-发布骨架.md:18,43` | 已删 iframe，**只留右栏 tab**（`dsh/src/client/index.ts:8,22,34-41`，commit `2e31ad4`） |
+| "驾驶舱 iframe / 双模 native+iframe" | `dsh/README.md:125,129`、内部记录（未随仓发布，存档在仓外） | 已删 iframe，**只留右栏 tab**（`dsh/src/client/index.ts:8,22,34-41`，commit `2e31ad4`） |
 | "驾驶舱占主区、隐藏左栏" | `dsh/src/client/CockpitPanel.tsx:3-6,21-23` | 实际 `openRightbar + openTab('re0-cockpit')`（`index.ts:47,53`） |
 | "app_entry 在后台线程跑进程内 MCP" | `mecha-sdk/mecha/app_bridge.py:10` | GUI 不调用 `mcp_server()`；Hub 是独立进程（`app_entry.py:446`） |
 | "控制面板在左、画布在中央" | `docs/手册-界面·原理·开发.md:66-77` | 画布左、面板右（`app_entry.py:247,264`） |
@@ -536,7 +536,7 @@ $env:QT_QPA_PLATFORM='offscreen'; $env:RE0_GUI_INPROC='1'; $env:PYTHONIOENCODING
 | "AI 也调 `self._run()`，故按钮/可取消性对两侧一致" | `ui_dynamic.py:1189-1190` | AI 走 MCP `run_compute`（Hub 进程），不经 `_run`；`_ai_initiated` 保护是死码 |
 | "`ui_shot.py` / `layout_audit.py` 等成套工具直接调用" | `skills/ui-design/SKILL.md:64-84` | `ui_design/` 已删（commit `3b0dae4`，M4）；只剩通用模板与清单 |
 | "`selftest_all.py --tier fast`" | 同上 `:91` | 现行 `run_checks.py`（`--only/--slow/--dir`） |
-| "MCP 工具 `screenshot()` 拿当前主窗口 PNG" | 同上 `:79-80` | 18 工具清单里**无 screenshot**（`docs/README.md:59-62`） |
+| "MCP 工具 `screenshot()` 拿当前主窗口 PNG" | 同上 `:79-80` | 18 工具清单里**无 screenshot**（内部记录（未随仓发布，存档在仓外）） |
 
 ---
 

@@ -82,7 +82,7 @@ def require_ai_server(port, why=''):
 
     为什么要有这个：需要 MCP 端点的自检（`checks/ai_*test*.py`）过去一律
     `port = win._init_ai()` 真起 server —— 在**人的软件正在跑实验**时会去抢
-    8765 / 覆盖 `.mcp-port`（2026-09-12 事故，见 docs/AI协同-分工与请示.md §六 #6）。
+    8765 / 覆盖 `.mcp-port`（2026-09-12 事故，见 内部记录（未随仓发布，存档在仓外） §六 #6）。
     现在 `start_server` 有 `EL_NO_AI_SERVER` 与"端口被活实例占用则拒启"两道闸，
     这些自检拿到 None 时应 **SKIP**（而不是把"没起来"误报成 FAIL）。
     """

@@ -9,7 +9,7 @@
 一个 **out-of-tree** 的 dsh（Cordis）插件，把 Re0 软件（mecha v2）接进 dsh：**接管 MCP
 连接生命周期**（治好 dsh stock HTTP 桥"服务重启即永久 `Session not found`"的死区），并把
 工具**原生注册**进 dsh。设计依据见
-`docs/_history/cockpit-mcp/DSH-MCP现状-给开发者的参考资料.md`（v1 期取证，死区分析仍成立）。
+内部记录（未随仓发布，存档在仓外）（v1 期取证，死区分析仍成立）。
 
 > **v1 的 client 半（◈驾驶舱面板）已退役**：它 iframe 的 cockpit-server（:8766）随
 > mecha-sdk 一起消失；"人监控 AI"的面改由 **GUI 侧边栏（Monitor 面板）**承担（mecha v2

@@ -1,7 +1,7 @@
 /**
  * MechaMcpBridge —— 自愈的 MCP 客户端，专治 dsh stock HTTP 桥的"服务重启即永久失联"死区。
  *
- * 背景（见 docs/DSH-MCP现状-给开发者的参考资料.md §2.3）：dsh 的 `dsh-mcp-client` 只在
+ * 背景（见 内部记录（未随仓发布，存档在仓外） §2.3）：dsh 的 `dsh-mcp-client` 只在
  * `transport.onclose` 触发时重连，而 streamable-http 的 POST 失败（服务重启后旧
  * `Mcp-Session-Id` → 404 "Session not found"）**只抛错、不触发 onclose**，SDK 也不用 404
  * 重置 session ⇒ 客户端永久卡死，只能重启 Host。我们 Hub 恰是 stateful HTTP，落进这个死区。

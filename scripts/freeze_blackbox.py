@@ -92,7 +92,7 @@ def _patch_arc_literature_dme():
 _patch_arc_literature_dme()
 
 B_GAUSS = 21.7
-# 标准基组 = "W=2 壳层"（61 组 / N=394）。见 docs/freeze优化-AutoTuner交接.md
+# 标准基组 = "W=2 壳层"（61 组 / N=394）。见 内部记录（未随仓发布，存档在仓外）
 RUNGS = [(60, 1), (59, 2), (58, 3), (58, 4)]
 T_SNAP = 150.0            # 演化窗口（ns）：>120 ns 已无场，取值即"打完的稳定末态"
 

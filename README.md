@@ -6,7 +6,7 @@
 > **当前形态（2026-09-25 核对）**：新主干（Re0）已覆盖旧版；引擎 + GUI + sweep + 多体 + 机甲语义内核
 > 全在。**AI 机甲框架已提炼为独立库 `mecha`**（本机实测 **0.2.0**，本机位置见
 > `README.md` §4），本仓不再持有 `src/mecha` / `src/cockpit`；EL 自己的 v2 领域层
-> 住在 `mecha_v2/`。索引见 `docs/README.md`（**读文档前先看它**）。
+> 住在 `mecha_v2/`。索引见 内部记录（未随仓发布，存档在仓外）（**读文档前先看它**）。
 
 ---
 
@@ -23,7 +23,7 @@
 
 | 方式 | 通道 | 状态 |
 |---|---|---|
-| **GUI** | PyQt5，`app_entry.py` → `src/ui/*` | ⚠ 布局逐像素未动（M3 无偏离）；god-mode 检视器保留（引擎常量只读）。**已知失能**：「窗口/光子块」两控件静默失能（迁移后无人消费）；写权门控 `set_readonly` 有定义、MainWindow 从未调用。逐条见 `docs/待办-经复核的问题清单.md` §D1/§D2（该清单成文于 v1 期，部分条目随 v1 退役已失效，见其顶注） |
+| **GUI** | PyQt5，`app_entry.py` → `src/ui/*` | ⚠ 布局逐像素未动（M3 无偏离）；god-mode 检视器保留（引擎常量只读）。**已知失能**：「窗口/光子块」两控件静默失能（迁移后无人消费）；写权门控 `set_readonly` 有定义、MainWindow 从未调用。逐条见 内部记录（未随仓发布，存档在仓外） §D1/§D2（该清单成文于 v1 期，部分条目随 v1 退役已失效，见其顶注） |
 | **AI** | MCP 写通道（权威进程内起服务器：`app_entry.py --authority`；或独立进程 `python -m mecha_v2.hub`），**14 个工具** | ✅ 语义寻址 / 可教学错误 / 体积闸 / 指针化 / async 作业 / CodeAct 编排 / 建场层 |
 | **远程跨设备** | 只读监控端点（权威进程内，**动态端口** + 项目根 `.monitor-port` 发现，仅 127.0.0.1 + CORS）；远程写未作正式能力验收 | ⚠ 只读监控可用（`/status` `/activity` `/history` `/config`）；写通道默认只 localhost（T6）。旧文档里的 cockpit `--host/--token` 随 v1 退役 |
 
@@ -52,7 +52,7 @@ src/sweep/         并行扫描（4 文件）
 src/_archive/      封存的 Floquet 权威锚（仍被判据引用）
 checks/            45 个 .py（43 判据 + checklib/pair_evolve 两个支撑模块）
 dsh/               dsh（Cordis）集成插件：自愈 MCP 桥 + 监控面板（TS）
-docs/              文档（顶层 38 份 + _history/ 归档；索引见 docs/README.md）
+docs/              文档（顶层 38 份 + _history/ 归档；索引见 内部记录（未随仓发布，存档在仓外））
 ```
 
 **依赖方向（单向，判据强制）**：`core`（纯物理，不认识框架）← 胶水层 → `mecha`。
@@ -136,7 +136,7 @@ AI 侧调用指南（两份**需手工同步**）：`skills/energy-level/SKILL.m
 
 ## 7. 已知未解决（诚实交代）
 
-> 逐条登记（含证据与最小改法）见 **`docs/待办-经复核的问题清单.md`**。以下为要点。
+> 逐条登记（含证据与最小改法）见 内部记录（未随仓发布，存档在仓外）。以下为要点。
 
 1. **框架提炼在"实例②"上被证伪**：独立库 `mecha-sdk` 自称领域无关，但 `Get Paper` 试接后写了
    `Get Paper/docs/MECHA-INDICTMENT.md`——六条指控（物理方言进强制 ABC、`ops.py` 无条件
@@ -148,7 +148,7 @@ AI 侧调用指南（两份**需手工同步**）：`skills/energy-level/SKILL.m
    > **是否仍成立尚未复核**——本仓不做结论，只标注前提已变。
 2. **提炼守卫只守 import**：`checks/mecha_purity_selfcheck.py` 是 AST import 扫描，且 `numpy` 在
    白名单里 ⇒ 上面六条语义级偏差全在盲区（46/0 全绿与六条指控并存，不矛盾）。
-3. **`dsh/` 尚未独立成仓**：`docs/dsh插件-发布骨架.md` §2 的五项发布动作一项未勾。
+3. **`dsh/` 尚未独立成仓**：内部记录（未随仓发布，存档在仓外） §2 的五项发布动作一项未勾。
 4. **`field.E_vpcm` 量级待裁决**：表单允许 ±1e6 V/cm，而 n=60 的 Inglis-Teller 极限约 25 V/cm。
 
 ## 8. 纪律（沿用，未变）
