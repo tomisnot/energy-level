@@ -272,22 +272,70 @@ class Binder:
                           actor='gui')
 
     def _seed(self, key, read_fn):
-        """把面板当前值种进 bridge（不经 gate：用 actor='session' 侧，仅初始化）。"""
+        """把面板当前值种进 bridge（装配期初值；seed 不过写权门，但**过值校验**）。
+
+        ⚠ 被拒**不许静默**（D5 同源）：校验器拦下初值 = 一次真失败，必须**留痕**
+        （日志 + 一条史）。2026-09-26 实测：这两处当年是 `except Exception: pass`，
+        而框架 A2 给 `Gate.seed` 补上校验后，"种了但被拒"与"从没种过"**完全无法区分**
+        ——静默把补校验的意义抵消掉了。
+        """
         try:
-            self.bridge.session.set(key, read_fn(), actor='session',
+            value = read_fn()
+        except Exception as e:                                  # noqa: BLE001
+            self._seed_failed(key, None, e, source='GUI 初始种子（读面板值失败）')
+            return
+        try:
+            self.bridge.session.set(key, value, actor='session',
                                     reason='GUI 初始种子')
-        except Exception:                                       # noqa: BLE001
-            pass
+        except Exception as e:                                  # noqa: BLE001
+            self._seed_failed(key, value, e, source='GUI 初始种子')
+
+    def _seed_failed(self, key, value, err, *, source):
+        """初值没落成 = 一件事：**打日志 + 记一条史**（`Gate.record` 只记史、不改快照）。
+
+        记的内容就是**校验器给的原话**（kind + 键名 + 去向/建议）——那本身就是可教学的；
+        这样史里能区分"被拒"与"从没种过"。
+        """
+        kind = getattr(err, 'kind', None) or type(err).__name__
+        why = getattr(err, 'message', None) or str(err)
+        hint = getattr(err, 'hint', '') or ''
+        print('[mecha-bind] %s：键 %r 未落快照（kind=%s）：%s%s'
+              % (source, key, kind, why, ('｜' + hint) if hint else ''), flush=True)
+        try:
+            self.bridge.record_audit(
+                'seed.rejected',
+                {'key': key, 'kind': kind, 'why': why, 'hint': hint,
+                 'value': repr(value)[:200], 'source': source},
+                actor='session',
+                reason='启动初值被拒：%s（%s）' % (key, kind))
+        except Exception as e2:                                 # noqa: BLE001
+            # 记史也失败 ⇒ **更不能静默**：至少把这件事本身打出来
+            print('[mecha-bind] 记 seed.rejected 事件也失败：%s: %s'
+                  % (type(e2).__name__, e2), flush=True)
+        if self._notify is not None:
+            try:
+                self._notify('初始值「%s」未被接受（%s）：%s' % (key, kind, why), 0)
+            except Exception as e3:                             # noqa: BLE001
+                print('[mecha-bind] 状态栏提示失败：%s: %s'
+                      % (type(e3).__name__, e3), flush=True)
 
     def push_all(self):
-        """把当前所有 external 面板值推进 bridge（存档/运行前同步用）。"""
+        """把当前所有 external 面板值推进 bridge（存档/运行前同步用）。
+
+        ⚠ 与 `_seed` 同纪律：**被拒要留痕**（不静默）。
+        """
         for key, (read_fn, _w, _wid, _a) in self._ext.items():
             self._updating = True
             try:
-                self.bridge.session.set(key, read_fn(), actor='gui',
+                value = read_fn()
+            except Exception as e:                              # noqa: BLE001
+                self._seed_failed(key, None, e, source='GUI 同步面板值（读面板值失败）')
+                continue
+            try:
+                self.bridge.session.set(key, value, actor='gui',
                                         reason='GUI 同步面板值')
-            except Exception:                                   # noqa: BLE001
-                pass
+            except Exception as e:                              # noqa: BLE001
+                self._seed_failed(key, value, e, source='GUI 同步面板值')
             finally:
                 self._updating = False
 

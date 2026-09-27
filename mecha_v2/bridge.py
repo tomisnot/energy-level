@@ -230,9 +230,24 @@ class V2Bridge:
             return self._gate.set_batch(chan, dict(items), reason=reason, call_id=call_id)
 
     def _seed(self, key, value, *, actor="session", reason=""):
-        """启动种子：经 Gate.seed 落快照 + 记史，不走写权门（面板初值回填）。"""
+        """启动种子：经 Gate.seed 落快照 + 记史，不走写权门（面板初值回填）。
+
+        ⚠ 自 2026-09-26（框架 A2）起 `Gate.seed` **仍走值校验**（只是不过写权门）——
+        非法初值会被拦。调用方**不许静默吞**：用 `record_audit` 留痕（见它的 docstring）。
+        """
         with self._lock:
             return self._gate.seed(key, value, actor, reason=reason or "seed")
+
+    def record_audit(self, key, value, *, actor="session", reason=""):
+        """**只记史、不改快照**（`Gate.record`）——"拒绝也是一件事，必须留得下痕"。
+
+        用途：把"某件事发生了"留在史里，例如**启动初值被校验器拒**。没有它，
+        "种了但被拒"与"从没种过"在史里长得一模一样（2026-09-26 实测缺陷：
+        `src/ui/_mecha_bind.py` 当年 `except Exception: pass` 把拒绝吞掉了）。
+        ⚠ 键请用**审计键**（如 `seed.rejected`），不要冒充那个真键的写入。
+        """
+        with self._lock:
+            return self._gate.record(key, value, actor, reason)
 
     @staticmethod
     def _channel_for(actor: str) -> Channel:
