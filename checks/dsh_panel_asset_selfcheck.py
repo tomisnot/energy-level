@@ -52,7 +52,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ASSET_DIR = os.path.join('dsh', 'src', 'dsh-panel')
 
 #: **出处说明**（只作说明，不参与比对——比对靠下面那组常量）。
-REFERENCE_REVISION = 'mecha/dsh-panel @ 5ee78e4（2026-09-26 逐字复制；前几版 58e2f8a、f516a99、c44b01f）'
+REFERENCE_REVISION = ('mecha/dsh-panel @ 7490db2（2026-09-26 逐字复制；代码/单测与 5ee78e4 '
+                      '逐字节相同，README 随 7490db2；更早 58e2f8a、f516a99、c44b01f）')
 
 #: **行为载体**（代码 + 单测）→ 行尾归一 sha256。改这里 = "上游发新版后整份重新复制"。
 #: ⚠ `panel-config.ts` 不进表（它是参数块，必然不同）；`README.md` 不进表（prose）。
