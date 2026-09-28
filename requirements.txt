@@ -24,17 +24,24 @@ pyqtgraph==0.13.7
 # 仅状态栏提示 AI 接口未启用"的降级路径——那是 v1 时代 `src/ai` 的行为，
 # 而 `src/ai` 目录已不存在（2026-09-25 核实）。
 #
-# 框架本体 = 独立库 `mecha`（本机实测 0.2.0）。下面是**相对路径**：
-#   ../mecha
-# = 从 EL 根上溯到盘符根、再进 `mecha`（两仓**不在同一父目录**——旧注释
-#   "两仓并列于 code/python/ 下"是错的；**同盘符**是它能写成相对路径的前提）。
-# ⚠ 相对路径的解析基准随 pip 版本/CWD 而异（本轮未验证）⇒ **请在 EL 根执行**
-#   `pip install -r requirements.txt`——两种基准下都成立。
-# 本机那条绝对路径**只**写在 README §4（一个事实一个家，别在声明文件里再抄一份）。
-# 0.2.0 的 [project.optional-dependencies] 是**空的**、没有任何 extra，
-# 也没有 cockpit 包 ⇒ 不能写 `mecha[...]`。也**不要**再指向 mecha-sdk（0.1.0，
-# 已退役：它没有 `mecha.authority.Mode`，而 src/v2_bind.py:214 需要它 ⇒ EL 跑不了它）。
--e ../mecha
+# 框架本体 = 独立库 `mecha`（已发 v0.2.0，见其仓的 annotated tag）。
+#
+# ⚠ **前置（如实写明）**：下面这条 URL **目前解析不了** —— `github.com/tomisnot/mecha`
+#   还没建仓（现在访问是 404）。**等上游仓建好、tag 推上去之后**，这条就能直接装。
+#   在那之前，本机开发请走下面第二条路（editable）。
+#
+# ① 装**发布版**（给陌生人/CI；上游建仓后即生效）：
+#       mecha @ git+https://github.com/tomisnot/mecha@v0.2.0
+# ② 装**本机开发版**（editable，改 mecha 源码立刻生效）：
+#       pip install -e ../mecha
+#    ⚠ 前提：**两个仓是兄弟目录**（本仓与 `mecha` 同在同一个父目录下）。
+#       布局不同时请把 `../mecha` 换成你自己的 mecha 仓路径。
+# 任选其一即可（别两条都装）。⚠ 相对路径的解析基准随 pip 版本/CWD 而异 ⇒
+# **请在 EL 根执行** `pip install -r requirements.txt`。
+# ⚠ 0.2.0 的 [project.optional-dependencies] 是**空的**、没有任何 extra，也没有
+# `cockpit` 包 ⇒ 不能写 `mecha[...]`。也**不要**再指向已退役的 `mecha-sdk`（0.1.0：
+# 它没有 `mecha.authority.Mode`，而 src/v2_bind.py 需要它 ⇒ EL 跑不了它）。
+mecha @ git+https://github.com/tomisnot/mecha@v0.2.0
 
 # ── AI 写通道 / 只读监控端点（只有 AI 模式需要；GUI 模式不起任何端点）────
 # src/v2_bind.py:224 在进程内起 MCP 服务器线程（streamable-http，mcp 2.x）；

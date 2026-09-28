@@ -62,12 +62,11 @@ docs/              文档（顶层 38 份 + _history/ 归档；索引见 内部�
 
 ## 4. 外部依赖：`mecha`（AI 机甲纪律机器，**硬依赖**）
 
-框架本体**不在本仓**，是独立库。本机实测（2026-09-25）：`pip show mecha` → version **0.2.0**、
-Editable project location ``mecha` 仓（与本仓同级，见下方安装段）`；`import mecha.gate` →
-``mecha` 仓（与本仓同级，见下方安装段）\mecha\gate.py`。
+框架本体**不在本仓**，是独立库（版本以它的仓为准，本文件不写版本号——手写的数字会烂）。
+`import mecha.gate` 走已安装的 `mecha` 包（editable 安装时指向框架仓的 `mecha/` 子目录）。
 
 ```
-`mecha` 仓（与本仓同级，见下方安装段）                              (v0.2.0, editable 安装)
+mecha
     mecha/    gate(唯一写入口) / history(append-only) / authority(写权模式) /
               surface(能力面) / tools / assembly(具名装配点) / data_layout /
               monitor / write_lease / commands / roles / scopes / visibility /
@@ -75,12 +74,13 @@ Editable project location ``mecha` 仓（与本仓同级，见下方安装段）
               providers/  approval / codeact / jobs / log_local / skills / spill
 ```
 
-- **依赖声明**：`requirements.txt` 用**相对路径** `-e ../mecha`
-  声明（EL 与 mecha 已**不在同一父目录**；**同盘符**才使得相对路径成立）。本机绝对位置
-  是 ``mecha` 仓（与本仓同级，见下方安装段）`（editable 装的就是它）——这个事实**只写在这里**，声明文件里
-  不再抄一份。⚠ 相对路径的解析基准随 pip 版本/CWD 而异 ⇒ **在 EL 根跑**
-  `pip install -r requirements.txt`。0.2.0 的 `[project.optional-dependencies]` 是**空的**、
-  也没有 `cockpit` 包 ⇒ **不能**写 `mecha[...]`。
+- **依赖声明**：`requirements.txt` 里写的是**发布版**（PEP 508 直接引用）：
+  `mecha @ git+https://github.com/tomisnot/mecha@v0.2.0`。
+  ⚠ **该 URL 目前解析不了**——上游仓 `github.com/tomisnot/mecha` **还没建**（访问是 404）；
+  建仓并把 tag 推上去之后才装得到。**在那之前，本机开发请走 editable**：
+  `pip install -e ../mecha`（前提：两个仓是**兄弟目录**；布局不同就换成你自己的 mecha 路径）。
+  两条路**任选其一**，别都装。⚠ 相对路径的解析基准随 pip 版本/CWD 而异 ⇒
+  **在 EL 根执行** `pip install -r requirements.txt`。
 - **它是硬依赖，不是"可选 AI 依赖"**：`app_entry.py:53-54` 顶层
   `from src.v2_bind import make_v2_bridge` → `mecha_v2.bridge` 顶层 `import mecha.*`
   （**无 try/except**）⇒ 缺 mecha 时软件直接 ImportError 起不来，**没有降级路径**。
