@@ -63,11 +63,11 @@ docs/              文档（顶层 38 份 + _history/ 归档；索引见 内部�
 ## 4. 外部依赖：`mecha`（AI 机甲纪律机器，**硬依赖**）
 
 框架本体**不在本仓**，是独立库。本机实测（2026-09-25）：`pip show mecha` → version **0.2.0**、
-Editable project location `D:\code-nosync\mecha`；`import mecha.gate` →
-`D:\code-nosync\mecha\mecha\gate.py`。
+Editable project location ``mecha` 仓（与本仓同级，见下方安装段）`；`import mecha.gate` →
+``mecha` 仓（与本仓同级，见下方安装段）\mecha\gate.py`。
 
 ```
-D:\code-nosync\mecha                              (v0.2.0, editable 安装)
+`mecha` 仓（与本仓同级，见下方安装段）                              (v0.2.0, editable 安装)
     mecha/    gate(唯一写入口) / history(append-only) / authority(写权模式) /
               surface(能力面) / tools / assembly(具名装配点) / data_layout /
               monitor / write_lease / commands / roles / scopes / visibility /
@@ -75,9 +75,9 @@ D:\code-nosync\mecha                              (v0.2.0, editable 安装)
               providers/  approval / codeact / jobs / log_local / skills / spill
 ```
 
-- **依赖声明**：`requirements.txt` 用**相对路径** `-e ../../../../../../code-nosync/mecha`
+- **依赖声明**：`requirements.txt` 用**相对路径** `-e ../mecha`
   声明（EL 与 mecha 已**不在同一父目录**；**同盘符**才使得相对路径成立）。本机绝对位置
-  是 `D:\code-nosync\mecha`（editable 装的就是它）——这个事实**只写在这里**，声明文件里
+  是 ``mecha` 仓（与本仓同级，见下方安装段）`（editable 装的就是它）——这个事实**只写在这里**，声明文件里
   不再抄一份。⚠ 相对路径的解析基准随 pip 版本/CWD 而异 ⇒ **在 EL 根跑**
   `pip install -r requirements.txt`。0.2.0 的 `[project.optional-dependencies]` 是**空的**、
   也没有 `cockpit` 包 ⇒ **不能**写 `mecha[...]`。
@@ -85,7 +85,7 @@ D:\code-nosync\mecha                              (v0.2.0, editable 安装)
   `from src.v2_bind import make_v2_bridge` → `mecha_v2.bridge` 顶层 `import mecha.*`
   （**无 try/except**）⇒ 缺 mecha 时软件直接 ImportError 起不来，**没有降级路径**。
   AI 模式另需 `mcp>=2,<3` + `uvicorn`，两者已在 `requirements.txt` 真声明。
-- **`mecha-sdk`（0.1.0，`D:\学\...\mecha-sdk`）是已退役的旧库，EL 跑不了它**：它没有
+- **`mecha-sdk`（0.1.0，`已退役的旧仓路径略`）是已退役的旧库，EL 跑不了它**：它没有
   `mecha.authority.Mode`，而 `src/v2_bind.py:214` 需要 `Mode`。凡文档里写 "mecha-sdk" 的
   地方请按"历史件"读（各文档顶部有横幅）。
 - 三件套：**spec（合规契约）+ Python SDK（合规实现）+ dsh 插件（驾驶舱 UX）**。
@@ -96,21 +96,21 @@ D:\code-nosync\mecha                              (v0.2.0, editable 安装)
 # 基线：判据全档（约 10 分钟）；分档 --core（约 20s）/ --fast（约 150s）
 #   --list 看判据清单，--only <子串> 单跑
 $env:PYTHONPATH=''; $env:QT_QPA_PLATFORM='offscreen'; $env:PYTHONIOENCODING='utf-8'
-& D:\python310\python.exe run_checks.py
+python run_checks.py
 
 # 正常使用：看门人 launcher 弹窗选模式（AI / GUI），进程交接与写权落位都由它编排
-& D:\python310\python.exe launcher.py
+python launcher.py
 
 # 等价单跑——GUI 模式：纯本地软件，不起任何端点，写权在人
-& D:\python310\python.exe app_entry.py --gui
+python app_entry.py --gui
 
 # 等价单跑——AI 模式：headless 权威，进程内起 MCP 服务器 + 只读监控端点（动态端口）
-& D:\python310\python.exe app_entry.py --authority
+python app_entry.py --authority
 #   两个发现文件都写在项目根：.mcp-port（MCP 端点）/ .monitor-port（监控端点）；
 #   dsh 插件的面板自己经同源路由 /re0-mecha/monitor-url 取地址，人不用抄端口。
 
 # 独立进程 Hub（无 GUI 的 headless 部署；写权威落 --data-dir，默认 .mecha-v2-hub）
-& D:\python310\python.exe -m mecha_v2.hub --root .
+python -m mecha_v2.hub --root .
 ```
 
 > MCP 端口是**随机空闲口**，由权威写进项目根 `.mcp-port`；dsh 插件每次建会话现读它

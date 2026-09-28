@@ -407,48 +407,33 @@ def main():
                  bool(sorted(set(SURFACES) - {'skills/energy-level/SKILL.md',
                                               'skills/ui-design/SKILL.md'}))))
     subs.append(('机器事实复述被抓：合成映射里别处提到该事实 → 报出',
-                 fact_offenders('D:\\x\\mecha',
-                                {FACT_HOME: 'see `D:\\x\\mecha`',
-                                 'docs/a.md': '装于 D:\\x\\mecha'}) == ['docs/a.md']))
+                 fact_offenders('SYNTHETIC_FACT_HOME/mecha',
+                                {FACT_HOME: 'see `SYNTHETIC_FACT_HOME/mecha`',
+                                 'docs/a.md': '装于 SYNTHETIC_FACT_HOME/mecha'}) == ['docs/a.md']))
     subs.append(('机器事实无复述 → **不误报**',
-                 fact_offenders('D:\\x\\mecha',
-                                {FACT_HOME: 'see `D:\\x\\mecha`',
+                 fact_offenders('SYNTHETIC_FACT_HOME/mecha',
+                                {FACT_HOME: 'see `SYNTHETIC_FACT_HOME/mecha`',
                                  'docs/a.md': '位置见 README §4'}) == []))
     C.group('F 致死性 + 反方向不误报（对照表/暂缺节/跨行引用只链接、不复述）', subs)
 
-    # ---- G 机器事实只有一个家（R13：守"权威陈述只在一处"这个承诺）----
-    fact = _machine_path_from_home()
-    tracked = _tracked_files()
-    files, unreadable = {}, []
-    for rel in tracked:
-        try:
-            files[rel] = _read(rel)
-        except Exception:                                      # noqa: BLE001
-            unreadable.append(rel)
-    offenders = fact_offenders(fact, files)
-    stats['tracked 文件数'] = len(tracked)
-    stats['读到内容的文件数'] = len(files)
-    stats['读不到的'] = unreadable
-    stats['事实复述者'] = offenders
-    C.group('G 机器事实（框架装在哪）的权威陈述只在一处：只在 %s 里，别处一律链接'
-            % FACT_HOME, [
-        ('从 %s 解析到该事实：%r（R9：不硬编码在判据里）' % (FACT_HOME, fact), bool(fact)),
-        ('tracked 面 %d 个里有复述的文件：%s'
-         % (len(tracked), offenders or '无'),
-         bool(tracked) and not offenders),
-        ('R8 自证：tracked %d 个**全部读得到**（读不到 %s）——否则守卫会对它们静默失明'
-         % (len(tracked), unreadable or '无'),
-         bool(tracked) and not unreadable),
-    ])
+    # ---- G **已退役**（2026-09-27，开源批 ①）----
+    # 原 G 组守的承诺是"**机器事实（框架装在哪）的权威陈述只在一处**"——它成立的前提是
+    # "仓里**允许**出现本机路径，只是不许复述"。**开源后这个前提没了**：公开仓里
+    # **一处都不许**出现本机路径。⇒ 承诺被更强的守卫取代：`checks/personal_paths_selfcheck.py`
+    # （全仓 0 命中，含 D 盘盘符、用户目录、同步盘名、仓库根名、本机用户名、私人邮箱），
+    # 且它**自己也带**"读到 N 个"的自证与对偶。
+    # ⚠ 按 R13（删机制时把承诺改写成**行为级**判据，不写"这东西不存在"的守卫）：这里**不留**
+    # "README 里不许有该锚点"这类实现痕迹守卫——"不许有本机路径"由上面那条判据在**全仓**层
+    # 面表达，比"某一句只许出现一次"更强也更清楚。
+    stats['G 组'] = '已退役 → 由 checks/personal_paths_selfcheck.py 取代（全仓 0 本机路径）'
 
     print('[ai_surface] 非退化自证：%s' % stats)
     C.group('R8 非退化自证：扫到的面/段/注册表工具都非空', [
-        ('SKILL 面 %d 份、client 文件 %d 个、注册表工具 %d 个、对照表 %d 行、tracked %d 个'
+        ('SKILL 面 %d 份、client 文件 %d 个、注册表工具 %d 个、对照表 %d 行'
          % (stats['SKILL 文件数'], stats['client 文件数'],
-            stats['注册表工具数'], stats['对照表行数'], stats.get('tracked 文件数', 0)),
+            stats['注册表工具数'], stats['对照表行数']),
          stats['SKILL 文件数'] > 0 and stats['client 文件数'] > 0
-         and stats['注册表工具数'] > 0 and stats['对照表行数'] > 0
-         and stats.get('tracked 文件数', 0) > 0),
+         and stats['注册表工具数'] > 0 and stats['对照表行数'] > 0),
     ])
 
     ok = C.summary()

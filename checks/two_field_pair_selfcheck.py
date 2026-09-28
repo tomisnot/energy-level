@@ -13,7 +13,7 @@
 TP3 是本引擎的核心验收：旋转系吸收光场载波 + 微波-only 光子块 + V_dd 旋转
 筛选的全部构造，与不做任何变换的第一性参考对拍。
 
-运行：D:\\python310\\python.exe -u checks\\two_field_pair_selfcheck.py
+运行：python -u checks\\two_field_pair_selfcheck.py
 """
 import os
 import sys

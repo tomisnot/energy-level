@@ -119,6 +119,11 @@ FAST_KNOWN_SEC = {
     # （日志 + seed.rejected 史事件）——此前 `except Exception: pass` 把拒绝吞掉，
     # "种了但被拒"与"从没种过"无法区分，抵消了框架 A2 补校验的意义。
     'seed_rejection_visible_selfcheck.py': 5.1,
+    # 2026-09-27 现测 0.2s。**个人路径守卫**（开源批 ①）：被跟踪文件里出现本机路径特征
+    # （D 盘盘符 / 用户目录 / 同步盘两种写法 / 仓库根名 / 本机用户名 / 私人邮箱）⇒ 红。
+    # ⚠ 必须在 Python 里扫（PowerShell 的 git ls-files 会把中文路径转义 ⇒ 假报 0）；
+    # 且必须**自证"实际读到 N 个"**——"读不到的"与"没命中的"长得一模一样。
+    'personal_paths_selfcheck.py': 0.2,
 }
 
 

@@ -6,8 +6,8 @@
 与"按改动自动选判据"用。
 
 用法：
-    & D:\python310\python.exe scripts\check_profile.py            # 全部
-    & D:\python310\python.exe scripts\check_profile.py --timeout 300
+    python scripts\check_profile.py            # 全部
+    python scripts\check_profile.py --timeout 300
 输出：runtime/check_profile.csv（+ 控制台按耗时降序的表）
 """
 import argparse

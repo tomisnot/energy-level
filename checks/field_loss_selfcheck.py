@@ -8,7 +8,7 @@
   双计规则（伙伴 Γ_out=0 ⇒ 该向散射计损归零）与近共振剔除（|Δ|<near_cutoff）。
 
 纯 numpy（无 ARC/numba/引擎），逐条对齐源仓 dissipation_lab/selfcheck 的锚。
-运行：D:\\python310\\python.exe checks\\field_loss_selfcheck.py
+运行：python checks\\field_loss_selfcheck.py
 """
 import os
 import sys

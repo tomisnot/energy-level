@@ -11,7 +11,7 @@
 
 注：hard 用独立内核 `_rhs_hard_pair`（非 rhs_phi_pairs），其时变损耗接线列为
 后续（capability 已在共用内核 + 装配器就绪）。见 内部记录（未随仓发布，存档在仓外）。
-运行：D:\python310\python.exe checks\field_loss_engine_selfcheck.py
+运行：python checks\field_loss_engine_selfcheck.py
 """
 import os
 import sys

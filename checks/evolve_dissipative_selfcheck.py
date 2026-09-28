@@ -19,7 +19,7 @@
   D11 无耗散一致性补充（另一包络）
   D12 numba 内核 ≡ numpy 回退（非对齐输出网格 → 部分步线性插值路径）
 
-运行：D:\\python310\\python.exe -u checks\\evolve_dissipative_selfcheck.py
+运行：python -u checks\\evolve_dissipative_selfcheck.py
 """
 import os
 import sys

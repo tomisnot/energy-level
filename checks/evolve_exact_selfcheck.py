@@ -15,7 +15,7 @@
   E6 耗散：纯衰变解析 e^{−Γt}；CW 驱动稳态 ≈ Ω²/(Γ²/4+2Ω²)（转参考路径）
   E7 STIRAP 冒烟：Λ 型反直觉序双脉冲，末态转移 > 0.9
 
-运行：D:\\python310\\python.exe -u checks\\evolve_exact_selfcheck.py
+运行：python -u checks\\evolve_exact_selfcheck.py
 """
 import os
 import sys

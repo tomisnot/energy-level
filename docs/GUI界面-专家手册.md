@@ -1,7 +1,7 @@
 # GUI 界面模块 · 专家手册
 
 > ⚠ **历史件横幅（2026-09-25 加，主代理指令）**：本文记录的是**已退役的 `mecha-sdk` 0.1.0**
-> 时代（`D:\学\BaiduSyncdisk\编程\code\python\mecha-sdk`）。EL 现运行的框架是 **`mecha` 0.2.0**
+> 时代（`已退役的 `mecha-sdk` 仓（本机路径略）`）。EL 现运行的框架是 **`mecha` 0.2.0**
 > （本机位置见 `README.md` §4），**模块集完全不同**：0.1.0 的 `ops` / `session` /
 > `bus` / `registry` / `codeact` / `server` / `cockpit` / `hub_bridge` / `hub_client` /
 > `archives` / `interlock` / `autonomy` / `gc` / `app_bridge` / `subscribe` / `hooks` 等在
@@ -23,7 +23,7 @@
 > `cleanliness_guard_selfcheck` 单跑 → 1 PASS / 0 FAIL。
 >
 > **口径**：本文所有结论带 `文件:行号`，并区分「文档声称」与「代码实际」。mecha 侧文件在仓库外，
-> 路径写作 `mecha-sdk/mecha/xxx.py`（实装位置 `D:\学\BaiduSyncdisk\编程\code\python\mecha-sdk\mecha\`）。
+> 路径写作 `mecha-sdk/mecha/xxx.py`（实装位置 `已退役的 `mecha-sdk` 仓（本机路径略）`）。
 
 ---
 
@@ -472,10 +472,10 @@ git diff -- src/ui/ui_dynamic.py app_entry.py |
 ```powershell
 $env:QT_QPA_PLATFORM='offscreen'; $env:RE0_GUI_INPROC='1'; $env:PYTHONIOENCODING='utf-8'
 # ① 实例化闸：MainWindow 能建起来
-& D:\python310\python.exe -c "import app_entry; w=app_entry.MainWindow(); print('ok', type(w.app_bridge).__name__)"
+python -c "import app_entry; w=app_entry.MainWindow(); print('ok', type(w.app_bridge).__name__)"
 # ② 布局闸：diff 里不得出现布局类调用（见 §7.3 配方）
 # ③ 判据闸（含 sweep_gui，子串匹配）
-& D:\python310\python.exe run_checks.py --only gui_     # 期望 scripts=6 fail=0
+python run_checks.py --only gui_     # 期望 scripts=6 fail=0
 # ④ 收尾：涉及共享代码时请主代理跑全量（46/0，约 589s）——不要自行跑全量
 ```
 （`os._exit` 前记得 `sys.stdout.flush()`：offscreen + matplotlib 的 teardown 会刷噪声并给非零退出码，

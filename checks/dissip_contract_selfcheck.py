@@ -10,7 +10,7 @@
      （现须改指 sambe，且仍抛 NotImplementedError）。
 
 计数模型同 checklib：**不变式包**（整包 1 项，子条件累计 SUB）。
-运行：D:\python310\python.exe checks\dissip_contract_selfcheck.py
+运行：python checks\dissip_contract_selfcheck.py
 """
 import os
 import sys

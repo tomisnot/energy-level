@@ -12,7 +12,7 @@
   EP4 寿命耗散：解析指数衰变 + Σpops+loss_A+loss_B=1
   EP5 收敛性：tol 1e-4 vs 1e-7 误差单调下降 + 幺正范数
 
-运行：D:\\python310\\python.exe -u checks\\evolve_exact_pair_selfcheck.py
+运行：python -u checks\\evolve_exact_pair_selfcheck.py
 """
 import os
 import sys

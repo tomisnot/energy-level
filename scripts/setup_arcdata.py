@@ -9,7 +9,7 @@ AlkaliAtom.dataFolder 重定向到项目根 .arcdata/；本脚本负责把 Rb-87
 来源优先取 ~/.arc-data（已由 ARC 初始化过的完整缓存），缺失文件回退到
 arc 包自带的 data 目录。重复运行安全（只复制缺失文件）。
 
-用法: D:\\python310\\python.exe -u scripts\\setup_arcdata.py [--all]
+用法: python -u scripts\\setup_arcdata.py [--all]
   --all：复制全部缓存（~234 MB，含所有原子；换原子时无需再跑本脚本）
 """
 import os
