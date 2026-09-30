@@ -103,7 +103,7 @@ def build_tool_registry(engine: ElEngine, gate: Gate, surface: Surface,
         # resolved=引擎实际落地的值、readback=从快照读回的值、before=写前旧值。
         # AI 不用二次查询即可核对"我声称写的"与"域里真存的"是否一致。
         return {"ok": True, "key": key, "applied": True,
-                "before": before, "resolved": ev.value,
+                "before": before, "resolved": ev.after,
                 "readback": gate.snapshot.get(key)}
 
     # ---- set_config ----

@@ -63,7 +63,7 @@ def el_summarizer(events: list[Event]) -> dict:
         "总变更": len(events),
         "人写": n_human,
         "AI 写": n_ai,
-        "最近一条": f"#{last.seq} [{last.actor}] {last.key} ← "
+        "最近一条": f"#{last.seq} [{last.actor}] {last.target} ← "
                     f"{last.reason or '（无 reason）'}",
     }
     # 关键配置的人话复述（值与原始折叠比对；键不在史里就不复述）
@@ -220,7 +220,7 @@ class V2Bridge:
         with self._lock:
             ev = self._gate.set(chan, key, value, reason=reason, call_id=call_id)
         # v1 AppBridge.write 的回执形状（GUI 多数忽略，这里如实提供）
-        return {"ok": True, "resolved": ev.value, "readback": self.read(key),
+        return {"ok": True, "resolved": ev.after, "readback": self.read(key),
                 "seq": ev.seq}
 
     def write_many(self, items, *, reason="", actor="gui", call_id=""):
@@ -247,7 +247,7 @@ class V2Bridge:
         ⚠ 键请用**审计键**（如 `seed.rejected`），不要冒充那个真键的写入。
         """
         with self._lock:
-            return self._gate.record(key, value, actor, reason)
+            return self._gate.record(key, "", value, actor, reason)
 
     @staticmethod
     def _channel_for(actor: str) -> Channel:
@@ -323,15 +323,15 @@ class V2Bridge:
         GUI 判据与面板用它对账"谁在什么时候写了什么"；数据源就是权威史，
         与 subscribe 的推送形状一致（同一适配，两种取法）。
         """
-        return [{"kind": "set", "actor": e.actor, "target": e.key,
-                 "value": e.value, "seq": e.seq, "call_id": e.call_id}
+        return [{"kind": "set", "actor": e.actor, "target": e.target,
+                 "value": e.after, "seq": e.seq, "call_id": e.call_id}
                 for e in self._history.events() if e.seq >= since]
 
     def subscribe(self, callback):
         """把 v2 Event 适配成 v1 事件 dict（{kind,actor,target,value,seq,call_id}）。"""
         def _ev(e: Event) -> None:
-            callback({"kind": "set", "actor": e.actor, "target": e.key,
-                      "value": e.value, "seq": e.seq, "call_id": e.call_id})
+            callback({"kind": "set", "actor": e.actor, "target": e.target,
+                      "value": e.after, "seq": e.seq, "call_id": e.call_id})
         return self._history.subscribe(_ev)
 
     # ---- 存档（原子批量：真实调用方，兑现 set_batch 的存在理由）----

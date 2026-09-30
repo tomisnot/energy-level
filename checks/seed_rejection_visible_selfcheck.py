@@ -59,7 +59,7 @@ def _events():
 
 
 def _rejections():
-    return [e for e in _events() if e.key == 'seed.rejected']
+    return [e for e in _events() if e.op == 'seed.rejected']
 
 
 # ---------------- A 被拒：必须留痕 ----------------
@@ -70,7 +70,7 @@ with contextlib.redirect_stdout(buf):
                              write_fn=lambda v: None)
 logged = buf.getvalue()
 rej = _rejections()
-info = (rej[-1].value if rej else {}) or {}
+info = (rej[-1].after if rej else {}) or {}
 C.group('A 初值被拒要留痕：快照不动 + 史里有 seed.rejected + 日志有原话', [
     ('快照里没有被拒的键（br.read → %r）' % br.read(REJECTED_KEY),
      br.read(REJECTED_KEY) is None),

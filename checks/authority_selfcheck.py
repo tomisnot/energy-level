@@ -132,7 +132,7 @@ C.group('E switch_mode：只有人类侧能切（AI 不能自解锁）+ LOCKED �
     ('未知 actor 切模式被拒（unknown_actor）',
      _e_unknown and _eu.kind == 'unknown_actor'),
     ('mode 不落 History（协调态非域状态；authority.py 声明）',
-     all(e.key == 'field.B_gauss' for e in br.history.events())),
+     all(e.target == 'field.B_gauss' for e in br.history.events())),
 ])
 
 # F. v1 undo 门在 v2 不存在（如实登记，不是断言失败）

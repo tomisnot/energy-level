@@ -312,9 +312,9 @@ def body_problems(registry, history):
     seen['清空事件数'] = len(evs)
     if not evs:
         bad.append('B2 set_config.value=null：没落史（观测退化）')
-    elif evs[-1].value is not None:
+    elif evs[-1].after is not None:
         bad.append('B2 set_config.value：传 null 应原样到达（清空语义），实得 %r'
-                   % evs[-1].value)
+                   % evs[-1].after)
     return bad, seen
 
 

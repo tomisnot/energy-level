@@ -106,7 +106,7 @@ def _leg(label, tools, text, is_error, journal_path, subs, stats):
              or '"ok":true' in (text or ''))
     subs.append(('② %s 真调 set_config 成功（调得动；isError=%s，正文 %s）'
                  % (label, is_error, (text or '')[:70]), ok_call))
-    hit = any(e.get('key') == WRITE_KEY for e in events)
+    hit = any(e.get('target') == WRITE_KEY for e in events)
     subs.append(('③ %s journal 真落了那条写（%d 行，命中=%s）'
                  % (label, len(events), hit), hit))
 

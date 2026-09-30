@@ -80,28 +80,31 @@
          "seq": "num",
          "kind": "str",
          "actor": "str",
+         "op": "str",
          "target": "str",
-         "value": "num",
          "before": "null",
          "after": "num",
          "reason": "str",
-         "call_id": "str"
+         "call_id": "str",
+         "ts": "str"
         },
         {
          "seq": "num",
          "kind": "str",
          "actor": "str",
+         "op": "str",
          "target": "str",
-         "value": "num",
          "before": "num",
          "after": "num",
          "reason": "str",
-         "call_id": "str"
+         "call_id": "str",
+         "ts": "str"
         },
         {
          "seq": "num",
          "kind": "str",
          "actor": "str",
+         "op": "str",
          "target": "str",
          "value": {
           "$list": {
@@ -123,7 +126,8 @@
           }
          },
          "reason": "str",
-         "call_id": "str"
+         "call_id": "str",
+         "ts": "str"
         }
        ]
       }

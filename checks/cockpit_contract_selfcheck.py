@@ -95,8 +95,8 @@ STATUS_OPTIONAL = {'pid', 'uptime_s', 'mcp_port', 'monitor_port'}
 CONFIG_KEYS = {'ok', 'has_schema', 'groups', 'orphans', 'n_keys'}
 CONFIG_OPTIONAL = {'n_snapshot_keys'}
 ACTIVITY_EVENT_KEYS = {'kind', 'actor', 'target', 'value', 'seq', 'call_id'}
-HISTORY_EVENT_KEYS = {'seq', 'kind', 'actor', 'target', 'value', 'before',
-                      'after', 'reason', 'call_id'}
+HISTORY_EVENT_KEYS = {'seq', 'kind', 'actor', 'target', 'op', 'after', 'before',
+                      'reason', 'call_id', 'ts'}
 #: 面板实际消费的行字段（契约 §3.4）：必须都在；`prefix/type/desc` 是允许的冗余。
 ROW_REQUIRED = {'name', 'short', 'value', 'unit', 'set'}
 ROW_ALLOWED = ROW_REQUIRED | {'prefix', 'type', 'desc'}
@@ -466,10 +466,6 @@ def audit(obs, *, fixture_mode):
                  % (sorted(e) if isinstance(e, dict) else type(e).__name__,
                     sorted(HISTORY_EVENT_KEYS)))
             break
-    for e in hev:
-        if isinstance(e, dict) and e.get('value') != e.get('after'):
-            _bad(bad, True, 'E /history value != after（同一事件的两处投影必须同值）')
-            break
     hseq = [e.get('seq') for e in hev if isinstance(e, dict)]
     _bad(bad, hseq != sorted(hseq), 'E /history 事件未按 seq 升序')
     _bad(bad, bool(hseq) and hseq != list(range(hseq[0], hseq[0] + len(hseq))),
@@ -749,8 +745,8 @@ def audit_noschema(bad, obs):
 # ---------------------------------------------------------------- 致死性自测
 def _good_obs():
     """供自测的最小合规观测（不参与 golden，只喂探测器）。"""
-    ev = {'seq': 1, 'kind': 'set', 'actor': 'gui', 'target': 'k', 'value': 1,
-          'before': None, 'after': 1, 'reason': 'r', 'call_id': ''}
+    ev = {'seq': 1, 'kind': 'set', 'op': 'set', 'actor': 'gui', 'target': 'k',
+          'before': None, 'after': 1, 'reason': 'r', 'call_id': '', 'ts': ''}
     ae = {'kind': 'set', 'actor': 'gui', 'target': 'k', 'value': 1, 'seq': 1,
           'call_id': ''}
     ok_hdr = {'access-control-allow-origin': '*'}
@@ -842,10 +838,10 @@ def selftest(obs_good):
         ('/activity 事件混入 before → 报出键集不符', _mutate(
             obs_good, 'routes.GET /activity.json.events[0].before', None), '事件键'),
         ('事件倒序 → 报出', _mutate(obs_good, 'routes.GET /history.json.events', [
-            {'seq': 2, 'kind': 'set', 'actor': 'gui', 'target': 'k', 'value': 1,
-             'before': 1, 'after': 1, 'reason': 'r', 'call_id': ''},
-            {'seq': 1, 'kind': 'set', 'actor': 'gui', 'target': 'k', 'value': 1,
-             'before': None, 'after': 1, 'reason': 'r', 'call_id': ''}]), '升序'),
+            {'seq': 2, 'kind': 'set', 'op': 'set', 'actor': 'gui', 'target': 'k',
+             'before': 1, 'after': 1, 'reason': 'r', 'call_id': '', 'ts': ''},
+            {'seq': 1, 'kind': 'set', 'op': 'set', 'actor': 'gui', 'target': 'k',
+             'before': None, 'after': 1, 'reason': 'r', 'call_id': '', 'ts': ''}]), '升序'),
         ('POST body 改字 → 报出', _mutate(
             obs_good, 'routes.POST /status.text',
             '{"ok": false, "error": "nope"}'), 'POST'),
