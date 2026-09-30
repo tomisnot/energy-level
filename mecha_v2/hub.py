@@ -85,7 +85,7 @@ def build_stack(el_root: str | Path, data_root: str | Path,
     （D-33：真实路径与判据同走 assemble，装配漂移在真引擎上即红）。
 
     返回里**只带真注册表**（``tools``），**不带** ``toolhost``：``assemble()`` 的
-    ``sw.toolhost`` 包的是装配点那个**空** ``sw.tools``，而 EL 的 14 个工具注册在
+    ``sw.toolhost`` 包的是装配点那个**空** ``sw.tools``，而 EL 的工具注册在
     ``build_tool_registry`` 里、从不写进 ``sw.tools`` ⇒ 谁把它当 ``toolhost=`` 传进
     MCP 端点，就会"工具列得出来、调不动"（2026-09-25 实发，见 A11）。调用唯一路径
     仍是框架 handler 内的 ``ToolHost.call``；端点缺省
@@ -174,7 +174,7 @@ def make_host(stack: dict, *, host: str = "127.0.0.1", port: int = 0,
     从不写进 ``sw.tools``）⇒ ``sw.toolhost`` 包的是空表，传它会让
     **工具列得出来、调不动**（`unknown_tool`，且 journal 不落盘——2026-09-25 实测，
     由 mecha 的 `phase5_hub_selfcheck` 抓到）。缺省让框架用
-    ``LocalToolHost(stack["tools"])``，即绑**真的**那 14 个工具。
+    ``LocalToolHost(stack["tools"])``，即绑**真的**那些工具。
     """
     return McpHost(stack["tools"], host=host, port=port,
                    port_file=port_file, log=log)

@@ -84,7 +84,7 @@ AI 面改不了写权模式、伪造不了 human 归因（Authority 的通道判
   `_missing`（不静默 null）。
 - 回执 `{ok, steps:[{index,op,ok,detail,output}], stopped_at}`——**每步自带
   output**（不用再按位置对齐）与 detail（成功=短摘要，失败=原因）；`stopped_at=-1` = 全成。
-- 每步留可追溯记录（逐子调用审计，不污染域状态史）。
+- 每步留可追溯记录（逐子调用审计，不污染账）。
 
 **失败长什么样**（机器可判别）：工具失败时回执 `isError=true`，正文是
 `{"ok": false, "error": {"message", "info": {"kind", "hint", "suggest"}}}` 的

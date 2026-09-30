@@ -378,7 +378,7 @@ def _run_actions(surface: Surface, gate: Gate,
                  pick=None):
     """把一串结构化动作交给 CodeAct 编排（逐子调用记日志，可归因）。
 
-    **审计落一份进程内临时 History，不混进域状态史**（总纲 §5.2②：域状态史
+    **审计落一份进程内临时 History，不混进账**（总纲 §5.2②：账
     与操作者行为史是两份资产）。若把 `codeact.N` 写进域史，Gate 重启折叠快照
     会把这些审计事件当域状态吃进去 ⇒ read_config 出噪声、存档 load 被 validate
     当场拒。操作者行为史归宿主（dsh 按 call_id 记），这里逐步随回执如实返回。
