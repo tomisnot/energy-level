@@ -32,8 +32,9 @@ mecha `2722f58`）——本文件只留 EL 侧的两件事：把 `V2Bridge` 适�
   `/re0-mecha/monitor-url` 把它转成 `{base}` 给面板，面板**每轮现读**。清理规则归
   框架 `mecha.portfile`（启动前无条件清 / 收尾按内容清）。**要改端口请改 dsh 侧**，
   Python 侧不再有任何端口字面量。
-- 监控端点的契约（逐字段）冻结在 `_mecha-extraction/cockpit-contract.md`，
-  由 `checks/cockpit_contract_selfcheck.py` + `checks/cockpit_golden.json` 看守。
+- 监控端点的**传输契约**（四路由字段 / CORS / OPTIONS / POST 404 / 精确匹配）归框架
+  `mecha.cockpit`，由框架 `checks/phase11_cockpit_selfcheck.py` 守；EL 侧只守
+  "**自己的 schema/装配真的接进了树**"（`checks/human_control_selfcheck.py` 的 F 组）。
 """
 from __future__ import annotations
 

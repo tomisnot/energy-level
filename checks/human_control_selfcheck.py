@@ -165,6 +165,41 @@ def main():
              for o in cb.get('orphans', []))),
     ])
 
+    # ---- F. `/config` 的**真 schema** 分支 ----
+    # 原 `cockpit_contract_selfcheck.py`（迁移前置夹具，1074 行 + golden 354 行）已删：
+    # 端点的**传输契约**（四路由字段 / CORS / OPTIONS / POST 404 / 精确匹配 / 无 schema 分支）
+    # 归框架 `mecha.cockpit`，由框架 `checks/phase11_cockpit_selfcheck.py` 守；
+    # EL 侧只剩**这一条**：**EL 自己的 schema 真的接进了树**（`_el_schema_rows` + 引擎族裸名约定）。
+    # ⇒ 承诺改写成行为级断言（R13），不是"这东西不存在"。
+    from src.core import protocol as P            # noqa: PLC0415
+
+    class _SchemaOnly:
+        """只回 schema 的引擎替身（不建 ARC cache，秒级）——口径同 `ai_surface` 的先例。"""
+        _cache = None          # V2Bridge 构造期会读 engine._cache（本组不碰 cache）
+
+        def schema(self):
+            return {"config": P.config_schema(), "solve": P.solve_schema(),
+                    "engine": P.engine_params(), "settable_keys": P.settable_keys()}
+
+    h2, a2 = History(), Authority(mode=Mode.HUMAN)
+    br2 = V2Bridge(Gate(a2, h2, validate=accept_all), h2, a2, engine=_SchemaOnly())
+    br2.write('field.B_gauss', 12.0, reason='F 组夹具（真 schema 桥）', actor='gui')
+    ep2 = start_monitor_endpoint(br2, port=0)
+    st, cb2 = _get('http://127.0.0.1:%d/config' % ep2.port)
+    groups = cb2.get('groups', {})
+    eng_names = [r['name'] for g in groups.get('engine', []) for r in g.get('rows', [])]
+    C.group('F GET /config：EL 的真 schema 接进树（族/裸名约定/孤儿边界）', [
+        ('200 且 has_schema=True（有引擎 ⇒ 不是降级分支）',
+         st == 200 and cb2.get('has_schema') is True),
+        ('三族都在（config / solve / engine），n_keys > 0',
+         {'config', 'solve', 'engine'} <= set(groups) and cb2.get('n_keys', 0) > 0),
+        ('engine 族键是**裸名**（不带 engine. 前缀）——bridge.params 的既有约定',
+         bool(eng_names) and not any(n.startswith('engine.') for n in eng_names)),
+        ('写了 1 个 schema 内键 ⇒ n_snapshot_keys=1 且不进 orphans',
+         cb2.get('n_snapshot_keys') == 1 and cb2.get('orphans') == []),
+    ])
+    ep2.stop()
+
     ok = C.summary()
     sys.exit(0 if ok else 1)
 

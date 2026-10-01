@@ -96,9 +96,6 @@ FAST_KNOWN_SEC = {
     # 新增判据请在此登记**实测**耗时（跑 scripts/check_profile.py 现测），否则它不会进
     # --fast/--core 档——内循环就看不到它的红绿，只能等全档（数分钟）才发现。
     'narrow_pulse_env_selfcheck.py': 5.1,
-    # 2026-09-25 现测 0.5-0.6s（取大）。监控端点契约门（框架化迁移的前置夹具）——
-    # 必须进 --core/--fast：迁移时要"改一行马上知道面板契约破没破"。
-    'cockpit_contract_selfcheck.py': 0.6,
     # 2026-09-25 现测 3.1-3.2s（run_checks 口径：含 mcp SDK 导入；进程内纯逻辑约 0.4s）。
     # MCP 工具面 `default` 声明守卫（R5 三分法）——漏一个声明的症状是"模型侧行为变差
     # 而不报错"，故进 --fast 内循环；>3s 故不进 --core（那是秒级档的纪律，不放宽阈值）。
