@@ -12,6 +12,16 @@
  * **本模块零 SDK、零 dsh 依赖**（纯逻辑，可注入 fake session 精确单测）；真正的 SDK 接线在
  * `mcp-session-http.ts`。错误识别用鸭子类型（HTTP 状态码为正、JSON-RPC 码为负，不冲突），
  * 故不需要 import `StreamableHTTPError`。
+ *
+ * ## ⚠ 类名不是项目参数（别每个项目改一次）
+ *
+ * **类名 `MechaMcpBridge` 是资产自己的标识，不是品牌位**——本资产就叫 mecha。
+ * 项目要自己的名字，改的是**参数**：`BridgeOptions.logLabel`（日志前缀）与 `offlineHint`
+ * （断联指引）。⇒ 这样"逐字复制"才成立；否则每抄一次都要动文件内容，比对立刻失效。
+ * （已有项目按自己的桥名（如 `PaperPilotMcpBridge`）复制，那是它们的选择，**不是本资产的约定**。）
+ *
+ * ⚠ **这段纪律的唯一权威在 `README.md`**（D1：一个事实一个家）——本文件只留链接，
+ * 复述会分叉。参数清单见 README 的「参数表」，逐字复制的验收见它的「复制约定」。
  */
 
 /** 一个工具的最小描述（喂给 dsh 的 ctx.tools.register）。 */
@@ -58,6 +68,19 @@ export interface ReconnectOptions {
 export interface BridgeOptions {
   /** 建会话的工厂（必填；生产用 httpSessionFactory，测试注入 fake）。 */
   sessionFactory: SessionFactory
+  /**
+   * 日志前缀标签（**项目值**，填该项目自己的短名）；日志一律形如 `[<label>] …`。
+   * 缺省 `'mcp-bridge'` ⇒ 资产自身零项目字面量。
+   */
+  logLabel?: string
+  /**
+   * 断联时给调用方看的那句**可操作指引**（**项目值**）。
+   *
+   * ⚠ 为什么是参数而不是资产内置：离线要"可读且可操作"，而"怎么把软件重新起来"
+   * 是项目知识（谁启动权威、怎么切模式）。资产只保证**失败说得清、不静默**，
+   * 不替项目编造启动方式。缺省给一句中性指引。
+   */
+  offlineHint?: string
   /** 退避重连参数。 */
   reconnect?: ReconnectOptions
   logger?: BridgeLogger
@@ -103,11 +126,17 @@ export class MechaMcpBridge {
   private readonly reconnect: Required<Pick<ReconnectOptions, 'initialDelayMs' | 'maxDelayMs' | 'growFactor'>> & { maxAttempts: number }
   private readonly sleep: (ms: number) => Promise<void>
   private readonly opts: BridgeOptions
+  /** 派生自 `opts.logLabel`（唯一来源），日志一律经它加前缀 ⇒ 零散字面量不再是手抄物。 */
+  private readonly tag: string
+  private readonly offlineHint: string
 
   // 不用 TS 参数属性（constructor(private opts)）：dsh 用 Node 原生 strip-only 加载 .ts，
   // 只擦类型、不生成代码，参数属性会 ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX。显式字段+赋值才可擦除。
   constructor(opts: BridgeOptions) {
     this.opts = opts
+    this.tag = `[${opts.logLabel?.trim() || 'mcp-bridge'}]`
+    this.offlineHint = opts.offlineHint?.trim()
+      || '请确认软件已启动；工具仍在列表但暂不可用。'
     const rc = opts.reconnect ?? {}
     this.reconnect = {
       initialDelayMs: rc.initialDelayMs ?? 300,
@@ -146,7 +175,7 @@ export class MechaMcpBridge {
       await this.connectOnce()
       this.setStatus('ready')
     } catch (err) {
-      this.opts.logger?.warn?.(`[re0-mecha] 首连失败（${msgOf(err)}）；转后台重连，不阻塞插件加载`)
+      this.opts.logger?.warn?.(`${this.tag} 首连失败（${msgOf(err)}）；转后台重连，不阻塞插件加载`)
       this.setStatus('offline')
       void this.ensureReconnecting().catch(() => {})
     }
@@ -158,7 +187,7 @@ export class MechaMcpBridge {
     session.onClose = () => {
       // 被动断线（如 SSE 流关闭）：若未主动关闭，触发后台重连。
       if (!this.closed && this.session === session) {
-        this.opts.logger?.warn?.('[re0-mecha] 会话传输关闭；触发后台重连')
+        this.opts.logger?.warn?.(`${this.tag} 会话传输关闭；触发后台重连`)
         this.setStatus('reconnecting')
         void this.ensureReconnecting().catch(() => {})
       }
@@ -184,7 +213,7 @@ export class MechaMcpBridge {
         try {
           await this.connectOnce()
           this.setStatus('ready')
-          this.opts.logger?.info?.(`[re0-mecha] 重连成功（第 ${attempt} 次尝试，新 session）`)
+          this.opts.logger?.info?.(`${this.tag} 重连成功（第 ${attempt} 次尝试，新 session）`)
           return
         } catch (err) {
           if (maxAttempts > 0 && attempt >= maxAttempts) {
@@ -192,7 +221,7 @@ export class MechaMcpBridge {
             throw err
           }
           this.setStatus('reconnecting')
-          this.opts.logger?.warn?.(`[re0-mecha] 重连第 ${attempt} 次失败（${msgOf(err)}）；${delay}ms 后再试`)
+          this.opts.logger?.warn?.(`${this.tag} 重连第 ${attempt} 次失败（${msgOf(err)}）；${delay}ms 后再试`)
           await this.sleep(delay)
           delay = Math.min(Math.round(delay * growFactor), maxDelayMs)
         }
@@ -215,20 +244,20 @@ export class MechaMcpBridge {
    * 重连仍失败 → 抛**可读的离线错误**（断联显式信号，不再是静默 404）。
    */
   async callTool(name: string, args: unknown, signal?: AbortSignal): Promise<unknown> {
-    if (this.closed) throw new Error('[re0-mecha] 桥已关闭')
+    if (this.closed) throw new Error(`${this.tag} 桥已关闭`)
     await this.ensureReady()
     try {
       return await this.session!.callTool(name, args, signal)
     } catch (err) {
       if (signal?.aborted) throw err
       if (!isSessionInvalidError(err) && !isConnectionError(err)) throw err
-      this.opts.logger?.warn?.(`[re0-mecha] 调用 ${name} 遇 ${classify(err)}（${msgOf(err)}）→ 重连后重试一次`)
+      this.opts.logger?.warn?.(`${this.tag} 调用 ${name} 遇 ${classify(err)}（${msgOf(err)}）→ 重连后重试一次`)
       try {
         await this.ensureReconnecting()
       } catch (reconnectErr) {
         throw new Error(
-          `[re0-mecha] Hub 离线：调用 ${name} 时连接失效且重连未成功（${msgOf(reconnectErr)}）。`
-          + '请确认软件在 AI 模式（人经 launcher.py 启动）；工具仍在列表但暂不可用。',
+          `${this.tag} 服务离线：调用 ${name} 时连接失效且重连未成功（${msgOf(reconnectErr)}）。`
+          + this.offlineHint,
         )
       }
       return await this.session!.callTool(name, args, signal)
@@ -253,7 +282,7 @@ export class MechaMcpBridge {
     try {
       await s.close()
     } catch (err) {
-      this.opts.logger?.info?.(`[re0-mecha] 关旧会话时出错（忽略）：${msgOf(err)}`)
+      this.opts.logger?.info?.(`${this.tag} 关旧会话时出错（忽略）：${msgOf(err)}`)
     }
   }
 

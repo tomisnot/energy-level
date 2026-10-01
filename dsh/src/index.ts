@@ -22,11 +22,12 @@
  * **只有参数块 `panel-config.ts` 允许项目化**（见该目录 `README.md` 的复制约定）。
  */
 import type { Context } from '@deepseek-ai/cordis'
-import { MechaMcpBridge } from './host/mcp-bridge.ts'
-import { httpSessionFactory } from './host/mcp-session-http.ts'
-import { resolveHubUrl, buildRequestInit } from './host/config.ts'
-import { syncTools, type ToolDisposers } from './host/register-tools.ts'
+import { MechaMcpBridge } from './dsh-panel/mcp-bridge.ts'
+import { syncTools, type ToolDisposers } from './dsh-panel/register-tools.ts'
+import { buildRequestInit } from './dsh-panel/config.ts'
+import { elBridgeOptions, elResolveHubUrl, elSessionFactory } from './host/el-hub.ts'
 import { elRootFromPortFile, writeModeRequest } from './host/mode-request.ts'
+import { EL_BRIDGE, EL_FEATURES, headerPlan } from './el-params.ts'
 import { PANEL_CONFIG } from './dsh-panel/panel-config.ts'
 import { makeMonitorUrlHandler } from './dsh-panel/monitor-url.ts'
 
@@ -34,10 +35,14 @@ import { makeMonitorUrlHandler } from './dsh-panel/monitor-url.ts'
 export const name = 're0-mecha'
 
 /**
- * 等待 host 服务就绪再激活：tools（工具注册）、commands（/re0-gui 切换）、
- * webServer（注册监控地址的同源只读路由）。
+ * 等待 host 服务就绪再激活：tools（工具注册）、webServer（注册监控地址的同源只读路由），
+ * 以及**只在交权开关开着时**才要的 commands（注册 `/re0-gui`）。
+ * ⇒ 不声明用不到的服务（R17：能力关着时不占一格）。
  */
-export const inject = ['tools', 'commands', 'webServer']
+export const inject = [
+  'tools', 'webServer',
+  ...(headerPlan(EL_FEATURES.enableSwitchToGui).switchToGui ? ['commands'] : []),
+]
 
 /**
  * 插件配置（用户在 cordis.patch.yml 的 entry `config:` 里给；全部可选，缺省在 apply 里兜）。
@@ -77,42 +82,51 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
     // 行为不变。lastUrl 仅供日志展示最近一次解析结果。
     let lastUrl = ''
     const resolveUrl = async (): Promise<string> => {
-      lastUrl = await resolveHubUrl(config)
+      lastUrl = await elResolveHubUrl(config)
       return lastUrl
     }
 
-    const bridge = new MechaMcpBridge({
+    const bridge = new MechaMcpBridge(elBridgeOptions(
       // requestInit：远程 Hub 鉴权头（需求③接缝；本地 hubToken 空 → 不带头）。
-      sessionFactory: httpSessionFactory({ url: resolveUrl, requestInit: buildRequestInit(config) }),
-      reconnect: {
-        initialDelayMs: config.reconnectInitialDelayMs ?? 300,
-        maxDelayMs: config.reconnectMaxDelayMs ?? 15000,
-        maxAttempts: config.reconnectMaxAttempts ?? 0,
+      elSessionFactory(resolveUrl, buildRequestInit(config)),
+      {
+        // 三个重连旋钮**只在部署显式给了值时才覆盖**（不给 = undefined ⇒ 用资产自己的
+        // 默认值；EL 不再手抄一份 300/15000/0 —— 那是第二处真值）。
+        reconnect: {
+          initialDelayMs: config.reconnectInitialDelayMs,
+          maxDelayMs: config.reconnectMaxDelayMs,
+          maxAttempts: config.reconnectMaxAttempts,
+        },
+        logger: {
+          info: m => ctx.logger?.info?.(m),
+          warn: m => ctx.logger?.warn?.(m),
+          error: m => ctx.logger?.error?.(m),
+        },
+        // 桥发现/刷新工具 → 两阶段 swap 重注册（首连与每次重连后都走这里）。
+        onTools: tools => {
+          disposers = syncTools(ctx, bridge, serverName, tools, disposers,
+                                { logLabel: EL_BRIDGE.logLabel })
+        },
+        // 断联显式信号（报告 §4.3.1）：状态迁移落日志，人/AI 不再面对"工具在但静默坏"。
+        onStatus: status => {
+          if (status === 'offline') ctx.logger?.warn?.('[re0-mecha] Hub 离线：工具暂不可用，后台重连中')
+          else if (status === 'ready') ctx.logger?.info?.(`[re0-mecha] 已连上 Hub MCP：${lastUrl}`)
+          else if (status === 'reconnecting') ctx.logger?.warn?.('[re0-mecha] 与 Hub 的连接中断，重连中…')
+        },
       },
-      logger: {
-        info: m => ctx.logger?.info?.(m),
-        warn: m => ctx.logger?.warn?.(m),
-        error: m => ctx.logger?.error?.(m),
-      },
-      // 桥发现/刷新工具 → 两阶段 swap 重注册（首连与每次重连后都走这里）。
-      onTools: tools => {
-        disposers = syncTools(ctx, bridge, serverName, tools, disposers)
-      },
-      // 断联显式信号（报告 §4.3.1）：状态迁移落日志，人/AI 不再面对"工具在但静默坏"。
-      onStatus: status => {
-        if (status === 'offline') ctx.logger?.warn?.('[re0-mecha] Hub 离线：工具暂不可用，后台重连中')
-        else if (status === 'ready') ctx.logger?.info?.(`[re0-mecha] 已连上 Hub MCP：${lastUrl}`)
-        else if (status === 'reconnecting') ctx.logger?.warn?.('[re0-mecha] 与 Hub 的连接中断，重连中…')
-      },
-    })
+    ))
 
     ctx.logger?.info?.('[re0-mecha] 挂载 Hub MCP 桥（端点每次建会话现解 .mcp-port，只 connect 不 spawn 权威）')
     await bridge.start()   // Hub 未起也不抛：插件照常加载，桥后台重连，起来后自动注册工具
 
     // /re0-gui：dsh 界面「切换至 GUI」按钮的落点——写 .mode-request（'gui'），
     // 看门人轮询到就 terminate 权威+dsh、起 GUI 模式。插件只留意图、不 spawn/kill。
+    // ⚠ **这是能力开关（`EL_FEATURES.enableSwitchToGui`），不是常驻件**：它依赖"有人在
+    // 轮询 .mode-request"（EL 的看门人）；关着时**按钮与 command 都不注册**——两半读的是
+    // 同一个 `headerPlan` ⇒ 不会出现"按钮在、command 不在"的死按钮（见 el-params.ts）。
     // root 同时也是监控端口文件的所在地（两个发现文件同在项目根）。
     const root = elRootFromPortFile(config.mcpPortFile)
+    const switchAction = headerPlan(EL_FEATURES.enableSwitchToGui).switchToGui
 
     // 监控地址的同源只读路由（**共享资产**：mecha/dsh-panel/monitor-url.ts，逐字复制）。
     // 每次被 fetch 都现读端口文件 ⇒ 权威重启换端口后下一拍自动落在新端口（漂移自愈）。
@@ -128,23 +142,25 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
     })
     ctx.logger?.info?.(`[re0-mecha] 注册监控地址路由 ${PANEL_CONFIG.ROUTE_PATH}（读 ${root} 的 ${PANEL_CONFIG.PORT_FILE}，不回落默认端口）`)
 
-    const disposeCmd = ctx.commands!.register({
-      name: 're0-gui',
-      description: '把控制权交还人类：请求看门人切换到 GUI 模式（本 dsh 实例将退出）',
-      handler: async () => {
-        try {
-          const path = await writeModeRequest(root, 'gui')
-          return { kind: 'success' as const,
-            text: `已请求切换至 GUI 模式（${path}）。本 dsh 实例即将随交接退出。` }
-        } catch (e) {
-          return { kind: 'error' as const, text: `写 .mode-request 失败：${(e as Error).message}` }
-        }
-      },
-    })
+    const disposeCmd = switchAction
+      ? ctx.commands!.register({
+          name: switchAction.command,
+          description: '把控制权交还人类：请求看门人切换到 GUI 模式（本 dsh 实例将退出）',
+          handler: async () => {
+            try {
+              const path = await writeModeRequest(root, 'gui')
+              return { kind: 'success' as const,
+                text: `已请求切换至 GUI 模式（${path}）。本 dsh 实例即将随交接退出。` }
+            } catch (e) {
+              return { kind: 'error' as const, text: `写 .mode-request 失败：${(e as Error).message}` }
+            }
+          },
+        })
+      : null
 
     return async () => {
       try { disposeMonitorRoute() } catch { /* ignore */ }
-      try { disposeCmd() } catch { /* ignore */ }
+      if (disposeCmd) { try { disposeCmd() } catch { /* ignore */ } }
       for (const dispose of disposers.values()) {
         try { dispose() } catch { /* ignore */ }
       }

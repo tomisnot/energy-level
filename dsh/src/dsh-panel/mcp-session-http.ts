@@ -15,13 +15,17 @@ import type { McpSession, SessionFactory, ToolDef } from './mcp-bridge.ts'
 
 export interface HttpSessionOptions {
   /**
-   * Hub 的 MCP 端点，如 `http://127.0.0.1:8765/mcp`。**也可以是异步解析器**：
+   * 服务的 MCP 端点，如 `http://127.0.0.1:<项目端口文件里那个端口>/mcp`。**也可以是异步解析器**：
    * 每次建会话（首连与每次重连）都重新求值 ⇒ 权威重启换端口后，工厂重读
-   * `.mcp-port` 就连上新端口（实测报告 §0：56093→52755 漂移曾致老会话永久失联）。
+   * 端口文件就连上新端口（实测：56093→52755 漂移曾致老会话永久失联）。
    * 传字符串则固化——只有显式 hubUrl（远程设备）才该这样用。
+   * ⚠ 端口文件叫什么、默认端点是什么，**都是项目值**（见 `config.ts` 的 `resolveServiceUrl`）。
    */
   url: string | (() => Promise<string>)
-  /** 客户端标识（initialize 时上报）。 */
+  /**
+   * 客户端标识（initialize 时上报）。缺省给资产自己的中性名
+   * ⇒ **资产零项目字面量**；项目要自己的名字就显式传。
+   */
   clientInfo?: { name: string; version: string }
   /** 额外请求头（如远程只读鉴权 token）。 */
   requestInit?: RequestInit
@@ -39,7 +43,7 @@ export function httpSessionFactory(opts: HttpSessionOptions): SessionFactory {
       fetch: opts.fetch,
       // 刻意不传 sessionId：让服务端下发新的（重连恢复=新 session，不复用旧 id）。
     })
-    const client = new Client(opts.clientInfo ?? { name: 're0-mecha-dsh', version: '0.1.0' })
+    const client = new Client(opts.clientInfo ?? { name: 'mcp-bridge-dsh', version: '0.1.0' })
     // connect 自动执行 initialize 握手（拿到新 Mcp-Session-Id）；Hub 不在则此处抛连接错误。
     await client.connect(transport)
 

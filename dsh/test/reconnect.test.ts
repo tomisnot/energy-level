@@ -7,13 +7,18 @@
  *   D 重连后工具集变化再通知 · E Hub 未起时 start() 不阻塞插件加载。
  *
  * 跑：`node --import tsx --test test/reconnect.test.ts`（无需真 MCP 服务/网络）。
+ *
+ * ⚠ 桥本体已换成**共享资产**（`../src/dsh-panel/mcp-bridge.ts`，逐字复制）；本文件是 EL
+ * 自己的**验收套件**（`../src/host/el-hub.ts` 的 `elBridgeOptions` 就是生产路径用的那个
+ * 参数填充 ⇒ 本文件跑的是生产接线，不是替身接线）。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   MechaMcpBridge, isSessionInvalidError, isConnectionError,
   type McpSession, type ToolDef,
-} from '../src/host/mcp-bridge.ts'
+} from '../src/dsh-panel/mcp-bridge.ts'
+import { elBridgeOptions } from '../src/host/el-hub.ts'
 
 const fastSleep = async (): Promise<void> => {}
 
@@ -73,7 +78,7 @@ test('错误分类器：session 失效 / 连接失败 / 普通工具错误 三�
 
 test('A 首连：发现工具 + 调用成功 + 状态 ready', async () => {
   const hub = new FakeHub()
-  const br = new MechaMcpBridge({ sessionFactory: hub.sessionFactory, sleep: fastSleep })
+  const br = new MechaMcpBridge(elBridgeOptions(hub.sessionFactory, { sleep: fastSleep }))
   await br.start()
   assert.equal(br.isReady(), true)
   assert.equal(br.getStatus(), 'ready')
@@ -86,7 +91,7 @@ test('A 首连：发现工具 + 调用成功 + 状态 ready', async () => {
 
 test('B【头号验收】§2.3：Hub 重启→旧 session 404→桥自愈重连(新 session)→调用恢复', async () => {
   const hub = new FakeHub()
-  const br = new MechaMcpBridge({ sessionFactory: hub.sessionFactory, sleep: fastSleep })
+  const br = new MechaMcpBridge(elBridgeOptions(hub.sessionFactory, { sleep: fastSleep }))
   await br.start()
   const first = await br.callTool('run_compute', { reason: 'r1' }) as { session: string }
 
@@ -109,15 +114,24 @@ test('B【头号验收】§2.3：Hub 重启→旧 session 404→桥自愈重连(
 
 test('C Hub 宕机：调用抛**可读离线错误**（非静默 404）；Hub 回来后自动重连成功', async () => {
   const hub = new FakeHub()
-  const br = new MechaMcpBridge({
-    sessionFactory: hub.sessionFactory, sleep: fastSleep,
+  const br = new MechaMcpBridge(elBridgeOptions(hub.sessionFactory, {
+    sleep: fastSleep,
     reconnect: { maxAttempts: 3, initialDelayMs: 1, maxDelayMs: 2 },
-  })
+  }))
   await br.start()
   assert.equal(br.isReady(), true)
 
   hub.setDown(true)
-  await assert.rejects(() => br.callTool('run_compute', { reason: 'r' }), /Hub 离线/)
+  // 资产把文案里的"服务离线"与**项目指引**分成两段；EL 的指引经 `elBridgeOptions` 填进来
+  // ⇒ 两条断言：① 可读离线错误（非静默 404）；② EL 的 offlineHint **真的有消费者**（R17：
+  // 参数换成别的值、这条就红——不是"只要抛错就行"）。
+  await assert.rejects(() => br.callTool('run_compute', { reason: 'r' }),
+    (e: unknown) => {
+      const msg = String((e as Error).message)
+      assert.match(msg, /服务离线/)
+      assert.match(msg, /launcher\.py/, 'EL 的 offlineHint 必须接进离线错误（参数要有消费者）')
+      return true
+    })
   assert.equal(br.getStatus(), 'offline')
 
   hub.setDown(false)   // Hub 回来 → 再调用 → 自动重连成功
@@ -130,10 +144,10 @@ test('C Hub 宕机：调用抛**可读离线错误**（非静默 404）；Hub �
 test('D 重连后工具集变化 → onTools 再次触发（dsh 据此重注册工具）', async () => {
   const hub = new FakeHub()
   const seen: string[][] = []
-  const br = new MechaMcpBridge({
-    sessionFactory: hub.sessionFactory, sleep: fastSleep,
+  const br = new MechaMcpBridge(elBridgeOptions(hub.sessionFactory, {
+    sleep: fastSleep,
     onTools: t => seen.push(t.map(x => x.name)),
-  })
+  }))
   await br.start()
   assert.deepEqual(seen[0], ['set_param', 'run_compute'])
 
@@ -150,27 +164,28 @@ test('D 重连后工具集变化 → onTools 再次触发（dsh 据此重注册�
 test('E Hub 未起时 start() 不抛（不阻塞 dsh 插件加载）', async () => {
   const hub = new FakeHub()
   hub.setDown(true)
-  const br = new MechaMcpBridge({
-    sessionFactory: hub.sessionFactory, sleep: fastSleep,
+  const br = new MechaMcpBridge(elBridgeOptions(hub.sessionFactory, {
+    sleep: fastSleep,
     reconnect: { maxAttempts: 2, initialDelayMs: 1, maxDelayMs: 2 },
-  })
+  }))
   await br.start()               // 不应抛（Hub 不在也让插件加载）
   assert.equal(br.isReady(), false)
   await br.close()
 })
 
 test('F 端口漂移（实测报告 §0）：重启换端口 → 旧连接炸 → 重连工厂现读 .mcp-port → 连上新端口', async () => {
-  // 生产接线的忠实模拟：sessionFactory 每次建会话经**真 resolveHubUrl** 现读端口文件；
+  // 生产接线的忠实模拟：sessionFactory 每次建会话经**生产那条解析口**
+  // （`elResolveHubUrl`：EL 的端口文件名/默认端点 + 资产的"显式 > 文件 > 默认"规则）现读端口文件；
   // 每个 session 记住自己的端口，端口漂移后旧 session 的 callTool 抛"连不上"（旧进程已死）。
   // 桥的重连循环 + 每次现解的 URL 两者配合，漂移才自愈——缺一即红（对照见下）。
   const { writeFile, rm } = await import('node:fs/promises')
   const { join } = await import('node:path')
-  const { resolveHubUrl } = await import('../src/host/config.ts')
+  const { elResolveHubUrl } = await import('../src/host/el-hub.ts')
   const pf = join(process.cwd(), '.__reconnect_port_drift__.mcp-port')
   let livePort = '56093'
   const created: string[] = []
   const sessionFactory = async (): Promise<McpSession> => {
-    const url = await resolveHubUrl({ mcpPortFile: pf })   // 真解析器，每次现读
+    const url = await elResolveHubUrl({ mcpPortFile: pf })   // 生产解析口，每次现读
     const port = url.match(/:(\d+)\//)?.[1] ?? ''
     if (port !== livePort) throw connErr()                 // 建会话时端口已变 → 连不上
     created.push(port)
@@ -187,7 +202,7 @@ test('F 端口漂移（实测报告 §0）：重启换端口 → 旧连接炸 �
   }
   try {
     await writeFile(pf, livePort, 'utf8')
-    const br = new MechaMcpBridge({ sessionFactory, sleep: fastSleep })
+    const br = new MechaMcpBridge(elBridgeOptions(sessionFactory, { sleep: fastSleep }))
     await br.start()
     assert.equal(br.isReady(), true)
     const r1 = await br.callTool('run_sim', {}) as { port: string }

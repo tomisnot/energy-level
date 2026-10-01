@@ -3,9 +3,19 @@
 
 ## 它守什么
 
-`dsh/src/dsh-panel/` 是 mecha 参考实现 `mecha/dsh-panel/`（提交态 **58e2f8a**）的
-**逐字副本**——按该目录 `README.md` 的复制约定：**只有参数块 `panel-config.ts` 允许
-项目化**（EL 的路由 / 端口文件名 / 标题），**其余文件必须与参考实现逐字一致**。
+`dsh/src/dsh-panel/` 是 mecha 参考实现 `mecha/dsh-panel/` 的**逐字副本**——按该目录
+`README.md` 的复制约定：**只有参数块 `panel-config.ts` 允许项目化**（EL 的路由 / 端口
+文件名 / 标题），**其余文件必须与参考实现逐字一致**。出处（含本仓抄了哪两批件）见下面的
+`REFERENCE_REVISION`——**别在这段里另抄一个提交哈希**（D1：事实一个家）。
+
+2026-10-01 起本目录含**两类**标准件（资产 README 的分类）：
+
+* **默认件**（面板 + 地址路由）：`routes.ts` / `panel-view.ts` / `panel-data.ts` /
+  `MonitorTabBody.tsx` / `monitor-client.ts` / `monitor-url.ts` + 各自的 `.test.ts`；
+* **opt-in 件**（自愈 MCP 桥 + 工具注册）：`mcp-bridge.ts` / `mcp-session-http.ts` /
+  `config.ts` / `register-tools.ts` / `mcp-sdk-shims.d.ts` + `mcp-bridge.test.ts`
+  ——EL **要用**（dsh 里的 AI 原生调自家工具），故照抄；**它们的项目值经参数传进去**，
+  见 `dsh/src/el-params.ts` 与 `dsh/src/host/el-hub.ts`（这两个文件**不是**资产件，不进本表）。
 
 本判据把**行为载体**（代码 + 单测）的**行尾归一 sha256** 钉成常量：
 
@@ -52,8 +62,10 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ASSET_DIR = os.path.join('dsh', 'src', 'dsh-panel')
 
 #: **出处说明**（只作说明，不参与比对——比对靠下面那组常量）。
-REFERENCE_REVISION = ('mecha/dsh-panel @ 7490db2（2026-09-26 逐字复制；代码/单测与 5ee78e4 '
-                      '逐字节相同，README 随 7490db2；更早 58e2f8a、f516a99、c44b01f）')
+REFERENCE_REVISION = ('mecha/dsh-panel @ c0cd1d3（2026-10-01：默认 10 件仍与 7490db2 逐字相同，'
+                      '本批新增 **opt-in 件** mcp-bridge / mcp-session-http / config / '
+                      'register-tools / mcp-sdk-shims + mcp-bridge.test，README 同步；'
+                      '更早 7490db2、58e2f8a、f516a99、c44b01f）')
 
 #: **行为载体**（代码 + 单测）→ 行尾归一 sha256。改这里 = "上游发新版后整份重新复制"。
 #: ⚠ `panel-config.ts` 不进表（它是参数块，必然不同）；`README.md` 不进表（prose）。
@@ -78,6 +90,19 @@ CARRIERS = {
         '560103c18231df5bad3d18a77f16f0ed6cceab513928ef765dbdb2afec9a1aca',
     'MonitorTabBody.tsx':
         '8ed1233f18e32a9c4b6af37ebd69937fe63f5522ce2a410bb0dab8ec9339d3d6',
+    # opt-in 件（2026-10-01 批次）：自愈 MCP 桥 + 端点解析 + 工具注册 + SDK 类型垫片。
+    # ⚠ 它们的**项目值经参数传进去**（`dsh/src/el-params.ts` / `host/el-hub.ts`），
+    #   所以这些文件本身逐字一致 = 合同；参数填错会在 EL 自己的验收测试里红。
+    'mcp-bridge.ts':
+        '625fdd325a81635fc7fac1e55c7358c939f40fc9220a18300b8ed5b99b38ace8',
+    'mcp-session-http.ts':
+        '423dca6f422491690e91c03b1576296b578162aa5be72684419bc510445fa194',
+    'config.ts':
+        '537668e2c0b4af8bc0b624ec42cd9e5c0f126205ab676e7700bc592e137c4207',
+    'register-tools.ts':
+        '4eadbf2f495f2f16e09a197db920b1662cb17ddbf051f563509fbe08e0174bf0',
+    'mcp-sdk-shims.d.ts':
+        'd2fc24f0d7131fa2c2e700e9d669c51578f0698023c7919b3b3d36f027aa331e',
     # 单测（随实现一起复制；由 C 组真跑）
     'monitor-url.test.ts':
         '90db86e3b5217b89b18b082f37c502ef6750c54b2de58ad202fb71eecd9cfd29',
@@ -87,6 +112,8 @@ CARRIERS = {
         'b3ece6c3f436f22b5abd3f7ffb295d3799f0fadf2628d4d791312bbd4445152a',
     'panel-view.test.ts':
         'bd2afe86800130e9ff8c03081a5696bd2c9f4c23fe71070c3fca57c72931d1b4',
+    'mcp-bridge.test.ts':
+        '6aceabcdaff4209df66f0380329bb6decded086e16051884823988698456c05c',
 }
 
 
