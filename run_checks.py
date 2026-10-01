@@ -107,10 +107,6 @@ FAST_KNOWN_SEC = {
     # AI 可见面守卫（B8）：按**内容**扫 4 份 SKILL + 面板 client（`.dsh/` 两份
     # gitignored ⇒ git diff 看不见它们）；进 --core：改文档也要立刻知道。
     'ai_surface_selfcheck.py': 2.3,
-    # 2026-09-25 现测 0.5s。dsh 面板**共享资产**守卫：行为载体（逐字副本）的行尾归一
-    # sha256 常量指纹 + 真跑共享单测（skipped 必须为 0）。⚠ 它硬依赖 `node`
-    # （跑 `node --test`；缺 node 判红、不软跳过——同 mecha 的 `dsh_panel_selfcheck`）。
-    'dsh_panel_asset_selfcheck.py': 0.5,
     # 2026-09-26 现测 4.2-5.1s（真装配 + offscreen Qt + 真校验器）。启动初值**被拒必须留痕**
     # （日志 + seed.rejected 史事件）——此前 `except Exception: pass` 把拒绝吞掉，
     # "种了但被拒"与"从没种过"无法区分，抵消了框架 A2 补校验的意义。
