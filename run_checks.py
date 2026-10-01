@@ -65,7 +65,6 @@ TIER_CORE_SEC = 3.0       # --core：秒级，改一行就跑
 TIER_FAST_SEC = 15.0      # --fast：提交前
 # 单判据实测耗时（秒；2026-09-22 由 scripts/check_profile.py 测得）。
 FAST_KNOWN_SEC = {
-    'docs_consistency_selfcheck.py': 0.4,
     'checks_sentinel.py': 0.5,
     'cleanliness_guard_selfcheck.py': 1.6,
     'field_loss_selfcheck.py': 1.7,

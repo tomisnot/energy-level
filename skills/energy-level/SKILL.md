@@ -9,7 +9,7 @@ whenToUse: 当需要操控 Energy Level 软件（改参数、加能级组、配�
 > 本文件是 AI harness 的 skill 说明书：连接方式、工具清单、工作流、单位约定、
 > 物理坑。AI 使用中若发现文档与实态不符，应回头修正本文件（自我迭代）。
 > **本版对齐 mecha v2**：工具面 = `mecha_v2/tools.py` 注册的 MCP 工具，共 **14 个**
-> （清单见下方「## 工具清单」表；该表由 `checks/docs_consistency_selfcheck.py` 与真
+> （清单见下方「## 工具清单」表；该表由 `checks/ai_surface_selfcheck.py` 的 C 组与真
 > 注册表**双向互钉**，多一个/漏一个即判据红）。宿主 MCP 面**就是**这张注册表，
 > **没有**额外的 `list_tools` 工具可调。v1 的 GUI 内嵌 AI 面
 > （run_python/submit_sweep/get_diag/screenshot/set_groups…）**在 v2 不存在**，

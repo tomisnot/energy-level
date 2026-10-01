@@ -6,7 +6,7 @@ ADR `边界机制补三洞-运行时图与声明表一致`：并表判据不许�
 
 表 = 装配点出厂声明（build_roles 注入 EL 的 engine_name/project）
    + EL 运行时真实注册项（build_tool_registry 往 Surface 登记的 QUERY 等）。
-schema-only 引擎（照 checks/docs_consistency 先例）：build 期只调 schema()，
+schema-only 引擎（照 checks/ai_surface_selfcheck 先例）：build 期只调 schema()，
 不建 ARC cache，秒级。
 
 用法：python scripts/gen_capability_map.py            # 生成 docs/capabilities.md

@@ -350,6 +350,23 @@ def main():
          bool(pairs) and len(left) >= 8),
     ])
 
+    # ---- C2 工具表探测器的**致死性**（R7）----
+    # 原 `docs_consistency_selfcheck.py` 只做"C 组：SKILL 表 ⇄ 注册表互钉"这一件事，
+    # 已被上面 C 组**完全覆盖**（同一条双向相等断言）；但它带的那 4 条红证是它独有的
+    # ⇒ 判据删除时**跟着搬过来**（R13：删机制要把承诺改写/搬运，不是写"这东西不存在"）。
+    _want = {'set_config', 'read_config'}
+    _good = '## 工具清单\n\n| 工具 |\n|---|\n| `set_config` |\n| `read_config` |\n'
+    C.group('C2 工具表探测器的致死性：多一个 / 漏一个 / 无小节都要报', [
+        ('干净表 == 期望集（不误报）', _section_rows(_good, TOOL_HEAD) == _want),
+        ('多一个 → 不等（报出）',
+         _section_rows(_good + '| `nonexistent_tool` |\n', TOOL_HEAD) != _want),
+        ('漏一个 → 不等（报出）',
+         _section_rows('## 工具清单\n\n| 工具 |\n|---|\n| `set_config` |\n',
+                       TOOL_HEAD) != _want),
+        ('找不到「## 工具清单」小节 → None（报，不静默）',
+         _section_rows('# 没有该小节\n', TOOL_HEAD) is None),
+    ])
+
     # ---- D 退役名 / 固定端口（按段落）----
     dsubs, all_hard, all_soft = [], [], []
     for rel in sorted(SURFACES):
