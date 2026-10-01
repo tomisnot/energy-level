@@ -20,7 +20,7 @@ Phase 5 侧证：AI 拿到的就是这些工具，物理演化只有 run_sim→S
 `set_config.reason`、`set_drive.{pol,pulse,detuning_mhz,mode,atom,name,reason}`、
 `read_waves.atom`、`reset_config.reason`）；真默认就是 `None` 的参数（8 个）
 **一律不声明**——声明成 `null` 会落进第二格，语义不同。
-判据 `checks/mcp_toolface_selfcheck.py` 守这条（**完备 + 唯一**），并断言
+判据 `checks/mcp_defaults_selfcheck.py` 守这条（**完备 + 唯一**），并断言
 "显式 null ⇒ 到达工具体的是真默认"。
 
 ## Known Limitations and Deferred Work
