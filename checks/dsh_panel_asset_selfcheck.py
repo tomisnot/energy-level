@@ -62,10 +62,10 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ASSET_DIR = os.path.join('dsh', 'src', 'dsh-panel')
 
 #: **出处说明**（只作说明，不参与比对——比对靠下面那组常量）。
-REFERENCE_REVISION = ('mecha/dsh-panel @ c0cd1d3（2026-10-01：默认 10 件仍与 7490db2 逐字相同，'
-                      '本批新增 **opt-in 件** mcp-bridge / mcp-session-http / config / '
-                      'register-tools / mcp-sdk-shims + mcp-bridge.test，README 同步；'
-                      '更早 7490db2、58e2f8a、f516a99、c44b01f）')
+REFERENCE_REVISION = ('mecha/dsh-panel @ 22e41cc（2026-10-01：桥修 `ensureReady` 移入 `try` —— '
+                      '补回移植时丢掉的那处修复，"首连失败后再调用"要回可读离线错误；'
+                      '并只对连接/会话类失败包装"服务离线"（编程错不再被伪装）；'
+                      '更早 c0cd1d3〔opt-in 件首批〕、7490db2、58e2f8a、f516a99、c44b01f）')
 
 #: **行为载体**（代码 + 单测）→ 行尾归一 sha256。改这里 = "上游发新版后整份重新复制"。
 #: ⚠ `panel-config.ts` 不进表（它是参数块，必然不同）；`README.md` 不进表（prose）。
@@ -94,7 +94,7 @@ CARRIERS = {
     # ⚠ 它们的**项目值经参数传进去**（`dsh/src/el-params.ts` / `host/el-hub.ts`），
     #   所以这些文件本身逐字一致 = 合同；参数填错会在 EL 自己的验收测试里红。
     'mcp-bridge.ts':
-        '625fdd325a81635fc7fac1e55c7358c939f40fc9220a18300b8ed5b99b38ace8',
+        '59c5078fce46c4610a319d2a70628ef7827ea11c01734be02eca67d35ca2d510',
     'mcp-session-http.ts':
         '423dca6f422491690e91c03b1576296b578162aa5be72684419bc510445fa194',
     'config.ts':
@@ -113,7 +113,7 @@ CARRIERS = {
     'panel-view.test.ts':
         'bd2afe86800130e9ff8c03081a5696bd2c9f4c23fe71070c3fca57c72931d1b4',
     'mcp-bridge.test.ts':
-        '6aceabcdaff4209df66f0380329bb6decded086e16051884823988698456c05c',
+        '4fba5f5e963da321a1b3d33a4fc67323e0506cfad18d2fdadf7df7cc7962dc7e',
 }
 
 
