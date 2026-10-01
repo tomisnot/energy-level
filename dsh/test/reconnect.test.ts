@@ -222,3 +222,35 @@ test('F 端口漂移（实测报告 §0）：重启换端口 → 旧连接炸 �
     await rm(pf, { force: true })
   }
 })
+
+/**
+ * ⭐ **G：首连失败之后再调用**——与 C **是两支**，别合并（2026-10-01 补，来自上游的真回归）。
+ *
+ * C 的形状是"**先连上**（`isReady()===true`）、再把 Hub 弄宕"：那时 session 还在、
+ * `status==='ready'` ⇒ `callTool` 里 `ensureReady()` **直接 return**，错误由
+ * `session.callTool` 抛出、本来就落在 `try` 内 ⇒ **C 测的是"连上后掉线"那一支**。
+ *
+ * G 的形状是"**一开始就连不上**"：`start()` 失败 ⇒ `status='offline'`、无 session ⇒
+ * `callTool` 必须自己找路重连；资产曾把 `await ensureReady()` 放在 `try` **之外**
+ * ⇒ 这里会抛**裸连接错/404**，而精心写的「服务离线…+`offlineHint`」永远跑不到。
+ * ⇒ **C 抓不到这个分支**（它在修复前后都绿），只有本条能抓（R7 的红证见提交说明）。
+ */
+test('G ⭐ 首连失败之后再调用：仍抛**可读离线错误**（裸 404/裸连接错就是缺陷）', async () => {
+  const hub = new FakeHub()
+  hub.setDown(true)                      // ← 一开始就连不上（不是"连上后掉线"）
+  const br = new MechaMcpBridge(elBridgeOptions(hub.sessionFactory, {
+    sleep: fastSleep,
+    reconnect: { maxAttempts: 2, initialDelayMs: 1, maxDelayMs: 2 },
+  }))
+  await br.start()                       // 不抛（Hub 不在也让插件加载）
+  assert.equal(br.isReady(), false, '前提：首连确实失败了——否则本条测的不是这个分支')
+
+  await assert.rejects(() => br.callTool('run_sim', {}), (e: unknown) => {
+    const msg = String((e as Error).message)
+    assert.match(msg, /服务离线/, '首连失败后再调用必须是可读离线错误（裸 404 = 缺陷）')
+    assert.match(msg, /launcher\.py/, 'EL 的 offlineHint 在这一支也必须真的有消费者')
+    return true
+  })
+  assert.equal(br.getStatus(), 'offline')
+  await br.close()
+})
