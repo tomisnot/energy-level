@@ -1,23 +1,25 @@
 # -*- coding: utf-8 -*-
-"""写权模式机判据（mecha v2：Authority + Gate + Channel，两模式写权互斥 + 致死性）。
+"""EL **适配层**的写权映射判据（只留 EL 自己写的那一层）。
 
-守总纲 §5.2⑤ 与硬纪律 4（actor 由通道钉死）：
-  A. actor→side 映射（V2Bridge 适配器层：gui/human→human；ai/mcp/codeact/job→ai；
-     未知 actor→拒 unknown_actor）。
-  B. **出厂 LOCKED**（DEFAULT_MODE）：任何通道都不能写（nothing ships enabled）。
-  C. human 模式：人侧可写、AI 侧被拒**且快照不变**、拒绝可教学
-     （kind=authority_mode_mismatch + hint + suggest）。
-  D. ai 模式：AI 侧可写、人侧被拒。
-  E. switch_mode：**只有 human 侧能切**（AI 不能自解锁，kind=authority_switch_denied）；
-     切到 LOCKED 全员禁写；未知 actor 拒。
-     （v2 语义：mode 是操作者协调态，不落 History——mecha/authority.py
-     docstring 已声明；v1 的 authority_switch 事件断言随之退役。）
-  F. v1 的 undo 门不存在于 v2（History append-only，撤销=反向 set 记新事件，
-     决策见 mecha 仓 ADR `EL能力面取舍` 第 3 条）。
-  G. **致死性**：B（LOCKED 拒一切）+ C/D（越权被拒）合起来证明这道门是**载重的**。
+## 为什么只剩这些（2026-10-01 收窄）
 
-纯内存装配（Gate/History/Authority 手搭 + V2Bridge 测试注入构造），不碰 EL 引擎、
-不起 cache——判据测的是**控制权机制本身**（<1s）。
+写权门 / 模式机**本身**的语义是**框架的**，且框架判据已经在实测：
+- `mecha/checks/phase1_assembly_selfcheck.py`：LOCKED 下 seed 落地与校验、OPEN 两侧可写、
+  既有模式互斥、`authority_switch_denied`、拒绝不留痕、快照与 fold(史) 一致、批量回滚；
+- `mecha/checks/phase5_bridge_selfcheck.py`：**对 EL 的真 `V2Bridge`** 实测 can_write、
+  写权互斥（ai 模式下 gui 被拒 + 抛 GateDenied）、`switch_mode(actor='ai')` 被拒、
+  `switch_mode(actor='gui')` 经适配器映射到 human 侧放行、订阅刷新与 journal 归因。
+
+⇒ 本判据**不再重测那些**（同义重复），只守**框架不知道的那部分**——EL 的
+`_ACTOR_CHANNEL` 表与它的边界行为：
+
+- **A** 表的内容与完整性（谁映到哪一侧；只有两种 side）；
+- **B** 未知 actor：`write` / `switch_mode` 都拒（`unknown_actor`）、`can_write` 为 False；
+- **C** 映射的**效果**：细标签进史做归因、side 定写权（human / ai 互为对照）；
+- **D** `watch_mode` 只是把 `Authority.watch` 透出去（真变化才通知 + disposer 生效）。
+
+⚠ 保留棘轮：这几条删掉，EL 的适配层就没人守了（框架判据测框架语义，它不知道 EL 的表长什么样）。
+⚠ 未覆盖（如实登记）：`watch_mode` 在**生产**里没有消费者（见交接文档 §8 挂起项）。
 """
 import os
 import sys
@@ -26,12 +28,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 from checks.checklib import Checker                        # noqa: E402
-from mecha.authority import Authority, DEFAULT_MODE, Mode  # noqa: E402
+from mecha.authority import Authority, Mode                # noqa: E402
 from mecha.errors import GateDenied                        # noqa: E402
-from mecha.gate import Channel, Gate, accept_all           # noqa: E402
+from mecha.gate import Gate, accept_all                    # noqa: E402
 from mecha.history import History                          # noqa: E402
 
-from mecha_v2.bridge import V2Bridge, _ACTOR_CHANNEL  # noqa: E402
+from mecha_v2.bridge import V2Bridge, _ACTOR_CHANNEL       # noqa: E402
 
 C = Checker('authority')
 
@@ -40,12 +42,11 @@ def _mk_bridge(mode: Mode) -> V2Bridge:
     """纯内存装配（engine=None）：只测控制权，不碰物理。"""
     auth = Authority(mode=mode)
     hist = History()
-    gate = Gate(auth, hist, validate=accept_all)
-    return V2Bridge(gate, hist, auth)
+    return V2Bridge(Gate(auth, hist, validate=accept_all), hist, auth)
 
 
 def _denied(fn):
-    """执行 fn，返回 (是否被 GateDenied, 异常或 None)。"""
+    """执行 fn → (是否被 GateDenied, 异常或 None)。"""
     try:
         fn()
         return False, None
@@ -53,127 +54,58 @@ def _denied(fn):
         return True, e
 
 
-# ---------------- A. actor → side 映射（适配器层） ----------------
-_a1, _e1 = _denied(lambda: _mk_bridge(Mode.HUMAN).write(
-    'field.B_gauss', 1.0, reason='火星人越权', actor='martian'))
-C.group('A actor→side 映射（桥层表：gui/human→human；ai 系→ai；未知→拒）', [
-    ('ai/codeact/mcp/job → ai 侧',
+# ---------------- A. EL 的映射表（框架不知道它长什么样） ----------------
+C.group('A EL 适配层的 actor→side 映射表', [
+    ('ai 系四个标签 → ai',
      all(_ACTOR_CHANNEL[a] == 'ai' for a in ('ai', 'codeact', 'mcp', 'job'))),
-    ('gui/human → human 侧',
+    ('human 侧两个标签 → human',
      all(_ACTOR_CHANNEL[a] == 'human' for a in ('gui', 'human'))),
-    ('细标签归因进史（Channel("gui","human").actor=gui, side=human）',
-     Channel('gui', 'human').actor == 'gui' and Channel('gui', 'human').side == 'human'),
-    ('未知 actor → 写被拒（kind=unknown_actor，安全默认）',
-     _a1 and _e1.kind == 'unknown_actor'),
+    ('表里只有这两种 side（没有第三种写权面）',
+     set(_ACTOR_CHANNEL.values()) == {'human', 'ai'}),
 ])
 
-# ---------------- B. 出厂 LOCKED：谁都不可写 ----------------
-brB = _mk_bridge(DEFAULT_MODE)
-_b_gui, _eb = _denied(lambda: brB.write('field.B_gauss', 1.0, reason='人写', actor='gui'))
-_b_ai, _ = _denied(lambda: brB.write('field.B_gauss', 2.0, reason='AI 写', actor='ai'))
-C.group('B 出厂 LOCKED（DEFAULT_MODE）：任何通道都不能改域状态', [
-    ('默认模式就是 locked（nothing ships enabled）',
-     DEFAULT_MODE is Mode.LOCKED and brB.mode == 'locked'),
-    ('human 侧写被拒（kind=authority_locked + hint）',
-     _b_gui and _eb.kind == 'authority_locked' and bool(_eb.hint)),
-    ('ai 侧写被拒', _b_ai),
-    ('LOCKED 下两侧 can_write 都是 False',
-     brB.can_write('gui') is False and brB.can_write('ai') is False),
-    ('被拒后快照一字节没动', brB.effective() == {}),
-])
-
-# ---------------- C~E：human 起步的桥 ----------------
+# ---------------- B. 未知 actor：fail closed ----------------
 br = _mk_bridge(Mode.HUMAN)
-
-# C. human 模式：人可写、AI 被拒且不落地
-rec_human = br.write('field.B_gauss', 10.0, reason='人调磁场', actor='gui')
-snap_after_human = br.effective()
-_c_ai, _ec = _denied(lambda: br.write('field.B_gauss', 99.0,
-                                       reason='AI 越权偷写', actor='ai'))
-C.group('C human 模式：人侧可写、AI 侧被拒且不落地（写权互斥）', [
-    ('gui 写入成功（回执 {ok,resolved,seq}）',
-     rec_human['ok'] and rec_human['resolved'] == 10.0 and rec_human['seq'] >= 1),
-    ('ai 写入被拒（GateDenied）', _c_ai),
-    ('被拒后快照逐位不变（AI 没写进去）', br.effective() == snap_after_human),
-    ('拒绝可教学：kind=authority_mode_mismatch + hint + suggest',
-     _ec.kind == 'authority_mode_mismatch' and bool(_ec.hint) and bool(_ec.suggest)),
+_a_den, _a_err = _denied(lambda: br.write('field.B_gauss', 1.0,
+                                          reason='火星人越权', actor='martian'))
+_b_den, _b_err = _denied(lambda: br.switch_mode(Mode.AI, actor='martian'))
+C.group('B 未知 actor → 一切入口都拒（不静默、不默认放行）', [
+    ('write 被拒且 kind=unknown_actor', _a_den and _a_err.kind == 'unknown_actor'),
+    ('switch_mode 被拒且 kind=unknown_actor', _b_den and _b_err.kind == 'unknown_actor'),
+    ('can_write 未知标签 = False（控件据此只读）', br.can_write('martian') is False),
+    ('两处被拒后快照仍空（没有偷偷落地）', br.effective() == {}),
 ])
 
-# D. ai 模式：AI 可写、人被拒
-br.switch_mode(Mode.AI, actor='human')          # 人开闸
+# ---------------- C. 映射的效果：归因 + 写权（一正一反） ----------------
+rec = br.write('field.B_gauss', 10.0, reason='人调磁场', actor='gui')
+ev = br.history.events()[-1]
+_c_den, _c_err = _denied(lambda: br.write('field.B_gauss', 99.0,
+                                          reason='AI 越权偷写', actor='ai'))
+br.switch_mode(Mode.AI, actor='human')          # 人开闸（看门人语义）
 rec_ai = br.write('field.B_gauss', 20.0, reason='AI 调磁场', actor='ai')
-_d_gui, _ = _denied(lambda: br.write('field.B_gauss', 88.0,
-                                      reason='人越权偷写', actor='gui'))
-C.group('D ai 模式：AI 侧可写、人侧被拒', [
-    ('切到 ai 成功（mode=ai）', br.mode == 'ai'),
-    ('ai 写入成功', rec_ai['ok'] and rec_ai['resolved'] == 20.0),
-    ('gui 写入被拒', _d_gui),
-    ('ai 模式下 can_write：ai=True / gui=False',
-     br.can_write('ai') is True and br.can_write('gui') is False),
+_d_den, _ = _denied(lambda: br.write('field.B_gauss', 88.0,
+                                     reason='人越权偷写', actor='gui'))
+_rec = br.history.events()[-1]
+C.group('C 映射的效果：细标签进史 + side 定写权（human / ai 互为对照）', [
+    ('gui 写在 human 模式放行，且**史里的 actor 是细标签 gui**（没被抹成 side）',
+     rec['ok'] and ev.actor == 'gui' and ev.target == 'field.B_gauss'),
+    ('ai 在 human 模式被拒，且可教学（kind + hint + suggest）',
+     _c_den and _c_err.kind == 'authority_mode_mismatch'
+     and bool(_c_err.hint) and bool(_c_err.suggest)),
+    ('ai 模式：ai 可写、gui 被拒（互斥是真的）', rec_ai['ok'] and _d_den),
+    ('ai 写的史 actor 是 ai（面板/端点据此高亮归因）', _rec.actor == 'ai'),
 ])
 
-# E. switch_mode：AI 不能自解锁；LOCKED 全员禁写；未知 actor 拒
-_e_self, _es = _denied(lambda: br.switch_mode(Mode.HUMAN, actor='ai'))
-br.switch_mode(Mode.HUMAN, actor='human')       # 人夺回
-br.switch_mode(Mode.LOCKED, actor='gui')        # gui 标签在 human 侧 → 可切
-_e_locked_gui, _ = _denied(lambda: br.write('field.B_gauss', 1.0,
-                                            reason='locked 下人写', actor='gui'))
-_e_locked_ai, _ = _denied(lambda: br.write('field.B_gauss', 1.0,
-                                           reason='locked 下 AI 写', actor='ai'))
-br.switch_mode(Mode.HUMAN, actor='human')       # 解回
-_e_unknown, _eu = _denied(lambda: br.switch_mode(Mode.AI, actor='martian'))
-C.group('E switch_mode：只有人类侧能切（AI 不能自解锁）+ LOCKED 语义', [
-    ('AI 侧切模式被拒（kind=authority_switch_denied）',
-     _e_self and _es.kind == 'authority_switch_denied'),
-    ('人类夺回：切回 human 放行', br.mode == 'human'),
-    ('切到 LOCKED 后两侧都写不进（维护/危险态）',
-     _e_locked_gui and _e_locked_ai),
-    ('解回 human 后 gui 恢复可写', br.can_write('gui') is True),
-    ('未知 actor 切模式被拒（unknown_actor）',
-     _e_unknown and _eu.kind == 'unknown_actor'),
-    ('mode 不落 History（协调态非域状态；authority.py 声明）',
-     all(e.target == 'field.B_gauss' for e in br.history.events())),
-])
-
-# F. v1 undo 门在 v2 不存在（如实登记，不是断言失败）
-C.check('F v2 无 undo 口（撤销=反向 set 记新事件，ADR EL能力面取舍；'
-        '写权门的覆盖面因此不需要 undo 分支）',
-        not hasattr(br, 'undo'))
-
-# F2. watch_mode：mode 不落史 ⇒ UI 实时反映"此刻谁能写"靠订阅（GUI 按钮/网页控制台）
+# ---------------- D. watch_mode = Authority.watch 的透出 ----------------
 _seen = []
 _unwatch = br.watch_mode(lambda m: _seen.append(m))
-br.switch_mode(Mode.AI, actor='human')          # 真变化 → 通知
-br.switch_mode(Mode.AI, actor='human')          # 同模式重复 → 幂等不通知
 br.switch_mode(Mode.HUMAN, actor='human')       # 真变化 → 通知
-got = list(_seen)
+_after_one = list(_seen)
 _unwatch()
-br.switch_mode(Mode.AI, actor='human')          # 退订后 → 不再收
-br.switch_mode(Mode.HUMAN, actor='human')
-
-# 坏订阅者：回调抛错必须被吞，模式机照常切换
-_seen2 = []
-br.watch_mode(lambda m: (_ for _ in ()).throw(RuntimeError('坏订阅者')))
-br.watch_mode(lambda m: _seen2.append(m))       # 正常订阅者仍应收到
-_crashed = False
-try:
-    br.switch_mode(Mode.LOCKED, actor='human')
-    br.switch_mode(Mode.HUMAN, actor='human')
-except Exception:                                        # noqa: BLE001
-    _crashed = True
-
-C.group('F2 watch_mode 订阅：真变化才通知、幂等不重复、退订即止、坏订阅者不拖垮', [
-    ('两次真切换各收一条（回调收 mode 字符串）', got == ['ai', 'human']),
-    ('同模式重复切换不通知（UI 不吃重复刷新）', len(_seen) == 2),
-    ('disposer 退订后不再收（切换仍生效）',
-     len(_seen) == 2 and br.mode == 'human'),
-    ('坏订阅者抛错被吞、模式机照常切换（正常订阅者仍收到）',
-     _crashed is False and _seen2 == ['locked', 'human']),
+br.switch_mode(Mode.AI, actor='human')          # 已退订 → 不再收
+C.group('D watch_mode 透出模式变更（"此刻谁能写"的订阅口）', [
+    ('真变化时回调收到 mode 字符串', _after_one == ['human']),
+    ('disposer 退订后不再收（切换本身仍生效）', len(_seen) == 1 and br.mode == 'ai'),
 ])
-
-# G. 致死性：B 的 LOCKED 拒一切 + C/D 的越权被拒 ⇒ 门是载重的
-C.check('G 致死性：无门可写（human 模式人写成功）对照越权必拒——门不是哑门',
-        rec_human['ok'] and rec_ai['ok'] and _c_ai and _d_gui
-        and _b_gui and _b_ai and _e_self)
 
 sys.exit(0 if C.summary() else 1)
