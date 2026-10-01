@@ -27,12 +27,12 @@ import { syncTools, type ToolDisposers } from './dsh-panel/register-tools.ts'
 import { buildRequestInit } from './dsh-panel/config.ts'
 import { elBridgeOptions, elResolveHubUrl, elSessionFactory } from './host/el-hub.ts'
 import { elRootFromPortFile, writeModeRequest } from './host/mode-request.ts'
-import { EL_BRIDGE, EL_FEATURES, headerPlan } from './el-params.ts'
+import { EL_BRIDGE, EL_FEATURES, LOG_TAG, PLUGIN, headerPlan } from './el-params.ts'
 import { PANEL_CONFIG } from './dsh-panel/panel-config.ts'
 import { makeMonitorUrlHandler } from './dsh-panel/monitor-url.ts'
 
-/** Cordis 插件显示名（诊断用）。 */
-export const name = 're0-mecha'
+/** Cordis 插件显示名（诊断用）。**取自参数家**（`PLUGIN.name` 是唯一来源）。 */
+export const name = PLUGIN.name
 
 /**
  * 等待 host 服务就绪再激活：tools（工具注册）、webServer（注册监控地址的同源只读路由），
@@ -74,7 +74,7 @@ export interface Config {
 /** 挂载 host 桥：连 Hub、注册工具、状态信号；teardown 时注销工具并关桥。 */
 export async function apply(ctx: Context, config: Config = {}): Promise<void> {
   await ctx.effect(async () => {
-    const serverName = config.serverName || 're0-mecha'
+    const serverName = config.serverName || PLUGIN.serverName
     let disposers: ToolDisposers = new Map()
     // 端点**每次建会话现解**（不固化）：权威重启换端口（实测报告 §0，如
     // 56093→52755）后，桥的重连工厂重读 .mcp-port 即连上新端口——老会话
@@ -109,14 +109,14 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
         },
         // 断联显式信号（报告 §4.3.1）：状态迁移落日志，人/AI 不再面对"工具在但静默坏"。
         onStatus: status => {
-          if (status === 'offline') ctx.logger?.warn?.('[re0-mecha] Hub 离线：工具暂不可用，后台重连中')
-          else if (status === 'ready') ctx.logger?.info?.(`[re0-mecha] 已连上 Hub MCP：${lastUrl}`)
-          else if (status === 'reconnecting') ctx.logger?.warn?.('[re0-mecha] 与 Hub 的连接中断，重连中…')
+          if (status === 'offline') ctx.logger?.warn?.(`${LOG_TAG} Hub 离线：工具暂不可用，后台重连中`)
+          else if (status === 'ready') ctx.logger?.info?.(`${LOG_TAG} 已连上 Hub MCP：${lastUrl}`)
+          else if (status === 'reconnecting') ctx.logger?.warn?.(`${LOG_TAG} 与 Hub 的连接中断，重连中…`)
         },
       },
     ))
 
-    ctx.logger?.info?.('[re0-mecha] 挂载 Hub MCP 桥（端点每次建会话现解 .mcp-port，只 connect 不 spawn 权威）')
+    ctx.logger?.info?.(`${LOG_TAG} 挂载 Hub MCP 桥（端点每次建会话现解 .mcp-port，只 connect 不 spawn 权威）`)
     await bridge.start()   // Hub 未起也不抛：插件照常加载，桥后台重连，起来后自动注册工具
 
     // /re0-gui：dsh 界面「切换至 GUI」按钮的落点——写 .mode-request（'gui'），
@@ -140,7 +140,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
       path: PANEL_CONFIG.ROUTE_PATH,
       handler: makeMonitorUrlHandler({ root, portFile: PANEL_CONFIG.PORT_FILE }),
     })
-    ctx.logger?.info?.(`[re0-mecha] 注册监控地址路由 ${PANEL_CONFIG.ROUTE_PATH}（读 ${root} 的 ${PANEL_CONFIG.PORT_FILE}，不回落默认端口）`)
+    ctx.logger?.info?.(`${LOG_TAG} 注册监控地址路由 ${PANEL_CONFIG.ROUTE_PATH}（读 ${root} 的 ${PANEL_CONFIG.PORT_FILE}，不回落默认端口）`)
 
     const disposeCmd = switchAction
       ? ctx.commands!.register({
@@ -166,5 +166,5 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
       }
       await bridge.close()
     }
-  }, 're0-mecha: host MCP bridge')
+  }, `${PLUGIN.name}: host MCP bridge`)
 }

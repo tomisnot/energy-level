@@ -20,10 +20,29 @@
  * ⇒ "逐字复制"才成立（参数表见 `dsh-panel/README.md`）。
  */
 
+/**
+ * EL 的插件身份（**唯一来源**）。
+ *
+ * ⚠ 为什么要有这一项：`name`（Cordis 插件名）与 `serverName`（MCP 工具命名空间
+ * `mcp__<serverName>__<tool>`）在 dsh 侧**同一个字符串**，而它此前在 `src/index.ts`
+ * 里被写了十来遍（插件名 1 处 + serverName 默认 1 处 + 每条日志的前缀若干处）。
+ * 那是"同一事实多个家"——**改漏一处就是静默错**（工具命名空间与子注册表名不一致）。
+ * ⇒ 现在：`PLUGIN` 一处声明，`LOG_TAG` 由它派生，其余全部引用它。
+ */
+export const PLUGIN = {
+  /** Cordis 插件名（`src/index.ts` / `src/client/index.ts` 的 `export const name`）。 */
+  name: 're0-mecha',
+  /** MCP 工具命名空间：工具名形如 `mcp__re0-mecha__<tool>`。 */
+  serverName: 're0-mecha',
+} as const
+
+/** 日志前缀，形如 `[re0-mecha]`。**由 `PLUGIN.name` 派生**（不手抄第二个字面量）。 */
+export const LOG_TAG = `[${PLUGIN.name}]` as const
+
 /** EL 填给共享资产 opt-in 件的值（**唯一来源**）。 */
 export const EL_BRIDGE = {
   /** `BridgeOptions.logLabel`：日志前缀 `[re0-mecha] …`（与 EL 旧的日志前缀逐字一致）。 */
-  logLabel: 're0-mecha',
+  logLabel: PLUGIN.name,
   /**
    * `BridgeOptions.offlineHint`：断联时那句**可操作指引**（项目知识：怎么把软件重新起来）。
    * 原自建版把这段写死在桥的错误文案里；资产把它参数化了 ⇒ 必须由 EL 显式传，
