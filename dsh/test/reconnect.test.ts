@@ -6,7 +6,7 @@
  *   分类器 · A 首连 · B §2.3 重启自愈(+致死性对照) · C 宕机→可读离线错误→恢复 ·
  *   D 重连后工具集变化再通知 · E Hub 未起时 start() 不阻塞插件加载。
  *
- * 跑：`node --import tsx --test test/reconnect.test.ts`（无需真 MCP 服务/网络）。
+ * 跑：`node --test test/reconnect.test.ts`（**裸跑**、无需真 MCP 服务/网络；⚠ 别加 `--preserve-symlinks`）。
  *
  * ⚠ 桥本体是**依赖包** `@mecha/dsh-panel`（junction，磁盘上一份代码；EL 不再持有副本）；
  * 本文件是 EL 自己的**验收套件**（`../src/host/el-hub.ts` 的 `elBridgeOptions` 就是生产路径

@@ -6,7 +6,7 @@
  * `el-hub.ts` 填进去。⇒ 本文件测的是**EL 那条生产接线**，不是资产内部规则
  * （资产自己的规则由它的共享单测守）。
  *
- * 跑：`node --import tsx --test test/config.test.ts`
+ * 跑：`node --test test/config.test.ts`（**裸跑**：无旗标、无 tsx；⚠ 别加 `--preserve-symlinks`，见交接文档 §6）
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'

@@ -55,7 +55,7 @@ cd dsh && npm install && cd ..
 （走 AI 模式启动器 `python 能级.py` 会自动检测缺失并 npm install，可略过手动这步。）
 
 ```sh
-# 开发期（tsx 直接加载源、无需构建；但仍需上面装过依赖）
+# 开发期（Node **原生剥类型**直接加载 TS 源：无需 tsx、无需构建；但仍需上面装过依赖）
 dsh web --patch ./dsh/cordis.source.patch.yml
 # 交付期（先构建）
 cd dsh && npm run bundle && cd ..

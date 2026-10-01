@@ -28,7 +28,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --preserve-symlinks --preserve-symlinks-main --import tsx --test test/reconnect.test.ts test/config.test.ts test/re0-panel.test.ts test/switch-to-gui.test.ts",
+    "test": "node --test test/reconnect.test.ts test/config.test.ts test/re0-panel.test.ts test/switch-to-gui.test.ts",
     "bundle": "tsdown"
   },
   "dependencies": {
@@ -41,7 +41,6 @@
     "@types/react": "^18.3.1",
     "@types/ws": "^8.18.1",
     "tsdown": "^0.22.2",
-    "tsx": "^4.22.4",
     "typescript": "^5.9.0"
   },
   "peerDependencies": {

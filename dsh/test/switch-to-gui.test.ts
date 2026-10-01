@@ -15,7 +15,7 @@
  *   按钮文案只能取 `EL_HEADER_LABEL`（一处真值）。这两条探的是"有人把手写分支加回来"
  *   那一刻——那时行为断言仍绿，但它已经埋了脱钩的种子。
  *
- * 跑：`node --import tsx --test test/switch-to-gui.test.ts`
+ * 跑：`node --test test/switch-to-gui.test.ts`（**裸跑**）
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
