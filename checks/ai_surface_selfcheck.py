@@ -86,12 +86,6 @@ SURFACES = {
 #: 面板取址面（TS）：不得硬编码监控地址。
 CLIENT_GLOB_DIR = os.path.join('dsh', 'src', 'client')
 
-#: **机器事实的唯一家**（DSH §3.1"一个事实一个家"）：框架在本机的安装位置只允许在
-#: `README.md` §4 出现，别处一律链接过去。事实本身**从家里解析**（R9），不在判据里
-#: 硬编码——换机器/换布局时，家里改了、判据自动跟随。
-FACT_HOME = 'README.md'
-FACT_ANCHOR = re.compile(r'Editable project location `([^`]+)`')
-
 #: v1 工具名（退役）。**只用无歧义的名字**——`query`/`undo` 会与 `query_params` 撞。
 RETIRED = ('set_param', 'list_params', 'get_state', 'list_levels', 'get_activity',
            'get_waves', 'estimate_cost', 'preview_behavior', 'run_compute',
@@ -186,44 +180,6 @@ def scan_text(text):
                             % (ls[0], tok))
             break
     return hard, soft
-
-
-def fact_offenders(fact, files):
-    """→ 复述该机器事实的文件（**纯函数**：喂合成映射即可证明它抓得住，R7）。
-
-    守的**承诺**是"一个事实一个家"（R13：不守"这个词只出现 N 次"这种实现痕迹——
-    事实本身由 :data:`FACT_HOME` 解析得到，换机器时它跟着变）。
-    """
-    if not fact:
-        return ['（事实为空：家里解析不到 ⇒ 无法判定）']
-    return sorted(rel for rel, text in files.items()
-                  if rel != FACT_HOME and fact in text)
-
-
-def _machine_path_from_home():
-    """从唯一持有该事实的家里解析出"框架装在哪"（R9：期望值来自被检对象之外）。"""
-    m = FACT_ANCHOR.search(_read(FACT_HOME))
-    return m.group(1).strip() if m else ''
-
-
-def _tracked_files():
-    """tracked 文件清单（`git ls-files` ⇒ 自动排除 gitignored 的探针与构建产物）。
-
-    ⚠ **必须带 `-c core.quotepath=false`**：git 默认对非 ASCII 路径**加引号转义**
-    （`"docs/\\344\\272\\244..."`），那样 `_read()` 全部抛错、文件被**静默跳过**——
-    而本仓文档大多中文名 ⇒ 守卫会对它们全体失明（实测：G 组红证据没红才发现）。
-    git 不可用**不静默通过**（"无法判定" ≠ "判定通过"）；返回空表由调用方判红。
-    """
-    import subprocess
-    try:
-        p = subprocess.run(['git', '-C', ROOT, '-c', 'core.quotepath=false', 'ls-files'],
-                           capture_output=True, text=True, encoding='utf-8',
-                           errors='replace', timeout=60)
-    except (OSError, subprocess.SubprocessError):
-        return []
-    if p.returncode != 0:
-        return []
-    return [f for f in (p.stdout or '').splitlines() if f.strip()]
 
 
 def _slice(text, head_re, stop_re):
@@ -423,26 +379,16 @@ def main():
     subs.append(('登记表死项被抓：合成"登记集 - 发现集"非空 → 报出',
                  bool(sorted(set(SURFACES) - {'skills/energy-level/SKILL.md',
                                               'skills/ui-design/SKILL.md'}))))
-    subs.append(('机器事实复述被抓：合成映射里别处提到该事实 → 报出',
-                 fact_offenders('SYNTHETIC_FACT_HOME/mecha',
-                                {FACT_HOME: 'see `SYNTHETIC_FACT_HOME/mecha`',
-                                 'docs/a.md': '装于 SYNTHETIC_FACT_HOME/mecha'}) == ['docs/a.md']))
-    subs.append(('机器事实无复述 → **不误报**',
-                 fact_offenders('SYNTHETIC_FACT_HOME/mecha',
-                                {FACT_HOME: 'see `SYNTHETIC_FACT_HOME/mecha`',
-                                 'docs/a.md': '位置见 README §4'}) == []))
-    C.group('F 致死性 + 反方向不误报（对照表/暂缺节/跨行引用只链接、不复述）', subs)
+    C.group('F 致死性 + 反方向不误报（对照表/暂缺节/跨行引用都放行）', subs)
 
-    # ---- G **已退役**（2026-09-27，开源批 ①）----
-    # 原 G 组守的承诺是"**机器事实（框架装在哪）的权威陈述只在一处**"——它成立的前提是
-    # "仓里**允许**出现本机路径，只是不许复述"。**开源后这个前提没了**：公开仓里
-    # **一处都不许**出现本机路径。⇒ 承诺被更强的守卫取代：`checks/personal_paths_selfcheck.py`
-    # （全仓 0 命中，含 D 盘盘符、用户目录、同步盘名、仓库根名、本机用户名、私人邮箱），
-    # 且它**自己也带**"读到 N 个"的自证与对偶。
-    # ⚠ 按 R13（删机制时把承诺改写成**行为级**判据，不写"这东西不存在"的守卫）：这里**不留**
-    # "README 里不许有该锚点"这类实现痕迹守卫——"不许有本机路径"由上面那条判据在**全仓**层
-    # 面表达，比"某一句只许出现一次"更强也更清楚。
-    stats['G 组'] = '已退役 → 由 checks/personal_paths_selfcheck.py 取代（全仓 0 本机路径）'
+    # ---- G **已退役**（2026-09-27，开源批 ①；死件 2026-10-01 清掉）----
+    # 原 G 组守"**机器事实（框架装在哪）的权威陈述只在一处**"，前提是"仓里允许出现本机路径、
+    # 只是不许复述"。**开源后前提没了**：公开仓里一处都不许出现本机路径 ⇒ 承诺被更强的守卫
+    # 取代：`checks/personal_paths_selfcheck.py`（全仓 0 命中，且自带"读到 N 个"的自证与对偶）。
+    # 随它一起留下的 `FACT_HOME` / `FACT_ANCHOR` / `fact_offenders` / `_machine_path_from_home`
+    # / `_tracked_files` 已**无任何生产调用者**（`_*` 两个连调用者都没有）⇒ 2026-10-01 删掉
+    # （连同 F 组里那两条喂合成映射的用例）：留着就是"声明了没人读"的死件（R17）。
+    stats['G 组'] = '已退役 → 由 checks/personal_paths_selfcheck.py 取代（死件已清）'
 
     print('[ai_surface] 非退化自证：%s' % stats)
     C.group('R8 非退化自证：扫到的面/段/注册表工具都非空', [
