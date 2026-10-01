@@ -7,6 +7,7 @@
 import { useState, type CSSProperties } from 'react'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { InjectFace, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
+import { EL_HEADER_LABEL } from '../el-params.ts'
 
 type HeaderProps = PropsRuntime<'conversation.session.header.actions'>
 
@@ -33,7 +34,7 @@ export function CockpitButton({ openCockpit }: CockpitButtonProps) {
   return (
     <button type="button" style={BTN} title="打开机甲监控（右栏）"
       onClick={() => openCockpit()}>
-      ◈ 监控
+      {EL_HEADER_LABEL.cockpit}
     </button>
   )
 }
@@ -56,7 +57,7 @@ export function SwitchToGuiButton({ sessionId, switchToGui }: SwitchToGuiButtonP
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
       <button type="button" style={BTN} title="把控制权交还人类：切换到 GUI 模式（本 dsh 实例将退出）"
         disabled={busy} onClick={onClick}>
-        → GUI
+        {EL_HEADER_LABEL.switchToGui}
       </button>
       {msg ? <small style={{ opacity: 0.7 }}>{msg}</small> : null}
     </span>

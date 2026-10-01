@@ -28,7 +28,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test test/reconnect.test.ts test/config.test.ts test/re0-panel.test.ts src/dsh-panel/mcp-bridge.test.ts src/dsh-panel/monitor-url.test.ts src/dsh-panel/monitor-client.test.ts",
+    "test": "node --import tsx --test test/reconnect.test.ts test/config.test.ts test/re0-panel.test.ts test/switch-to-gui.test.ts src/dsh-panel/mcp-bridge.test.ts src/dsh-panel/monitor-url.test.ts src/dsh-panel/monitor-client.test.ts",
     "bundle": "tsdown"
   },
   "dependencies": {
