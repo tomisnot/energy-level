@@ -3,21 +3,21 @@
  *
  * ## 为什么单独立一个文件
  *
- * 共享资产 `dsh-panel/` 把"可变量"收进它自己的参数块（`dsh-panel/panel-config.ts`），
- * 而**资产覆盖不到的项目值**——MCP 桥的日志前缀 / 断联指引 / 客户端标识 / 端点默认，
- * 以及「交权按钮」这个**能力开关**——也需要**一个家**。散在 host/client 两半的各调用点上
- * 就是两处真值，正是本工程反复付代价的那类漂移（R1 / D1）。
+ * **资产覆盖不到的项目值**需要一个家：MCP 桥的日志前缀 / 断联指引 / 客户端标识 / 端点默认、
+ * 面板的三项（路由 / 端口文件名 / 标题），以及「交权按钮」这个**能力开关**。
+ * 散在 host/client 两半的各调用点上就是两处真值，正是本工程反复付代价的那类漂移（R1 / D1）。
  *
  * ## 硬约束：本文件必须**浏览器安全**
  *
  * client 半会 import 它（交权按钮的开关）⇒ **零 import、零 `node:*`**。
  * 需要读文件或碰 SDK 的 EL 参数填法在 `host/el-hub.ts`（node-only）。
  *
- * ## 与资产的关系
+ * ## 与资产的关系（2026-10-01 依赖化之后）
  *
- * 资产件一律**逐字复制**（含 `mcp-bridge.ts` / `register-tools.ts` / `config.ts` /
- * `mcp-session-http.ts`）；EL 的值**只在这里与 `host/el-hub.ts` 出现**，经参数传进去
- * ⇒ "逐字复制"才成立（参数表见 `dsh-panel/README.md`）。
+ * 资产已是**可依赖的包** `@mecha/dsh-panel`（`file:` 依赖 ⇒ node_modules 里是 **junction**，
+ * 磁盘上只有一份代码）；**EL 不再持有副本、也不再有"参数块文件"**。
+ * ⇒ EL 的值**只在这里与 `host/el-hub.ts`**：桥类参数**经参数传**（`elBridgeOptions` 等），
+ * 面板参数**启动时注入一次**（`configurePanel(EL_PANEL)`，见两个半的 `apply`）。
  */
 
 /**
@@ -55,6 +55,23 @@ export const EL_BRIDGE = {
   defaultUrl: 'http://127.0.0.1:8765/mcp',
   /** `HubUrlConfig.mcpPortFile`：权威写的 MCP 端口文件名（原自建版的默认值）。 */
   mcpPortFile: '.mcp-port',
+} as const
+
+/**
+ * EL 的面板参数（**注入用**；取代原来的"参数块文件"）。
+ *
+ * 资产改成依赖包之后，项目**不能再改资产文件**（三仓共用同一份）⇒ 参数改为**启动时注入**：
+ * `configurePanel(EL_PANEL)`，读取侧 `panelConfig()` **未注入即抛**（资产不给默认值——
+ * 猜一个会把"忘了注入"演成"连上了但面板是空的"）。
+ * 两个消费方半（host / client）**各注入一次**（两份 bundle，互不共享内存）。
+ */
+export const EL_PANEL = {
+  /** host 半注册的只读路由；client 半 fetch 同一个串。 */
+  routePath: '/re0-mecha/monitor-url',
+  /** 权威写的**监控**端口文件名（⚠ 与 `EL_BRIDGE.mcpPortFile` 是两个不同的文件）。 */
+  portFile: '.monitor-port',
+  /** 面板标题（纯展示；模型不读它）。 */
+  title: '机甲监控',
 } as const
 
 /**

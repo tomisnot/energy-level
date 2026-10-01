@@ -1,16 +1,16 @@
 /**
  * EL 的 **node 侧参数接线**：把 EL 的值（`el-params.ts`）填进共享资产的 opt-in 件。
  *
- * 为什么单独一层而不是就地改资产文件：资产件的纪律是**逐字复制**（`dsh-panel/README.md`
- * 的「复制约定」），项目值只能**经参数**传进去 ⇒ 需要一个 EL 自己的地方来持有"哪几个参数、
- * 填什么值"。本文件就是那个地方（node-only 那一半；浏览器安全那一半在 `el-params.ts`）。
+ * 为什么单独一层：资产已是**依赖包** `@mecha/dsh-panel`（junction，磁盘上一份代码），
+ * 项目值只能**经参数 / 注入**进去 ⇒ 需要一个 EL 自己的地方来持有"哪几个参数、填什么值"。
+ * 本文件就是那个地方（node-only 那一半；浏览器安全那一半在 `el-params.ts`）。
  *
  * ⚠ 本文件**不是**资产件，别把它的内容想成"该跟上游同步"的东西；它随 EL 的部署形态变。
  */
-import type { BridgeOptions, SessionFactory } from './../dsh-panel/mcp-bridge.ts'
-import type { HubUrlConfig } from './../dsh-panel/config.ts'
-import { resolveHubUrl } from './../dsh-panel/config.ts'
-import { httpSessionFactory } from './../dsh-panel/mcp-session-http.ts'
+import type { BridgeOptions, SessionFactory } from '@mecha/dsh-panel/mcp-bridge.ts'
+import type { HubUrlConfig } from '@mecha/dsh-panel/config.ts'
+import { resolveHubUrl } from '@mecha/dsh-panel/config.ts'
+import { httpSessionFactory } from '@mecha/dsh-panel/mcp-session-http.ts'
 import { EL_BRIDGE } from './../el-params.ts'
 
 /** EL 的 dsh 插件配置（用户在 cordis patch 的 entry `config:` 里给）。 */

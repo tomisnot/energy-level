@@ -13,23 +13,23 @@
  *
  * **client 半（dsh 界面：◈监控 按钮 + 右栏监控面板 + 「切换至 GUI」按钮）**：
  * 面板轮询权威的**只读监控端点**（`/history` + `/config`）。端点端口是**动态**的，
- * 故本文件另注册一条**同源只读路由**（`PANEL_CONFIG.ROUTE_PATH`）：读项目根的监控
- * 端口文件（`PANEL_CONFIG.PORT_FILE`）→ 回 `{base}`，面板据此取址（**面板侧零端口字面量**）。
+ * 故本文件另注册一条**同源只读路由**（`EL_PANEL.routePath`，经 `configurePanel` 注入资产）：
+ * 读项目根的监控端口文件（`EL_PANEL.portFile`）→ 回 `{base}`，面板据此取址（**面板侧零端口字面量**）。
  * 「切换至 GUI」按钮经本文件注册的 /re0-gui command 写 .mode-request，看门人接手进程交接。
  *
- * 监控地址这一层**不再是本仓自有实现**：它取自 mecha 的共享资产
- * `mecha/dsh-panel/`（参考实现，提交态 `58e2f8a`），逐字复制到 `./dsh-panel/`，
- * **只有参数块 `panel-config.ts` 允许项目化**（见该目录 `README.md` 的复制约定）。
+ * **资产是依赖包，不是副本**（2026-10-01）：`@mecha/dsh-panel`（`file:` 依赖 ⇒ node_modules
+ * 里是 **junction**，磁盘上只有一份代码）。参数**不再有"参数块文件"**，改为本文件在
+ * `apply` 里 `configurePanel(EL_PANEL)` **注入一次**（未注入时资产会**抛**，不静默回落）。
  */
 import type { Context } from '@deepseek-ai/cordis'
-import { MechaMcpBridge } from './dsh-panel/mcp-bridge.ts'
-import { syncTools, type ToolDisposers } from './dsh-panel/register-tools.ts'
-import { buildRequestInit } from './dsh-panel/config.ts'
+import { MechaMcpBridge } from '@mecha/dsh-panel/mcp-bridge.ts'
+import { syncTools, type ToolDisposers } from '@mecha/dsh-panel/register-tools.ts'
+import { buildRequestInit } from '@mecha/dsh-panel/config.ts'
+import { configurePanel, panelConfig } from '@mecha/dsh-panel/panel-config.ts'
+import { makeMonitorUrlHandler } from '@mecha/dsh-panel/monitor-url.ts'
 import { elBridgeOptions, elResolveHubUrl, elSessionFactory } from './host/el-hub.ts'
 import { elRootFromPortFile, writeModeRequest } from './host/mode-request.ts'
-import { EL_BRIDGE, EL_FEATURES, LOG_TAG, PLUGIN, headerPlan } from './el-params.ts'
-import { PANEL_CONFIG } from './dsh-panel/panel-config.ts'
-import { makeMonitorUrlHandler } from './dsh-panel/monitor-url.ts'
+import { EL_BRIDGE, EL_FEATURES, EL_PANEL, LOG_TAG, PLUGIN, headerPlan } from './el-params.ts'
 
 /** Cordis 插件显示名（诊断用）。**取自参数家**（`PLUGIN.name` 是唯一来源）。 */
 export const name = PLUGIN.name
@@ -128,19 +128,25 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
     const root = elRootFromPortFile(config.mcpPortFile)
     const switchAction = headerPlan(EL_FEATURES.enableSwitchToGui).switchToGui
 
-    // 监控地址的同源只读路由（**共享资产**：mecha/dsh-panel/monitor-url.ts，逐字复制）。
+    // ⭐ **注入面板参数**（资产已改成依赖包：项目不能再改资产文件）。
+    // 未注入时 `panelConfig()` 会抛 ⇒ 注入点必须压在"用面板之前"，不许留默认。
+    // disposer 跟着 effect 收尾（本仓到处在用的可逆副作用形状）。
+    const disposePanel = configurePanel(EL_PANEL)
+    const panel = panelConfig()
+
+    // 监控地址的同源只读路由（**资产**：`@mecha/dsh-panel/monitor-url.ts`）。
     // 每次被 fetch 都现读端口文件 ⇒ 权威重启换端口后下一拍自动落在新端口（漂移自愈）。
-    // 端口文件名来自**参数块**（PANEL_CONFIG.PORT_FILE）——单一来源；库不替项目猜文件名，
+    // 端口文件名来自**注入的参数**（`EL_PANEL.portFile`）——单一来源；库不替项目猜文件名，
     // 留空时路由一律 503 且给可读错误（刻意的响亮失败）。
     // 服务名 `webServer` 由 `@deepseek-ai/dsh-host-webserver` 提供（`inject` 已声明，
     // 故 apply 跑到这里它必在）；本仓 host 半对 @deepseek-ai/* 只留**类型** import，
     // 这里按既有风格（同 `sidebarRight`）走 any 取用，避免引入运行时 peer 依赖。
     const disposeMonitorRoute = (ctx as any).webServer.register({
       kind: 'exact',
-      path: PANEL_CONFIG.ROUTE_PATH,
-      handler: makeMonitorUrlHandler({ root, portFile: PANEL_CONFIG.PORT_FILE }),
+      path: panel.routePath,
+      handler: makeMonitorUrlHandler({ root, portFile: panel.portFile }),
     })
-    ctx.logger?.info?.(`${LOG_TAG} 注册监控地址路由 ${PANEL_CONFIG.ROUTE_PATH}（读 ${root} 的 ${PANEL_CONFIG.PORT_FILE}，不回落默认端口）`)
+    ctx.logger?.info?.(`${LOG_TAG} 注册监控地址路由 ${panel.routePath}（读 ${root} 的 ${panel.portFile}，不回落默认端口）`)
 
     const disposeCmd = switchAction
       ? ctx.commands!.register({
@@ -160,6 +166,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
 
     return async () => {
       try { disposeMonitorRoute() } catch { /* ignore */ }
+      try { disposePanel() } catch { /* ignore */ }
       if (disposeCmd) { try { disposeCmd() } catch { /* ignore */ } }
       for (const dispose of disposers.values()) {
         try { dispose() } catch { /* ignore */ }

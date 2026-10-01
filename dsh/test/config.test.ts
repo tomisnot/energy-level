@@ -1,7 +1,7 @@
 /**
  * EL 的端点解析与远程鉴权头单测（`src/host/el-hub.ts` + 共享资产的 `buildRequestInit`）。
  *
- * ⚠ **规则已归共享资产**（`dsh-panel/config.ts`：显式 URL > 端口文件 > 项目默认，
+ * ⚠ **规则归资产包**（`@mecha/dsh-panel/config.ts`：显式 URL > 端口文件 > 项目默认，
  * 缺省**不猜端口**）；**EL 的值**（默认端点、端口文件名）住 `el-params.ts`，由
  * `el-hub.ts` 填进去。⇒ 本文件测的是**EL 那条生产接线**，不是资产内部规则
  * （资产自己的规则由它的共享单测守）。
@@ -10,7 +10,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { buildRequestInit } from '../src/dsh-panel/config.ts'
+import { buildRequestInit } from '@mecha/dsh-panel/config.ts'
 import { elHubUrlConfig, elResolveHubUrl } from '../src/host/el-hub.ts'
 import { EL_BRIDGE } from '../src/el-params.ts'
 

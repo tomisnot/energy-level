@@ -8,16 +8,16 @@
  *
  * 跑：`node --import tsx --test test/reconnect.test.ts`（无需真 MCP 服务/网络）。
  *
- * ⚠ 桥本体已换成**共享资产**（`../src/dsh-panel/mcp-bridge.ts`，逐字复制）；本文件是 EL
- * 自己的**验收套件**（`../src/host/el-hub.ts` 的 `elBridgeOptions` 就是生产路径用的那个
- * 参数填充 ⇒ 本文件跑的是生产接线，不是替身接线）。
+ * ⚠ 桥本体是**依赖包** `@mecha/dsh-panel`（junction，磁盘上一份代码；EL 不再持有副本）；
+ * 本文件是 EL 自己的**验收套件**（`../src/host/el-hub.ts` 的 `elBridgeOptions` 就是生产路径
+ * 用的那个参数填充 ⇒ 本文件跑的是生产接线，不是替身接线）。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   MechaMcpBridge, isSessionInvalidError, isConnectionError,
   type McpSession, type ToolDef,
-} from '../src/dsh-panel/mcp-bridge.ts'
+} from '@mecha/dsh-panel/mcp-bridge.ts'
 import { elBridgeOptions } from '../src/host/el-hub.ts'
 
 const fastSleep = async (): Promise<void> => {}
