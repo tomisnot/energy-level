@@ -89,6 +89,16 @@ declare module '@deepseek-ai/cordis' {
     }
     /** 注册可逆副作用：setup 返回 disposer；await 之。 */
     effect(setup: () => unknown | Promise<unknown>, label?: string): Promise<void>
+    /**
+     * 只在**某些服务就绪**时跑一段，返回 disposer。
+     *
+     * ⚠ 2026-10-01 补：资产骨架 `mount-host-plugin.ts` 用它注册监控地址路由
+     * （`ctx.inject(['webServer'], …)`）——**没有 webServer 的部署靠它跳过而不是不激活**
+     * （顶层 `inject` 缺服务会让整个插件不激活，那会把"面板没有 web 服务"升级成
+     * "AI 工具也没了"）。此前垫片漏声明了它，导致传 `ctx` 给骨架必须写
+     * `as unknown as HostContext`——那是垫片的缺口，不是骨架接口的问题。
+     */
+    inject(names: string[], fn: (scoped: unknown) => (() => void) | undefined): void
     /** 监听类型化事件，返回取消监听的 disposer。 */
     on(event: string, listener: (...args: any[]) => unknown): () => void
     /** 在 ctx 上提供一个服务，返回 disposer。 */

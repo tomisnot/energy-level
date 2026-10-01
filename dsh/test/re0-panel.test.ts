@@ -8,7 +8,7 @@
  * |---|---|
  * | "副本与参考实现逐字一致"（指纹表） | **结构**：不存在副本了（路径是 junction ⇒ 改它等于改 mecha）。原 `checks/dsh_panel_asset_selfcheck.py` 已随副本一起删 |
  * | 503 无 `base` / 非 ok 档文案 / 地址拿不到不取数 / 记录仪渲染 | 资产自带单测（mecha 的门禁跑它们） |
- * | `panelConfig()` 未注入即抛、字段留空即抛 | `@mecha/dsh-panel/panel-data.test.ts:122-129` |
+ * | `panelConfig()` 未注入即抛、字段留空即抛 | `@mecha/dsh-panel/panel/panel-data.test.ts:122-129` |
  *
  * 本文件只守**EL 自己的取值与接线**：
  *  1. **EL 注入的那三个值**（路由 / 端口文件名 / 标题）与注入往返；
@@ -26,9 +26,9 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join, relative } from 'node:path'
-import { configurePanel, panelConfig } from '@mecha/dsh-panel/panel-config.ts'
-import { CONFIG_PATH, HISTORY_PATH, eventsOf, loadPanel } from '@mecha/dsh-panel/panel-data.ts'
-import { recPageHtml } from '@mecha/dsh-panel/panel-view.ts'
+import { configurePanel, panelConfig } from '@mecha/dsh-panel/panel/panel-config.ts'
+import { CONFIG_PATH, HISTORY_PATH, eventsOf, loadPanel } from '@mecha/dsh-panel/panel/panel-data.ts'
+import { recPageHtml } from '@mecha/dsh-panel/panel/panel-view.ts'
 import { EL_PANEL } from '../src/el-params.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -86,13 +86,16 @@ test('反面语料：历史默认端口 8767 不在 EL 的面板源码里（端�
  * ⚠ 闭包**跟着 junction 走进资产包**（`node_modules/@mecha/dsh-panel/…`）：这样"资产包真的
  * 被解析到"与"它的 client 半里没有 `node:*`"由**同一条**检查一起证明。
  * 其它裸包名（`react` 等）由宿主提供，不追。
+ *
+ * ⚠ 标签用 `pkg/` / `el/` 前缀，**断言不写死资产内部目录名**（资产按入口分过家：
+ * `panel/`、`host/`，将来还可能再动）——用"是不是资产里的文件 / 以什么结尾"来断言。
  */
 function closureOf(entryAbs: string): { seen: string[]; nodeHits: string[] } {
   const strip = (src: string) => src
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/(^|[^:])\/\/.*$/gm, '$1')
   const label = (p: string): string => (p.startsWith(PANEL_DIR)
-    ? 'panel/' + relative(PANEL_DIR, p).replace(/\\/g, '/')
+    ? 'pkg/' + relative(PANEL_DIR, p).replace(/\\/g, '/')
     : 'el/' + relative(SRC, p).replace(/\\/g, '/'))
   const seen = new Set<string>()
   const nodeHits: string[] = []
@@ -119,16 +122,16 @@ test('⭐ EL 入口 + 资产包的 import 闭包里没有 node:*（跟着 juncti
   const { seen, nodeHits } = closureOf(join(SRC, 'client', 'index.ts'))
   assert.deepEqual(nodeHits, [],
     `闭包里出现 node 内建：${nodeHits.join('、')}`
-    + ' ⇒ 浏览器 bundle 会失败（node-only 的实现必须留在资产的 monitor-url.ts）')
-  // R8 自证：闭包必须**真的走过了若干文件**，且**真的进了资产包**
+    + ' ⇒ 浏览器 bundle 会失败（node-only 的实现必须留在资产的 host/monitor-url.ts）')
+  // R8 自证：闭包必须**真的走过了若干文件**，且**真的进了资产包**（不写死资产内部目录名）
   assert.ok(seen.length >= 6, `闭包只走了 ${seen.length} 个文件 ⇒ 检查可能没生效：${seen}`)
-  assert.ok(seen.includes('panel/routes.ts'),
+  assert.ok(seen.some(s => s.startsWith('pkg/') && s.endsWith('/routes.ts')),
     `闭包必须走进资产包（junction 没被跟随？）：${seen}`)
   assert.ok(seen.includes('el/el-params.ts'), `闭包里应当有 EL 的参数家：${seen}`)
-  assert.ok(!seen.includes('panel/monitor-url.ts'),
+  assert.ok(!seen.some(s => s.includes('monitor-url')),
     `client 半不许碰到 node-only 的 monitor-url.ts：${seen}`)
   // 对偶（不许空洞）：资产的 node 半**必须**仍然依赖 node——否则上一条"没东西可抓"
-  assert.match(readFileSync(join(PANEL_DIR, 'monitor-url.ts'), 'utf8'), /from 'node:fs'/,
+  assert.match(readFileSync(join(PANEL_DIR, 'host', 'monitor-url.ts'), 'utf8'), /from 'node:fs'/,
     'node 半应当 import node:fs（否则本检查没有可抓之物）')
 })
 

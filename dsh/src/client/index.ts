@@ -27,8 +27,8 @@
  */
 import type { Context } from '@deepseek-ai/cordis'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
-import { MonitorTabBody } from '@mecha/dsh-panel/MonitorTabBody.tsx'
-import { configurePanel, panelConfig } from '@mecha/dsh-panel/panel-config.ts'
+import { MonitorTabBody } from '@mecha/dsh-panel/panel/MonitorTabBody.tsx'
+import { configurePanel, panelConfig } from '@mecha/dsh-panel/panel/panel-config.ts'
 import { CockpitButton, SwitchToGuiButton, type CockpitInjected, type SwitchInjected } from './buttons.tsx'
 import { EL_FEATURES, EL_PANEL, EL_TAB, PLUGIN, headerPlan } from '../el-params.ts'
 
@@ -98,7 +98,7 @@ export async function apply(ctx: Context): Promise<void> {
     const disposeBody = ctx.slots.inject('sidebar.right.pane.tab', () =>
       ctx.slots.register(
         // 面板**自己取数**（原生形态）：取址/取数/归约/渲染全在资产里
-        // （`@mecha/dsh-panel/{panel-data,panel-view,MonitorTabBody}`）⇒ **没有注入面**
+        // （`@mecha/dsh-panel/panel/{panel-data,panel-view,MonitorTabBody}`）⇒ **没有注入面**
         // （原先那个 `resolveMonitorBase` 缝已被兜住；留着就是"声明了却不被读"的死缝）。
         // 本仓只提供**项目自己的东西**：注入的参数 + 下面的 tab 注册。
         { name: 'sidebar.right.pane.tab', key: EL_TAB.id } as any,

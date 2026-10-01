@@ -12,8 +12,8 @@
  *
  * ⚠ 本文件不是资产件；它随 EL 的部署形态变（比如哪天默认端点变了）。
  */
-import type { HubUrlConfig } from '@mecha/dsh-panel/config.ts'
-import { resolveHubUrl } from '@mecha/dsh-panel/config.ts'
+import type { HubUrlConfig } from '@mecha/dsh-panel/host/config.ts'
+import { resolveHubUrl } from '@mecha/dsh-panel/host/config.ts'
 import { EL_BRIDGE } from './../el-params.ts'
 
 /** EL 的 dsh 插件配置（用户在 cordis patch 的 entry `config:` 里给）。 */

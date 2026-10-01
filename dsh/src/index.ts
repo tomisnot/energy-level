@@ -3,7 +3,7 @@
  *
  * ## 机制全在**资产骨架**里（2026-10-01 上提）
  *
- * `@mecha/dsh-panel/mount-host-plugin.ts` 的 `mountHostPlugin(ctx, opts)` 接管了此前本文件
+ * `@mecha/dsh-panel/host/mount-host-plugin.ts` 的 `mountHostPlugin(ctx, opts)` 接管了此前本文件
  * 手写的那约 100 行通用机制：会话工厂（含 **SDK 懒加载**）、建桥、logger 转发、
  * `onTools → syncTools` 两阶段 swap、`onStatus` 三态日志、监控地址路由的注册**与注销**、
  * 收尾顺序、面板参数注入。⇒ **本文件只剩 EL 的参数值与自身分支**。
@@ -19,10 +19,10 @@
  * 磁盘上只有一份代码）；面板参数经 `panelConfig` 交给骨架注入（未注入时资产会**抛**）。
  */
 import type { Context } from '@deepseek-ai/cordis'
-import { buildRequestInit } from '@mecha/dsh-panel/config.ts'
+import { buildRequestInit } from '@mecha/dsh-panel/host/config.ts'
 import {
   hostPluginInject, mountHostPlugin, type HostContext,
-} from '@mecha/dsh-panel/mount-host-plugin.ts'
+} from '@mecha/dsh-panel/host/mount-host-plugin.ts'
 import { elResolveHubUrl } from './host/el-hub.ts'
 import { elRootFromPortFile, writeModeRequest } from './host/mode-request.ts'
 import { EL_BRIDGE, EL_FEATURES, EL_PANEL, PLUGIN, headerPlan } from './el-params.ts'
@@ -69,7 +69,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
   // 项目根（`.mcp-port` 与 `.mode-request` 同址；监控端口文件也在这里）。
   const root = elRootFromPortFile(config.mcpPortFile)
 
-  await mountHostPlugin(ctx as unknown as HostContext, {
+  await mountHostPlugin(ctx, {
     serverName: config.serverName || PLUGIN.serverName,
     logLabel: PLUGIN.name,
     projectRoot: root,
