@@ -18,7 +18,29 @@ import {
   MechaMcpBridge, isSessionInvalidError, isConnectionError,
   type McpSession, type ToolDef,
 } from '@mecha/dsh-panel/mcp-bridge.ts'
-import { elBridgeOptions } from '../src/host/el-hub.ts'
+import type { BridgeOptions, SessionFactory } from '@mecha/dsh-panel/mcp-bridge.ts'
+import { EL_BRIDGE, PLUGIN } from '../src/el-params.ts'
+
+/**
+ * 本文件自己的桥参数构造（**测试本级**）。
+ *
+ * ⚠ 生产路径不再有这一层：host 半的建桥/参数装配已归资产骨架
+ * `@mecha/dsh-panel/mount-host-plugin.ts` ⇒ 原先 `host/el-hub.ts` 的 `elBridgeOptions`
+ * 已随骨架删除。本文件是**桥的端到端语义验收**（真实重连 / 可读离线错误），要的是
+ * "用 EL 的值装一台真桥"，故在此就地构造——**值仍取自 EL 的参数家**（`EL_BRIDGE`），
+ * 于是"EL 的 `offlineHint` 真有消费者"那条断言仍然成立。
+ */
+function elBridgeOptions(
+  sessionFactory: SessionFactory,
+  overrides: Partial<BridgeOptions> = {},
+): BridgeOptions {
+  return {
+    sessionFactory,
+    logLabel: PLUGIN.name,
+    offlineHint: EL_BRIDGE.offlineHint,
+    ...overrides,
+  }
+}
 
 const fastSleep = async (): Promise<void> => {}
 

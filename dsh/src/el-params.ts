@@ -12,22 +12,23 @@
  * client 半会 import 它（交权按钮的开关）⇒ **零 import、零 `node:*`**。
  * 需要读文件或碰 SDK 的 EL 参数填法在 `host/el-hub.ts`（node-only）。
  *
- * ## 与资产的关系（2026-10-01 依赖化之后）
+ * ## 与资产的关系（2026-10-01 依赖化 + 骨架化之后）
  *
  * 资产已是**可依赖的包** `@mecha/dsh-panel`（`file:` 依赖 ⇒ node_modules 里是 **junction**，
- * 磁盘上只有一份代码）；**EL 不再持有副本、也不再有"参数块文件"**。
- * ⇒ EL 的值**只在这里与 `host/el-hub.ts`**：桥类参数**经参数传**（`elBridgeOptions` 等），
- * 面板参数**启动时注入一次**（`configurePanel(EL_PANEL)`，见两个半的 `apply`）。
+ * 磁盘上只有一份代码）：**EL 不再持有副本、也不再有"参数块文件"**。
+ * host 半的建桥/参数装配归**资产骨架**（`mount-host-plugin.ts`）⇒ EL 的值只在这里：
+ * 骨架参数（`logLabel` / `clientInfo` / `offlineHint`）与面板参数（`EL_PANEL`，经骨架注入
+ * host 半、client 半自己 `configurePanel` 注入一次）；端点**怎么算**在 `host/el-hub.ts`。
  */
 
 /**
  * EL 的插件身份（**唯一来源**）。
  *
- * ⚠ 为什么要有这一项：`name`（Cordis 插件名）与 `serverName`（MCP 工具命名空间
- * `mcp__<serverName>__<tool>`）在 dsh 侧**同一个字符串**，而它此前在 `src/index.ts`
- * 里被写了十来遍（插件名 1 处 + serverName 默认 1 处 + 每条日志的前缀若干处）。
+ * ⚠ 为什么要有这一项：`name`（Cordis 插件名）/ `serverName`（MCP 工具命名空间
+ * `mcp__<serverName>__<tool>`）/ 骨架的 `logLabel`（日志前缀 + 服务名）在 dsh 侧
+ * **是同一个字符串**，而它此前在 `src/index.ts` 里被写了十来遍。
  * 那是"同一事实多个家"——**改漏一处就是静默错**（工具命名空间与子注册表名不一致）。
- * ⇒ 现在：`PLUGIN` 一处声明，`LOG_TAG` 由它派生，其余全部引用它。
+ * ⇒ 现在：`PLUGIN` 一处声明，其余全部引用它（骨架的 `logLabel` 也取 `PLUGIN.name`）。
  */
 export const PLUGIN = {
   /** Cordis 插件名（`src/index.ts` / `src/client/index.ts` 的 `export const name`）。 */
@@ -36,13 +37,8 @@ export const PLUGIN = {
   serverName: 're0-mecha',
 } as const
 
-/** 日志前缀，形如 `[re0-mecha]`。**由 `PLUGIN.name` 派生**（不手抄第二个字面量）。 */
-export const LOG_TAG = `[${PLUGIN.name}]` as const
-
-/** EL 填给共享资产 opt-in 件的值（**唯一来源**）。 */
+/** EL 填给共享资产 opt-in 件 / 骨架的值（**唯一来源**）。 */
 export const EL_BRIDGE = {
-  /** `BridgeOptions.logLabel`：日志前缀 `[re0-mecha] …`（与 EL 旧的日志前缀逐字一致）。 */
-  logLabel: PLUGIN.name,
   /**
    * `BridgeOptions.offlineHint`：断联时那句**可操作指引**（项目知识：怎么把软件重新起来）。
    * 原自建版把这段写死在桥的错误文案里；资产把它参数化了 ⇒ 必须由 EL 显式传，

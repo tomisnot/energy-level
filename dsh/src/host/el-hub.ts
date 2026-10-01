@@ -1,16 +1,19 @@
 /**
- * EL 的 **node 侧参数接线**：把 EL 的值（`el-params.ts`）填进共享资产的 opt-in 件。
+ * EL 的 **node 侧参数接线**：把 EL 的端点知识填进资产包的解析规则。
  *
- * 为什么单独一层：资产已是**依赖包** `@mecha/dsh-panel`（junction，磁盘上一份代码），
- * 项目值只能**经参数 / 注入**进去 ⇒ 需要一个 EL 自己的地方来持有"哪几个参数、填什么值"。
- * 本文件就是那个地方（node-only 那一半；浏览器安全那一半在 `el-params.ts`）。
+ * ## 2026-10-01 瘦身（host 半骨架上提之后）
  *
- * ⚠ 本文件**不是**资产件，别把它的内容想成"该跟上游同步"的东西；它随 EL 的部署形态变。
+ * 建桥 / 会话工厂 / 桥参数（`logLabel` / `offlineHint`）/ 工具注册 / 监控路由 / 收尾
+ * 现在是资产骨架 `mount-host-plugin.ts` 的职责 ⇒ 原先在这里的 `elSessionFactory` 与
+ * `elBridgeOptions` **已删**（留着就是"两处都懂怎么建桥"）。
+ *
+ * ⇒ 本文件只剩**项目知识**：**端点怎么算**。资产拥有"显式 URL > 端口文件 > 项目默认"这条
+ * **规则**，EL 拥有那两个**名字**（端口文件名 / 默认端点）。
+ *
+ * ⚠ 本文件不是资产件；它随 EL 的部署形态变（比如哪天默认端点变了）。
  */
-import type { BridgeOptions, SessionFactory } from '@mecha/dsh-panel/mcp-bridge.ts'
 import type { HubUrlConfig } from '@mecha/dsh-panel/config.ts'
 import { resolveHubUrl } from '@mecha/dsh-panel/config.ts'
-import { httpSessionFactory } from '@mecha/dsh-panel/mcp-session-http.ts'
 import { EL_BRIDGE } from './../el-params.ts'
 
 /** EL 的 dsh 插件配置（用户在 cordis patch 的 entry `config:` 里给）。 */
@@ -35,33 +38,7 @@ export function elHubUrlConfig(config: ElHubConfig = {}): HubUrlConfig {
   }
 }
 
-/** EL 的端点解析（每次建会话现解 ⇒ 权威重启换端口后下一拍跟上）。 */
+/** EL 的端点解析（骨架把它包成"每次建会话现解" ⇒ 权威重启换端口后下一拍跟上）。 */
 export async function elResolveHubUrl(config: ElHubConfig = {}): Promise<string> {
   return resolveHubUrl(elHubUrlConfig(config))
-}
-
-/** EL 的会话工厂：EL 的客户端标识 + 可注入的请求头（远程鉴权接缝）。 */
-export function elSessionFactory(
-  url: string | (() => Promise<string>),
-  requestInit?: RequestInit,
-): SessionFactory {
-  return httpSessionFactory({ url, clientInfo: { ...EL_BRIDGE.clientInfo }, requestInit })
-}
-
-/**
- * EL 的桥参数（**唯一来源**：桥的 `logLabel` / `offlineHint` 只在这里填）。
- *
- * ⚠ 别在调用点再手写这两个值：`reconnect.test.ts` 的离线断言正是拿本函数的产物去验
- * "EL 的指引真的进了错误文案"（参数必须**真有消费者**，R17）。
- */
-export function elBridgeOptions(
-  sessionFactory: SessionFactory,
-  overrides: Partial<BridgeOptions> = {},
-): BridgeOptions {
-  return {
-    sessionFactory,
-    logLabel: EL_BRIDGE.logLabel,
-    offlineHint: EL_BRIDGE.offlineHint,
-    ...overrides,
-  }
 }

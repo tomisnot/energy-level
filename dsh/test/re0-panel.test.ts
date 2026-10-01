@@ -57,10 +57,14 @@ test('EL 注入的面板参数：值就是 EL 的，且注入能被读回（往�
 })
 
 // ---------------------------------------------------------------- 2 单一来源
-test('⭐ 单一来源：路由字面量只在 el-params.ts，两半都经 configurePanel 注入', () => {
-  for (const f of ['index.ts', 'client/index.ts']) {
-    assert.match(read(f), /configurePanel\(EL_PANEL\)/, `${f} 必须注入 EL 的面板参数`)
-  }
+test('⭐ 单一来源：路由字面量只在 el-params.ts，两半都把 EL 的值交给资产', () => {
+  // host 半：注入 + 注册监控地址路由都归**骨架** ⇒ EL 只需把 `EL_PANEL` 交给它
+  // （骨架内部才调 configurePanel，并用 panel.routePath / panel.portFile）。
+  assert.match(read('index.ts'), /panelConfig:\s*EL_PANEL\b/,
+    'host 半必须把 EL 的面板参数交给骨架（注入与注册由骨架做）')
+  // client 半：骨架管不到（两份 bundle）⇒ 它自己注入一次。
+  assert.match(read('client/index.ts'), /configurePanel\(EL_PANEL\)/,
+    'client 半必须自己注入 EL 的面板参数')
   assert.match(read('el-params.ts'), /'\/re0-mecha\/monitor-url'/,
     '路由字面量必须住在 el-params.ts（EL 的参数家）')
   const offenders = literalOutsideParams(EL_PANEL.routePath,
