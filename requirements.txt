@@ -2,11 +2,10 @@
 # 构建/使用：python -m pip install -r requirements.txt
 # 说明：
 #   - numba 为必需（ip4/lindblad 演化内核加速；缺失时自动 numpy 回退，但明确不要拆除）
-#   - torch / pairinteraction / qutip 均不需要，禁止装进环境（本项目用不到；
-#     装了只会拖慢导入并拉大依赖面）
-#   - ARC 在 PyPI 上的发行名是 arc_alkali_rydberg_calculator（导入名 arc）；
-#     不要 pip install arc（那是另一个无关小库）。其自带依赖 sympy/lmfit/rich/h5py
-#     由 pip 自动解析。
+#   - **不硬性禁止任何库**：GPU 加速相关（torch / CuPy）等可按需引入，需要时在
+#     对应可选依赖组或运行环境安装即可（默认精简安装不拉它们，只为控制安装体积，非禁用）。
+#   - ARC 在 PyPI 上的发行名是 arc_alkali_rydberg_calculator（导入名 arc）；其自带依赖
+#     sympy/lmfit/rich/h5py 由 pip 自动解析。（安装时用发行名，避免撞上无关的同名小包）
 numpy==2.2.6
 scipy==1.15.2
 matplotlib==3.10.1
@@ -14,6 +13,9 @@ PyQt5==5.15.9
 arc_alkali_rydberg_calculator==3.9.0
 numba==0.65.1
 pyqtgraph==0.13.7
+tenpy==1.1.1
+# GPU 加速（平衡态批量 ED/Lanczos）为**可选**：装 cupy-cuda12x 或 torch（本环境已带）
+# 即启用 GPU 路径；未装时代码自动回退 CPU（保持确定性）。非硬依赖。
 
 # ── AI 机甲框架 mecha（**硬依赖**，不是"可选的 AI 依赖"）──────────────
 # EL 的 GUI 与 AI 走**同一道 Gate**：app_entry.py:53-54 顶层

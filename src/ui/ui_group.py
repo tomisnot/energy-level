@@ -136,6 +136,15 @@ class EnergyGroupPanel(QWidget):
         if 0 <= cur < self.group_list.count():
             self.group_list.setCurrentRow(cur)
 
+    def refresh_list(self):
+        """对外入口：订阅 `groups_store.changed`（增删/裁剪/**恢复存档**都要重画）。
+
+        旧设计只靠 `add_group`/裁剪/删除**显式**调 `_refresh_rows()` ⇒ 任何“不改
+        控件而直接换 store”的路径（如恢复存档走 `store.replace()`）会让列表空着。
+        收拢到信号上：单一真源，新增写路径不会漏刷新。
+        """
+        self._refresh_rows()
+
     def edit_selected_trim(self, row=None):
         """打开"子能级"勾选框（默认全选）；改完走 registry 同一条通道（P2）。
 

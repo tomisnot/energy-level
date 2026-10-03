@@ -12,3 +12,8 @@
 本包是 core 的一部分（第 7 个引擎家族），只读复用同包 static_pair/static_atom，
 经 runspec 唯一分派点（dynamic.mode==2）接入语义层，遵守统一 Result 契约。
 """
+
+# 平衡态产品入口（ED/GPU批量/Lanczos/KPM/DMRG 经 eq_route 路由，runspec method=gs/thermal/dos 可达）。
+from .eq_engine import solve_equilibrium, build_equilibrium, run_equilibrium  # noqa: F401
+
+__all__ = ['solve_equilibrium', 'build_equilibrium', 'run_equilibrium']

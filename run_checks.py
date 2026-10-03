@@ -116,6 +116,42 @@ FAST_KNOWN_SEC = {
     # ⚠ 必须在 Python 里扫（PowerShell 的 git ls-files 会把中文路径转义 ⇒ 假报 0）；
     # 且必须**自证"实际读到 N 个"**——"读不到的"与"没命中的"长得一模一样。
     'personal_paths_selfcheck.py': 0.2,
+    # 2026-10-01 现测 1.3s。**平衡态多体标杆（P0·Tier-B）**：引擎 ED 装配 ≡ 独立 Kronecker
+    # ≡ 手推显式矩阵（三路径同谱）+ XX 二聚体/blockade 解析锚。秒级、不碰 ARC → 进 --core。
+    # 详见 docs/标杆判据库-平衡态多体算法正确性实例.md。
+    'equibench_engine_ed_selfcheck.py': 1.3,
+    # 2026-10-01 平衡态求解器标杆三连（均不碰 ARC，进 --core）：
+    #   gs_solvers=稠密eigh/Lanczos/虚时/独立Kron 四路径交叉一致；
+    #   analytic_thermo=XX 自由费米子+二聚体/N=1 Curie 热力学闭式；
+    #   heisenberg2d=引擎映射≡独立 XXX + Lieb-Mattis 总自旋严格值。
+    'equibench_gs_solvers_selfcheck.py': 2.5,
+    'equibench_analytic_thermo_selfcheck.py': 1.6,
+    'equibench_heisenberg2d_selfcheck.py': 2.6,
+    # GPU 批量 ED 标杆（cupy/torch 批量化≡逐点≡numpy）：含 GPU 后端 import/CUDA 初始化开销
+    # → ~13s，只进 --fast（不进秒级 --core）；无 GPU 时自动走 CPU 批量化仍全绿。
+    'equibench_gpu_batched_selfcheck.py': 13.0,
+    # TeNPy 2D 柱形 DMRG 标杆（DMRG≡我们的ED≡GPU批量≡独立Kron≡经典解析）：含 tenpy+GPU 导入
+    # → ~16s，只进全档（>15s 不进 --fast）；无 tenpy 时自动 SKIP。
+    'equibench_dmrg_selfcheck.py': 16.5,
+    # KPM/Chebyshev 谱方法标杆（general-H 有限温+DOS，对齐精确谱分解）：随机迹 nvec=2000 主导
+    # → ~28s，只进全档。无 GPU 依赖（纯 numpy/scipy）。
+    'equibench_kpm_selfcheck.py': 28.0,
+    # ① 一般复耦合(V/J/A+σ⁺σ⁺)喂进 TeNPy MPO：MPO≡引擎H且DMRG≡精确（需 tenpy）→ ~7s，--fast。
+    'equibench_dmrg_general_selfcheck.py': 7.0,
+    # ② 算法路由+统一入口：决策正确 + 跨后端(ed/lanczos/dmrg/gpu/kpm)一致 + 契约（需 tenpy）→ ~13s，--fast。
+    'equibench_router_selfcheck.py': 13.0,
+    # ② 端到端分派：runspec.evolve_run 把 gs/thermal/dos 路由到 eq_engine→各后端（假 calib、无 ARC）。
+    'equibench_dispatch_selfcheck.py': 15.5,
+    # ② 产品路径封顶：真 ARC 快照→build_run→evolve_run→平衡态 Result（gs/thermal），
+    # 并钉住平衡态走通 GUI/AI 消费点（check_run/summarize_run/result_summary/_land）。
+    'equibench_product_selfcheck.py': 22.0,
+    # 任意点云 DMRG（自写 autoMPO）：MPO≡引擎H（置换逐元素）、DMRG≡ED≡Lanczos、n=12 三法
+    # 交叉、键维收敛、eq_engine 路由。多组 DMRG 扫描主导 → ~93s，只进全档（需 tenpy）。
+    'equibench_dmrg_cluster_selfcheck.py': 97.0,
+    # 多体页“保存/恢复状态”往返：8 份演示档逐个导入→查界面与会话同步（不求解）+
+    # 一个小尺寸真跑 + 字体守卫（防 ARC 把 rcParams['font.family'] 改回 serif）。
+    # 开销在 offscreen MainWindow + ARC 建缓存 → ~32s，进全档。
+    'mb_state_roundtrip_selfcheck.py': 32.0,
 }
 
 

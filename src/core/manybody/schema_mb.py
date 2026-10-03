@@ -61,7 +61,32 @@ CONFIG_SCHEMA_MB = {
     # 截断已由 `n_window`（伙伴态窗）+ `guard_mhz`（近简并剔除）覆盖，不需要第三个旋钮。
     'manybody.solver': dict(
         type='str', enum=['auto', 'ed', 'tebd'], default='auto',
-        desc='求解器：auto=按维度选 / ed=精确对角化（M1）/ tebd=TeNPy MPS（M3，未实现）'),
+        desc='**含时演化**求解器：auto=按维度选 / ed=精确对角化 / tebd=TeNPy MPS（未实现）。'
+             '平衡态不看本键，看 `manybody.eq_backend`。'),
+    'manybody.eq_backend': dict(
+        type='str', enum=['auto', 'ed', 'gpu-batch', 'lanczos', 'kpm', 'dmrg'],
+        default='auto',
+        desc='**平衡态**求解后端：auto=按规模路由 / ed=稠密对角 / gpu-batch=批量本征 / '
+             'lanczos=稀疏迭代 / kpm=Chebyshev 谱 / dmrg=TeNPy 柱形 DMRG'
+             '（**任意点云**：多腿/无周期/逐键复耦合，自写 autoMPO）。'),
+    'manybody.want': dict(
+        type='str', enum=['', 'gs', 'thermal', 'dos'], default='',
+        desc="''=含时演化（默认）；gs=基态、thermal=有限温（配 manybody.betas）、"
+             "dos=态密度——非空即走平衡态路径（runspec 委托 eq_engine 路由）。"),
+    'manybody.betas': dict(
+        type='list', default=None,
+        desc='thermal 的逆温度清单（1/MHz），如 [0.1,1,10]；None=[1.0]。'),
+    # 平衡态 DMRG 截断控制（只有 backend=dmrg 时消费；不像引擎内部常量，这些是人/AI
+    # 要当场权衡精度↔时长的旋钮，故上 UI）。
+    'manybody.chi_max': dict(
+        type='int', default=200, lo=2, hi=4000,
+        desc='DMRG 最大键维 χ（越大越准越慢；键数 ~χ³）'),
+    'manybody.truncerr': dict(
+        type='float', default=1e-10, lo=0.0, hi=1e-2,
+        desc='DMRG 单次截断误差目标（保得越紧越慢）'),
+    'manybody.max_sweeps': dict(
+        type='int', default=60, lo=2, hi=500,
+        desc='DMRG 最大 sweep 数'),
     'manybody.second_order': dict(
         type='bool', default=True,
         desc='二阶 Löwdin downfolding（vdW C6 从伙伴态涌现）；关=只一阶 V_dd'),

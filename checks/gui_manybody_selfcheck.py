@@ -59,70 +59,18 @@ C.group('A 多体页装配（第三页；既有两页不动 = M3）', [
 # ---------------- B. 参数页 → choke point ----------------
 # 6 个标量/布尔走 `_mecha_bind` 工厂；`terms`(三态) 与 `psi0`(三态+模式串) 是
 # **手写控件**（工厂没有 list/多态类型）——它们也必须经 choke point 写。
-_BOUND_KEYS = ('manybody.template', 'manybody.solver', 'manybody.second_order',
+_BOUND_KEYS = ('manybody.solver', 'manybody.want', 'manybody.eq_backend',
+               'manybody.chi_max', 'manybody.second_order',
                'manybody.n_window', 'manybody.guard_mhz', 'manybody.ed_max_dim')
-_TERMS_UI = ('I1', 'I2', 'I3')
 _bound = [k for (_wd, k, _s) in _w.binder._binds if k.startswith('manybody.')]
-_mb.template_cb.setCurrentText('xy')
-_tpl_written = _w.app_bridge.read('manybody.template')     # 就地取（后面探针会改回 ising）
+# 模板/相互作用项已从 UI 撤下（相互作用恒全开）⇒ 不再测其控件绑定。
 _mb.nwin_sb.setValue(2)
 _nwin_written = _w.app_bridge.read('manybody.n_window')
 _evs = [e for e in _w.app_bridge.activity(0)
         if str(e.get('target') or '').startswith('manybody.')]
 
 
-def _probe_terms(mode, checks, template=None):
-    """驱动「相互作用项」三态控件 → 读回 session（判据与致死性共用同一探针）。"""
-    if template:
-        _mb.template_cb.setCurrentText(template)
-    _mb.terms_mode_cb.setCurrentIndex(mode)
-    for t in _TERMS_UI:
-        _mb.term_cbs[t].setChecked(t in checks)
-    _mb._write_terms()
-    return _w.app_bridge.read('manybody.terms')
-
-
-# 三态语义（与 schema 一一对应；裁决⑤ 后 `terms` 默认由 ['I1'] 改成 None）
-_t_follow = _probe_terms(0, set(), 'ising')      # 跟随模板 → None
-_t_follow_xy = _probe_terms(0, set(), 'xy')      # 换模板仍是 None（预设真值在 core）
-_t_custom = _probe_terms(1, {'I2'})              # 自定义 → 显式 list
-_t_custom2 = _probe_terms(1, {'I1', 'I3'})
-_t_empty = _probe_terms(2, set())                # 显式无相互作用 → []
-
-# 读路径回归（自测发现真 bug）：会话显式 ['I2'] → refresh 后勾选框必须显示 I2
-_w.app_bridge.write('manybody.terms', ['I2'], reason='判据：读路径', actor='gui')
-_mb.refresh_from_session()
-_read_mode = _mb.terms_mode_cb.currentIndex()
-_read_checks = [t for t in _TERMS_UI if _mb.term_cbs[t].isChecked()]
-
-# 切模式不覆盖（自测发现真 bug）：mode0 显示的是预设(ising→I1)，切到 mode1 不得
-# 把会话里的 ['I2'] 静默改成 ['I1']
-_w.app_bridge.write('manybody.terms', ['I2'], reason='判据：切模式', actor='gui')
-_mb.refresh_from_session()
-_mb.terms_mode_cb.setCurrentIndex(0)
-_mb.terms_mode_cb.setCurrentIndex(1)
-_switch_val = _w.app_bridge.read('manybody.terms')
-
-# 致死性：把"写出值"故意改错（三态一律写 ['I1']）→ 同一批期望必须判出不一致
-_orig_write_terms = type(_mb)._write_terms
-
-
-def _broken_write_terms(self):
-    self.main.app_bridge.write('manybody.terms', ['I1'],
-                               reason='致死性：故意写错', actor='gui')
-
-
-type(_mb)._write_terms = _broken_write_terms
-try:
-    _lethal = [_probe_terms(0, set(), 'ising'), _probe_terms(1, {'I2'}),
-               _probe_terms(2, set())]
-finally:
-    type(_mb)._write_terms = _orig_write_terms
-_lethal_caught = (_lethal != [_t_follow, _t_custom, _t_empty])   # 与三条模式断言同一批期望
-_w.app_bridge.write('manybody.terms', None, reason='判据：复原', actor='gui')
-_mb.refresh_from_session()
-
-# psi0 三态
+# psi0 三态（含时演化仍需；模板/相互作用项控件已撤下 ⇒ 不再测其绑定）
 _mb.psi0_cb.setCurrentIndex(1)
 _psi0_ground = _w.app_bridge.read('manybody.psi0')
 _mb.psi0_cb.setCurrentIndex(0)
@@ -133,24 +81,9 @@ _mb._write_psi0()
 _psi0_str = _w.app_bridge.read('manybody.psi0')
 
 C.group('B 参数页经 _mecha_bind / choke point 绑到 session（含三态语义）', [
-    ('6 个标量/布尔键都进了 binder（实测 %d：%s）' % (len(_bound), _bound),
+    ('标量/布尔键都进了 binder（实测 %d：%s）' % (len(_bound), _bound),
      sorted(_bound) == sorted(_BOUND_KEYS)),
-    ('改模板 → session 读到 xy（就地取值，免受后续探针改模板影响）',
-     _tpl_written == 'xy'),
     ('改 n_window → session 读到 2', _nwin_written == 2),
-    ('相互作用项·跟随模板 → 写 None（%r / %r；预设真值在 core，不复制表）'
-     % (_t_follow, _t_follow_xy), _t_follow is None and _t_follow_xy is None),
-    ('相互作用项·自定义 → 写显式 list（%r / %r）' % (_t_custom, _t_custom2),
-     _t_custom == ['I2'] and _t_custom2 == ['I1', 'I3']),
-    ('相互作用项·显式无 → 写 []（与 None 是两个不同值，不可混同）',
-     _t_empty == []),
-    ('读路径：会话显式 [I2] → 模式=1 且勾选框显示 I2（mode=%d, 勾选=%s）'
-     % (_read_mode, _read_checks),
-     _read_mode == 1 and _read_checks == ['I2']),
-    ('切模式不覆盖：[I2] 经 mode0→mode1 往返仍是 [I2]（%r）' % (_switch_val,),
-     _switch_val == ['I2']),
-    ('致死性：写出值故意改错 → 同一批期望判出不一致（%r）' % (_lethal,),
-     _lethal_caught),
     ('ψ0 三态：Lanczos=%r / 全基态=%r / 模式串=%r'
      % (_psi0_ground, _psi0_none, _psi0_str),
      _psi0_ground == 'ground' and _psi0_none is None and _psi0_str == 'grg'),
@@ -159,6 +92,10 @@ C.group('B 参数页经 _mecha_bind / choke point 绑到 session（含三态语�
 ])
 
 # ---------------- C. 点云 ↔ session（含空表清除） ----------------
+# g/r 恒取自「能级组裁剪后的全部能级」（_levels→build_states）。GUI 接线判据隔离 ARC 裁剪：
+# 直接打桩 _levels 为「恰好 2 个」，走通加原子路径（能级计数本身由 core 判据覆盖）。
+_LV2 = [(5.0, 0.0, 0.5, -0.5), (70.0, 0.0, 0.5, -0.5)]
+_mb._levels = lambda: list(_LV2)
 _mb._atoms = []
 _mb._write_atoms('判据：清空')
 _mb._add_atom()
@@ -168,17 +105,30 @@ _rows = _mb.table.rowCount()
 _ok_shape = all(isinstance(a.get('g'), list) and len(a['g']) == 4
                 and isinstance(a.get('pos'), list) and len(a['pos']) == 3
                 for a in _atoms)
+_gr_from_groups = all(list(a.get('g') or []) == list(_LV2[0])
+                      and list(a.get('r') or []) == list(_LV2[1])
+                      for a in _atoms)
 _mb._atoms = []
 _mb._write_atoms('判据：清空')
 _cleared = _w.app_bridge.read('manybody.atoms')
+# 守卫：能级数≠2 时 → 不加原子，顶部出现“⚠”一行警告。
+_mb._levels = lambda: list(_LV2) + [(70.0, 1.0, 1.5, -0.5)]   # 3 个 → 不合法
+_before = len(_mb._atoms)
+_mb._add_atom()
+_after = len(_mb._atoms)
+_warn_txt = _mb.level_status.text()
+_mb._levels = lambda: list(_LV2)                                # 恢复恰好 2 个
 C.group('C 点云：写 session（choke point）+ 空表写 None 清除', [
     ('加 2 个原子 → session 有 2 个', len(_atoms) == 2),
     ('表行数与 session 一致（%d）' % _rows, _rows == 2),
     ('每个原子 g/r 是 4 元组、pos 是 3 元组（过 validate_atom_list）', _ok_shape),
+    ('g/r 来自能级组裁剪后的 2 个能级（非原子表自带）', _gr_from_groups),
     ('删到空 → 写 None（registry 拒空 list，故必须清除而非写空表）',
      _cleared is None),
     ('标签随原子数更新（%s）' % _mb.atom_label.text(),
      'dim=2^2=4' in _mb.atom_label.text() or 'dim=2^0=1' in _mb.atom_label.text()),
+    ('能级数≠2 → 不加原子且顶部“⚠”警告（%d→%d）' % (_before, _after),
+     _after == _before and '⚠' in _warn_txt),
 ])
 
 # ---------------- D. 成本提示是纯查询（不写 dynamic.mode） ----------------
@@ -299,6 +249,82 @@ C.group('G M1 点云画布交互（点击加原子 / 拖动移动；松开才落
     ('表与点云同步（行数=1）', _mb.table.rowCount() == 1),
     ('未做项措辞已更新：点云交互不再列为"未做"',
      all('画布交互' not in x for x in UMB.NOT_YET)),
+])
+
+# ---------------- H. 模式分家：演化 / 平衡态 只显示对应组件 ----------------
+# 用 isHidden()（只看显式 hide 标志）——窗口在 offscreen 下没 show，isVisible() 恒 False。
+_mb._set_mode('evolve')
+app.processEvents()
+_h0 = dict(ev=_mb.sec_evolve.isHidden(), eq=_mb.sec_eq.isHidden(),
+           res=_mb.res_canvas.isHidden(), eqc=_mb.eq_canvas.isHidden(),
+           want=_w.app_bridge.read('manybody.want'),
+           btn=_mb.run_btn.text())
+_mb._set_mode('eq')
+app.processEvents()
+_h1 = dict(ev=_mb.sec_evolve.isHidden(), eq=_mb.sec_eq.isHidden(),
+           res=_mb.res_canvas.isHidden(), eqc=_mb.eq_canvas.isHidden(),
+           want=_w.app_bridge.read('manybody.want'),
+           btn=_mb.run_btn.text())
+_mb.want_cb.setCurrentText('thermal')
+_want_thermal = _w.app_bridge.read('manybody.want')
+_mb._set_mode('evolve')
+app.processEvents()
+_h2 = dict(ev=_mb.sec_evolve.isHidden(), eq=_mb.sec_eq.isHidden(),
+           want=_w.app_bridge.read('manybody.want'), btn=_mb.run_btn.text())
+# 平衡态结果渲染（三种 want 各走一遍，不抛异常且主格有内容）——**当场**抓摘要文本，
+# 因为下一次 _draw_eq_result 会 clear 并重写 eq_summary。
+_mb._draw_eq_result(dict(want='gs', backend='ed', n_atoms=3, dim=8,
+                         E0=-1.5, gap=0.4, n_atom=[0.3, 0.2, 0.35]))
+_n_gs_bars = len(_mb.eq_ax_main.patches)
+_txt_gs = _mb.eq_summary.text()
+_mb._draw_eq_result(dict(want='thermal', backend='kpm', betas=[0.1, 1.0, 10.0],
+                         E=[1.0, 0.2, 0.01], C=[0.1, 0.4, 0.02]))
+_n_th_lines = len(_mb.eq_ax_main.lines)          # E(β) 在本轴；C(β) 在 twin 轴
+_txt_th = _mb.eq_summary.text()
+_mb._draw_eq_result(dict(want='dos', backend='kpm', energies=[-1.0, 0.0, 1.0],
+                         rho=[0.2, 1.0, 0.3]))
+_n_dos_lines = len(_mb.eq_ax_main.lines)
+_txt_dos = _mb.eq_summary.text()
+_mb._draw_eq_result(None)
+_ev_want = [e for e in _w.app_bridge.activity(0)
+             if e.get('target') == 'manybody.want']
+def _in(sec, w):
+    """w 是否挂在分区 sec 下（沿 parent 链找；Qt 会把布局内控件直接挂到布局宿主）。"""
+    p = w.parent()
+    while p is not None:
+        if p is sec:
+            return True
+        p = p.parent()
+    return False
+
+
+C.group('H 模式分家：演化/平衡态 只显示对应组件 + want 互斥写回', [
+    ('演化模式：只显示演化分区与演化结果图（%s）' % _h0,
+     not _h0['ev'] and _h0['eq'] and not _h0['res'] and _h0['eqc']
+     and (_h0['want'] or '') == '' and '演化' in _h0['btn']),
+    ('平衡态模式：只显示平衡态分区与平衡态结果（%s）' % _h1,
+     _h1['ev'] and not _h1['eq'] and _h1['res'] and not _h1['eqc']
+     and _h1['want'] in ('gs', 'thermal', 'dos') and '平衡态' in _h1['btn']),
+    ('两次切换（eq → evolve）后 want 为空串且组件复原（%s）' % _h2,
+     (_h2['want'] or '') == '' and not _h2['ev'] and _h2['eq']),
+    ('平衡态分区内选 thermal → session want=thermal（%r）' % _want_thermal,
+     _want_thermal == 'thermal'),
+    ('两分区控件不重叠：含时求解器/ψ0/ED上限只在演化区，后端/betas 只在平衡态区',
+     _in(_mb.sec_evolve, _mb.solver_cb) and _in(_mb.sec_evolve, _mb.psi0_cb)
+     and _in(_mb.sec_evolve, _mb.edmax_sb)
+     and _in(_mb.sec_eq, _mb.backend_cb) and _in(_mb.sec_eq, _mb.betas_edit)
+     and not _in(_mb.sec_eq, _mb.solver_cb)
+     and not _in(_mb.sec_evolve, _mb.backend_cb)),
+    ('gs 结果：⟨n_i⟩ 柱 %d 根且读数带 E0（%s）' % (_n_gs_bars, _txt_gs[:46]),
+     _n_gs_bars == 3 and 'E0' in _txt_gs and 'want=gs' in _txt_gs),
+    ('thermal 结果：E(β) 曲线 %d 条且读数报 β 点数（%s）'
+     % (_n_th_lines, _txt_th[:46]),
+     _n_th_lines == 1 and 'β 点数 = 3' in _txt_th and 'want=thermal' in _txt_th),
+    ('dos 结果：ρ(E) 曲线 %d 条且读数带分箱/max ρ（%s）'
+     % (_n_dos_lines, _txt_dos[:46]),
+     _n_dos_lines == 1 and 'want=dos' in _txt_dos and '分箱 = 3' in _txt_dos),
+    ('want 写入经 choke point 且 actor=gui（%d 条）' % len(_ev_want),
+     bool(_ev_want) and all(e.get('actor') == 'gui' for e in _ev_want)),
 ])
 
 _ok = C.summary()

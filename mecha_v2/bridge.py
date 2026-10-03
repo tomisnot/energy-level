@@ -439,9 +439,12 @@ class ElOps:
         import uuid
         self.root.mkdir(parents=True, exist_ok=True)
         aid = uuid.uuid4().hex[:12]
+        # 含时载荷（pops/t/…）+ **平衡态载荷**（betas/E/C/F、energies/rho、n_atom）。
+        # 早先只认含时键 ⇒ 平衡态数组全部静默丢失（GUI 无图可画）。
         arrays = {k: v for k, v in res.items()
                   if k in ("pops", "t", "loss", "pops_2d", "states_2d",
-                           "loss_A", "loss_B", "om_mhz", "diag")}
+                           "loss_A", "loss_B", "om_mhz", "diag",
+                           "betas", "E", "C", "F", "energies", "rho", "n_atom")}
         with (self.root / f"{aid}.pkl").open("wb") as f:
             pickle.dump((run.get("labels"), arrays), f, protocol=4)
         return aid

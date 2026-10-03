@@ -59,6 +59,24 @@ class LevelGroupStore(QObject):
             del self.groups[idx]
             self.changed.emit()
 
+    def replace(self, groups):
+        """整体替换（恢复存档用）：会话 `groups.list` 是真值，但 store 住在会话外。
+
+        原样收下条目（保留 label/color/**ms/Fs 裁剪**），只补齐缺的颜色；发一次
+        `changed`。不这样同步的话，“恢复状态”后界面仍用旧能级组（实测踩过：
+        多体页因取不到 g/r 而报“需恰好 2 个能级”）。返回实际收下数。
+        """
+        out = []
+        for g in (groups or []):
+            d = dict(g)
+            d.setdefault('label', core.auto_label(int(d['n']), int(d['l']),
+                                                  float(d['j'])))
+            d.setdefault('color', self._assign_color())
+            out.append(d)
+        self.groups = out
+        self.changed.emit()
+        return len(out)
+
     def _assign_color(self):
         color = COLOR_CYCLE[self._color_counter % len(COLOR_CYCLE)]
         self._color_counter += 1

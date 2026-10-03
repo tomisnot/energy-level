@@ -339,6 +339,54 @@ class Binder:
             finally:
                 self._updating = False
 
+    def pull_all(self):
+        """把**会话现值**灌回全部登记控件（恢复存档 / AI 改配置后用）。返回刷新数。
+
+        与 `push_all` 对称（push：面板→会话；pull：会话→面板）。登记型控件只在
+        构造时 seed 一次，之后任何外部写（菜单「恢复状态」、AI/MCP `set_config`）
+        都不会重填 ⇒ 界面显示旧值（实测：导入 `manybody.eq_backend='dmrg'` 的存档
+        后，后端下拉仍停在 auto——人会以为“档里没存”，而会话里其实是对的）。
+        全程置 `_updating`：setter 不得反写会话（否则重填变成双向抹平）。
+        会话值为 None 的键**不动控件**（无真值可填，不拿默认值覆盖用户现选）。
+        """
+        n = 0
+        self._updating = True
+        try:
+            for w, key, setter in self._binds:
+                try:
+                    v = self.bridge.read(key)
+                except Exception:                       # noqa: BLE001
+                    continue
+                if v is None:
+                    continue
+                sig = w.blockSignals(True)
+                try:
+                    setter(w, v)
+                    n += 1
+                except Exception as e:                  # noqa: BLE001
+                    print('[mecha-bind] 重填 %r 失败：%s: %s'
+                          % (key, type(e).__name__, e), flush=True)
+                finally:
+                    w.blockSignals(sig)
+            for key, (_rf, _wf, _wid, apply_fn) in self._ext.items():
+                if apply_fn is None:
+                    continue
+                try:
+                    v = self.bridge.read(key)
+                except Exception:                       # noqa: BLE001
+                    continue
+                if v is None:
+                    continue
+                try:
+                    apply_fn(v)
+                    n += 1
+                except Exception as e:                  # noqa: BLE001
+                    print('[mecha-bind] 重填面板（external）%r 失败：%s'
+                          % (key, e), flush=True)
+        finally:
+            self._updating = False
+        return n
+
 
 # ---------------- 模块级工厂（近 pm.spinbox(reg, ...) 的 drop-in 签名） ----------------
 def spinbox(binder, key, default, lo, hi, decimals=2, width=None, parent=None,

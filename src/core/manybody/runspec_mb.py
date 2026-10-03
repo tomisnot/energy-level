@@ -17,7 +17,7 @@ import hashlib
 
 import numpy as np
 
-from .model import ManyBodyModel, TEMPLATE_TERMS
+from .model import ManyBodyModel, TERMS
 from . import assemble as _asm
 from . import engine_ed as _ed
 from .schema_mb import mb_get, validate_drive_segments
@@ -76,19 +76,12 @@ def model_from_params(p, warnings=None):
     B = p.get('manybody.B_gauss')
     if B is None:
         B = p.get('field.B_gauss')               # 未设 → 复用共享 Zeeman 场
-    tmpl = mb_get(p, 'manybody.template')
-    terms_raw = mb_get(p, 'manybody.terms')      # None = 跟随 template 预设
-    if warnings is not None and terms_raw is not None:
-        preset = TEMPLATE_TERMS.get(tmpl)
-        if preset is not None and tuple(terms_raw) != tuple(preset):
-            warnings.append(
-                '[多体] manybody.terms=%s 与 manybody.template=%s 的预设 %s 不一致'
-                '——**以显式 terms 为准**（相互作用内容只有一个真源）；'
-                '若想用模板预设，请清空 manybody.terms'
-                % (list(terms_raw), tmpl, list(preset)))
+    tmpl = mb_get(p, 'manybody.template')          # 已弃用：仅兼容旧存档取值
+    # 相互作用项**恒全开**（I1+I2+I3）：模板/项勾选已从 UI 撤下，
+    # 旧的 manybody.terms/template 一律忽略 → “第一性全相互作用”单一口径。
     m = ManyBodyModel(
-        template=tmpl,
-        terms=(None if terms_raw is None else tuple(terms_raw)),
+        template=tmpl or 'ising',
+        terms=tuple(TERMS),
         B_gauss=float(B or 0.0),
         n_window=int(mb_get(p, 'manybody.n_window')),
         r_cut_um=(None if p.get('manybody.r_cut_um') is None

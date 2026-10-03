@@ -51,9 +51,27 @@ from src.ui.ui_spectrum import LevelAnalysisPanel
 # mecha v2：GUI 与 AI（MCP 服务器线程）共一 Gate、一份 History（v1 门面已退役）。
 from src.v2_bind import make_v2_bridge
 
-matplotlib.rcParams['font.family'] = 'sans-serif'
-matplotlib.rcParams['font.sans-serif'] = ['Microsoft YaHei', 'SimHei', 'DejaVu Sans']
-matplotlib.rcParams['axes.unicode_minus'] = False
+def setup_cjk_fonts():
+    """让 matplotlib 图上的中文不用方框（**必须在 ARC 导入之后再调**）。
+
+    真因（实测）：`arc` 包在 import 时就把自己的绘图风格写进全局 rcParams
+    （`arc/calculations_atom_pairstate.py:82` 设 `font.family='serif'`）⇒ 在它之后
+    创建的每个 Text 都解析到 DejaVu Serif，中文全变方框。而 ARC 过去是在
+    `MainWindow()` 里建 cache 时才被导入——比本模块的设定时机晚。
+    所以这里**先主动 import arc**（它本来就要用，不增加成本），把它的覆盖提前完
+    成，再设我们的字体；不能反过来（晚设会被晚导入的 arc 盖掉）。
+    """
+    matplotlib.rcParams['font.family'] = 'sans-serif'
+    matplotlib.rcParams['font.sans-serif'] = ['Microsoft YaHei', 'SimHei',
+                                              'DejaVu Sans']
+    matplotlib.rcParams['axes.unicode_minus'] = False
+
+
+try:                                        # 先让 arc 把 rcParams 改完
+    import arc                              # noqa: F401
+except Exception:                           # noqa: BLE001
+    pass                                    # 无 ARC 时走纯逻辑路径，不影响字体
+setup_cjk_fonts()
 
 
 _MODE_QSS = (
@@ -109,6 +127,7 @@ class MainWindow(QMainWindow):
         # app_bridge.switch_mode。engine.* 只读（点1），故不再有引擎覆写状态。
         self.god_mode = False
         self._build_ui()
+        setup_cjk_fonts()               # 兜底：万一又有东西在构造期改了 rcParams
         # 两模式收拢（2026-09-24）：GUI 模式 = 纯本地软件、无 AI 连接，故**不挂
         # AI 监控侧边栏**（那是 AI 模式的事，且已迁到 dsh 右侧栏面板）。控制权
         # 切换经看门人：菜单「切换至 AI 模式」写 .mode-request，看门人接手交接。
@@ -127,6 +146,9 @@ class MainWindow(QMainWindow):
         self.field_state = field_state
         self.groups = self.groups_store.groups
         self.groups_store.changed.connect(self._on_store_groups_changed)
+        # 组列表也由同一信号驱动：以前只靠面板自己显式重画，恢复存档直接换 store
+        # 时列表就空着（实测）。收拢到信号 ⇒ 任何写路径都不会漏刷新。
+        self.groups_store.changed.connect(self.group_panel.refresh_list)
 
     def _on_store_groups_changed(self):
         self.groups = self.groups_store.groups
@@ -161,31 +183,27 @@ class MainWindow(QMainWindow):
                                                 self.groups, **(_ac_kw or {}))
         self._level_by_key = {(r['n'], r['l'], r['j'], r['mj']): r for r in self._level_all if r['kind'] == 'mJ'}
         ref = min((r['E0'] for r in self._level_all), default=0.0)
-        lowest = {}
+        self.group_panel.level_table.setRowCount(0)
+        # 行直接取自 `_level_all`——它由 `base_sublevels` 生成，**已施加逐子能级裁剪**。
+        # 旧写法在这里自己 `arange(-j, j)` 枚举 mJ ⇒ 无视 ms/Fs：表里显示 5 个能级、
+        # 而多体页按裁剪后的 2 个取 g/r（两边自相矛盾，用户无法判断哪个是真的）。
         for r in self._level_all:
             key = (r['n'], r['l'], r['j'])
-            if key not in lowest or r['E0'] < lowest[key]['E0']:
-                lowest[key] = r
-        self.group_panel.level_table.setRowCount(0)
-        for g in self.groups:
-            key = (g['n'], g['l'], g['j'])
             pix = QPixmap(12, 12)
-            pix.fill(QColor(g['color']))
-            lo = lowest.get(key)
-            for m in np.arange(-g['j'], g['j'] + 1e-9, 1.0):
-                r = self.group_panel.level_table.rowCount()
-                self.group_panel.level_table.insertRow(r)
-                self.group_panel.level_table.setItem(r, 0, QTableWidgetItem(QIcon(pix), g['label']))
-                it_m = QTableWidgetItem(f'{m:g}')
-                it_m.setTextAlignment(Qt.AlignCenter)
-                self.group_panel.level_table.setItem(r, 1, it_m)
-                rm = self._level_by_key.get((key[0], key[1], key[2], float(m)))
-                if rm is None:
-                    rm = lo
-                if rm is not None:
-                    self.group_panel.level_table.setItem(r, 2, QTableWidgetItem(f"{rm['E0'] - ref:.3f}"))
-                else:
-                    self.group_panel.level_table.setItem(r, 2, QTableWidgetItem(''))
+            pix.fill(QColor(r.get('color') or '#1f77b4'))
+            name = r.get('group_label') or core.auto_label(*key)
+            row = self.group_panel.level_table.rowCount()
+            self.group_panel.level_table.insertRow(row)
+            self.group_panel.level_table.setItem(row, 0, QTableWidgetItem(QIcon(pix), name))
+            if r['kind'] == 'F':
+                m_txt = 'F=%g, mF=%+g' % (float(r['F']), float(r['mF']))
+            else:
+                m_txt = '%g' % float(r['mj'])
+            it_m = QTableWidgetItem(m_txt)
+            it_m.setTextAlignment(Qt.AlignCenter)
+            self.group_panel.level_table.setItem(row, 1, it_m)
+            self.group_panel.level_table.setItem(
+                row, 2, QTableWidgetItem(f"{r['E0'] - ref:.3f}"))
 
     def _build_ui(self):
         # 面板控件经 _mecha_bind 就地绑到 session（定义即注册）；binder 已在 __init__ 建。
@@ -403,23 +421,62 @@ class MainWindow(QMainWindow):
         if not path:
             return
         try:
+            # 先把“住在面板里、经 external 登记”的值推回会话（否则存档拿到的是旧值；
+            # push_all 的注释就是“存档/运行前同步用”，但此前**无调用方**）。
+            self.binder.push_all()
             self.app_bridge.save(path, reason='GUI 保存状态')   # v2 快照 dict（{键:值}）
         except Exception as e:                          # noqa: BLE001
             QMessageBox.warning(self, '保存失败', str(e))
             return
         QMessageBox.information(self, '保存状态', f'已保存 → {path}')
 
+    def _resync_from_session(self):
+        """恢复存档后把“住在会话外”的状态拉回同步（否则界面显示旧态）。
+
+        会话是真值源，但三类状态不在会话里：登记型控件只在构造时 seed 一次、
+        能级组住在 `LevelGroupStore`、多体页持有 `_atoms` 面板缓存。实测踩过：
+        只 `load()` 不拉同步 → 后端下拉仍显示 auto（会话其实已是 dmrg）、多体页
+        原子表为空、且因 `main.groups` 未更新而取不到 g/r。
+        """
+        self.binder.pull_all()                    # 登记控件 + external 面板
+        snap = self.app_bridge.effective() or {}
+        n = 0
+        if self.groups_store is not None:
+            n = self.groups_store.replace(snap.get('groups.list') or [])
+        mb = getattr(self, 'manybody', None)
+        if mb is not None:
+            mb.refresh_from_session()      # 原子表/模式/请求量/betas 回显
+            mb.refresh_groups()            # 再把已存原子 g/r 对到当前能级组
+        return n
+
     def _load_state(self):
         path, _ = QFileDialog.getOpenFileName(self, '恢复状态', '', 'JSON (*.json)')
         if not path:
             return
         try:
-            self.app_bridge.load(path, reason='GUI 恢复状态')   # 经 Gate 原子批量写→订阅刷新
+            with open(path, encoding='utf-8') as f:
+                data = json.load(f)
+        except Exception as e:                          # noqa: BLE001
+            QMessageBox.warning(self, '恢复失败', '文件不可读：%s' % e)
+            return
+        if isinstance(data, dict) and ('format' in data or 'params' in data):
+            # 旧 v1 存档（顶层 {format,mode,params}）：v2 只读扁平 {键:值}快照。
+            # 不在这里默默拆包：旧快照可能含已删键，而写档是**原子批量**
+            #（坏一键全不写），拆包后部分生效更难查。明确报出来。
+            QMessageBox.warning(
+                self, '恢复失败',
+                '这是 **v1 旧存档**（顶层带 %r）——v2 只读扁平 {键:值} 快照。\n'
+                '请在当前版本重新保存一份。' % sorted(data.keys()))
+            return
+        try:
+            n = self.app_bridge.load(path, reason='GUI 恢复状态')   # 经 Gate 原子批量写→订阅刷新
         except Exception as e:                          # noqa: BLE001
             QMessageBox.warning(self, '恢复失败', str(e))
             return
+        n_groups = self._resync_from_session()
         self.refresh()
-        QMessageBox.information(self, '恢复状态', f'已恢复 ← {path}')
+        QMessageBox.information(self, '恢复状态',
+                                '已恢复 %d 键（能级组 %d 个）← %s' % (n, n_groups, path))
 
     def _apply_fullscreen_layout(self):
         screen = QApplication.primaryScreen()

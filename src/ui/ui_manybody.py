@@ -1,40 +1,35 @@
 # -*- coding: utf-8 -*-
-"""多体页（P3-1 M0）：N 原子阵列的配置 + 点云 + 结果。
+"""多体页（P3-1）：N 原子阵列的配置 + 点云 + 结果。
 
-**页面结构**（裁决③ 2026-09-22："单独开一页，啥布局你自己发挥"；既有页一行不动）：
-  中央（本页自己的 tab）：
-    ① 原子表（x/y/z/Ω/δ + 逐原子 g/r 量子数）+ 添加/删除按钮
-    ② 点云画布（x–y 平面，按 Ω 标注）
-    ③ 结果画布（产物态布居 / 逐原子布居）
-  右侧参数面板（`manybody_widget`，进 `page_stack` ⇒ 与动态页**互斥占位**，
-  不与它抢同一块面板；这是 M3 纪律里唯一仍然生效的那条）：
-    模板 / 相互作用项 / 求解器 / 二阶 downfolding / n_window / guard / ed_max_dim /
-    初态 ψ0 + 成本提示 + 运行
+**一个模式按钮分两条工作流**（演化 与 平衡态 彻底分家）：页顶「时间演化 / 平衡态」互斥
+按钮控制只显示对应组件（参数页的两个分区 + 中央区的两个结果画布都随之切换）：
+  · 时间演化（`manybody.want=''`）：含时求解器 `manybody.solver`、初态 ψ0、ED 维度上限；
+    结果画布 = 产物态布居 / ⟨n_i⟩(t) / C_ij。
+  · 平衡态（`manybody.want∈gs/thermal/dos`）：请求量、后端 `manybody.eq_backend`、
+    betas；**无 ψ0/时间轴概念**；结果画布 = E₀+gap+⟨n_i⟩ 或 E/C–β 或 ρ(E)。
+  几何点云表、能级状态、标定旋钮（二阶/n_window/guard）、成本预估为两模式共用。
+
+**页面结构**（裁决③ 2026-09-22：“单独开一页，布局自己发挥”）：
+  中央（本页自己的 tab）：点云画布 + 演化结果画布 / 平衡态结果区（按模式显隐）
+  右侧参数页（`manybody_widget`，进 `page_stack` ⇒ 与动态页**互斥占位**）：
+    能级状态 → **模式按钮** → 几何表 → 模式专属分区 → 标定/成本/运行
 
 **真值**：全部 `manybody.*` 键，经 choke point 写 session（人机同源 I5）——本页不持有
-平行状态；点云/ψ0/terms 这些非标量走 `app_bridge.write`（`register_external` 的等价手写）。
+平行状态；点云/ψ0/betas 这些非标量走 `app_bridge.write`。
 
-**运行**：**借 `DynamicPanel._run`**（同一条运行流，I5），先 `set_nbody('many')` 把族
-声明为多体，再用自己的回调渲染（`on_done`）。进度条/取消复用底栏常驻控件。
+**运行**：**借 `DynamicPanel._run`**（同一条运行流，I5），先 `set_nbody('many')`，再用自己
+的回调渲染（`on_done`）。进度条/取消复用底栏常驻控件。
 
-**M0 范围**（未做项显式列在 `NOT_YET`，不放假控件）：
-  · 点云的**画布交互编辑**（点击加原子/拖拽）——M1；M0 用表编辑 + 只读点云；
-  · 关联矩阵 C_ij 热图 / 纠缠熵 S 曲线——M2（且 S 依赖 P1-8 的 artifact 边界）；
-  · `drive_segments` 分段驱动表、`psi0='sup'` 叠加——后续（见 `NOT_YET`）。
-
-**已裁决不做**（裁决⑤ 2026-09-22，见 `DECIDED_NO`）：`manybody.seed`（core 已删）与
-`manybody.energy_window_mhz`（core 已删）**都不上控件**，原因写在 `DECIDED_NO` 里并显示在
-页面底部——**不留"待裁决"的悬空措辞**（否则后来人会以为还悬着）。
-`manybody.template` 已由"预设选择器"**真实现**（core `TEMPLATE_TERMS`）⇒ 本页恢复
-ising/xy 单选（**有物理效果**），potts3 下拉项**禁用**（未实现，D3 显式边界）；
-`manybody.terms` 是**权威开关**，UI 上用三态控件完整表达 None/list/[] 并写明"显式覆盖预设"。
+**未做项**显式列在 `NOT_YET`；**已裁决不做**列在 `DECIDED_NO`（不悬空措辞）。
+相互作用项：模板/项勾选已从界面移除，由能级标定**恒全开**（I1+I2+I3）。g/r 直接取能级组裁剪后的
+全部能级（需恰好 2 个，否则顶部一行红警告且不能加原子）。
 """
 import numpy as np
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                              QPushButton, QComboBox, QLineEdit, QCheckBox,
                              QTableWidget, QTableWidgetItem, QHeaderView,
-                             QAbstractItemView, QMessageBox)
+                             QAbstractItemView, QMessageBox, QButtonGroup)
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 
@@ -70,8 +65,7 @@ _TERMS = ('I1', 'I2', 'I3')
 _TERM_TIP = {'I1': '密度-密度 V·n_i n_j（vdW/blockade 主项）',
              'I2': '交换 J(σ⁺σ⁻)',
              'I3': '双激发 A(σ⁺σ⁺)'}
-_COLS = ('x (µm)', 'y (µm)', 'z (µm)', 'Ω (MHz)', 'δ (MHz)',
-         'g (n,l,j,m)', 'r (n,l,j,m)')
+_COLS = ('x (µm)', 'y (µm)', 'z (µm)', 'Ω (MHz)', 'δ (MHz)')
 
 
 class ManyBodyPanel(QWidget):
@@ -87,6 +81,11 @@ class ManyBodyPanel(QWidget):
         self._build_canvases()
         self.manybody_widget = self._build_controls()
         self._build_module()
+        # 能级组增删/裁剪 → 重算能级数（恰好 2 个才有 g/r），与动态页同一事件机制。
+        try:
+            main.groups_changed.connect(self.refresh_groups)
+        except Exception:                               # noqa: BLE001
+            pass
         self.refresh_from_session()
 
     # ================= 画布区 =================
@@ -111,16 +110,97 @@ class ManyBodyPanel(QWidget):
         self.cloud_canvas.setToolTip(
             '左键点空白：在该位置加一个原子\n'
             '左键点中原子并拖动：移动（松开时才写 session，避免事件风暴）\n'
-            '删除/改 Ω/δ/g/r：用上方表格与按钮')
+            '删除/改 Ω/δ：用右侧参数页的表格与按钮（g/r 自动取自能级组）')
         self._draw_cloud()
         self._draw_result(None)
+        # 平衡态结果区（仅“平衡态”模式可见）：左=主曲线、右=逐原子⟨n_i⟩/摘要格
+        self.eq_summary = QLabel('（未求解）')
+        self.eq_summary.setWordWrap(True)
+        self.eq_summary.setStyleSheet('color:#374151;')
+        self.eq_fig = Figure(figsize=(10.5, 3.0), dpi=100)
+        self.eq_ax_main = self.eq_fig.add_subplot(121)
+        self.eq_ax_txt = self.eq_fig.add_subplot(122)
+        self.eq_canvas = FigureCanvas(self.eq_fig)
+        self.eq_fig.subplots_adjust(left=0.08, right=0.96, top=0.88, bottom=0.16,
+                                    wspace=0.28)
+        self._draw_eq_result(None)
 
     def _build_module(self):
-        """本页根布局：原子表 → 点云 → 结果（上下三段，中央区自定版式）。"""
+        """本页根（中央画布）：点云 + **按模式二选一**的结果区（演化三格 / 平衡态）。
+
+        几何表/工具条在右侧参数页顶部（=主窗口场面板下方）。
+        """
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(4)
+        root.addWidget(self.cloud_canvas, 3)
+        root.addWidget(self.res_canvas, 3)          # 时间演化结果
+        root.addWidget(self.eq_summary, 0)          # 平衡态结果（+ 画布）
+        root.addWidget(self.eq_canvas, 3)
 
+    def _apply_mode(self):
+        """按 `self._mode` 只显示对应组件（参数分区 + 中央结果区 + 运行按钮文案）。"""
+        eq = self._mode == 'eq'
+        self.sec_evolve.setVisible(not eq)
+        self.sec_eq.setVisible(eq)
+        self.res_canvas.setVisible(not eq)
+        self.eq_canvas.setVisible(eq)
+        self.eq_summary.setVisible(eq)
+        self.btn_mode_evolve.setChecked(not eq)
+        self.btn_mode_eq.setChecked(eq)
+        self.run_btn.setText('求解平衡态' if eq else '运行多体演化')
+        self._draw_cloud()
+
+    # ================= 参数页（进 page_stack） =================
+    def _build_controls(self):
+        panel = QWidget()
+        p = QVBoxLayout(panel)
+        p.setSpacing(6)
+        reg = self.main.binder            # _mecha_bind.Binder（与动态页同一绑定层）
+
+        # —— 能级来源/校验：g/r 取自能级组裁剪后的能级，需恰好 2 个 ——
+        self.level_status = QLabel('')
+        self.level_status.setWordWrap(True)
+        p.addWidget(self.level_status)
+
+        # —— 模式按钮：演化 与 平衡态 彻底分家，只显示对应组件 ——
+        self._mode = 'evolve'
+        mbar = QHBoxLayout()
+        mbar.setSpacing(6)
+        mbar.addWidget(QLabel('模式'))
+        self.btn_mode_evolve = QPushButton('时间演化')
+        self.btn_mode_eq = QPushButton('平衡态')
+        for _b in (self.btn_mode_evolve, self.btn_mode_eq):
+            _b.setCheckable(True)
+            _b.setStyleSheet(
+                'QPushButton{padding:3px 10px;} QPushButton:checked'
+                '{background:#1d4ed8; color:white; font-weight:600;}')
+            mbar.addWidget(_b)
+        self._mode_grp = QButtonGroup(self)
+        self._mode_grp.setExclusive(True)
+        self._mode_grp.addButton(self.btn_mode_evolve)
+        self._mode_grp.addButton(self.btn_mode_eq)
+        self.btn_mode_evolve.clicked.connect(lambda: self._set_mode('evolve'))
+        self.btn_mode_eq.clicked.connect(lambda: self._set_mode('eq'))
+        self.btn_mode_evolve.setToolTip(
+            '含时演化：给初态 ψ0，沿时间轴演化（求解器 auto/ed/tebd）')
+        self.btn_mode_eq.setToolTip(
+            '平衡态：不求时间轴，直接解基态/有限温/态密度'
+            '（后端 auto/ed/gpu-batch/lanczos/kpm/dmrg）')
+        mbar.addStretch(1)
+        p.addLayout(mbar)
+
+        # 两个模式专属分区（先建容器，控件填在下面；放在几何表之后、标定之前）
+        self.sec_evolve = QWidget()
+        self._ev_lay = QVBoxLayout(self.sec_evolve)
+        self._ev_lay.setContentsMargins(0, 0, 0, 0)
+        self._ev_lay.setSpacing(6)
+        self.sec_eq = QWidget()
+        self._eq_lay = QVBoxLayout(self.sec_eq)
+        self._eq_lay.setContentsMargins(0, 0, 0, 0)
+        self._eq_lay.setSpacing(6)
+
+        # —— 几何点云表（从中央画布顶部移到参数页顶部 ⇒ 主窗口里就在场面板正下方）——
         bar = QHBoxLayout()
         bar.setSpacing(6)
         self.atom_label = QLabel('原子（0）')
@@ -133,15 +213,11 @@ class ManyBodyPanel(QWidget):
         self.btn_del = QPushButton('删除选中')
         self.btn_del.clicked.connect(self._del_atom)
         bar.addWidget(self.btn_del)
-        self.btn_fill = QPushButton('g/r 取能级组')
-        self.btn_fill.setToolTip('把选中行的 g/r 量子数重置为能级组面板里最低的两个组')
-        self.btn_fill.clicked.connect(self._fill_gr_from_groups)
-        bar.addWidget(self.btn_fill)
         bar.addStretch(1)
         self.hint = QLabel('')
         self.hint.setStyleSheet('color:#6b7280;')
         bar.addWidget(self.hint)
-        root.addLayout(bar)
+        p.addLayout(bar)
 
         self.table = QTableWidget(0, len(_COLS))
         self.table.setHorizontalHeaderLabels(list(_COLS))
@@ -151,78 +227,88 @@ class ManyBodyPanel(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table.setFixedHeight(132)
         self.table.itemChanged.connect(self._on_table_edited)
-        root.addWidget(self.table)
+        p.addWidget(self.table)
 
-        root.addWidget(self.cloud_canvas, 3)
-        root.addWidget(self.res_canvas, 3)
+        p.addWidget(self.sec_evolve)
+        p.addWidget(self.sec_eq)
 
-    # ================= 参数页（进 page_stack） =================
-    def _build_controls(self):
-        panel = QWidget()
-        p = QVBoxLayout(panel)
-        p.setSpacing(6)
-        reg = self.main.binder            # _mecha_bind.Binder（与动态页同一绑定层）
-
+        # ================= 时间演化专属：含时求解器（ψ0 / ED 上限在下面一并归入）
         row = QHBoxLayout()
-        row.addWidget(QLabel('模板'))
-        self.template_cb = MB.combobox(
-            reg, 'manybody.template', ['ising', 'xy', 'potts3'],
-            spec=MB.ParamSpec('str', options=['ising', 'xy', 'potts3'],
-                              desc='局部空间/相互作用预设'))
-        self.template_cb.setToolTip(
-            '相互作用**预设**（core `TEMPLATE_TERMS`）：\n'
-            '  ising → terms=I1（密度-密度 V·n_i n_j）\n'
-            '  xy    → terms=I2（交换 J σ⁺σ⁻）\n'
-            '两者都是每原子 2 能级（横向场由逐原子 Ω 提供）。\n'
-            'potts3：3 能级/原子——**M1 未实现**，选中会在运行时明确报错。\n'
-            '⚠ **优先级**：显式 manybody.terms 覆盖本预设（相互作用内容只有一个真源）。')
-        # potts3 未实现 ⇒ 下拉项**禁用**（不是删掉：D3 显式边界，让人看得见"有这个档但没做"）
-        _pi = self.template_cb.findText('potts3')
-        if _pi >= 0:
-            self.template_cb.model().item(_pi).setEnabled(False)
-        self.template_cb.currentTextChanged.connect(
-            lambda _t: self._refresh_terms_display())
-        row.addWidget(self.template_cb)
-        row.addWidget(QLabel('求解器'))
+        row.addWidget(QLabel('含时求解器'))
         self.solver_cb = MB.combobox(
             reg, 'manybody.solver', ['auto', 'ed', 'tebd'],
             spec=MB.ParamSpec('str', options=['auto', 'ed', 'tebd'],
-                              desc='多体求解器'))
+                              desc='多体含时求解器'))
         self.solver_cb.setToolTip('auto：按 dim=2^N 与 ed_max_dim 自动判可行\n'
                                   'ed：精确对角化（M1）\n'
-                                  'tebd：TeNPy/MPS——**M3 未实现**，选中会明确报错')
+                                  'tebd：TeNPy/MPS——**未实现**，选中会明确报错')
         _si = self.solver_cb.findText('tebd')
         if _si >= 0:
             self.solver_cb.model().item(_si).setEnabled(False)
         row.addWidget(self.solver_cb)
         row.addStretch(1)
-        p.addLayout(row)
+        self._ev_lay.addLayout(row)
 
-        # 相互作用项：**三态**控件，与 schema 一一对应（None / 显式 list / 显式 []）。
-        # 为什么用 combo+勾选框而不是"就三个勾选框"：schema 里"跟随模板预设(None)"与
-        # "显式不要任何相互作用项([])"是**两个不同的值**，三个勾选框表达不了这个区别，
-        # 会造成"取消勾选到底等于哪个"的歧义（D2：多键/同旋钮必须写明优先级）。
-        row2 = QHBoxLayout()
-        self.terms_mode_cb = QComboBox()
-        self.terms_mode_cb.addItems(list(_TERMS_MODES))
-        self.terms_mode_cb.setToolTip(
-            '跟随模板预设：manybody.terms=None（ising→I1 / xy→I2）\n'
-            '自定义勾选：写显式列表，**覆盖**模板预设\n'
-            '显式无相互作用：写 []（自由自旋，无 I1/I2/I3）')
-        self.terms_mode_cb.currentIndexChanged.connect(self._on_terms_mode_changed)
-        row2.addWidget(self.terms_mode_cb)
-        self.term_cbs = {}
-        for t in _TERMS:
-            cb = QCheckBox(t)
-            cb.setToolTip(_TERM_TIP[t])
-            cb.stateChanged.connect(self._write_terms)
-            row2.addWidget(cb)
-            self.term_cbs[t] = cb
-        self.terms_hint = QLabel('')
-        self.terms_hint.setStyleSheet('color:#6b7280;')
-        row2.addWidget(self.terms_hint)
-        row2.addStretch(1)
-        p.addLayout(row2)
+        # ================= 平衡态专属：请求量 + 后端 + betas =================
+        req = QLabel('平衡态请求量')
+        req.setStyleSheet('font-weight:600;')
+        self._eq_lay.addWidget(req)
+        rowe = QHBoxLayout()
+        rowe.addWidget(QLabel('求什么'))
+        self.want_cb = MB.combobox(
+            reg, 'manybody.want', ['gs', 'thermal', 'dos'],
+            spec=MB.ParamSpec('str', options=['gs', 'thermal', 'dos'],
+                              desc='平衡态请求量'))
+        self.want_cb.setToolTip('gs=基态（E₀/gap/⟨n_i⟩）\n'
+                                'thermal=有限温 E/C/F–β（KPM 谱方法）\n'
+                                'dos=态密度 ρ(E)（KPM）')
+        rowe.addWidget(self.want_cb)
+        rowe.addWidget(QLabel('后端'))
+        self.backend_cb = MB.combobox(
+            reg, 'manybody.eq_backend',
+            ['auto', 'ed', 'gpu-batch', 'lanczos', 'kpm', 'dmrg'],
+            spec=MB.ParamSpec('str',
+                              options=['auto', 'ed', 'gpu-batch', 'lanczos',
+                                       'kpm', 'dmrg'],
+                              desc='平衡态求解后端'))
+        self.backend_cb.setToolTip(
+            'auto：按规模路由（小→ed、大稀疏→lanczos、有 GPU 且批量→gpu-batch、'
+            'thermal/dos→kpm、大而几何规整→dmrg）\n'
+            'ed/gpu-batch/lanczos/kpm：显式指定\n'
+            'dmrg：TeNPy 柱形 DMRG——**任意点云**（多腿/无周期/逐键复 V·J·A）')
+        rowe.addWidget(self.backend_cb)
+        rowe.addStretch(1)
+        self._eq_lay.addLayout(rowe)
+
+        rowb = QHBoxLayout()
+        rowb.addWidget(QLabel('χ (DMRG 键维)'))
+        self.chi_sb = MB.intbox(reg, 'manybody.chi_max', 200, 2, 4000,
+                                spec=MB.ParamSpec('int', desc='DMRG 最大键维 χ'))
+        self.chi_sb.setToolTip('仅后端=dmrg 时生效：χ 越大越准、越慢（代价 ~χ³）。\n'
+                               '先用 60~120 看趋势，要数字再上 200+；收敛看结果图里的 χ/truncerr')
+        rowb.addWidget(self.chi_sb)
+        rowb.addWidget(QLabel('betas (1/MHz)'))
+        self.betas_edit = QLineEdit('0.1, 0.5, 1, 3, 10')
+        self.betas_edit.setPlaceholderText('如 0.1, 0.5, 1, 3, 10（仅 thermal 用）')
+        self.betas_edit.setToolTip('逆温度清单，逗号/空格分隔；β→∞ 趋基态。'
+                                   'gs/dos 忽略本项')
+        self.betas_edit.editingFinished.connect(self._write_betas)
+        rowb.addWidget(self.betas_edit)
+        rowb.addStretch(1)
+        self._eq_lay.addLayout(rowb)
+
+        _eq_note = QLabel('平衡态**不走时间轴**：没有初态 ψ0、也没有时长/步数——只解'
+                          '当前几何+驱动所对应的哈密顿量。')
+        _eq_note.setStyleSheet('color:#6b7280;')
+        _eq_note.setWordWrap(True)
+        self._eq_lay.addWidget(_eq_note)
+
+        # 相互作用项：模板/项勾选已撤下——**恒全开（I1+I2+I3）**，第一性全相互作用单一口径。
+        _terms_note = QLabel('相互作用：由能级标定自动全开（V·nn ＋ 交换 J ＋ 双激发 A）；'
+                             '不再有“模板/项”开关。')
+        _terms_note.setStyleSheet('color:#6b7280;')
+        _terms_note.setWordWrap(True)
+        p.addWidget(_terms_note)
 
         row3 = QHBoxLayout()
         self.second_order_cb = MB.checkbox(
@@ -248,14 +334,19 @@ class ManyBodyPanel(QWidget):
         self.guard_sb.setToolTip('Löwdin downfolding 的近简并中间态剔除阈；'
                                  '被剔除的个数会在运行旁注里报出（不静默）')
         row4.addWidget(self.guard_sb)
-        row4.addWidget(QLabel('ED 维度上限'))
+        row4.addStretch(1)
+        p.addLayout(row4)
+
+        # 演化专属：ED 维度上限 + 初态 ψ0
+        rowe2 = QHBoxLayout()
+        rowe2.addWidget(QLabel('ED 维度上限'))
         self.edmax_sb = MB.intbox(reg, 'manybody.ed_max_dim', 1 << 20, 2, 1 << 24,
                                   spec=MB.ParamSpec('int', desc='ED 维度上限 2^N'))
         self.edmax_sb.setToolTip('dim=2^N 超过本值 → solver=auto 明确报错（不静默降级）；\n'
                                  '调大需自负内存')
-        row4.addWidget(self.edmax_sb)
-        row4.addStretch(1)
-        p.addLayout(row4)
+        rowe2.addWidget(self.edmax_sb)
+        rowe2.addStretch(1)
+        self._ev_lay.addLayout(rowe2)
 
         row5 = QHBoxLayout()
         row5.addWidget(QLabel('初态 ψ0'))
@@ -273,7 +364,7 @@ class ManyBodyPanel(QWidget):
         self.psi0_edit.setVisible(False)
         row5.addWidget(self.psi0_edit)
         row5.addStretch(1)
-        p.addLayout(row5)
+        self._ev_lay.addLayout(row5)
 
         self.cost_label = QLabel('（点「预估成本」看规模；或切到本页自动预估）')
         self.cost_label.setWordWrap(True)
@@ -307,6 +398,7 @@ class ManyBodyPanel(QWidget):
                                              for k, why in DECIDED_NO))
         p.addWidget(self.decided_no)
         p.addStretch(1)
+        self._apply_mode()                      # 初始只显示默认模式（时间演化）的组件
         return panel
 
     # ================= 钩子（app_entry 的 modules 协议） =================
@@ -320,8 +412,8 @@ class ManyBodyPanel(QWidget):
         return
 
     def refresh_groups(self):
-        """能级组变化：只影响「g/r 取能级组」的默认值，不改已有原子。"""
-        return
+        """能级组变化：重算能级数→更新警告；恰好 2 个则把原子 g/r 同步为这 2 个。"""
+        self._sync_atoms_gr()
 
     # ================= 与 session 的往返 =================
     def refresh_from_session(self):
@@ -333,25 +425,7 @@ class ManyBodyPanel(QWidget):
         except Exception:                               # noqa: BLE001
             atoms = []
         self._atoms = [dict(a) for a in atoms]
-        # 相互作用项三态：None=跟随模板 / list=显式 / []=显式无
-        terms = br.read('manybody.terms')
-        self.terms_mode_cb.blockSignals(True)
-        if terms is None:
-            self.terms_mode_cb.setCurrentIndex(0)
-        elif len(terms) == 0:
-            self.terms_mode_cb.setCurrentIndex(2)
-        else:
-            self.terms_mode_cb.setCurrentIndex(1)
-        self.terms_mode_cb.blockSignals(False)
-        # 读路径（真 bug 修，2026-09-22 自测发现）：模式 1 的勾选框**必须**从会话现值
-        # 同步——否则加载存档/undo 后勾选框是空的，而 session 里其实有显式列表
-        # （显示与真值分叉；且下一次 `_write_terms` 会把空表当作用户意图写回去）。
-        if isinstance(terms, (list, tuple)):
-            for t, cb in self.term_cbs.items():
-                cb.blockSignals(True)
-                cb.setChecked(t in terms)
-                cb.blockSignals(False)
-        self._refresh_terms_display()
+        # 相互作用项**恒全开**（模板/项勾选已撤下）⇒ 不再回填/显示 terms。
         psi = br.read('manybody.psi0')
         self.psi0_cb.blockSignals(True)
         if psi == 'ground':
@@ -363,19 +437,92 @@ class ManyBodyPanel(QWidget):
             self.psi0_cb.setCurrentIndex(0)
         self.psi0_cb.blockSignals(False)
         self.psi0_edit.setVisible(self.psi0_cb.currentIndex() == 2)
+        # 模式回填：`manybody.want` 非空 ⇒ 平衡态（只读控件，**不反写** session）。
+        w = str(br.read('manybody.want') or '').lower()
+        self._mode = 'eq' if w in ('gs', 'thermal', 'dos') else 'evolve'
+        self.want_cb.blockSignals(True)
+        if w in ('gs', 'thermal', 'dos'):
+            self.want_cb.setCurrentText(w)
+        self.want_cb.blockSignals(False)
+        bts = br.read('manybody.betas')
+        if bts:
+            self.betas_edit.setText(', '.join('%g' % float(b) for b in bts))
+        self._apply_mode()
         self._rebuild_table()
+        self._refresh_level_status()
 
-    def _default_gr(self):
-        """新原子的 g/r 默认值：能级组最低两组；无组时给 60S/60P 并在状态栏提示。"""
-        gs = sorted(getattr(self.main, 'groups', []) or [],
-                    key=lambda g: self.cache.E_mhz(g['n'], g['l'], g['j']))
-        if len(gs) >= 2:
-            g, r = gs[0], gs[1]
-            return ([g['n'], g['l'], g['j'], float(g['j'])],
-                    [r['n'], r['l'], r['j'], float(r['j'])])
-        self.main.log('多体能级：能级组不足 2 个 → 原子默认用 60S1/2 / 60P3/2，'
-                      '请在能级组面板添加实际组，或直接编辑表的 g/r 列', 8000)
-        return [60, 0, 0.5, 0.5], [60, 1, 1.5, 1.5]
+    def _base_states(self):
+        """能级组「当前裁剪后的全部态」（原样，含 kind）→ (states, note)。
+
+        与动态基组同一 `runspec.build_states` ⇒ 两页的能级基准不漂移。
+        `note` 非空 = 解析失败的原因（不静默返空，否则界面只显示“0 个”而看不出所以）。
+        """
+        groups = [dict(g) for g in (getattr(self.main, 'groups', None) or [])]
+        if not groups:
+            return [], '能级组为空——先在能级组面板添加并裁剪。'
+        br = getattr(self.main, 'app_bridge', None)
+        B = E = 0.0
+        if br is not None:
+            try:
+                B = float(br.read('field.B_gauss') or 0.0)
+                E = float(br.read('field.E_vpcm') or 0.0)
+            except Exception:                           # noqa: BLE001
+                pass
+        try:
+            from src.core import runspec as _rs
+            return list(_rs.build_states(self.cache, groups, B, E)), ''
+        except Exception as e:                          # noqa: BLE001
+            return [], '解析能级组失败：%s: %s' % (type(e).__name__, e)
+
+    def _levels(self):
+        """能级组裁剪后的全部能级 → [(n,l,j,m)…]；**只取 m_J 基**的态。"""
+        sts, _note = self._base_states()
+        return [(float(s['n']), float(s['l']), float(s['j']), float(s['m']))
+                for s in sts if s.get('kind') == 'mJ']
+
+    def _level_diag(self, n_mj):
+        """mJ 能级数不是 2 时，给出具体原因（超精细 / 解析失败 / 就是多了）。"""
+        sts, note = self._base_states()
+        if note:
+            return note
+        n_f = sum(1 for s in sts if s.get('kind') != 'mJ')
+        if n_f:
+            return ('其中 %d 个是**超精细 (F,mF)** 展开的态（如 5S 基态）——多体的'
+                    '2 能级基只定在 m_J 子能级上，请用 ms 裁剪或改用里德堡态。' % n_f)
+        if not sts:
+            return '能级组裁剪后一个态也不剩（ms/Fs 可能裁得太狠）。'
+        return ''
+
+    def _refresh_level_status(self):
+        lv = self._levels()
+        if len(lv) == 2:
+            self.level_status.setText(
+                '能级（来自能级组）：g=%s、r=%s — 恰好 2 个 ✓' % (lv[0], lv[1]))
+            self.level_status.setStyleSheet('color:#047857;')
+        else:
+            why = self._level_diag(len(lv))
+            self.level_status.setText(
+                '⚠ 多体页的 g/r 取自「能级组」裁剪后的能级，需**恰好 2 个**；'
+                '当前 m_J 基 %d 个。%s请在能级组面板处理到 2 个。'
+                % (len(lv), (why + ' ') if why else ''))
+            self.level_status.setStyleSheet('color:#b91c1c; font-weight:600;')
+
+    def _sync_atoms_gr(self):
+        """能级组变动：恰好 2 个时把已存原子 g/r 同步为这 2 个（g/r 由能级组决定）。"""
+        lv = self._levels()
+        if len(lv) != 2 or not self._atoms:
+            self._refresh_level_status()
+            return
+        ch = False
+        for a in self._atoms:
+            if (list(a.get('g') or []) != list(lv[0])
+                    or list(a.get('r') or []) != list(lv[1])):
+                a['g'], a['r'] = list(lv[0]), list(lv[1])
+                ch = True
+        if ch:
+            self._write_atoms('多体页：g/r 随能级组同步')
+            self._rebuild_table()
+        self._refresh_level_status()
 
     def _write_atoms(self, reason):
         """点云 → session（choke point）。空表写 None=清除（registry 拒空 list）。"""
@@ -389,7 +536,15 @@ class ManyBodyPanel(QWidget):
             QMessageBox.warning(self, '点云写入失败', str(e))
 
     def _add_atom(self):
-        g, r = self._default_gr()
+        lv = self._levels()
+        if len(lv) != 2:
+            # g/r 直接取自能级组当前裁剪后的能级，需恰好 2 个。
+            # 不弹模态框：顶部 `level_status` 已是常驻“一行警告”，另记入日志。
+            self._refresh_level_status()
+            self.main.log('多体页：需恰好 2 个能级才能加原子（请先在能级组面板裁剪），'
+                          '当前 %d 个' % len(lv))
+            return
+        g, r = lv
         n = len(self._atoms)
         self._atoms.append({'g': list(g), 'r': list(r),
                             'pos': [6.0 * n, 0.0, 0.0],
@@ -408,30 +563,16 @@ class ManyBodyPanel(QWidget):
         self._rebuild_table()
         self.refresh_cost()
 
-    def _fill_gr_from_groups(self):
-        row = self.table.currentRow()
-        if not (0 <= row < len(self._atoms)):
-            self.main.log('多体页：先选中一行再取能级组')
-            return
-        g, r = self._default_gr()
-        self._atoms[row]['g'] = list(g)
-        self._atoms[row]['r'] = list(r)
-        self._write_atoms('多体页：g/r 取能级组')
-        self._rebuild_table()
-
     def _rebuild_table(self):
         self.table.blockSignals(True)
         self.table.setRowCount(len(self._atoms))
         for i, a in enumerate(self._atoms):
             pos = list(a.get('pos') or [0, 0, 0])
             vals = [pos[0], pos[1], pos[2], a.get('Omega_mhz', 0.0),
-                    a.get('delta_mhz', 0.0),
-                    ','.join('%g' % x for x in (a.get('g') or [])),
-                    ','.join('%g' % x for x in (a.get('r') or []))]
+                    a.get('delta_mhz', 0.0)]
             for c, v in enumerate(vals):
                 it = QTableWidgetItem(str(v))
-                if c < 5:
-                    it.setTextAlignment(Qt.AlignCenter)
+                it.setTextAlignment(Qt.AlignCenter)
                 self.table.setItem(i, c, it)
         self.table.blockSignals(False)
         self.atom_label.setText('原子（%d）  dim=2^%d=%d'
@@ -447,20 +588,14 @@ class ManyBodyPanel(QWidget):
         a = self._atoms[i]
         txt = (item.text() or '').strip()
         try:
-            if c < 5:
-                key = ('pos', c) if c < 3 else ('Omega_mhz' if c == 3 else 'delta_mhz')
-                v = float(txt)
-                if key[0] == 'pos':
-                    pos = list(a.get('pos') or [0, 0, 0])
-                    pos[key[1]] = v
-                    a['pos'] = pos
-                else:
-                    a[key] = v
-            else:
-                q = [float(x) for x in txt.replace(' ', '').split(',')]
-                if len(q) != 4:
-                    raise ValueError('需 4 个数 (n,l,j,m)')
-                a['g' if c == 5 else 'r'] = q
+            if c < 3:
+                pos = list(a.get('pos') or [0, 0, 0])
+                pos[c] = float(txt)
+                a['pos'] = pos
+            elif c == 3:
+                a['Omega_mhz'] = float(txt)
+            elif c == 4:
+                a['delta_mhz'] = float(txt)
         except Exception as e:                          # noqa: BLE001
             QMessageBox.warning(self, '原子表输入非法',
                                 '第 %d 行「%s」= %r 无法解析：%s\n（已回退）'
@@ -557,6 +692,44 @@ class ManyBodyPanel(QWidget):
         self._refresh_terms_display()
         self.refresh_cost()
 
+    # ================= 模式（时间演化 / 平衡态）与平衡态参数 =================
+    def _set_mode(self, mode):
+        """模式按钮：切换可见组件 **并**把 `manybody.want` 写成对应值（演化=''）。"""
+        self._mode = 'eq' if str(mode) == 'eq' else 'evolve'
+        self._apply_mode()
+        self._write_want()
+
+    def _write_want(self):
+        """want 真值：演化=''（走含时路径）；平衡态=下拉选中（gs/thermal/dos）。
+
+        经 choke point（app_bridge.write）——与控件同一写路（人机同路 I5）。
+        """
+        val = '' if self._mode == 'evolve' else (self.want_cb.currentText() or 'gs')
+        br = getattr(self.main, 'app_bridge', None)
+        if br is None:
+            return
+        try:
+            br.write('manybody.want', val, reason='多体页：模式/请求量', actor='gui')
+        except Exception as e:                          # noqa: BLE001
+            self.main.log('写 manybody.want 失败：%s' % e)
+
+    def _write_betas(self):
+        """betas 文本 → float 清单（逗号/空格分隔）；空写 None（=core 默认 [1.0]）。"""
+        vals = []
+        for tok in self.betas_edit.text().replace(',', ' ').split():
+            try:
+                vals.append(float(tok))
+            except ValueError:
+                self.main.log('多体页：betas 忽略非法项 %r' % tok)
+        br = getattr(self.main, 'app_bridge', None)
+        if br is None:
+            return
+        try:
+            br.write('manybody.betas', vals or None,
+                     reason='多体页：逆温度清单', actor='gui')
+        except Exception as e:                          # noqa: BLE001
+            self.main.log('写 manybody.betas 失败：%s' % e)
+
     def _write_psi0(self):
         i = self.psi0_cb.currentIndex()
         self.psi0_edit.setVisible(i == 2)
@@ -628,7 +801,11 @@ class ManyBodyPanel(QWidget):
             if 0 <= i < self.table.rowCount():
                 self.table.selectRow(i)
             return
-        g, r = self._default_gr()
+        lv = self._levels()
+        if len(lv) != 2:                        # g/r 由能级组决定，需恰好 2 个
+            self._refresh_level_status()
+            return
+        g, r = lv
         self._atoms.append({'g': list(g), 'r': list(r),
                             'pos': [float(event.xdata), float(event.ydata), 0.0],
                             'Omega_mhz': 0.0, 'delta_mhz': 0.0})
@@ -730,7 +907,7 @@ class ManyBodyPanel(QWidget):
         # ---- 中：逐原子 ⟨n_i⟩(t)（联合 → 重算；边缘 → 直接用） ----
         axa = self.res_ax_atom
         axa.set_xlabel('t (ns)')
-        axa.set_ylabel('⟨n_i⟩ 激发概率')
+        axa.set_ylabel(r'$\langle n_i\rangle$ 激发概率')
         axa.grid(alpha=0.3)
         try:
             if joint:
@@ -748,11 +925,11 @@ class ManyBodyPanel(QWidget):
                 axb = axa.twinx()
                 axb.plot(t, np.asarray(_s), lw=1.1, ls=':', color='#854F0B')
                 axb.set_ylabel('S (nat)', fontsize=8)
-            axa.set_title('逐原子 ⟨n_i⟩(t)%s'
+            axa.set_title(r'逐原子 $\langle n_i\rangle$(t)%s'
                           % ('（由联合 pops 重算）' if joint else '（边缘）'),
                           fontsize=9)
         except Exception as e:                              # noqa: BLE001
-            axa.text(0.5, 0.5, '⟨n_i⟩ 计算失败：%s' % e, ha='center', va='center',
+            axa.text(0.5, 0.5, r'$\langle n_i\rangle$ 计算失败：%s' % e, ha='center', va='center',
                      transform=axa.transAxes, color='#A32D2D', fontsize=8)
         # ---- 右：关联 C_ij（末态，与引擎口径一致：engine_ed 用最后一步的 p） ----
         axc = self.res_ax_corr
@@ -783,6 +960,122 @@ class ManyBodyPanel(QWidget):
         self.res_canvas.draw_idle()
 
     # ================= 运行（借 DynamicPanel 的同一条运行流） =================
+    @staticmethod
+    def _arr(res, key):
+        """取结果里的数组字段。
+
+        ⚠ 绝不能写 `np.asarray(res.get(key) or [], float)`：值是 numpy 数组时
+        `arr or []` 会抛“truth value of an array ... is ambiguous”（实测整个结果图
+        被自己的异常处理接住，只在图上打一行红字）。必须显式判 None。
+        """
+        v = res.get(key)
+        if v is None:
+            return np.zeros(0, dtype=float)
+        try:
+            return np.asarray(v, dtype=float).ravel()
+        except (TypeError, ValueError):
+            return np.zeros(0, dtype=float)
+
+    def _draw_eq_result(self, res):
+        """平衡态结果：主格画图 + 右格读数（与含时的三格结果图互斥显示）。
+
+        gs → 逐原子 ⟨n_i⟩ 柱 + E₀/gap；thermal → E(β) 与 C(β)（双 y 轴）；dos → ρ(E)。
+        """
+        axm, axt = self.eq_ax_main, self.eq_ax_txt
+        axm.clear()
+        axt.clear()
+        axt.set_axis_off()
+        if not res:
+            axm.text(0.5, 0.5, '还没有平衡态结果（选「求什么」后点「求解平衡态」）',
+                     ha='center', va='center', transform=axm.transAxes,
+                     color='#9ca3af')
+            axt.text(0.5, 0.5, '—', ha='center', va='center',
+                     transform=axt.transAxes, color='#9ca3af')
+            self.eq_summary.setText('（未求解）')
+            self.eq_canvas.draw_idle()
+            return
+        want = str(res.get('want') or res.get('method') or '')
+        bits = []
+        try:
+            if want == 'gs':
+                na = self._arr(res, 'n_atom')
+                if na.size:
+                    axm.bar(range(na.size), na, color='#2563EB')
+                    axm.set_xticks(range(na.size))
+                    axm.set_ylim(0, max(1.0, float(na.max()) * 1.15))
+                    axm.set_xlabel('atom i')
+                    axm.set_ylabel(r'$\langle n_i\rangle$ 激发概率')
+                    axm.grid(alpha=0.3, axis='y')
+                else:
+                    axm.text(0.5, 0.5, r'该后端未给逐原子 $\langle n_i\rangle$',
+                             ha='center',
+                             va='center', transform=axm.transAxes, color='#6b7280')
+                axm.set_title(r'基态 $\langle n_i\rangle$（后端 %s）'
+                              % res.get('backend', '?'), fontsize=9)
+                for k, lbl in (('E0', 'E0'), ('gap', 'gap'),
+                               ('S', 'S'), ('chi', 'χ')):
+                    if res.get(k) is not None:
+                        bits.append('%s = %.6g %s' % (lbl, float(res[k]),
+                                                      'MHz' if k in ('E0', 'gap') else ''))
+            elif want == 'thermal':
+                b = self._arr(res, 'betas')
+                E = self._arr(res, 'E')
+                C = self._arr(res, 'C')
+                if b.size and E.size == b.size:
+                    axm.plot(b, E, 'o-', color='#2563EB', label='E')
+                    axm.set_xscale('log')
+                    axm.set_xlabel('β (1/MHz)')
+                    axm.set_ylabel('E (MHz)')
+                    axm.grid(alpha=0.3)
+                    handles, labels = axm.get_legend_handles_labels()
+                    if C.size == b.size:
+                        axb = axm.twinx()
+                        axb.plot(b, C, 's--', color='#B45309', label='C')
+                        axb.set_ylabel('C', fontsize=8)
+                        h2, l2 = axb.get_legend_handles_labels()
+                        handles, labels = handles + h2, labels + l2
+                    axm.legend(handles, labels, fontsize=7, loc='best')
+                    axm.set_title('有限温 E(β)/C(β)（后端 %s）'
+                                  % res.get('backend', '?'), fontsize=9)
+                    bits.append('β 点数 = %d' % b.size)
+                    for k in ('E_first_last', 'C_first_last', 'F_first_last'):
+                        v = res.get(k)
+                        if v is not None and len(v) == 2:
+                            bits.append('%s = [%.4g, %.4g]' % (k, v[0], v[1]))
+                else:
+                    axm.text(0.5, 0.5, '结果里没有 betas/E 数组', ha='center',
+                             va='center', transform=axm.transAxes, color='#A32D2D')
+            elif want == 'dos':
+                e = self._arr(res, 'energies')
+                rho = self._arr(res, 'rho')
+                if e.size and rho.size == e.size:
+                    axm.plot(e, rho, color='#7C3AED')
+                    axm.set_xlabel('E (MHz)')
+                    axm.set_ylabel('ρ(E)')
+                    axm.grid(alpha=0.3)
+                axm.set_title('态密度 ρ(E)（后端 %s）' % res.get('backend', '?'),
+                              fontsize=9)
+                bits.append('分箱 = %d' % e.size)
+                for k in ('rho_max', 'E_at_rho_max'):
+                    if res.get(k) is not None:
+                        bits.append('%s = %.4g' % (k, float(res[k])))
+            else:
+                axm.text(0.5, 0.5, '不认识的 want=%r' % want, ha='center',
+                         va='center', transform=axm.transAxes, color='#A32D2D')
+        except Exception as e:                              # noqa: BLE001
+            axm.text(0.5, 0.5, '绘图失败：%s' % e, ha='center', va='center',
+                     transform=axm.transAxes, color='#A32D2D', fontsize=8)
+        head = 'want=%s   后端=%s   N=%s   dim=%s' % (
+            want, res.get('backend', '?'), res.get('n_atoms', '?'),
+            res.get('dim', '?'))
+        body = '\n'.join(bits) if bits else '（无额外读数）'
+        # matplotlib 面板里把 E0 写成 mathtext（雅黑缺 `₀` 字形，直接用会变方框）；
+        # 顶部 QLabel 走 Qt 字体，保留纯文本更可读。
+        axt.text(0.02, 0.96, head + '\n' + body.replace('E0 =', r'$E_0$ ='),
+                 va='top', ha='left', fontsize=8, transform=axt.transAxes)
+        self.eq_summary.setText(head + '   ｜   ' + body.replace('\n', '  ·  '))
+        self.eq_canvas.draw_idle()
+
     def _on_run_clicked(self):
         d = self.main.dynamic
         if getattr(d, '_run_active', False):
@@ -798,13 +1091,13 @@ class ManyBodyPanel(QWidget):
         d._run(on_done=self._on_result)
 
     def _on_result(self, result, error):
-        """多体运行结束：收尾 UI（唯一入口）+ 从 artifact 取数组绘图。"""
+        """多体运行结束：收尾 UI（唯一入口）+ 按模式选结果渲染器。"""
         self.main.dynamic._finish_run_ui()
-        self.run_btn.setText('运行多体演化')
+        self.run_btn.setText('求解平衡态' if self._mode == 'eq' else '运行多体演化')
         if error == 'cancelled':
             return
         if error is not None:
-            QMessageBox.warning(self, '多体演化失败', str(error))
+            QMessageBox.warning(self, '多体运行失败', str(error))
             return
         res = None
         aid = (result or {}).get('artifact_id')
@@ -817,8 +1110,18 @@ class ManyBodyPanel(QWidget):
         except Exception as e:                          # noqa: BLE001
             self.main.log('多体结果载入失败：%s' % e)
         self._last_res = res
-        self._draw_result(res)
         summ = (result or {}).get('summary') or {}
+        if summ.get('equilibrium'):
+            # 平衡态：数组在 artifact（betas/E/C/F/energies/rho），标量在 summary
+            # （E0/gap/backend）——两边合并后才能画。
+            merged = dict(summ)
+            merged.update(res or {})
+            self._draw_eq_result(merged)
+            self.main.log('多体平衡态完成：want=%s backend=%s E0=%s'
+                          % (summ.get('want'), summ.get('backend'),
+                             summ.get('E0')), 12000)
+            return
+        self._draw_result(res)
         self.main.log('多体运行完成：method=%s backend=%s %s'
                       % ((result or {}).get('method'), (result or {}).get('backend'),
                          {k: summ.get(k) for k in ('n_atoms', 'dim', 'ok')

@@ -86,6 +86,11 @@ _ENGINE_TABLE = {
     ('hard', 'pair'): ('.hard', 'evolve_hard_pair'),
     ('ed', 'many'): ('.manybody.engine_ed', 'evolve_manybody'),
     ('tebd', 'many'): ('.manybody.engine_ed', 'evolve_tebd_stub'),
+    # 平衡态产品入口（manybody.eq_engine）：method 即请求量，走 eq_route 路由到
+    # ed/gpu-batch/lanczos/kpm/dmrg。spec['equilibrium']=True 时由 evolve_run 旁路。
+    ('gs', 'many'): ('.manybody.eq_engine', 'run_equilibrium'),
+    ('thermal', 'many'): ('.manybody.eq_engine', 'run_equilibrium'),
+    ('dos', 'many'): ('.manybody.eq_engine', 'run_equilibrium'),
 }
 
 _NBODY_OF_BOOL = {False: 'single', True: 'pair'}
@@ -500,8 +505,16 @@ def build_run(cache, params, *, pump=None, vdd=True, method=None, diag=False,
     p = params or {}
     mode = int(p.get('dynamic.mode') or 0)
     if mode == 2:
-        # 多体（N 原子阵列）：委托 manybody.runspec_mb（同一 RunSpec 契约；
-        # calibrate 在此主线程碰 ARC/SQLite，守 B-1① 线程亲和）
+        # 多体（N 原子阵列）：同一 RunSpec 契约；calibrate 在此主线程碰 ARC/SQLite。
+        # 平衡态请求 manybody.want∈gs/thermal/dos → 委托 eq_engine（不走时间轴，
+        # 经 eq_route 路由 ed/gpu-batch/lanczos/kpm/dmrg）；否则走含时 ED 演化。
+        _w = str(p.get('manybody.want') or '').lower()
+        if _w in ('gs', 'thermal', 'dos'):
+            from .manybody.eq_engine import build_equilibrium
+            return build_equilibrium(cache, p, want=_w,
+                                     method=(p.get('manybody.eq_backend')
+                                             or p.get('manybody.solver')),
+                                     betas=p.get('manybody.betas'))
         from .manybody.runspec_mb import build_run_manybody
         return build_run_manybody(cache, p, pump=pump, method=method,
                                   diag=diag, t_grid=t_grid)
@@ -593,6 +606,21 @@ def build_run(cache, params, *, pump=None, vdd=True, method=None, diag=False,
 
 def summarize_run(run):
     """RunSpec → 人类/AI 可读摘要（不含大数组）。"""
+    if run.get('equilibrium'):
+        # 平衡态请求（gs/thermal/dos）：**无时间轴/无初态**，不套用含时的
+        # t_max/npts/psi0 字段（旧写法会在 `run['t_max']` KeyError）。
+        return {
+            'two_body': False, 'nbody': run.get('nbody', 'many'),
+            'equilibrium': True, 'want': run.get('want'),
+            'method': run.get('method'), 'solver': run.get('method'),
+            'backend_hint': run.get('method_in'),
+            'n_atoms': run.get('n_atoms'), 'dim': run.get('dim'),
+            'terms': run.get('terms'),
+            'betas': (list(run.get('betas')) if run.get('betas') else None),
+            'kpm': dict(run.get('kpm') or {}),
+            'states_head': [s['label'] for s in (run.get('states') or [])[:6]],
+            'warnings': list(run.get('warnings') or []),
+        }
     st = run['states']
     out = {
         'two_body': bool(run['two_body']),
@@ -646,7 +674,12 @@ def evolve_run(run, progress_arr=None, log=None, cache=None):
             % ', '.join(sorted(ovr)))  # 早失败，不静默
     meth = run['method']
     if run.get('nbody') == 'many':
-        # 多体：唯一分派表取 engine_fn(meth,'many')；分支只备料（透传 calib/驱动/psi0）
+        # 平衡态旁路（want ∈ gs/thermal/dos）：不走时间轴，直接由 eq_engine 路由求解。
+        # 分派键用 want（→run_equilibrium）；run['method'] 存的是后端（ed/kpm/dmrg/...）。
+        if run.get('equilibrium'):
+            fn = engine_fn(run.get('want', 'gs'), 'many')
+            return fn(run, progress_arr=progress_arr, log=log)
+        # 多体含时：唯一分派表取 engine_fn(meth,'many')；分支只备料（透传 calib/驱动/psi0）
         fn = engine_fn(meth, 'many')
         return fn(run['calib'], run.get('psi0'), run['t'],
                   Om=run.get('Om'), delta=run.get('delta'),
@@ -741,6 +774,8 @@ def result_summary(run, res, top_n=8, want_labels=None):
     """
     if res is None:
         return {'ok': False, 'msg': '无结果（可能被取消）'}
+    if run.get('equilibrium') or (res.get('pops') is None and res.get('want')):
+        return _equilibrium_summary(run, res)
     labels = result_labels(run, res)
     arr = res.get('pops')
     if arr is None:
@@ -771,6 +806,49 @@ def result_summary(run, res, top_n=8, want_labels=None):
     return out
 
 
+def _equilibrium_summary(run, res):
+    """平衡态 Result → 紧凑摘要（数组走 artifact，这里只给读数）。
+
+    旧 `result_summary` 只要 `pops`，平衡态结果无 pops ⇒ 会错报“引擎契约被破坏”。
+    """
+    want = str(res.get('want') or run.get('want') or '')
+    n = int(run.get('n_atoms') or res.get('n_sites') or 0)
+    out = {'ok': True, 'equilibrium': True, 'want': want,
+           'backend': res.get('backend'), 'n_atoms': n,
+           'dim': int(run.get('dim') or (1 << n) if n else 0)}
+    r6 = lambda v: round(float(v), 6)          # noqa: E731
+    if want == 'gs':
+        if res.get('E0') is not None:
+            out['E0'] = round(float(res['E0']), 9)
+        for k in ('gap', 'chi', 'S'):
+            if res.get(k) is not None:
+                out[k] = round(float(res[k]), 9)
+        na = res.get('n_atom')
+        if na is not None:
+            out['n_atom'] = [r6(v) for v in np.asarray(na).ravel()]
+        return out
+    if want == 'thermal':
+        b = np.asarray(res.get('betas') or [], float)
+        out['n_betas'] = int(b.size)
+        if b.size:
+            out['betas'] = [r6(v) for v in b[:8]]
+            for key in ('E', 'C', 'F'):
+                a = np.asarray(res.get(key) or [], float)
+                if a.size == b.size:
+                    out['%s_first_last' % key] = [r6(a[0]), r6(a[-1])]
+        return out
+    if want == 'dos':
+        e = np.asarray(res.get('energies') or [], float)
+        rho = np.asarray(res.get('rho') or [], float)
+        out['n_bins'] = int(e.size)
+        if e.size and rho.size:
+            out['E_range'] = [r6(e[0]), r6(e[-1])]
+            out['rho_max'] = r6(rho.max())
+            out['E_at_rho_max'] = r6(float(e[int(np.argmax(rho))]))
+        return out
+    return {'ok': False, 'msg': '平衡态 want=%r 不认识（应为 gs/thermal/dos）' % want}
+
+
 def check_run(run):
     """RunSpec 的**运行前**自检（返回问题列表）。
 
@@ -778,6 +856,26 @@ def check_run(run):
     判据与 GUI `_run` 的校验同源（零波形 + 零耗散通道 = 空演化，GUI 也拒绝）。
     """
     problems = list(run.get('warnings') or [])
+    if run.get('equilibrium'):
+        # 平衡态（gs/thermal/dos）**不走时间轴** ⇒ 不能套用含时的时网格/空演化判据
+        #（旧写法在 `run['t']` 直接 KeyError，GUI/AI 经 ops.prepare 就挂）。
+        if int(run.get('n_atoms') or 0) <= 0:
+            problems.append('多体平衡态：没有原子（manybody.atoms 为空）')
+        w = str(run.get('want') or '')
+        if w not in ('gs', 'thermal', 'dos'):
+            problems.append('多体平衡态：want 需为 gs/thermal/dos，实=%r' % w)
+        if w == 'thermal':
+            bt = [float(b) for b in (run.get('betas') or [])]
+            if not bt:
+                problems.append('thermal 需要 betas（逆温度清单，1/MHz，如 [0.1,1,10]）')
+            elif any(b <= 0 for b in bt):
+                problems.append('betas 必须全为正数（1/MHz）')
+        if str(run.get('method') or '') == 'dmrg' and not run.get('ladder') \
+                and run.get('dmrg_ok') is False:
+            # 自写 autoMPO 后任意几何都能 DMRG；这里只提醒“排序不好可能很慢”（非阻断）。
+            problems.append('dmrg：点云蛇形排序后排键较长（长程键多），MPS 键数会较大；'
+                            '如太慢可改 auto/lanczos')
+        return problems
     t = np.asarray(run['t'], float)
     if len(t) < 2:
         problems.append('时间网格少于 2 点，演化无意义')
