@@ -51,6 +51,7 @@ from src.ui.ui_spectrum import LevelAnalysisPanel
 
 # mecha v2：GUI 与 AI（MCP 服务器线程）共一 Gate、一份 History（v1 门面已退役）。
 from src.v2_bind import make_v2_bridge
+from mecha.authority import Mode
 
 def setup_cjk_fonts():
     """让 matplotlib 图上的中文不用方框（**必须在 ARC 导入之后再调**）。
@@ -94,7 +95,7 @@ class MainWindow(QMainWindow):
     # 共用能级组增删事件（事件驱动，页面订阅刷新，不散布同步调用）
     groups_changed = pyqtSignal()
 
-    def __init__(self):
+    def __init__(self, bridge=None):
         super().__init__()
         self.setWindowTitle('Rb-87 能级计算')
         self.resize(1400, 800)
@@ -107,7 +108,12 @@ class MainWindow(QMainWindow):
         # 看不见这台软件；想动 AI 走看门人切到 AI 模式）。同一道 Gate、同一份
         # History 的机制照旧（写权恒 human，Binder/只读门控保留待库语义）。
         # 根 = 模块级 `PROJ_ROOT`（唯一定义点，与权威进程的 .mcp-port 同源）。
-        self.app_bridge = make_v2_bridge(PROJ_ROOT, start_services=False)
+        #: ⭐ 三层架构：**窗口复用注入的桥**（软件进程内开窗 = `--mcp --with-gui`）。
+        #: 没有注入 ⇒ 独立进程那一档（`--gui`）：它仍**自建**桥（纯本地、不起端点）。
+        #: ⚠ 同进程里自建第二份 ⇒ 同一数据根抢写租约 ⇒ `writer_lease_held`
+        #: （步骤 0 的 A4 实测；本行就是为消灭那个形态而生）。
+        self.app_bridge = bridge if bridge is not None else make_v2_bridge(
+            PROJ_ROOT, start_services=False)
         self.cache = self.app_bridge.cache
         # 面板控件 ↔ session。**notify=self.log**：写权被拒等"必须让人看见"的反馈
         # 走状态栏（P2-4）——没有它，`Binder._reject` 就只是"声明了没人接"的空机制。
@@ -499,15 +505,39 @@ class MainWindow(QMainWindow):
 def run_gui(app):
     """本地 GUI：纯本地操控面板，写权在人（不起任何端点）。
 
-    由人（或框架 supervisor 的 human adapter，即 Service.manual）带 `--gui` 起。
+    这是**独立进程**那一档（三层架构：纯 GUI 用户不走 mecha，自己找入口）。
+    软件进程内开窗是另一条路：`--mcp --with-gui`（窗口复用同一份桥）。
     """
     window = MainWindow()
     window.showMaximized()
     return app.exec_()
 
 
-def run_mcp():
-    """MCP 服务形态：headless（**不建 GUI 窗口**），给框架 supervisor 起。
+def _initial_mode():
+    """读**启动者**声明的初始写权（三层架构 §5.1：框架经 `MECHA_INITIAL_MODE` 送进来）。
+
+    ⚠ 空串 = 框架的【显式取消该变量】语义 ⇒ 同样走缺省。
+    ⚠ 解析一律用 `.value`：`Mode` 是 **str-Enum** —— `str(Mode.AI)` 给的是 `'Mode.AI'`
+      **不是** `'ai'`（三个仓的子代理刚都断在这上面）。
+    缺省 = 本仓声明的 AI（"从 mecha 启动永远是 AI 组"）；非法值 ⇒ 回落 AI 并**说出来**。
+    """
+    raw = (os.environ.get('MECHA_INITIAL_MODE') or '').strip().lower()
+    if not raw:
+        return Mode.AI
+    try:
+        return Mode(raw)
+    except ValueError:
+        print('[mcp] ⚠ MECHA_INITIAL_MODE=%r 非法（只认 %s）⇒ 回落 AI'
+              % (raw, '/'.join(m.value for m in Mode)), flush=True)
+        return Mode.AI
+
+
+def run_mcp(with_gui=False):
+    """MCP 服务形态：给框架 supervisor 起；**可选**在同一进程里开 GUI 窗口。
+
+    - 默认 headless：v2 栈照装（Gate/History + MCP 服务器线程 + 监控端点）；
+    - `--with-gui`：⭐ **窗口复用这同一份桥**（三层架构 §3 裁决 1 / §6 义务 1）。
+      ⚠ **不碰** `--gui` 那一档（独立进程形态，仍是自建桥）。
 
     v2 栈照装（Gate/History + MCP 服务器线程 + 监控端点），写权落 AI：
     装配出厂 HUMAN 后 `switch_mode(AI, actor='human')`——起它的那一侧（框架
@@ -519,9 +549,18 @@ def run_mcp():
     """
     import threading
     bridge = make_v2_bridge(PROJ_ROOT)
-    bridge.switch_mode('ai', actor='human')
-    print('[mcp] MCP 服务就绪：MCP 端点 + 只读监控端点已起，写权在 AI。'
-          'Ctrl+C 或 supervisor 收尾时退出。', flush=True)
+    #: 初始写权：**启动者声明**（§5.1）——缺省 = 本仓声明的 AI。⚠ `Mode` 是 str-Enum，
+    #: 所以传 `.value` 给桥（桥的 `switch_mode` 吃字符串）。
+    bridge.switch_mode(_initial_mode().value, actor='human')
+    print('[mcp] MCP 服务就绪：MCP 端点 + 只读监控端点已起，写权=%s。'
+          % bridge.mode, flush=True)
+    if with_gui:
+        window = MainWindow(bridge=bridge)   # ⭐ 复用同一份桥：不新建、不抢租约
+        window.showMaximized()
+        app = QApplication.instance()
+        print('[mcp] 已在**同一进程**开窗（复用同一份桥；窗口随本进程生死）。',
+              flush=True)
+        return app.exec_() if app is not None else 0
     stop = threading.Event()
     try:
         stop.wait()
@@ -545,11 +584,12 @@ def main():
     if '--gui' in sys.argv:
         return run_gui(app)
     if '--mcp' in sys.argv:
-        return run_mcp()
+        return run_mcp(with_gui='--with-gui' in sys.argv)
     print('未指定形态：本文件只起【本软件自己的一个形态】（--mcp 或 --gui）。\n'
           '要起整站（含 harness 与进程编排）用：python -m mecha --all\n'
-          '  python app_entry.py --mcp    起 MCP 服务端点（headless）\n'
-          '  python app_entry.py --gui    起本地 GUI')
+          '  python app_entry.py --mcp                起 MCP 服务端点（headless）\n'
+          '  python app_entry.py --mcp --with-gui     同上，并在**同一进程**开窗\n'
+          '  python app_entry.py --gui                起本地 GUI（独立进程）')
     return 2
 
 

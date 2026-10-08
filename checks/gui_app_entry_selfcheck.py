@@ -154,10 +154,14 @@ C.group('C 两模式收拢：看门人编排 + 权威 headless + GUI 不起端�
      '.mode-request' in _LAUNCH_SRC),
     ('交接先 terminate 再等退出（写租约随进程释放，防 writer_lease_held）',
      '_terminate_group' in _LAUNCH_SRC and '_await_exit' in _LAUNCH_SRC),
-    ('app_entry 有 run_mcp（MCP 服务形态，写权自动落 AI）',
-     'def run_mcp' in _APP_SRC and "switch_mode('ai'" in _APP_SRC),
-    ('GUI 模式装配不起端点（start_services=False，AI 物理看不见）',
-     'make_v2_bridge(PROJ_ROOT, start_services=False)' in _APP_SRC),
+    ('app_entry 有 run_mcp（MCP 服务形态）；初始写权**由启动者声明**'
+     '（MECHA_INITIAL_MODE，三层架构 §5.1；不再硬编码 ai）',
+     'def run_mcp' in _APP_SRC and '_initial_mode()' in _APP_SRC
+     and 'MECHA_INITIAL_MODE' in _APP_SRC),
+    ('⭐ 独立进程那一档（--gui）仍**自建**桥且不起端点（start_services=False）；'
+     '软件进程内开窗那一档（--mcp --with-gui）走**注入的**桥',
+     'start_services=False' in _APP_SRC and 'window = MainWindow()' in _APP_SRC
+     and 'MainWindow(bridge=bridge)' in _APP_SRC),
     ('GUI 模式不再挂 AI 监控侧边栏（monitor_panel 已退役）',
      'monitor_panel' not in _APP_SRC),
     ('无 run_ai / cockpit.server / src.adapter.serve（v1 编排与驾驶舱不回流）',

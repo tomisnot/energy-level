@@ -58,8 +58,17 @@ _ENV = {
 
 
 def service_argv() -> tuple[str, ...]:
-    """起 EL 的 MCP 服务形态（headless；`run_mcp()` 自己读 `PROJ_ROOT`，不需别的参数）。"""
-    return (_PY, "app_entry.py", "--mcp")
+    """起 EL 的 MCP 服务形态；`--with-gui` 让它在**同一进程**里开窗（复用同一份桥）。
+
+    ⚠ **为什么用旗标**（三层架构 §7）：「切到手动」只在 `has_gui` 的项目显示，而它
+    **只切写权**（面板与 dsh 都不关）⇒ 窗口得**先在软件进程里存在**。要不要开窗是
+    **每次启动的意图**（人是启动者），不是"这个软件必然要开" ⇒ 用旗标。
+    三个东西分工不同、别挤进一个变量：`has_gui` = **能力**（面板显不显示按钮）、
+    `MECHA_INITIAL_MODE` = **写权**（框架 §5.1 注入）、`--with-gui` = **本次是否开窗**。
+    ⚠ 不加这个旗标 ⇒ 该软件就是 headless（`--mcp` 单独跑的行为**没变**）。
+    `run_mcp()` 自己读 `PROJ_ROOT`，不需别的参数。
+    """
+    return (_PY, "app_entry.py", "--mcp", "--with-gui")
 
 
 SITE = Site(
