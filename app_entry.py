@@ -16,6 +16,8 @@
 """
 
 import os
+import queue
+import threading
 import sys
 
 # ── 无控制台启动的标准守卫 ─────────────────────────────────────────────
@@ -52,6 +54,7 @@ from src.ui.ui_spectrum import LevelAnalysisPanel
 # mecha v2：GUI 与 AI（MCP 服务器线程）共一 Gate、一份 History（v1 门面已退役）。
 from src.v2_bind import make_v2_bridge
 from mecha.authority import Mode
+from mecha.errors import MechaError
 
 def setup_cjk_fonts():
     """让 matplotlib 图上的中文不用方框（**必须在 ARC 导入之后再调**）。
@@ -532,6 +535,77 @@ def _initial_mode():
         return Mode.AI
 
 
+#: ⭐ 「手动面」（GUI 窗口）在本进程内的**唯一**记载点：``None`` = 还没开。
+#: 它同时是**幂等**的依据（已开 ⇒ 不重复开、不报错）。
+_MANUAL = {'window': None}
+
+#: 控制端点 → **Qt 主线程** 的搬运队列（见 `_open_on_qt_thread` 的说明）。
+_CONTROL_Q = queue.Queue()
+
+#: 主循环是否在跑（决定「能不能把开窗请求搬到 Qt 线程」）。
+_MAIN_LOOP = {'running': False}
+
+
+def open_manual_surface_now(bridge):
+    """在当前线程打开「手动面」（GUI 窗口）—— ⚠ **必须在 Qt 主线程调用**（Qt 的硬要求）。
+
+    ⭐ 复用**注入的**桥（``MainWindow(bridge=bridge)``）：这是步骤 0 的 A4 实测的必改点
+    —— 同进程里自建第二份桥会抢同一数据根的写租约（``writer_lease_held``）。
+    已经开着 ⇒ **幂等**返回 ``'already-open'``。
+    """
+    if _MANUAL['window'] is not None:
+        return 'already-open'
+    app = QApplication.instance()
+    if app is None:
+        raise MechaError('没有 QApplication ⇒ 本进程没有「手动面」能力',
+                         kind='no_manual_surface')
+    window = MainWindow(bridge=bridge)
+    window.showMaximized()
+    _MANUAL['window'] = window
+    return 'opened'
+
+
+def _open_on_qt_thread(bridge):
+    """把「开窗」这件事**搬回 Qt 主线程**做（控制请求来在 MCP 服务器那条线程上）。
+
+    ⭐ **为什么是搬回主线程、而不是在别的线程里起 Qt**：Qt 要求 GUI 对象与事件循环属于
+    **创建 QApplication 的那条线程**（这里就是主线程）—— 在别的线程建窗口是未定义行为。
+    而主线程此刻正阻塞在等待循环里 ⇒ 用一条队列把请求递过去，主循环取到后**在主线程**
+    建窗口（`_drain_control_queue`）。
+    ⚠ 这样**不动任何 native 初始化顺序**：窗口的建法与本进程 `--gui` 那一档**逐字相同**
+    （不碰 EL 那条 QThread / `0xc0000409` 的历史雷）。
+    """
+    if _MANUAL['window'] is not None:
+        return 'already-open'
+    if threading.current_thread() is threading.main_thread():
+        return open_manual_surface_now(bridge)          # 已经在 Qt 线程：直接开
+    if not _MAIN_LOOP['running']:
+        raise MechaError('当前没有在跑的 Qt 主循环，无法开窗', kind='no_manual_surface')
+    box: dict = {}
+    done = threading.Event()
+    _CONTROL_Q.put((box, done))
+    if not done.wait(30.0):
+        raise MechaError('开窗请求超时（主循环没响应）', kind='open_surface_timeout')
+    if 'err' in box:
+        raise box['err']
+    return box['result']
+
+
+def _drain_control_queue(bridge):
+    """主循环每拍调一次：执行「必须在 Qt 线程做」的请求（当前只有开窗）。"""
+    while True:
+        try:
+            box, done = _CONTROL_Q.get_nowait()
+        except queue.Empty:
+            return
+        try:
+            box['result'] = open_manual_surface_now(bridge)
+        except BaseException as e:                      # noqa: BLE001 —— 交给请求方响亮报错
+            box['err'] = e
+        finally:
+            done.set()
+
+
 def run_mcp(with_gui=False):
     """MCP 服务形态：给框架 supervisor 起；**可选**在同一进程里开 GUI 窗口。
 
@@ -554,18 +628,37 @@ def run_mcp(with_gui=False):
     bridge.switch_mode(_initial_mode().value, actor='human')
     print('[mcp] MCP 服务就绪：MCP 端点 + 只读监控端点已起，写权=%s。'
           % bridge.mode, flush=True)
+    # ⭐ 控制端点（三层架构 §7.1.1）：人侧专用，**不导出给 AI**；与能力面共用同一份
+    # Gate/Authority/History（同一本账）。⚠ 端口号不进任何日志、也不进给 AI 的文本。
+    from mecha_v2.control import (CONTROL_PORT_FILE, build_control_registry,
+                                  start_control_endpoint)
+    control_ep, _control_port = start_control_endpoint(
+        build_control_registry(bridge, open_surface=lambda: _open_on_qt_thread(bridge)),
+        port_file=os.path.join(PROJ_ROOT, CONTROL_PORT_FILE))
+    print('[mcp] 控制端点已起（端口文件 %s；地址只给框架，不进给 AI 的文本）。'
+          % CONTROL_PORT_FILE, flush=True)
     if with_gui:
-        window = MainWindow(bridge=bridge)   # ⭐ 复用同一份桥：不新建、不抢租约
-        window.showMaximized()
+        open_manual_surface_now(bridge)      # 与按需开窗走**同一处**逻辑（幂等）
         app = QApplication.instance()
         print('[mcp] 已在**同一进程**开窗（复用同一份桥；窗口随本进程生死）。',
               flush=True)
         return app.exec_() if app is not None else 0
     stop = threading.Event()
+    _MAIN_LOOP['running'] = True             # ← 主循环跑起来，才可能把开窗搬回主线程
     try:
-        stop.wait()
+        while not stop.is_set():
+            _drain_control_queue(bridge)     # 执行必须在 Qt 线程做的事（开窗）
+            if _MANUAL['window'] is not None:
+                app.processEvents()          # 有窗了才泵 Qt（headless 时不碰 Qt 事件）
+            stop.wait(0.05)                  # 可中断：Ctrl+C / terminate 照旧
     except KeyboardInterrupt:
         print('[mcp] 收到 Ctrl+C，退出（租约释放）。')
+    finally:
+        _MAIN_LOOP['running'] = False
+        try:
+            control_ep.stop()
+        except Exception:                    # noqa: BLE001 —— 收尾不掩盖退出
+            pass
     return 0
 
 
