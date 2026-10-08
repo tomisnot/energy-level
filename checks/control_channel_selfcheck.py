@@ -75,7 +75,8 @@ if 'leak' in FAULTS:
     from mecha_v2.hub import McpHost as _Host
     _abl = _build(bridge._engine, bridge._gate, bridge._authority, _Ch('ai'),  # noqa: SLF001
                   bridge.jobs, surface=bridge._surface)
-    for _n in ('set_write_authority', 'open_manual_surface', 'read_write_authority'):
+    # 红证：把**改**写权那两个漏进能力面 ⇒ ⑦ 必须红（读本来就该在能力面）
+    for _n in ('set_write_authority', 'open_manual_surface'):
         _abl.register(_define(name=_n, description='（红证：故意泄漏到能力面）',
                               parameters={},
                               output_schema={'type': 'object', 'required': ['ok']},
@@ -238,10 +239,12 @@ C.group('⑥ 响亮失败：未知 mode / 没有手动面', [
 
 # ---- ⑦ AI 那条端点看不到控制操作
 _abl_tools, _, _ = mcp(ABL, want_tools=True)
-C.group('⑦ ⚠ AI 那条端点（能力面）**看不到**这两个操作', [
-    ('能力面工具表 %d 个，不含 set_write_authority' % len(_abl_tools),
+C.group('⑦ ⚠ 能力面：**有** read_write_authority（AI 被拒后自查），**没有** set/open', [
+    ('能力面工具表 %d 个，⭐**含** read_write_authority' % len(_abl_tools),
+     'read_write_authority' in _abl_tools),
+    ('⭐ 且**不含** set_write_authority（"不许 AI 给自己解锁"的可判形式）',
      'set_write_authority' not in _abl_tools),
-    ('也不含 open_manual_surface', 'open_manual_surface' not in _abl_tools),
+    ('⭐ 且**不含** open_manual_surface', 'open_manual_surface' not in _abl_tools),
     ('能力面仍有它自己的工具（%s…）' % _abl_tools[:3], 'set_config' in _abl_tools),
 ])
 
@@ -255,6 +258,11 @@ try:
     _rw = _json.loads(t_rw)
 except Exception:                                                  # noqa: BLE001
     _rw = {}
+_, _e_rw_abl, _t_rw_abl = mcp(ABL, 'read_write_authority', {})
+try:
+    _rw_abl = _json.loads(_t_rw_abl)
+except Exception:                                                  # noqa: BLE001
+    _rw_abl = {}
 C.group('⑧ 控制端点上**有** read_write_authority，且四字段齐', [
     ('控制端点工具表含 read_write_authority（%s）' % sorted(_ctl_tools2),
      'read_write_authority' in _ctl_tools2),
@@ -313,8 +321,9 @@ C.group('⑪ ⭐ how_to_open 由项目给（不是框架缺省）', [
     ('回执里的 how_to_open == 本项目声明的 HOW_TO_OPEN（%s…）' % _rw.get('how_to_open', '')[:40],
      _rw.get('how_to_open') == HOW_TO_OPEN),
     ('它非空、且点到了人侧入口', bool(_rw.get('how_to_open')) and '手动' in str(_rw.get('how_to_open'))),
-    ('⚠ 当前**只在控制端点**（能力面上没有它）——见报告里与 §7.1.1"两处都注册"的冲突登记',
-     'read_write_authority' not in _abl_tools),
+    ('⭐ **两个面透出同一句**：控制面 == 能力面 == HOW_TO_OPEN（能力面那句 %s…）'
+     % str(_rw_abl.get('how_to_open', ''))[:36],
+     _rw_abl.get('how_to_open') == HOW_TO_OPEN == _rw.get('how_to_open')),
 ])
 
 # ---- ③b 真部署形态（子进程 + 生产那条搬运路径）

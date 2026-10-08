@@ -27,7 +27,7 @@ import json
 import threading
 from pathlib import Path
 
-from mecha.authority import Authority, Mode
+from mecha.authority import Authority, Mode, register_authority_read
 from mecha.errors import GateDenied, MechaError, UnknownKey
 from mecha.gate import Channel, Gate
 from mecha.history import Event, History, fold
@@ -208,6 +208,12 @@ class V2Bridge:
         ai = Channel("ai")
         tools = _build_gui_tools(self._engine, self._gate, self._authority,
                                  ai, self.jobs, surface=self._surface)
+        #: ⭐ **只读自省**也要给 AI 面（§7.1.1 定案的三处之**第一处**：AI 被拒后能自查
+        #: ——"先查后写，不盲撞"，GP 的原本用法）。⚠ 仍然**不许**把
+        #: `set_write_authority`/`open_manual_surface` 给 AI：那是**改**写权（§7.1.1）。
+        #: ⚠ 别以为"只读"就无害：它报的就是**闸门真会怎么判**（框架用 `gate(side)` 探侧）。
+        from .control import HOW_TO_OPEN
+        register_authority_read(tools, self._authority, how_to_open=HOW_TO_OPEN)
         mcp_host = McpHost(tools, host=host, port=port,
                            port_file=port_file, log=log)
         actual = mcp_host.start()
