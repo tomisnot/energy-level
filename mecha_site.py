@@ -22,9 +22,11 @@
 | ``env["RE0_V2_DATA_ROOT"]`` | ⭐ **状态根**：`src/v2_bind.py:171` 的优先级是 显式 > 这个变量 > el_root。**不钉死** ⇒ 换腿后可能看到**另一份** journal（"切了但看着是空的"，且无任何报错，§5.6） |
 | ``env["EL_NO_AI_SERVER"]=""`` | ⚠ 该变量**真值**会让 `v2_bind.py:172` 把 `start_services` 关掉 ⇒ **服务端根本不起**（ready 会超时，却看不出原因）。置空串 = **显式不设这个键**（Python 里空串是假值） |
 | ``env["PYTHONIOENCODING"]="utf-8"`` | 子进程 stdout 被重定向到 `runtime/logs/<id>.log` ⇒ **退回 cp936**，一句 `print("⚠…")` 就能让后台任务崩（§5.5(2)）。⚠ 设计文档判它**归 supervisor**，但框架当前**只 setdefault 了 `PYTHONUNBUFFERED`**（实测：全包 `PYTHONIOENCODING` 零命中）⇒ EL 先显式钉住；框架补上后可删 |
-| ``manual=None`` | GUI 接脊椎（human adapter）是**步骤 3**，本轮不做（§7.3） |
+| ``has_gui=True`` | EL **有** GUI 窗口（`app_entry.py --gui`）⇒ 面板据此显示「切到手动」（三层架构 §6：`False` 的项目只有 AI 一条腿） |
+| ``initial_mode=Mode.AI`` | ⭐ **由启动者声明**（人是启动者）：**从 mecha 启动 = 永远是 AI 组** ⇒ `AI`。⚠ 与软件侧的关系见下：`--mcp` 今天仍**自己** `switch_to('ai')`；**步骤 2/A4** 要改成**读框架注入的 `MECHA_INITIAL_MODE` 并应用它**（缺省回落本声明的值） |
 | ``dsh.patches`` | 入库两层：`cordis.patch.yml`（交付层，加载**构建产物** `./lib/index.mjs`）+ `cordis.project.patch.yml`（webserver 端口隔离层）。⚠ 聚合端点那一层（生成物）由**框架**生成（§5.5(4)） |
 | ``dsh.plugin_artifacts`` | `dsh/lib/index.mjs` 是**构建产物**（gitignored）⇒ 不存在就**响亮失败**，别等 dsh 起来报看不懂的错。⚠ 前置：`cd dsh && npm run bundle` |
+| 框架注入的两个（**不是**本声明的字段，**别在这里钉**） | `MECHA_SOFTWARE_ROOT`（数据根）/ `MECHA_INITIAL_MODE`（`locked`/`human`/`ai`/`open`）——三层架构 §5.1 定案：由 supervisor 在统一注入点给（与 `PYTHONIOENCODING` 同处 ⇒ 带【空串 = 显式取消】语义）。⭐ **软件侧责任（步骤 2/A4）**：`--mcp` 要读 `MECHA_INITIAL_MODE` 并**应用**到闸门，缺省回落本声明的 `initial_mode`（更保守可回落 `LOCKED`）。本轮**只记录、不消费**（硬约束：不改 `--mcp` 现有行为）。⚠ 与 `RE0_V2_DATA_ROOT` 的关系：前者是**框架声明**的数据根、后者是 EL 内部的管线变量 ⇒ 步骤 2 应让两者**同源**（否则又是「看到两份状态」） |
 | ``dsh.env={}`` | EL 的 dsh 插件**不读任何环境变量**（实测：`dsh/src/**` 无 `process.env`；它从 cordis config + `.mcp-port` 的 dirname 推项目根）⇒ **不编一个没人读的变量** |
 """
 
@@ -33,6 +35,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from mecha.authority import Mode
 from mecha.site import DSHSpec, ReadySpec, Service, Site
 
 #: 本仓根（本文件在仓根 ⇒ 即自身所在目录）。
@@ -75,8 +78,11 @@ SITE = Site(
                 timeout_s=90.0,           # ARC cache + assemble：秒级到十几秒，90s 有余量
             ),
             data_root=_SITE_ROOT,
-            #: ⚠ 本轮不做（GUI 接脊椎是步骤 3）；留 None 而不是编一个假的 adapter。
-            manual=None,
+            #: ⭐ 启动者（人）声明的初始写权：从 mecha 启动**永远是 AI 组** ⇒ AI。
+            #: （框架把它经 `MECHA_INITIAL_MODE` 送进软件；软件侧的应用是步骤 2。）
+            initial_mode=Mode.AI,
+            #: ⭐ EL 有 GUI 窗口（`app_entry.py --gui`）⇒ 面板显示「切到手动」。
+            has_gui=True,
             env=_ENV,
         ),
     ),

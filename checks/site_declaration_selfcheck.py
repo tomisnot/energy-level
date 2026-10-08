@@ -53,8 +53,17 @@ except Exception as e:                                        # noqa: BLE001
 
 C.group('A 框架能按约定加载本仓声明（load_sites + validate）', [
     ('找到 id=EL 的站点（%s）' % (_err or 'ok'), _svc is not None),
-    ('validate() 通过（id 形状 / manual id / dsh 插件产物都在）',
+    ('validate() 通过（id 形状 / dsh 插件产物都在）',
      _site is not None and _err is None),
+    ('⭐ `manual` 已按三层架构删掉（它曾是「要 spawn 的进程」，现在是进程内窗口）',
+     _svc is not None and not hasattr(_svc, 'manual')),
+    ('has_gui=True（EL 有 GUI 窗口 ⇒ 面板显示「切到手动」）',
+     _svc is not None and getattr(_svc, 'has_gui', None) is True),
+    ('⭐ initial_mode=AI（启动者声明：从 mecha 启动永远是 AI 组）',
+     # ⚠ **判据自己踩过这个坑**：`Mode` 是 `str` 枚举 ⇒ `str(Mode.AI)` 给的是
+    # `'Mode.AI'` 而**不是** `'ai'` ⇒ 必须比 `.value`（框架里同款坑：`SvcState.DOWN`）。
+    _svc is not None
+    and getattr(getattr(_svc, 'initial_mode', None), 'value', None) == 'ai'),
     ('argv 起的是 --mcp 形态，且 cwd 是本仓根',
      _svc is not None and '--mcp' in _svc.argv
      and Path(_svc.cwd).resolve() == ROOT),
