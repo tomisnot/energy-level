@@ -9,9 +9,10 @@
 
 模块内部业务逻辑由各自组件自行维护，主程序不做逐模块特例。
 
-入口关系（两者等价，命令不同）：
-- 开发：python 能级.py   （薄包装，转发本模块 main）
-- 直接：python app_entry.py（本模块自带 __main__ 守卫）
+入口（本文件只起【本软件自己的一个形态】，不编排进程）：
+- `--mcp`：MCP 服务形态（headless；由框架 supervisor 起）
+- `--gui`：本地 GUI（人或 human adapter 起）
+- 起整站（含 harness 与进程编排）用：`python -m mecha --all`
 """
 
 import os
@@ -496,44 +497,45 @@ class MainWindow(QMainWindow):
 
 
 def run_gui(app):
-    """GUI 模式：纯本地操控面板，写权在人，AI 物理看不见（不起任何端点）。
+    """本地 GUI：纯本地操控面板，写权在人（不起任何端点）。
 
-    看门人（launcher.py）spawn 本模式时带 `--gui`；弹窗选模式归看门人管。
+    由人（或框架 supervisor 的 human adapter，即 Service.manual）带 `--gui` 起。
     """
     window = MainWindow()
     window.showMaximized()
     return app.exec_()
 
 
-def run_authority():
-    """AI 模式：headless 权威进程（**不建 GUI 窗口**）。
+def run_mcp():
+    """MCP 服务形态：headless（**不建 GUI 窗口**），给框架 supervisor 起。
 
-    v2 栈照装（Gate/History + MCP 服务器线程 + 监控端点），写权自动落 AI：
-    装配出厂 HUMAN 后 `switch_mode(AI, actor='human')`——看门人**代理人的启动
-    意图**开闸（人选了 AI 模式即授权 AI 写），不是 AI 自解锁（护栏仍在：AI 面
-    改不了 mode）。ADR `两模式启动-看门人交接与写权自动落位`。
+    v2 栈照装（Gate/History + MCP 服务器线程 + 监控端点），写权落 AI：
+    装配出厂 HUMAN 后 `switch_mode(AI, actor='human')`——起它的那一侧（框架
+    supervisor，代表人【从 mecha 启动就带 AI】的意图）开闸，不是 AI 自解锁
+    （护栏仍在：AI 面改不了 mode）。
 
-    阻塞直到 Ctrl+C / terminate；journal 写租约随进程退出释放（看门人等退出
-    后才 spawn 新模式，交接不断档）。
+    阻塞直到 Ctrl+C / terminate；journal 写租约随进程退出释放（换腿与收尾都
+    依赖【先真退出、再起下一个写宿主】这条时序）。
     """
     import threading
     bridge = make_v2_bridge(PROJ_ROOT)
     bridge.switch_mode('ai', actor='human')
-    print('[authority] headless 权威就绪：MCP 端点 + 监控端点已起，写权在 AI。'
-          'Ctrl+C 或看门人交接时退出。', flush=True)
+    print('[mcp] MCP 服务就绪：MCP 端点 + 只读监控端点已起，写权在 AI。'
+          'Ctrl+C 或 supervisor 收尾时退出。', flush=True)
     stop = threading.Event()
     try:
         stop.wait()
     except KeyboardInterrupt:
-        print('[authority] 收到 Ctrl+C，退出（租约释放）。')
+        print('[mcp] 收到 Ctrl+C，退出（租约释放）。')
     return 0
 
 
 def main():
-    """入口：`--gui` 纯 GUI / `--authority` headless 权威（看门人 spawn 用）。
+    """入口：`--mcp` MCP 服务形态 / `--gui` 本地 GUI。
 
-    无参数 = 用户直接跑本文件 → 转发看门人 launcher.main()（弹窗选模式、
-    编排两模式与交接）。
+    ⚠ 无参数**不再静默降级**（旧【弹窗选模式】整套已作废）：明确指向
+    `python -m mecha --all`（起整站）。⚠ 是 `python -m mecha`，**不是**
+    `python -m mecha.launch` —— 后者是模块不是包，会**静默什么都不做**。
     """
     app = QApplication.instance() or QApplication(sys.argv)
     try:
@@ -542,10 +544,13 @@ def main():
         pass
     if '--gui' in sys.argv:
         return run_gui(app)
-    if '--authority' in sys.argv:
-        return run_authority()
-    import launcher
-    return launcher.main()
+    if '--mcp' in sys.argv:
+        return run_mcp()
+    print('未指定形态：本文件只起【本软件自己的一个形态】（--mcp 或 --gui）。\n'
+          '要起整站（含 harness 与进程编排）用：python -m mecha --all\n'
+          '  python app_entry.py --mcp    起 MCP 服务端点（headless）\n'
+          '  python app_entry.py --gui    起本地 GUI')
+    return 2
 
 
 if __name__ == '__main__':

@@ -4,7 +4,7 @@
 心智模型（用户裁决 2026-09-24，两模式收拢）：
 - **GUI 模式**：纯本地软件（`app_entry.py --gui`），写权在人，AI 物理看不见
   （不起 MCP/监控端点）。想动 AI 就切到 AI 模式。
-- **AI 模式**：headless 权威（`app_entry.py --authority`，写权自动在 AI）+ dsh
+- **AI 模式**：headless 权威（`app_entry.py --mcp`，写权自动在 AI）+ dsh
   前台（AI 界面 + 驾驶室/监控面板）。人在 dsh 里点"切换至 GUI"就切回。
 
 看门人常驻（无窗口，日志进本控制台），职责：
@@ -59,7 +59,7 @@ def start_group(mode):
     if mode == GUI:
         return [_spawn([PY, APP, "--gui"])], None   # primary 用索引 0
     # AI 模式：先起 headless 权威，等它写 .mcp-port，再起 dsh（前台）
-    auth = _spawn([PY, APP, "--authority"])
+    auth = _spawn([PY, APP, "--mcp"])
     _wait_mcp_port()
     dsh = _spawn_dsh()
     return [auth, dsh], 1                            # primary=dsh（索引 1）

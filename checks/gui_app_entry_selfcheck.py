@@ -141,21 +141,21 @@ C.group('B P1-7 AC 精度（窗口/光子块）接线：静态生效 + 动态不
 
 # ---------------- C. 两模式收拢：看门人编排 + headless 权威（v1 服务回流防呆） ----------------
 # 2026-09-24 两模式收拢：编排归看门人 launcher.py（弹窗选模式、进程交接），
-# app_entry 只剩 --gui（纯本地，不起端点）/ --authority（headless 权威，写权 AI）。
+# app_entry 只剩 --gui（纯本地，不起端点）/ --mcp（MCP 服务形态，写权 AI）。
 # run_ai/驾驶舱/v1 serve 的 spawn 一旦出现 = v1 回流，本组判红。
 _APP_SRC = open(_os.path.join(_os.path.dirname(_os.path.dirname(
     _os.path.abspath(__file__))), 'app_entry.py'), encoding='utf-8').read()
 _LAUNCH_SRC = open(_os.path.join(_os.path.dirname(_os.path.dirname(
     _os.path.abspath(__file__))), 'launcher.py'), encoding='utf-8').read()
 C.group('C 两模式收拢：看门人编排 + 权威 headless + GUI 不起端点', [
-    ('launcher 按模式 spawn（--gui / --authority）',
-     '--gui' in _LAUNCH_SRC and '--authority' in _LAUNCH_SRC),
+    ('launcher 按模式 spawn（--gui / --mcp）',
+     '--gui' in _LAUNCH_SRC and '--mcp' in _LAUNCH_SRC),
     ('launcher 轮询 .mode-request 做进程交接（切换经看门人）',
      '.mode-request' in _LAUNCH_SRC),
     ('交接先 terminate 再等退出（写租约随进程释放，防 writer_lease_held）',
      '_terminate_group' in _LAUNCH_SRC and '_await_exit' in _LAUNCH_SRC),
-    ('app_entry 有 run_authority（headless 权威，写权自动落 AI）',
-     'def run_authority' in _APP_SRC and "switch_mode('ai'" in _APP_SRC),
+    ('app_entry 有 run_mcp（MCP 服务形态，写权自动落 AI）',
+     'def run_mcp' in _APP_SRC and "switch_mode('ai'" in _APP_SRC),
     ('GUI 模式装配不起端点（start_services=False，AI 物理看不见）',
      'make_v2_bridge(PROJ_ROOT, start_services=False)' in _APP_SRC),
     ('GUI 模式不再挂 AI 监控侧边栏（monitor_panel 已退役）',

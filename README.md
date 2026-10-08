@@ -55,7 +55,7 @@ python launcher.py
 python app_entry.py --gui
 
 # 等价单跑 —— AI 模式：headless 权威，进程内起 MCP 服务器 + 只读监控端点（动态端口）
-python app_entry.py --authority
+python app_entry.py --mcp
 
 # 独立进程 Hub（无 GUI 的 headless 部署）
 python -m mecha_v2.hub --root .

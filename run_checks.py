@@ -66,6 +66,12 @@ TIER_FAST_SEC = 15.0      # --fast：提交前
 # 单判据实测耗时（秒；2026-09-22 由 scripts/check_profile.py 测得）。
 FAST_KNOWN_SEC = {
     'checks_sentinel.py': 0.5,
+    # 2026-10-08 现测 0.2s。统一启动器的**站点声明**自检：load_sites 真加载 + 端口文件名
+    # 跨语言单一事实 + 状态根环境变量已钉死 + CLI 契约（--mcp）。改声明/改入口就跑它。
+    'site_declaration_selfcheck.py': 0.2,
+    # 2026-10-08 现测 6.6s（起真 `app_entry.py --mcp` 子进程 + 真探活；请用 Run/全档）。
+    # ⇒ 进 --fast（<15s）但**不进 --core**（那是秒级档）。它参：声明照做能不能真起来。
+    'mcp_entry_smoke_selfcheck.py': 6.6,
     'cleanliness_guard_selfcheck.py': 1.6,
     'field_loss_selfcheck.py': 1.7,
     'human_control_selfcheck.py': 1.7,
