@@ -42,3 +42,7 @@ scripts/research/figs_photon/
 # 忽略它防 `git add -A` 误纳其 dsh/node_modules。删除目录后可移除此行。
 Re0重构/
 .human-token
+
+# 统一启动器的运行期产物（pid / 日志）：每台机器各自生成，不入库。
+# ⚠ 由框架 `mecha/launch.py` 写在「启动时的 cwd」下；含本机 pid。
+_mecha_runtime/
