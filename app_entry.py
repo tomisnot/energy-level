@@ -576,6 +576,10 @@ def main():
     `python -m mecha --all`（起整站）。⚠ 是 `python -m mecha`，**不是**
     `python -m mecha.launch` —— 后者是模块不是包，会**静默什么都不做**。
     """
+    #: ⚠ **如实记**：这一行是**无条件**的 ⇒ **headless（`--mcp` 不带 `--with-gui`）时
+    #: Qt 也已经被加载**：「`--mcp` 的 Qt 惰性化」**尚未落地**（别以为它是 lazy 的）。
+    #: 反过来这也是个好消息：**按需开窗的代价很低**（Qt 已在，只是晚一点画窗口）——
+    #: 但那需要一个「框架→软件」的控制通道，属下一轮，本轮**不做半成品**。
     app = QApplication.instance() or QApplication(sys.argv)
     try:
         app.setStyleSheet(ui_theme.QSS)

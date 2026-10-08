@@ -152,14 +152,50 @@ def start_monitor_endpoint(bridge, host="127.0.0.1", port=0, port_file=None):
 
 # ---------------- 装配：给 app_entry 用 ----------------
 
+def resolve_data_root(explicit, el_root):
+    """数据根的**唯一解析点**（三来源 + 固定顺序 + 分歧出声）。
+
+    顺序（⭐ 定案）：
+
+    1. **显式参数**（调用方直接给）；
+    2. **``MECHA_SOFTWARE_ROOT``**：**框架/启动者声明的**数据根（三层架构 §5.1）
+       —— 它是"这一份软件的数据根"的**单一事实** ⇒ **优先**；
+    3. ``RE0_V2_DATA_ROOT``：EL **内部**的管线变量（判据/测试/手工起用它指临时目录）
+       ⇒ **回落**位置；
+    4. ``el_root``。
+
+    ⚠ **为什么框架声明优先于 EL 内部变量**：反过来的话，一个**被继承或被判据设的**
+    环境变量就能把框架声明的根**悄悄顶掉** —— 那正是"看到两份状态、且无任何报错"
+    那个坑（§5.6）。判据要覆盖框架那一侧：**设 `MECHA_SOFTWARE_ROOT` 即可**，
+    不必也不该靠"临时目录盖过框架注入"。
+    ⚠ 两个来源都设且 resolve 后**不一致** ⇒ **响亮说出来**（仍按上面的顺序执行）：
+    静默取一个，会让"数据到底写哪去了"变成必须翻代码才知道的事。
+    """
+    picked = explicit or None
+    if not picked:
+        picked = os.environ.get("MECHA_SOFTWARE_ROOT") or None
+    if not picked:
+        picked = os.environ.get("RE0_V2_DATA_ROOT") or None
+    if not picked:
+        picked = el_root
+    _m = os.environ.get("MECHA_SOFTWARE_ROOT")
+    _r = os.environ.get("RE0_V2_DATA_ROOT")
+    if not explicit and _m and _r and os.path.abspath(_m) != os.path.abspath(_r):
+        print("[v2_bind] ⚠ 数据根两个来源不一致：MECHA_SOFTWARE_ROOT=%s / "
+              "RE0_V2_DATA_ROOT=%s ⇒ 采信**框架声明**的（%s）；EL 内部变量这次被忽略。"
+              % (_m, _r, _m), flush=True)
+    return picked
+
+
 def make_v2_bridge(el_root, *, data_root=None, data_dir_name=".mecha-v2",
                    start_services=True, mcp_port_file=None, monitor_port_file=None):
     """构造共享 Gate 的 V2Bridge；可选起 MCP 服务器 + 只读监控端点。
 
-    app_entry 调它：GUI 模式传 `start_services=False`（纯本地，不起任何端点）；
-    headless 权威（run_authority）用默认 True（起 MCP + 监控端点，供 dsh 连与轮询）。
-    数据根优先级：显式参数 > `RE0_V2_DATA_ROOT`（判据/测试用临时目录，
-    不污染仓内权威 journal）> el_root。`EL_NO_AI_SERVER` 置位 → 不起后台
+    app_entry 调它：本地 GUI 传 `start_services=False`（纯本地，不起任何端点）；
+    MCP 服务形态（`run_mcp`）用默认 True（起 MCP + 监控端点，供 dsh 连与轮询）。
+    数据根优先级：见 `resolve_data_root`（显式 > `MECHA_SOFTWARE_ROOT` 框架声明 >
+    `RE0_V2_DATA_ROOT` EL 内部回落 > el_root；两者不一致时**出声**）。
+    `EL_NO_AI_SERVER` 置位 → 不起后台
     服务（判据 in-process 用，避免与活实例抢端口/抢 .mcp-port——2026-09-12
     事故的同款防线）。
 
@@ -168,7 +204,7 @@ def make_v2_bridge(el_root, *, data_root=None, data_dir_name=".mecha-v2",
     """
     from mecha_v2.bridge import V2Bridge
     from mecha.authority import Mode
-    data_root = (data_root or os.environ.get("RE0_V2_DATA_ROOT") or el_root)
+    data_root = resolve_data_root(data_root, el_root)
     if os.environ.get("EL_NO_AI_SERVER"):
         start_services = False
     bridge = V2Bridge.for_shared(el_root=el_root, data_root=data_root,

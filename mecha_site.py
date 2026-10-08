@@ -14,7 +14,7 @@
 | 声明 | 依据 |
 |---|---|
 | ``id="EL"`` | 暴露名会**小写化**成 ``el_<tool>``；`Site.validate` **大小写不敏感**查重（§2.2.1） |
-| ``argv=(python, "app_entry.py", "--mcp")`` | `--mcp` = MCP 服务形态（原 `--authority` 改名）；`run_mcp()` 硬编码 `PROJ_ROOT` ⇒ **只需 cwd** |
+| ``argv=(python, "app_entry.py", "--mcp")`` | `--mcp` = MCP 服务形态（原 `--authority` 改名），**纯 headless**：argv **不带** `--with-gui` —— 裁决 1 的前提是「热更新时 GUI 根本不开」，见 `service_argv()`；`run_mcp()` 硬编码 `PROJ_ROOT` ⇒ **只需 cwd** |
 | ``ready.port_file=".mcp-port"`` | 与 `src/v2_bind.py` 的**默认发现文件**、`dsh/src/el-params.ts` 的 `mcpPortFile` **同一个名字**（跨语言单一事实） |
 | ``ready.ok_codes=()`` | ⭐ **实测**：EL 的 `GET /mcp` 回 **406**（`application/json`；带 `Accept: text/event-stream` 回 400），该端口上**没有**任何 2xx 路由（`GET /` 回 404）。框架默认只认 2xx ⇒ 不放宽会**永远判不就绪**。含义是"**有 HTTP 响应即证明服务在听**"，不是"错误码无所谓" |
 | ``ready`` 仍带 `port_file` | 框架的判据是"**端口文件相对 spawn 前变化过**" **且** 真探活（§3 铁律 2）⇒ 旧 `launcher._wait_mcp_port` 那种"文件存在且非空"的假绿（曾把 11 天前的残留判成就绪）不再可能 |
@@ -58,17 +58,22 @@ _ENV = {
 
 
 def service_argv() -> tuple[str, ...]:
-    """起 EL 的 MCP 服务形态；`--with-gui` 让它在**同一进程**里开窗（复用同一份桥）。
+    """起 EL 的 MCP 服务形态：**纯 headless**（⭐ 2026-10-08 裁决，理由见下）。
 
-    ⚠ **为什么用旗标**（三层架构 §7）：「切到手动」只在 `has_gui` 的项目显示，而它
-    **只切写权**（面板与 dsh 都不关）⇒ 窗口得**先在软件进程里存在**。要不要开窗是
-    **每次启动的意图**（人是启动者），不是"这个软件必然要开" ⇒ 用旗标。
-    三个东西分工不同、别挤进一个变量：`has_gui` = **能力**（面板显不显示按钮）、
-    `MECHA_INITIAL_MODE` = **写权**（框架 §5.1 注入）、`--with-gui` = **本次是否开窗**。
-    ⚠ 不加这个旗标 ⇒ 该软件就是 headless（`--mcp` 单独跑的行为**没变**）。
+    ⚠ **为什么 argv 不带 `--with-gui`**（三层架构 §3 裁决 1 的**理由本身**）：用户原话
+    「频繁热更新时通常是 AI 模式，**GUI 根本不开**」—— 而"窗口开在软件进程内"这个选择
+    **正是靠这个前提**才成立的。若 supervisor 起的 EL **总是开窗**，热更新时窗口**总是**
+    跟着重启 ⇒ 把当初要避开的代价又请回来了。⇒ 声明**默认 headless**。
+    ⚠ 旗标 `--with-gui` **保留**（那是**能力**，不是每个部署都要用；人工/诊断仍可
+    `python app_entry.py --mcp --with-gui`）。⭐ **"按需开窗"待做**：正解是"软件暴露一个
+    控制操作（人侧调用）⇒ 软件在**自己进程内**开窗"，与"写权切到 HUMAN"由**同一个按钮**
+    触发；⚠ 它需要一个「框架→软件」的控制通道，**今天还没有** ⇒ 属下一轮，
+    **不做半成品**（半成品通道比没有更坏）。
+    三者分工：`has_gui` = **能力**（面板显不显示「切到手动」）、`MECHA_INITIAL_MODE` =
+    **写权**（框架 §5.1 注入）、`--with-gui` = **本次是否开窗**（手工路径）。
     `run_mcp()` 自己读 `PROJ_ROOT`，不需别的参数。
     """
-    return (_PY, "app_entry.py", "--mcp", "--with-gui")
+    return (_PY, "app_entry.py", "--mcp")
 
 
 SITE = Site(

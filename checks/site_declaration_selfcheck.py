@@ -67,6 +67,9 @@ C.group('A 框架能按约定加载本仓声明（load_sites + validate）', [
     ('argv 起的是 --mcp 形态，且 cwd 是本仓根',
      _svc is not None and '--mcp' in _svc.argv
      and Path(_svc.cwd).resolve() == ROOT),
+    ('⭐ 声明起的 EL 是 **headless**（argv 里**没有** `--with-gui`）—— 裁决 1 的前提是'
+     '「热更新时 GUI 根本不开」，若总是开窗则把当初要避开的代价请回来了',
+     _svc is not None and '--with-gui' not in _svc.argv),
     ('data_root 是本仓根（写租约根 = .mecha-v2 的上一层）',
      _svc is not None and Path(_svc.data_root).resolve() == ROOT),
 ])
@@ -113,6 +116,64 @@ C.group('D CLI 契约：形态改名成 --mcp，无参指向 python -m mecha', [
     ('launcher.py（步骤 4 才删）共存期 spawn 的也是 --mcp', '"--mcp"' in _launch),
     ('launcher.py 里不再引用 --authority', '--authority' not in _launch),
     ("MCP 服务形态的函数是 run_mcp", 'def run_mcp' in _app),
+    ('`--with-gui` 仍是**可用能力**（人工/诊断路径没被删；只是声明不带它）',
+     '--with-gui' in _app and 'with_gui=' in _app),
+])
+
+# ---------------------------------------------------------------- E. 数据根同源（§5.1 / §5.6）
+# ⭐ 两个变量：`MECHA_SOFTWARE_ROOT`（**框架声明**的数据根）与 `RE0_V2_DATA_ROOT`
+# （EL **内部**管线变量：判据/测试用它指临时目录）。若各按各的解析 ⇒ **看到两份状态且无报错**。
+# 定案顺序写在 `resolve_data_root` 的 docstring 里：**显式 > 框架声明 > EL 内部 > el_root**；
+# 两者都设且不一致 ⇒ 采信框架的，但**响亮说出来**（不静默）。
+import contextlib                                                  # noqa: E402
+import io as _io                                                   # noqa: E402
+import os as _os                                                   # noqa: E402
+sys.path.insert(0, str(ROOT))
+from src.v2_bind import resolve_data_root                          # noqa: E402
+
+_KEYS = ('MECHA_SOFTWARE_ROOT', 'RE0_V2_DATA_ROOT')
+
+
+def _probe(env: dict, explicit=None):
+    """在受控环境里问一次解析结果 → (结果, 有没有出声)。"""
+    keep = {k: _os.environ.get(k) for k in _KEYS}
+    buf = _io.StringIO()
+    try:
+        for k in _KEYS:
+            _os.environ.pop(k, None)
+        for k, v in env.items():
+            if v is not None:
+                _os.environ[k] = v
+        with contextlib.redirect_stdout(buf):
+            got = resolve_data_root(explicit, '/ELROOT')
+        return got, buf.getvalue()
+    finally:
+        for k, v in keep.items():
+            if v is None:
+                _os.environ.pop(k, None)
+            else:
+                _os.environ[k] = v
+
+
+_g_mecha, _w_mecha = _probe({'MECHA_SOFTWARE_ROOT': '/FWROOT'})
+_g_re0, _w_re0 = _probe({'RE0_V2_DATA_ROOT': '/TMPROOT'})
+_g_same, _w_same = _probe({'MECHA_SOFTWARE_ROOT': '/X', 'RE0_V2_DATA_ROOT': '/X'})
+_g_diff, _w_diff = _probe({'MECHA_SOFTWARE_ROOT': '/FWROOT', 'RE0_V2_DATA_ROOT': '/TMPROOT'})
+_g_none, _w_none = _probe({})
+_g_exp, _w_exp = _probe({'MECHA_SOFTWARE_ROOT': '/FWROOT', 'RE0_V2_DATA_ROOT': '/TMPROOT'},
+                        explicit='/EXPLICIT')
+
+C.group('E ⭐ 数据根同源：框架声明 > EL 内部 > el_root；不一致**出声**（§5.1/§5.6）', [
+    ('只设框架声明 ⇒ 用它（%s）' % _g_mecha, _g_mecha == '/FWROOT'),
+    ('只设 EL 内部（判据/测试形态）⇒ 用它（%s）' % _g_re0, _g_re0 == '/TMPROOT'),
+    ('两者都设且**相同** ⇒ 用它、且**不出声**（%s）' % _g_same,
+     _g_same == '/X' and not _w_same.strip()),
+    ('⭐ 两者都设且**不同** ⇒ 采信**框架声明**（%s）' % _g_diff, _g_diff == '/FWROOT'),
+    ('⭐ 且**响亮说出来**（两个值都点名）（%s）' % ('有' if _w_diff.strip() else '无'),
+     'MECHA_SOFTWARE_ROOT' in _w_diff and 'RE0_V2_DATA_ROOT' in _w_diff
+     and _g_diff in _w_diff),
+    ('显式参数优先于两个环境变量（%s）' % _g_exp, _g_exp == '/EXPLICIT'),
+    ('都没设 ⇒ 回落 el_root（%s）' % _g_none, _g_none == '/ELROOT'),
 ])
 
 sys.exit(0 if C.summary() else 1)
