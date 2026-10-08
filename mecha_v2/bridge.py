@@ -229,6 +229,16 @@ class V2Bridge:
         with self._lock:
             return self._gate.set_batch(chan, dict(items), reason=reason, call_id=call_id)
 
+    @property
+    def authority(self):
+        """**只读**取出写权对象（交给框架的 `register_authority_read` 用）。
+
+        ⚠ 这是访问器、不是新机制：写权自省的**唯一实现**在框架
+        （`mecha.authority.authority_view`，用 `gate(side)` 纯查询探侧）——
+        控制面只做"注册"，不自己解释 mode 规则。
+        """
+        return self._authority
+
     def _seed(self, key, value, *, actor="session", reason=""):
         """启动种子：经 Gate.seed 落快照 + 记史，不走写权门（面板初值回填）。
 

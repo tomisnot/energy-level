@@ -34,7 +34,7 @@
 
 from __future__ import annotations
 
-from mecha.authority import Mode
+from mecha.authority import Mode, register_authority_read
 from mecha.errors import MechaError
 from mecha.tools import ToolRegistry, define_tool
 
@@ -43,6 +43,14 @@ CONTROL_PORT_FILE = ".control-port"
 
 #: 端点服务名（⚠ 只是服务名，**不是**给 AI 的工具前缀——这条端点不导出给 AI）。
 CONTROL_SERVER_NAME = "re0-mecha-control"
+
+#: ⭐ 由**本项目**给的「怎么切到人工」说明（框架**不写死**它：那是项目知识）。
+#: 它出现在 `read_write_authority()` 的回执里，给**被拒的一方**（AI 或人）指路。
+HOW_TO_OPEN = (
+    "面板（常驻控制台）上该软件的「切到手动」按钮：按一下写权即归人"
+    "（本机可信、无口令），再按「切回 AI」交还模型；"
+    "纯本地用户不经 mecha，直接 `python app_entry.py --gui`（独立进程、不起端点）。"
+)
 
 #: 端点说明（框架会校验体积；⚠ **不写地址、不写端口**）。
 CONTROL_INSTRUCTIONS = (
@@ -58,6 +66,10 @@ def build_control_registry(bridge, *, open_surface=None) -> ToolRegistry:
     搬到 **Qt 主线程**去做）。``None`` ⇒ 本进程没有手动面能力 ⇒ 调用时**响亮失败**。
     """
     reg = ToolRegistry()
+    #: ⭐ **只读自省**：用框架的**唯一实现**（`authority_view`，靠 `gate(side)` 纯查询
+    #: 探侧 ⇒ 报的就是闸门真会怎么判，不会与实际判定分叉）。⚠ 只注册这一个读操作；
+    #: `set_write_authority`/`open_manual_surface` 是**改**，仍只在本（控制）端点上。
+    register_authority_read(reg, bridge.authority, how_to_open=HOW_TO_OPEN)
 
     def _set_write_authority(mode):
         raw = str(mode).strip().lower()
@@ -118,5 +130,5 @@ def start_control_endpoint(registry, *, port_file, host="127.0.0.1", log=None):
     return ep, ep.start()
 
 
-__all__ = ["CONTROL_PORT_FILE", "CONTROL_SERVER_NAME", "build_control_registry",
-           "start_control_endpoint"]
+__all__ = ["CONTROL_PORT_FILE", "CONTROL_SERVER_NAME", "HOW_TO_OPEN",
+           "build_control_registry", "start_control_endpoint"]

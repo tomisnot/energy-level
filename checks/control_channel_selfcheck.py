@@ -75,7 +75,7 @@ if 'leak' in FAULTS:
     from mecha_v2.hub import McpHost as _Host
     _abl = _build(bridge._engine, bridge._gate, bridge._authority, _Ch('ai'),  # noqa: SLF001
                   bridge.jobs, surface=bridge._surface)
-    for _n in ('set_write_authority', 'open_manual_surface'):
+    for _n in ('set_write_authority', 'open_manual_surface', 'read_write_authority'):
         _abl.register(_define(name=_n, description='（红证：故意泄漏到能力面）',
                               parameters={},
                               output_schema={'type': 'object', 'required': ['ok']},
@@ -166,7 +166,8 @@ _r1 = mcp(CTL, 'set_write_authority', {'mode': 'ai'})
 C.group('① 控制端点起来、`.control-port` 回读正确、能调 set_write_authority', [
     ('.control-port 内容 = %r，与回读端口一致（%d）' % (_pf_txt, ctl_port),
      _pf_txt == str(ctl_port)),
-    ('控制端点工具表 = %s' % _tools, set(_tools) == {'set_write_authority', 'open_manual_surface'}),
+    ('控制端点工具表 = %s' % _tools,
+     {'set_write_authority', 'open_manual_surface', 'read_write_authority'} <= set(_tools)),
     ('调 set_write_authority(ai) 成功（is_error=%s）' % _r1[1], _r1[1] is False),
     ('切完 mode 真的变了（%s）' % bridge.mode, str(getattr(bridge.mode, 'value', bridge.mode)) == 'ai'),
 ])
@@ -242,6 +243,78 @@ C.group('⑦ ⚠ AI 那条端点（能力面）**看不到**这两个操作', [
      'set_write_authority' not in _abl_tools),
     ('也不含 open_manual_surface', 'open_manual_surface' not in _abl_tools),
     ('能力面仍有它自己的工具（%s…）' % _abl_tools[:3], 'set_config' in _abl_tools),
+])
+
+# ---- ⑧ 控制端点上**有** read_write_authority（框架唯一实现），四字段齐
+import json as _json                                               # noqa: E402
+from mecha_v2.control import HOW_TO_OPEN                           # noqa: E402
+
+_ctl_tools2, _, _ = mcp(CTL, want_tools=True)
+_, e_rw, t_rw = mcp(CTL, 'read_write_authority', {})
+try:
+    _rw = _json.loads(t_rw)
+except Exception:                                                  # noqa: BLE001
+    _rw = {}
+C.group('⑧ 控制端点上**有** read_write_authority，且四字段齐', [
+    ('控制端点工具表含 read_write_authority（%s）' % sorted(_ctl_tools2),
+     'read_write_authority' in _ctl_tools2),
+    ('调用成功（is_error=%s）' % e_rw, e_rw is False),
+    ('四字段齐（%s）' % sorted(_rw), {'mode', 'ai_can_write', 'human_holds',
+                                    'how_to_open'} <= set(_rw)),
+])
+
+# ---- ⑨ ⭐ 四档逐档对（**不许只断言"返回了 dict"**：恒 True 也能骗过那种断言）
+_EXPECT = {'locked': (False, False), 'human': (False, True),
+           'ai': (True, False), 'open': (True, True)}
+_table = {}
+for _m in ('locked', 'human', 'ai', 'open'):
+    mcp(CTL, 'set_write_authority', {'mode': _m})
+    _, _e2, _t2 = mcp(CTL, 'read_write_authority', {})
+    try:
+        _table[_m] = _json.loads(_t2)
+    except Exception:                                              # noqa: BLE001
+        _table[_m] = {}
+_rows = []
+for _m, (_ai, _hu) in _EXPECT.items():
+    _got = _table.get(_m, {})
+    _rows.append(('%s ⇒ ai_can_write=%s / human_holds=%s（期望 %s/%s）'
+                  % (_m, _got.get('ai_can_write'), _got.get('human_holds'), _ai, _hu),
+                  _got.get('ai_can_write') is _ai and _got.get('human_holds') is _hu
+                  and _got.get('mode') == _m))
+# 红证：把"恒 True"这种错误规则代进去，必须与实测**不符** ⇒ 说明逐档断言有分辨力
+_wrong = [{'mode': m, 'ai_can_write': True, 'human_holds': True} for m in _EXPECT]
+_discriminating = any((_table.get(r['mode'], {}).get('ai_can_write')
+                       != r['ai_can_write']) for r in _wrong)
+C.group('⑨ ⭐ 四档逐档对（locked/human/ai/open）', _rows + [
+    ('红证：把"恒 True"的错规则代进来 ⇒ 与实测不符（说明逐档断言有分辨力）',
+     _discriminating),
+])
+mcp(CTL, 'set_write_authority', {'mode': 'human'})       # 复原成人侧（本判据的起点）
+
+# ---- ⑩ ⭐ 纯查询：mode 不变、账不增长
+_n_before = len(bridge.history.events())
+_m_before = str(getattr(bridge.mode, 'value', bridge.mode))
+_, e_pure, _t_pure = mcp(CTL, 'read_write_authority', {})
+_n_after = len(bridge.history.events())
+_m_after = str(getattr(bridge.mode, 'value', bridge.mode))
+# 红证（探测灵敏度）：故意落一笔账，探测必须能看见"账长了"
+bridge.record_audit('control.__judge_probe', 'x', actor='human', reason='判据红证')
+_n_probe = len(bridge.history.events())
+C.group('⑩ ⭐ 纯查询无副作用（mode 不变、账不增长）', [
+    ('调用成功（is_error=%s）' % e_pure, e_pure is False),
+    ('mode 不变（%s → %s）' % (_m_before, _m_after), _m_before == _m_after),
+    ('账不增长（%d → %d）' % (_n_before, _n_after), _n_before == _n_after),
+    ('红证：探测能看见账增长（%d → %d，故意落那笔）' % (_n_after, _n_probe),
+     _n_probe == _n_after + 1),
+])
+
+# ---- ⑪ ⭐ how_to_open 是**本项目**给的那句；且这个读操作**只在控制端点**
+C.group('⑪ ⭐ how_to_open 由项目给（不是框架缺省）', [
+    ('回执里的 how_to_open == 本项目声明的 HOW_TO_OPEN（%s…）' % _rw.get('how_to_open', '')[:40],
+     _rw.get('how_to_open') == HOW_TO_OPEN),
+    ('它非空、且点到了人侧入口', bool(_rw.get('how_to_open')) and '手动' in str(_rw.get('how_to_open'))),
+    ('⚠ 当前**只在控制端点**（能力面上没有它）——见报告里与 §7.1.1"两处都注册"的冲突登记',
+     'read_write_authority' not in _abl_tools),
 ])
 
 # ---- ③b 真部署形态（子进程 + 生产那条搬运路径）
