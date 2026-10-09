@@ -151,7 +151,9 @@ test('C Hub 宕机：调用抛**可读离线错误**（非静默 404）；Hub �
     (e: unknown) => {
       const msg = String((e as Error).message)
       assert.match(msg, /服务离线/)
-      assert.match(msg, /launcher\.py/, 'EL 的 offlineHint 必须接进离线错误（参数要有消费者）')
+      // ⚠ 信源从 launcher.py 换成统一启动器（三层架构：各家不再自己编排进程）——
+    //   承诺不变：**offlineHint 必须真的接进离线错误**（参数要有消费者）。
+    assert.match(msg, /mecha/, 'EL 的 offlineHint 必须接进离线错误（参数要有消费者）')
       return true
     })
   assert.equal(br.getStatus(), 'offline')
@@ -270,7 +272,7 @@ test('G ⭐ 首连失败之后再调用：仍抛**可读离线错误**（裸 404
   await assert.rejects(() => br.callTool('run_sim', {}), (e: unknown) => {
     const msg = String((e as Error).message)
     assert.match(msg, /服务离线/, '首连失败后再调用必须是可读离线错误（裸 404 = 缺陷）')
-    assert.match(msg, /launcher\.py/, 'EL 的 offlineHint 在这一支也必须真的有消费者')
+    assert.match(msg, /mecha/, 'EL 的 offlineHint 在这一支也必须真的有消费者')
     return true
   })
   assert.equal(br.getStatus(), 'offline')

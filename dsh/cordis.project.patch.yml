@@ -1,4 +1,4 @@
-# 项目实例隔离 overlay（launcher 经 `--patch` 加载，组合链**最后一层**）
+# 项目实例隔离 overlay（统一启动器经 `--patch` 加载，组合链**最后一层**）
 #
 # 唯一职责：还原 webserver 的端口表达式，让 `--port` 生效（机制见《DSH-实例并存
 # 原理》——该文原文在**已退役**的 mecha-sdk 仓根 `DSH-实例并存原理.md`；本仓不再
@@ -7,7 +7,7 @@
 # profile 补丁（`~/.dsh/profiles/web/cordis.patch.yml`）把 webserver 的 `port`
 # 钉成字面量 3080。同 id 的 patch 是**整块替换** config，不是深合并，故本 overlay
 # 作为最后一层把整块照抄回来、只把 host/port 换成 `!!js` 表达式（compression 三件
-# 一并照抄）。还原后 `--port` 重新生效 ⇒ launcher 能把项目实例绑到 3081+，
+# 一并照抄）。还原后 `--port` 重新生效 ⇒ 启动器能把项目实例绑到 3081+，
 # 把 :3080 让给官方 dsh。
 #
 # 已撤（2026-09-24）：原先还有一条 `- id: remote-web-ui / disabled: true`，用来阻止

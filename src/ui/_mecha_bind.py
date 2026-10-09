@@ -4,7 +4,7 @@
 旧 GUI 的标准件（spinbox/combo/…）经 `pm_setup`→外部 `param_manager.ParamRegistry`
 绑定；那套 registry 是**独立于 mecha 的第二状态源**（违反 I2）。本层用 **mecha 原生**
 绑定取代它：widget 读初值自 bridge（v2 的 V2Bridge）、写经 `bridge.write`（choke point）、
-订阅史实时刷新（AI 写入即时反映 + 归因高亮）、按 `can_write` 只读门控（两模式）。
+订阅史实时刷新（AI 写入即时反映 + 归因高亮）、按 `can_write` 做只读门控（写权闸门）。
 
 **设计成 `pm` 的近 drop-in**（`spinbox/combobox/lineedit/checkbox/ParamSpec` 同名同签名），
 面板移植≈机械替换：`from .. import pm_setup as pm` → `from . import _mecha_bind as MB`；
@@ -50,7 +50,7 @@ class Binder:
     - `register_external`：非标参数（光场表/能级组/波形/psi/衰变）——把一个 bridge key
       映射到面板的 read_fn/write_fn（取代旧 `register_panel_params`）。
     - 订阅 bus：外部（AI）改某 key → 刷新对应 widget（blockSignals 防回环）+ 归因高亮。
-    - `set_readonly(ro)`：两模式门控——AI 模式下 GUI 控件物理只读（can_write('gui')==False）。
+    - `set_readonly(ro)`：写权门控——写权不在人侧时 GUI 控件物理只读（can_write('gui')==False）。
     """
 
     def __init__(self, bridge, reason_prefix='GUI', notify=None):
@@ -89,7 +89,7 @@ class Binder:
         """
         mode = getattr(self.bridge, 'mode', '?')
         msg = ('写权在 %s 侧（当前 %s 模式）：人对「%s」的修改被拒。'
-               '要接管：经看门人切回 GUI 模式（菜单「切换至 AI/GUI 模式」）'
+               '要接管：在统一启动器的面板上点「切到手动」（写权即归人）'
                % (mode, mode, key))
         if msg == self._last_reject:
             return
@@ -155,7 +155,7 @@ class Binder:
         except Exception:                                    # noqa: BLE001
             pass
 
-    # ---------------- 只读门控（两模式） ----------------
+    # ---------------- 只读门控（写权闸门） ----------------
     def set_readonly(self, ro):
         """AI 模式 ro=True：所有绑定控件物理只读/禁用（不只是看起来只读）。"""
         for (w, _k, _s) in self._binds:

@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
-"""EL ↔ mecha v2 的接线层：两模式收拢后的装配点（v1 门面已退役）。
+"""EL ↔ mecha v2 的接线层：**三层架构**（2026-10-08）下的装配点（v1 门面已退役）。
 
-app_entry 用它装配 V2Bridge.for_shared。**两模式**（用户裁决 2026-09-24）：
+app_entry 用它装配 V2Bridge.for_shared。**三层架构**（软件存活 / 客户端连接 / 写权
+三者正交；旧「两模式 + 进程交接」已被取代）：
 - GUI 模式：`start_services=False`——纯本地软件，不起 MCP/监控端点，AI 物理
   看不见（写权恒 human）。
 - AI 模式：headless 权威（run_authority）用默认 True——起 MCP 服务器线程 +
@@ -13,8 +14,8 @@ app_entry 用它装配 V2Bridge.for_shared。**两模式**（用户裁决 2026-0
 监控端点是**只读**的（/status + /activity + /history + /config）：给 dsh 右侧栏
 面板轮询"谁改了什么"。**实现已上提到框架 `mecha.cockpit`**（2026-09-25 第 1 段，
 mecha `2722f58`）——本文件只留 EL 侧的两件事：把 `V2Bridge` 适配成框架的
-`MonitorSource`、以及端口由宿主传参。控制权切换不经它——人的夺权/交权由看门人
-（launcher.py）编排进程交接；"AI 不能自授权"的护栏靠 Authority 的 side 判定
+`MonitorSource`、以及端口由宿主传参。控制权切换**不走它**——人的夺权/交权走
+**控制端点**（`.control-port`，见 `mecha_v2/control.py`）；「AI 不能自授权」的护栏靠 Authority 的 side 判定
 （AI 通道改不了 mode），不靠端点鉴权。
 
 ## Known Limitations and Deferred Work

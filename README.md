@@ -48,8 +48,8 @@ pip install -r requirements.txt
 ## 3. 怎么跑
 
 ```bash
-# 看门人：弹窗选模式（AI / GUI），进程交接与写权落位都由它编排
-python launcher.py
+# 统一启动器（框架编排：起软件 + 就绪判据 + dsh；⚠ 各家不再自己编排进程）
+python -m mecha --all
 
 # 等价单跑 —— GUI 模式：纯本地软件，不起任何端点，写权在人
 python app_entry.py --gui

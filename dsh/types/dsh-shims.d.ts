@@ -62,7 +62,8 @@ declare module '@deepseek-ai/cordis' {
     readonly tools: ToolRuntime
     readonly slots: SlotsRuntime
     readonly logger: Logger
-    /** host 侧：slash command 注册（/re0-gui 交权切换）。 */
+    /** host 侧：slash command 注册（⚠ 本插件**今天不注册任何 command** —— 原先那个
+     *  `/re0-gui` 交权切换已随三层架构删除：切写权走控制端点、不动进程）。 */
     readonly commands?: {
       register(def: {
         name: string

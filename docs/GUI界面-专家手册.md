@@ -30,7 +30,8 @@
 ## 0. 速查
 
 1. **启动**：`python 能级.py` → `能级.py:12` `from app_entry import MainWindow, main` → `app_entry.main()`（`app_entry.py:530`）
-   → **模态** `_choose_mode()`（`app_entry.py:507`）选 AI/GUI → `run_gui(app)`（`app_entry.py:403`）= `MainWindow()` + `showMaximized()`。
+   → ⚠ **原「模态 `_choose_mode()` 选 AI/GUI」已删**（三层架构：从 mecha 启动永远是 AI 组，
+   没有"选模式"这一步）→ `run_gui(app)` = `MainWindow()` + `showMaximized()`，或 `run_mcp()`（`--mcp`）。
    （直接跑：`python app_entry.py`。原「打包：`main.py:5`」一路已于 2026-09-25 随打包路线删除。）
 2. **`MainWindow.__init__`**（`app_entry.py:72`）：先定 transport（`_hub_connected` / `HubBridge` vs `AppBridge`，`:84-96`）→ `cache`/`binder`（`:97-98`）→ `_build_ui()`（`:185`）。
 3. **页面**：中央 `canvas_tabs` 两页 = **静态**（`analysis_panel.canvas` = `EnergyPlotPanel`）/ **动态**（`DynamicPanel`，`app_entry.py:238-247`）；
@@ -54,7 +55,7 @@
 | 1 | `能级.py:12` | 只转发 `app_entry.main`；`能级.py` 额外再导出 `MainWindow`（供 `import 能级 as main_mod` 的旧脚本）。**`main.py` 与打包路线已于 2026-09-25 删除** |
 | 2 | `app_entry.py` 顶部 | 无控制台启动守卫：`sys.stdout/stderr is None` → 补 devnull |
 | 3 | `app_entry.py:530-536` | `QApplication` + `ui_theme.QSS`（`ui_theme.py:60`，字体 10pt Microsoft YaHei） |
-| 4 | `app_entry.py:537` | `_choose_mode()` **模态** QMessageBox：AI 模式 / GUI 模式 / 取消 |
+| 4 | — | ⚠ **原 `_choose_mode()` 模态框已删**（三层架构：从 mecha 启动永远是 AI 组，不需要选模式） |
 | 5a | `app_entry.py:539` → `403` | GUI：`MainWindow()` + `showMaximized()` + `app.exec_()` |
 | 5b | `app_entry.py:541` → `410` | AI：后台 spawn `-m src.adapter.serve`（Hub :8765）+ `-m cockpit.server`（:8766），前台跑 `dsh web --patch ./dsh/cordis.source.patch.yml`；等 `.mcp-port` 最多 ~20s；缺 `dsh/node_modules` 自动 `npm install`（`:470-477`） |
 | 6 | `app_entry.py:84-96` | `MainWindow.__init__` 定 transport（见 §1.3） |
@@ -246,7 +247,11 @@ QMainWindow(MainWindow, 1400×800, 标题 'Rb-87 能级计算')
 
 ---
 
-## 5. 两模式与写权（human/AI）——**GUI 侧只实现了一半**
+## 5. 写权（human/AI）与 GUI 侧门控——**只实现了一半**
+
+> ⚠ 本节标题原为"两模式与写权"。**三层架构（2026-10-08）废掉了"两模式"那个框架**
+> （切写权不再换进程）⇒ 只留"写权"这一维；下面的内容按此读。
+>
 
 ### 5.1 语义（mecha 侧，权威）
 
@@ -381,7 +386,7 @@ git diff -- src/ui/ui_dynamic.py app_entry.py |
 | 6 | **M5** 注意力分级 | 无分级：只有状态栏 `showMessage`（8s 超时）+ 若干 `QMessageBox.warning`（模态） | `app_entry.py:115` |
 | 7 | **D5** 报错不静默 | ❌ 两处静默：`Binder._write` 门控吞写（`_mecha_bind.py:69-70`）；Hub 回程 `{'ok': False}` 无人检查（`ui_dynamic.py:936`） | — |
 | 8 | **D6** 每个写入面配读回面 | `solve.*` 有读回（`_param_cell` 读会话现值 `:585-587`）；**「窗口/光子块」两个控件无写面也无读回**（见 §9-Q1） | `fields.py:75-94,260-263` |
-| 9 | 两模式实时刷新 | in-process ✅ / **Hub ❌**（订阅形状不匹配，实测 AttributeError） | `_mecha_bind.py:63,76` vs `hub_bridge.py:89-109` |
+| 9 | 写权变化实时刷新 | in-process ✅ / **Hub ❌**（订阅形状不匹配，实测 AttributeError） | `_mecha_bind.py:63,76` vs `hub_bridge.py:89-109` |
 | 10 | 夺权路径 | GUI 内无入口（只有 HTTP :8767 + `.human-token`）；`HubBridge.switch_mode` 死码 | `serve.py:62-71`；`hub_bridge.py:136-154` |
 | 11 | 旧 P3「AI op 滚动到状态栏 + 一键撤销 AI」 | **迁移时删除**（`git diff 25ff146^ 25ff146 -- app_entry.py`，`_init_ai` 整段） | 未在新架构重建 |
 | 12 | 大载荷 I3 / 人机同产物 | in-process ✅（artifact + `load_artifact`）；**Hub 模式降级为只报 summary**，人看不到曲线 | `ui_dynamic.py:1418-1427` |
@@ -671,7 +676,7 @@ M5 成本/可行性提示（`estimate()` 已现成：`dim/ed_feasible/est_sec/es
 |---|---|---|---|
 | **P0** | **D3 死接线清理**（检视器 4 个精度旋钮、`param_edited`/`set_god_params`/`god_values`/`_LEGACY_KW2PATH`、`_ai_initiated`、`_show_progress` 死分支） | **0.5 天** | 零布局风险；消除"能输入没反应"（D5/D6）；且它们是改界面时的**噪声源**（易被当成活代码）。`gui_inspector` 判据已覆盖参数页 |
 | **P1** | **D1 `field.window`/光子块失能** | **1–1.5 天** | 唯一被削掉的能力。**建议"接回 registry"而非"删控件"**：删控件会改那一行几何（更贵且碰 M3）；接回只改参数传递（`fields.ac_kwargs()` → `ui_single.draw_levels`/`ui_spectrum.refresh_view`），需重跑静态页判据 |
-| **P2** | **D2 两模式门控接线**（`set_readonly` + 订阅 `authority_switch` + 修 Hub 订阅形状 + 状态栏提示） | **2–3 天** | 纲领 I5/§5 硬要求，**纯逻辑无几何**；流水面板单列一档，落**检视器新 tab**（M3 明文允许） |
+| **P2** | **D2 写权门控接线**（`set_readonly` + 订阅 `authority_switch` + 修 Hub 订阅形状 + 状态栏提示） | **2–3 天** | 纲领 I5/§5 硬要求，**纯逻辑无几何**；流水面板单列一档，落**检视器新 tab**（M3 明文允许） |
 | **P3** | **多体页** | **6.5–10 人日** | 增量能力、不影响既有正确性，但工作量最大且需先裁决"第 3 tab vs 第 3 档" |
 | **P4** | 数据管理清理入口（文件菜单或检视器新 tab） | 1–1.5 天 | 与 P0/P2 同属"接线类"，可在 P2 之后顺手做（都落检视器/菜单，零布局风险） |
 

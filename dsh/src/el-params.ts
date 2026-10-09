@@ -44,7 +44,7 @@ export const EL_BRIDGE = {
    * 原自建版把这段写死在桥的错误文案里；资产把它参数化了 ⇒ 必须由 EL 显式传，
    * 否则退回中性句（"请确认软件已启动…"），我们就丢了"要人经 launcher 起 AI 模式"这条指引。
    */
-  offlineHint: '请确认软件在 AI 模式（人经 launcher.py 启动）；工具仍在列表但暂不可用。',
+  offlineHint: '请确认软件已起来（人经统一启动器 python -m mecha --all 起，或直接 app_entry.py --mcp）；工具仍在列表但暂不可用。',
   /** `HttpSessionOptions.clientInfo`：initialize 上报的客户端标识。 */
   clientInfo: { name: 're0-mecha-dsh', version: '0.1.0' },
   /** `HubUrlConfig.defaultUrl`：端口文件读不到时的默认端点（原自建版的 `DEFAULT_URL`）。 */
@@ -71,26 +71,15 @@ export const EL_PANEL = {
 } as const
 
 /**
- * EL 的能力开关（**不是取值，是能力**）。
- *
- * `enableSwitchToGui`：会话头部的「→ GUI」按钮 + host 侧的 `/re0-gui` command。
- * ⚠ **它的前提是"有人在轮询 `.mode-request`"**——EL 的部署恒经看门人（`launcher.py`，
- * 见 `docs/交接-给下一代.md` §2），所以 EL 开；**没有看门人的部署必须关**，
- * 否则按钮按了没人接（"按了没反应"是本工程明确要避免的形态）。
- *
- * ⚠ **为什么是一个源级常量、而不是 dsh 插件的运行期 config**：client 半**未必**拿得到
- * entry 的 `config`（本 dsh 版本**未核**）；若 host 半按 config 关、client 半按常量开，
- * 就会出现"按钮在、command 不在"——正是我们要禁的死按钮。⇒ **两半读同一个常量**，
- * 一处关就两处都关（开关的唯一权威在本文件）。
+ * ⚠ **曾经有 `EL_FEATURES.enableSwitchToGui`**（会话头部「→ GUI」按钮 + host 的
+ * `/re0-gui` command 的能力开关）。**三层架构（2026-10-08）把它连同整条链删了**：
+ * 那条路靠"host 写 `.mode-request`、看门人轮询到就做进程交接"；而切写权现在走
+ * **控制端点**（`.control-port`）、**不动进程**、不留意图文件 ⇒ 没有存在理由。
  */
-export const EL_FEATURES = {
-  enableSwitchToGui: true,
-} as const
 
-/** 会话头部两个动作的**标签**（唯一来源：`buttons.tsx` 与槽位注册都用它，不许手抄两遍）。 */
+/** 会话头部动作的**标签**（唯一来源：`buttons.tsx` 与槽位注册都用它，不许手抄两遍）。 */
 export const EL_HEADER_LABEL = {
   cockpit: '◈ 监控',
-  switchToGui: '→ GUI',
 } as const
 
 /** 右栏监控 tab 的 id / kind（dsh 的 `sidebarRightTabs` 与本仓的 slot key 必须同串）。 */
@@ -105,31 +94,21 @@ export interface HeaderAction {
   readonly label: string
 }
 
-/** 交权动作：**带 command**（host 半据此决定注册哪个 slash command）。 */
-export interface SwitchAction extends HeaderAction {
-  readonly command: string
-}
-
 /** 头部动作计划：两半消费**同一个计划** ⇒ 不可能一处开一处关。 */
 export interface HeaderPlan {
-  /** 监控按钮（开右栏 + 打开面板 tab）——**永远有**。 */
+  /** 监控按钮（开右栏 + 打开面板 tab）。 */
   readonly cockpit: HeaderAction
-  /** 交权按钮 + 它的 command——**开关关着时是 `null`**。 */
-  readonly switchToGui: SwitchAction | null
 }
 
 /**
- * 按能力开关算出"会话头部要注册哪些动作"（纯函数，可单测；两半共用）。
+ * 会话头部要注册哪些动作（纯函数，可单测；两半共用）。
  *
- * ⚠ 关着时返回 `switchToGui: null` = **不注册按钮、也不注册 command**（R17：不留死缝，
- * 也不留按了没反应的按钮）。
+ * ⚠ **参数已去掉**：原先按能力开关算 `switchToGui` 那一半，而那个开关随整条
+ * "切换到 GUI"链一起删了（三层架构：切写权走控制端点、不动进程）。
+ * ⚠ 留着一个"没人能变的参数"就是死缝（R17）⇒ 连参数一起去掉。
  */
-export function headerPlan(enableSwitchToGui: boolean): HeaderPlan {
+export function headerPlan(): HeaderPlan {
   return {
     cockpit: { id: EL_TAB.id, order: 200, label: EL_HEADER_LABEL.cockpit },
-    switchToGui: enableSwitchToGui
-      ? { id: 're0-to-gui', order: 201, label: EL_HEADER_LABEL.switchToGui,
-          command: 're0-gui' }
-      : null,
   }
 }

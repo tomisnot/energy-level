@@ -39,7 +39,7 @@ src/host/config.ts         MCP 端点解析（hubUrl / .mcp-port / 默认）
 types/dsh-shims.d.ts       本地最小类型 shim（@deepseek-ai/* 是宿主提供的 peer，本地装不到）
 ```
 
-**安全红线**：插件**只 connect、绝不 spawn 权威**（人启动 launcher = 权威，T4）。换 harness
+**安全红线**：插件**只 connect、绝不 spawn 权威**（框架起那个进程，T4）。换 harness
 只丢本插件，软件的 MCP 端点照用（跨 harness）。
 
 ## 加载

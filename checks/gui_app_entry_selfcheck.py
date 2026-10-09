@@ -139,9 +139,11 @@ C.group('B P1-7 AC 精度（窗口/光子块）接线：静态生效 + 动态不
      'n_photon' not in _rs and 'sos_n_window' not in _rs),
 ])
 
-# ---------------- C. 两模式收拢：看门人编排 + headless 权威（v1 服务回流防呆） ----------------
-# 2026-09-24 两模式收拢：编排归看门人 launcher.py（弹窗选模式、进程交接），
-# app_entry 只剩 --gui（纯本地，不起端点）/ --mcp（MCP 服务形态，写权 AI）。
+# ---------------- C. 编排归框架 + headless 软件形态（v1 服务回流防呆） ----------------
+# ⚠ 原为"两模式收拢：编排归看门人 launcher.py（弹窗选模式、进程交接）"——
+#   三层架构（2026-10-08）把编排整块归框架（python -m mecha --all）、**launcher.py 已删**，
+#   切写权**不动进程**。
+# app_entry 只剩 --gui（纯本地，不起端点）/ --mcp（软件形态，写权按启动者声明）。
 # run_ai/驾驶舱/v1 serve 的 spawn 一旦出现 = v1 回流，本组判红。
 _APP_SRC = open(_os.path.join(_os.path.dirname(_os.path.dirname(
     _os.path.abspath(__file__))), 'app_entry.py'), encoding='utf-8').read()

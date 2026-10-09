@@ -14,7 +14,7 @@
   （真值会让 MCP 服务端**根本不起**）；`PYTHONIOENCODING` 为 `utf-8`（日志重定向下防 cp936 崩）；
 - **D** **CLI 契约已改名**：`app_entry.py` 认 `--mcp`、不再认 `--authority`、无参时指向
   `python -m mecha`（⚠ **不是** `mecha.launch`：那是模块不是包，会静默什么都不做）；
-  `launcher.py`（步骤 4 才删）在共存期 spawn 的也是 `--mcp`。
+  ⚠ 旧 `launcher.py` **已删**；它在世时 spawn 的也是 `--mcp`。
 
 真进程冒烟在另一条判据（`checks/mcp_entry_smoke_selfcheck.py`）：那条要起真服务、秒级起不来，
 **故意不进 `--core/--fast`**（档位纪律：那两档是秒级）。

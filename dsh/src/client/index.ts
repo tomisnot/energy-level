@@ -1,17 +1,16 @@
 /**
  * re0-mecha dsh 插件 —— **CLIENT 入口**（浏览器侧 Cordis 插件）。
  *
- * 两模式收拢（2026-09-24）后重建的 dsh 界面，三件事（第三件是**能力开关**）：
+ * dsh 界面两件事（⚠ 原有第三件「切换至 GUI」按钮**已按三层架构删除**）：
  *  1. ◈监控 按钮（会话头部）→ 开右栏 + 打开 `re0-cockpit` tab（旧覆盖层重布局
  *     已弃，右栏 tab 由 dsh 自管开合，按钮只负责"打开"，最轻）。
  *  2. 右栏 tab body（`MonitorTabBody`）→ 轮询权威**只读监控端点**的
  *     `/history`（写事件，含 `mode`）+ `/config`（配置态树），显示"当前写权模式 +
  *     AI/人最近改了什么"。
- *  3. ⭐ **切换至 GUI 按钮**（会话头部）→ 经 `/re0-gui` command 让 host 写 .mode-request，
- *     看门人接手 terminate 权威+dsh、起 GUI。**它由能力开关
- *     `EL_FEATURES.enableSwitchToGui` 控制**（见 `el-params.ts`）：关着时按钮与 command
- *     **都不存在**（两半读**同一个** `headerPlan`）——没有看门人的部署不该出现
- *     "按了没反应"的按钮。
+ *  ⚠ **曾经有第三件：会话头部「切换至 GUI」按钮**（经 `/re0-gui` command 让 host 写
+ *     `.mode-request`、看门人接手做进程交接）。**三层架构（2026-10-08）删了整条链**：
+ *     切写权现在走**控制端点**（`.control-port`）、**不动进程**、不留意图文件
+ *     ⇒ 按钮与 command 都不该存在（留一个"按了没人接"的按钮正是本工程要禁的形态）。
  *
  * **地址不再硬编码**（2026-09-25 第 2 段）：监控端点是**动态端口**，面板经共享资产的
  * `fetchMonitorBase` 去 host 半的**同源只读路由**取 `{base}`（host 读权威写的端口文件）。
@@ -26,11 +25,10 @@
  * `npm run bundle` 并重启 dsh 才生效。
  */
 import type { Context } from '@deepseek-ai/cordis'
-import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import { MonitorTabBody } from '@mecha/dsh-panel/panel/MonitorTabBody.tsx'
 import { configurePanel, panelConfig } from '@mecha/dsh-panel/panel/panel-config.ts'
-import { CockpitButton, SwitchToGuiButton, type CockpitInjected, type SwitchInjected } from './buttons.tsx'
-import { EL_FEATURES, EL_PANEL, EL_TAB, PLUGIN, headerPlan } from '../el-params.ts'
+import { CockpitButton, type CockpitInjected } from './buttons.tsx'
+import { EL_PANEL, EL_TAB, PLUGIN, headerPlan } from '../el-params.ts'
 
 /** Cordis 插件名（与 host 半一致）。**取自参数家**（`PLUGIN.name` 是唯一来源）。 */
 export const name = PLUGIN.name
@@ -39,13 +37,11 @@ export const name = PLUGIN.name
 const HEADER_SLOT = 'conversation.session.header.actions'
 
 /** 本半的动作计划——唯一权威是 `el-params.ts` 的 `headerPlan`（host 半读同一个）。 */
-const PLAN = headerPlan(EL_FEATURES.enableSwitchToGui)
+const PLAN = headerPlan()
 
-/** slots（按钮+tab body）+ layout（开右栏）+ 右栏 tab 服务；交权按钮另需 remote.commands。 */
-export const inject = [
-  'slots', 'layout', 'sidebarRight', 'sidebarRightTabs',
-  ...(PLAN.switchToGui ? ['remote', 'remote.commands'] : []),
-]
+/** slots（按钮+tab body）+ layout（开右栏）+ 右栏 tab 服务。
+ *  ⚠ 原交权按钮还另需 `remote` / `remote.commands`；那条链已删 ⇒ 不再声明（R17）。 */
+export const inject = ['slots', 'layout', 'sidebarRight', 'sidebarRightTabs']
 
 export async function apply(ctx: Context): Promise<void> {
   await ctx.effect(() => {
@@ -64,27 +60,8 @@ export async function apply(ctx: Context): Promise<void> {
         CockpitButton,
       ))
 
-    // 会话头部：切换至 GUI 按钮（发 /re0-gui command，host 写 .mode-request）。
-    // switchToGui 收 sessionId（组件传自己的 props.sessionId）。
-    // ⚠ **能力开关**：关着时这一段整体不执行（`disposeSwitch` 保持 null）⇒ 不留按钮；
-    // command 那侧由 host 半按**同一个计划**同步不注册 ⇒ 不会出现"按钮在、command 不在"。
-    const sw = PLAN.switchToGui
-    const disposeSwitch = sw
-      ? ctx.slots.inject(HEADER_SLOT, () =>
-          ctx.slots.register(
-            { name: HEADER_SLOT, id: sw.id, order: sw.order, label: sw.label,
-              inject: (): SwitchInjected => ({
-                switchToGui: async (sessionId: SessionId) => {
-                  const line = `/${sw.command}`
-                  const r = await ctx.remote!.commands!.execute(sessionId, line, [])
-                  if (!r.ok) return r.error.message
-                  if (r.value === undefined) return `unknown command: ${line}`
-                  return null
-                },
-              }) },
-            SwitchToGuiButton,
-          ))
-      : null
+    // ⚠ 这里**曾经**注册「切换至 GUI」按钮（发 /re0-gui command，host 写 .mode-request）。
+    // 三层架构删了整条链（切写权走控制端点、不动进程）⇒ 不留按钮、也不留 command。
 
     // ⭐ **注入面板参数**（client 半这一份 bundle 自己注入一次；资产不给默认值，
     // 未注入时它读参数会抛）。面板的数据层（`panel-data.ts`）读的就是这里的 routePath/tabs。
@@ -108,7 +85,6 @@ export async function apply(ctx: Context): Promise<void> {
     return () => {
       if (disposeBody) { try { disposeBody() } catch { /* ignore */ } }
       if (typeof relType === 'function') { try { relType() } catch { /* ignore */ } }
-      if (disposeSwitch) { try { disposeSwitch() } catch { /* ignore */ } }
       try { disposeCockpit?.() } catch { /* ignore */ }
       try { disposePanel() } catch { /* ignore */ }
     }

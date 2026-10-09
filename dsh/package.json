@@ -28,7 +28,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --test test/reconnect.test.ts test/config.test.ts test/re0-panel.test.ts test/switch-to-gui.test.ts",
+    "test": "node --test test/reconnect.test.ts test/config.test.ts test/re0-panel.test.ts",
     "bundle": "tsdown"
   },
   "dependencies": {

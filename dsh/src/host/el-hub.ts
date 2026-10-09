@@ -14,7 +14,21 @@
  */
 import type { HubUrlConfig } from '@mecha/dsh-panel/host/config.ts'
 import { resolveHubUrl } from '@mecha/dsh-panel/host/config.ts'
+import { dirname, join } from 'node:path'
 import { EL_BRIDGE } from './../el-params.ts'
+
+/**
+ * 由 `.mcp-port` 路径推 EL 根（端口文件所在目录）；缺省回落 cwd。
+ *
+ * ⚠ 它原来住在 `host/mode-request.ts`（那个文件写"切换意图" `.mode-request`）。
+ * **三层架构（2026-10-08）废掉了那条路**：切写权走**控制端点**（`.control-port`）、
+ * **不动进程**，所以"写文件请某某接手"没有存在理由 ⇒ 那个文件整个删了，
+ * **但本函数还有消费者**（`index.ts` 拿它算 EL 根）⇒ 搬到此处。
+ */
+export function elRootFromPortFile(mcpPortFile?: string): string {
+  const pf = mcpPortFile?.trim() || '.mcp-port'
+  return dirname(join(process.cwd(), pf))
+}
 
 /** EL 的 dsh 插件配置（用户在 cordis patch 的 entry `config:` 里给）。 */
 export interface ElHubConfig {

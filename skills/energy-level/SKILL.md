@@ -1,7 +1,7 @@
 ---
 name: energy-level
 description: 通过 MCP 操控 Rb-87 里德堡原子仿真软件 Energy Level（mecha v2）——管理能级组、场与微波/光波形，运行含时演化，并解读布居转移结果。含单位约定、v2 工具面、典型工作流与已知物理坑。
-whenToUse: 当需要操控 Energy Level 软件（改参数、加能级组、配波形、跑演化计算、取布居结果）或解读其计算结果时。软件需处于 **AI 模式**（人经 `python launcher.py` 选 AI，或 GUI 里点「切换至 AI 模式」），MCP 端点见项目根 .mcp-port；GUI 模式下 AI 物理不可见（无端点）。
+whenToUse: 当需要操控 Energy Level 软件（改参数、加能级组、配波形、跑演化计算、取布居结果）或解读其计算结果时。软件由人经统一启动器 `python -m mecha --all` 起（写权在 AI 侧），MCP 端点见项目根 .mcp-port；GUI 模式下 AI 物理不可见（无端点）。
 ---
 
 # SKILL: Energy Level — Rb-87 里德堡原子仿真（AI 操作指南 · mecha v2）
@@ -17,15 +17,16 @@ whenToUse: 当需要操控 Energy Level 软件（改参数、加能级组、配�
 
 ## 连接
 
-**两模式启动**（人经看门人 `python launcher.py` 选一次，随时可切换）：
+**软件怎么起**（人经统一启动器 `python -m mecha --all`；切写权**随时可切**）：
 
-- **AI 模式**（你要的状态）：headless 权威进程（无 GUI 窗口）+ dsh。权威进程
+- **默认（headless）**：软件进程（无 GUI 窗口）+ dsh。软件进程
   起 MCP 服务器，端口写项目根 `.mcp-port`（裸端口，兼容 dsh `resolveHubUrl`），
   你 attach 到 `http://127.0.0.1:<port>/mcp`。**写权自动在 AI 侧**（人授权了
   这个模式）。
-- **GUI 模式**：纯本地软件，**不起任何端点**——AI 物理看不见它。你连不上就是
-  人切去了 GUI 模式，等人在菜单点「切换至 AI 模式」即可（进程交接，journal
-  状态不断档）。
+- **人接管时**：写权切到人侧 ⇒ ⚠ **你的写会被当场拒**（**进程不重启、连接不断**），
+  但**读仍照常**。等人在面板上点「交还给 AI」即可。
+  ⚠ 另有「纯本地」形态（`app_entry.py --gui`，独立进程、不起任何端点，AI 物理看不见它）
+  —— 那不是 mecha 起的。
 
 **端点换端口/换进程**（实测报告 §0）：权威重启后端口会变（自动选空闲口）。
 **re0-mecha dsh 插件已自愈**：每次重连现读 `.mcp-port`，漂移后下一次调用自动
@@ -37,8 +38,8 @@ IDE 配置）不会自愈——那些须新开会话/改配置。
 seq/actor/before→after/reason，逐行可折叠）+ 配置态（族→前缀分层树）。
 **端口是动态分配的**（OS 选，写在项目根 `.monitor-port`）；面板自己经 dsh 同源只读
 路由 `/re0-mecha/monitor-url` 取地址，**没有人需要抄端口**，也没有硬编码端口可漂移。
-**控制权不经端点**：人的夺权/交权由看门人编排进程交接（dsh 里「→ GUI」按钮 /
-GUI 菜单），v1 那种"固定端口 + `/switch_mode` + token"的人工控制端点已退役。
+**控制权不经你这条端点**：人的夺权/交权走**控制端点**（`.control-port`，只给框架/面板
+⇒ 你**拿不到它的地址**）。你要知道自己此刻能不能写，就调只读的 `read_write_authority()`。
 AI 面改不了写权模式、伪造不了 human 归因（Authority 的通道判定，与端点无关）。
 
 **其他 IDE / 客户端接入**：本仓**当前没有** `.trae/mcp.json`（该配置曾存在，已不在
