@@ -82,33 +82,16 @@ export const EL_HEADER_LABEL = {
   cockpit: '◈ 监控',
 } as const
 
-/** 右栏监控 tab 的 id / kind（dsh 的 `sidebarRightTabs` 与本仓的 slot key 必须同串）。 */
-export const EL_TAB = {
-  id: 're0-cockpit',
-} as const
-
-/** 一个头部动作的注册计划（槽位 id/order/label）。 */
-export interface HeaderAction {
-  readonly id: string
-  readonly order: number
-  readonly label: string
-}
-
-/** 头部动作计划：两半消费**同一个计划** ⇒ 不可能一处开一处关。 */
-export interface HeaderPlan {
-  /** 监控按钮（开右栏 + 打开面板 tab）。 */
-  readonly cockpit: HeaderAction
-}
-
 /**
- * 会话头部要注册哪些动作（纯函数，可单测；两半共用）。
+ * ⚠ **已删（2026-10 阶段①）：`EL_TAB` 与 `headerPlan()`。**
  *
- * ⚠ **参数已去掉**：原先按能力开关算 `switchToGui` 那一半，而那个开关随整条
- * "切换到 GUI"链一起删了（三层架构：切写权走控制端点、不动进程）。
- * ⚠ 留着一个"没人能变的参数"就是死缝（R17）⇒ 连参数一起去掉。
+ * 它们服务的是"本仓自己注册会话头部按钮 + 自己注册右栏 tab 类型"那套写法。
+ * 阶段① 起那两件事**归框架**（`mountClientPanel`：按钮**唯一一个**、语义 = 开右栏；
+ * tab 的 `kind`/`id` 按三层架构 §7.3.3 = `mecha:EL` / `mecha-panel:EL`）
+ * ⇒ 本仓不再需要它们：`EL_TAB` **已无消费者**，而 `headerPlan()` 的 `order`/`label`
+ * 是框架那份按钮的事（本仓再留一份就是**第二份真值**）。
+ *
+ * ⚠ 顺带修掉一句**过期注释**：原先那行写着"dsh 的 `sidebarRightTabs` 与本仓的 slot key
+ * 必须同串" —— 那是本仓自己注册 slot 时的约束；现在 slot key 由框架用**它自己那个
+ * `id`**（`mecha-panel:EL`）负责，本仓不再拼 slot key。
  */
-export function headerPlan(): HeaderPlan {
-  return {
-    cockpit: { id: EL_TAB.id, order: 200, label: EL_HEADER_LABEL.cockpit },
-  }
-}

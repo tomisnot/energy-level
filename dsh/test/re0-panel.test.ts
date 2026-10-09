@@ -62,9 +62,13 @@ test('⭐ 单一来源：路由字面量只在 el-params.ts，两半都把 EL �
   // （骨架内部才调 configurePanel，并用 panel.routePath / panel.portFile）。
   assert.match(read('index.ts'), /panelConfig:\s*EL_PANEL\b/,
     'host 半必须把 EL 的面板参数交给骨架（注入与注册由骨架做）')
-  // client 半：骨架管不到（两份 bundle）⇒ 它自己注入一次。
-  assert.match(read('client/index.ts'), /configurePanel\(EL_PANEL\)/,
-    'client 半必须自己注入 EL 的面板参数')
+  // client 半：骨架管不到（两份 bundle）⇒ 它自己把 EL 的值交给资产。
+  // ⚠ 2026-10 阶段①：**交出方式**从"顶层 `configurePanel(EL_PANEL)`"变成
+  //   "`mountClientPanel(..., { panelConfig: EL_PANEL, ... })`"（按钮/tab 注册归框架）。
+  //   ⇒ 判据跟着改**机制**，但断言的**性质**不变：**client 半必须把 EL 那份交进去**
+  //   （资产未注入即抛 ⇒ 少了它就是"一路绿到浏览器里才炸"的那类故障）。
+  assert.match(read('client/index.ts'), /panelConfig:\s*EL_PANEL\b/,
+    'client 半必须把 EL 的面板参数交给框架 helper（另一份 bundle，host 那次到不了这里）')
   assert.match(read('el-params.ts'), /'\/re0-mecha\/monitor-url'/,
     '路由字面量必须住在 el-params.ts（EL 的参数家）')
   const offenders = literalOutsideParams(EL_PANEL.routePath,
