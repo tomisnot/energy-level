@@ -145,8 +145,23 @@ def mcp(url, tool=None, args=None, want_tools=False, timeout=90.0):
     ⚠ 若在服务器线程上直接建 Qt 窗口（第一版判据就是这么写的）⇒ **直接挂死**。
     """
     box: dict = {}
-    th = threading.Thread(target=lambda: box.update(raw=_mcp_raw(url, tool, args, want_tools)),
-                          daemon=True)
+
+    def _work():
+        """⭐ 在线程里跑，**并把异常带出来**。
+
+        ⚠ 为什么必须 try（实测抓到的真缺陷）：原写法是
+        ``box.update(raw=_mcp_raw(...))`` —— 一旦 `_mcp_raw` **抛**（例如 MCP 会话的
+        `ExceptionGroup`），异常死在**线程里**、`box` 里**没有** `raw` 这个键
+        ⇒ 主线程 `box['raw']` 抛 **`KeyError: 'raw'`** ⇒ ⚠ **真因（MCP 调用失败）被一个
+        毫无信息量的 KeyError 盖掉**，判据表现成"崩溃"而不是"干净地红"
+        （这正是本工程反复在防的「**崩溃冒充失败**」）。
+        """
+        try:
+            box['raw'] = _mcp_raw(url, tool, args, want_tools)
+        except BaseException as exc:                       # noqa: BLE001 - 带出去再抛
+            box['exc'] = exc
+
+    th = threading.Thread(target=_work, daemon=True)
     th.start()
     t0 = time.time()
     while th.is_alive() and time.time() - t0 < timeout:
@@ -155,6 +170,8 @@ def mcp(url, tool=None, args=None, want_tools=False, timeout=90.0):
         time.sleep(0.01)
     if th.is_alive():
         raise TimeoutError('MCP 调用超时（%s）' % (tool or 'list_tools'))
+    if 'exc' in box:
+        raise box['exc']                                   # ⭐ 真因，不是 KeyError
     return box['raw']
 
 
