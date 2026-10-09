@@ -106,15 +106,16 @@ C.group('C ⭐ 影响“看到哪份状态”的环境变量已由声明显式�
 
 # ---------------------------------------------------------------- D. CLI 契约
 _app = (ROOT / 'app_entry.py').read_text(encoding='utf-8')
-_launch = (ROOT / 'launcher.py').read_text(encoding='utf-8')
+#: ⚠ 旧看门人 `launcher.py` 已删（清理归一 A 类）⇒ 不再读它，改成**反向断言**。
+_launcher = ROOT / 'launcher.py'
 C.group('D CLI 契约：形态改名成 --mcp，无参指向 python -m mecha', [
     ("app_entry.py 认 '--mcp'", "'--mcp' in _app or '\"--mcp\"' in _app"),
     ("app_entry.py 不再认 '--authority'（契约层清干净）", '--authority' not in _app),
     ('无参时指向 python -m mecha --all，且**不再转发给看门人**（import launcher 已去；'
      '⚠ 注释里那句“不是 mecha.launch”是刻意的提醒，不算违规）',
      'python -m mecha --all' in _app and 'import launcher' not in _app),
-    ('launcher.py（步骤 4 才删）共存期 spawn 的也是 --mcp', '"--mcp"' in _launch),
-    ('launcher.py 里不再引用 --authority', '--authority' not in _launch),
+    ('⭐ 反向断言：旧看门人 `launcher.py` **已删**（进程编排整块归框架 `python -m mecha`；'
+     '本仓不再自己编排、也不再有"两模式交接"）', not _launcher.exists()),
     ("MCP 服务形态的函数是 run_mcp", 'def run_mcp' in _app),
     ('`--with-gui` 仍是**可用能力**（人工/诊断路径没被删；只是声明不带它）',
      '--with-gui' in _app and 'with_gui=' in _app),

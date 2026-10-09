@@ -88,8 +88,8 @@ _MODE_QSS = (
 )
 
 # 项目根（= 本文件所在目录）：v2 数据根（`.mecha-v2/` journal+artifacts）与
-# `.mcp-port` / `.mode-request` 的**唯一定义点**——GUI/权威进程内装配
-# （make_v2_bridge）与看门人（launcher.py）的端口/切换文件必须同源，否则
+# `.mcp-port` 的**唯一定义点**——任何形态（GUI / MCP 服务）都从同一处装配
+# （`make_v2_bridge`）⇒ 端口文件与数据根同源，否则
 # "起得来但看不见"（假绿）。
 PROJ_ROOT = os.path.dirname(os.path.abspath(__file__))
 
@@ -140,7 +140,6 @@ class MainWindow(QMainWindow):
         setup_cjk_fonts()               # 兜底：万一又有东西在构造期改了 rcParams
         # 两模式收拢（2026-09-24）：GUI 模式 = 纯本地软件、无 AI 连接，故**不挂
         # AI 监控侧边栏**（那是 AI 模式的事，且已迁到 dsh 右侧栏面板）。控制权
-        # 切换经看门人：菜单「切换至 AI 模式」写 .mode-request，看门人接手交接。
 
     def log(self, msg, timeout=8000):
         """统一信息出口：状态栏显示。"""
@@ -310,46 +309,9 @@ class MainWindow(QMainWindow):
         fm.addAction('保存状态', self._save_state)
         fm.addAction('恢复状态', self._load_state)
         fm.addSeparator()
-        fm.addAction('切换至 AI 模式…', self._switch_to_ai)
         self._build_mode_switch(menubar)
         QTimer.singleShot(0, self._apply_fullscreen_layout)
 
-    def _switch_to_ai(self):
-        """GUI 模式 → AI 模式：写 .mode-request，交看门人编排进程交接。
-
-        本进程不自己起 dsh/权威（那是看门人的活）——只留下"切换意图"，看门人
-        轮询到就 terminate 本 GUI、起 headless 权威 + dsh。journal 同一数据根、
-        append-only + 单写者保证状态不断档。
-        """
-        r = QMessageBox.question(
-            self, '切换至 AI 模式',
-            '将把控制权交给 AI：本 GUI 会退出，改由后台权威 + dsh 接管，'
-            '你在 dsh 里用 AI 驱动、右侧栏监控。\n\n'
-            '当前会话状态已入账本（journal），切回 GUI 模式时原样恢复。\n\n'
-            '确认切换？',
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-        if r != QMessageBox.Yes:
-            return
-        if not os.path.exists(os.path.join(PROJ_ROOT, 'launcher.py')):
-            QMessageBox.warning(
-                self, '无法切换', '没找到 launcher.py——切换需经看门人运行。')
-            return
-        try:
-            with open(os.path.join(PROJ_ROOT, '.mode-request'), 'w',
-                      encoding='utf-8') as f:
-                f.write('ai')
-        except OSError as e:
-            QMessageBox.warning(self, '切换失败', str(e))
-            return
-        self.log('已请求切换至 AI 模式，看门人即将接管…', 0)
-        QApplication.processEvents()
-        self.close()
-
-    # ---------- 模式切换（极简 / 上帝）----------
-    # t82：上帝模式是**凌驾于各页之上的模式**，不是某一页的复选框 ——
-    # 开关放在菜单栏那一行（QMenuBar 右上角 corner widget），两个互斥按钮。
-    # 开上帝模式：检视器自动显示 + 运行采集 diag（更重的诊断） + 标题/徽标标记；
-    # 极简模式：检视器隐藏但**对象与绑定照旧存在**（登记跟真值源走，不跟显隐走）。
     def _build_mode_switch(self, menubar):
         box = QWidget()
         hl = QHBoxLayout(box)

@@ -145,15 +145,16 @@ C.group('B P1-7 AC 精度（窗口/光子块）接线：静态生效 + 动态不
 # run_ai/驾驶舱/v1 serve 的 spawn 一旦出现 = v1 回流，本组判红。
 _APP_SRC = open(_os.path.join(_os.path.dirname(_os.path.dirname(
     _os.path.abspath(__file__))), 'app_entry.py'), encoding='utf-8').read()
-_LAUNCH_SRC = open(_os.path.join(_os.path.dirname(_os.path.dirname(
-    _os.path.abspath(__file__))), 'launcher.py'), encoding='utf-8').read()
+#: ⚠ 旧看门人 `launcher.py` 已删（清理归一 A 类）⇒ 这里**不再读它**，
+#: 改成**反向断言**（R13："旧东西已不存在"的守卫，而不是复述旧机制）。
+_LAUNCHER = _os.path.join(_os.path.dirname(_os.path.dirname(
+    _os.path.abspath(__file__))), 'launcher.py')
 C.group('C 两模式收拢：看门人编排 + 权威 headless + GUI 不起端点', [
-    ('launcher 按模式 spawn（--gui / --mcp）',
-     '--gui' in _LAUNCH_SRC and '--mcp' in _LAUNCH_SRC),
-    ('launcher 轮询 .mode-request 做进程交接（切换经看门人）',
-     '.mode-request' in _LAUNCH_SRC),
-    ('交接先 terminate 再等退出（写租约随进程释放，防 writer_lease_held）',
-     '_terminate_group' in _LAUNCH_SRC and '_await_exit' in _LAUNCH_SRC),
+    ('⭐ 反向断言：旧看门人已删（切换/交接不再由本仓编排）',
+     not _os.path.exists(_LAUNCHER)),
+    ('⭐ 反向断言：本仓不再有"两模式交接"的握手文件逻辑'
+     '（写权改经控制端点，见 control_channel_selfcheck）',
+     'mode-request' not in _APP_SRC),
     ('app_entry 有 run_mcp（MCP 服务形态）；初始写权**由启动者声明**'
      '（MECHA_INITIAL_MODE，三层架构 §5.1；不再硬编码 ai）',
      'def run_mcp' in _APP_SRC and '_initial_mode()' in _APP_SRC
