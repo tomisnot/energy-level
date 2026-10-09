@@ -97,6 +97,14 @@ SITE = Site(
             initial_mode=Mode.AI,
             #: ⭐ EL 有 GUI 窗口（`app_entry.py --gui`）⇒ 面板显示「切到手动」。
             has_gui=True,
+            #: ⭐ 给 AI 看的"怎么切写权"：框架只**转交**、不改写，它出现在写权自省的回执里
+            #: （`read_write_authority()` 的 `how_to_open` 字段）。⚠ **别写端口/凭据**。
+            how_to_open=(
+                "在启动面板（常驻控制台）上点本软件的「切到手动」：按一下写权即归人"
+                "（本机可信、无口令），窗口会在**同一进程内**打开；"
+                "再点「交还给 AI」即交还模型。⚠ 纯本地用户不经 mecha，"
+                "直接 `python app_entry.py --gui`（独立进程、不起端点）。"
+            ),
             env=_ENV,
         ),
     ),
