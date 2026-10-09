@@ -119,7 +119,7 @@ SITE = Site(
         ),
     ),
     dsh=DSHSpec(
-        command=("dsh",),
+        command=("dsh", "web"),
         cwd=_SITE_ROOT,
         patches=(
             _SITE_ROOT / "dsh" / "cordis.patch.yml",
