@@ -592,11 +592,13 @@ def run_mcp(with_gui=False):
           % bridge.mode, flush=True)
     # ⭐ 控制端点（三层架构 §7.1.1）：人侧专用，**不导出给 AI**；与能力面共用同一份
     # Gate/Authority/History（同一本账）。⚠ 端口号不进任何日志、也不进给 AI 的文本。
-    from mecha_v2.control import (CONTROL_PORT_FILE, build_control_registry,
-                                  start_control_endpoint)
+    from mecha.software_control import start_control_endpoint
+    from mecha_v2.control import CONTROL_SERVER_NAME, CONTROL_PORT_FILE, wire_control
     control_ep, _control_port = start_control_endpoint(
-        build_control_registry(bridge, open_surface=lambda: _open_on_qt_thread(bridge)),
-        port_file=os.path.join(PROJ_ROOT, CONTROL_PORT_FILE))
+        wire_control(bridge, open_surface=lambda: _open_on_qt_thread(bridge)),
+        port_file=os.path.join(PROJ_ROOT, CONTROL_PORT_FILE),
+        server_name=CONTROL_SERVER_NAME,
+        log=lambda m: print(m, flush=True))          # 收尾见 finally: control_ep.stop()
     print('[mcp] 控制端点已起（端口文件 %s；地址只给框架，不进给 AI 的文本）。'
           % CONTROL_PORT_FILE, flush=True)
     if with_gui:

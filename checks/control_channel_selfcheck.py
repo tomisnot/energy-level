@@ -61,8 +61,8 @@ if 'no-ledger' in FAULTS:                                      # 红证⑤：不
 
 from PyQt5.QtWidgets import QApplication, QWidget              # noqa: E402
 from app_entry import open_manual_surface_now                  # noqa: E402
-from mecha_v2.control import (build_control_registry,          # noqa: E402
-                              start_control_endpoint)
+from mecha.software_control import start_control_endpoint      # noqa: E402
+from mecha_v2.control import CONTROL_SERVER_NAME, wire_control  # noqa: E402
 
 app = QApplication.instance() or QApplication(sys.argv)
 if 'leak' in FAULTS:
@@ -109,8 +109,9 @@ _opener = lambda: _app_entry._open_on_qt_thread(bridge)         # noqa: E731
 
 from app_entry import _drain_control_queue                      # noqa: E402
 
-ctl_reg = build_control_registry(bridge, open_surface=_opener)
-ctl_ep, ctl_port = start_control_endpoint(ctl_reg, port_file=str(TMP / '.control-port'))
+ctl_reg = wire_control(bridge, open_surface=_opener)
+ctl_ep, ctl_port = start_control_endpoint(ctl_reg, server_name=CONTROL_SERVER_NAME,
+                                          port_file=str(TMP / '.control-port'))
 
 
 def _mcp_raw(url, tool=None, args=None, want_tools=False):
@@ -223,9 +224,9 @@ C.group('⑤ ⭐ 两个操作**都在账里**（同门同账；带 actor=human�
 # ---- ⑥ 响亮失败
 _, e_bad, t_bad = mcp(CTL, 'set_write_authority', {'mode': 'Mode.AI'})
 # 没有手动面 ⇒ 响亮失败：**真起一条 open_surface=None 的控制端点**再调（走完整协议栈）
-_noface_reg = build_control_registry(bridge, open_surface=None)
 _noface_ep, _noface_port = start_control_endpoint(
-    _noface_reg, port_file=str(TMP / '.control-port-noface'))
+    wire_control(bridge, open_surface=None), server_name=CONTROL_SERVER_NAME,
+    port_file=str(TMP / '.control-port-noface'))
 _, _e_noface, _t_noface = mcp('http://127.0.0.1:%d/mcp' % _noface_port,
                              'open_manual_surface', {})
 C.group('⑥ 响亮失败：未知 mode / 没有手动面', [
@@ -374,6 +375,25 @@ C.group('③b ⭐ 真部署形态：子进程 `--mcp` + 生产那条"搬回 Qt �
     ('真 MCP 调用 open_manual_surface ⇒ opened（%s）', _svc_open),
     ('开完窗子进程仍活着（Qt 事件在主线程被泵着）', _svc_alive),
     ('日志里没有 writer_lease_held（没抢第二份桥）', 'writer_lease_held' not in _sub_tail),
+])
+
+# ---- ⑫ ⭐ 本项目**不再持有**控制端点的**机制实现**（只接线；R13/R14）
+_ctl_src = (ROOT / 'mecha_v2' / 'control.py').read_text(encoding='utf-8')
+_FAULT_BACK = os.environ.get('EL_CONTROL_FAULT_BACK') == '1'
+if _FAULT_BACK:      # 红证：把机制定义抄回来 ⇒ 本组必红
+    _ctl_src += ("\n\ndef build_control_registry(authority, **kw):\n"
+                 "    return None\n\n\ndef start_control_endpoint(reg, **kw):\n"
+                 "    return None, 0\n")
+C.group('⑫ ⭐ 控制端点的**机制实现**在框架，本仓只有接线（"不许抄回来"的守卫）', [
+    ('`mecha_v2/control.py` 里**没有** `build_control_registry` / `start_control_endpoint` '
+     '的定义（只有 `wire_control` 接线）',
+     'def build_control_registry' not in _ctl_src
+     and 'def start_control_endpoint' not in _ctl_src),
+    ('它仍交齐那三样项目知识：`HOW_TO_OPEN` / `CONTROL_SERVER_NAME` / `wire_control`',
+     'HOW_TO_OPEN' in _ctl_src and 'CONTROL_SERVER_NAME' in _ctl_src
+     and 'def wire_control' in _ctl_src),
+    ('红证敏感度：红证模式下必须真的注入了那两个定义（R16：扰动要自证落上了）',
+     (not _FAULT_BACK) or ('def start_control_endpoint' in _ctl_src)),
 ])
 
 ok = C.summary()
