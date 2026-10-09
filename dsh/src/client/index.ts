@@ -31,11 +31,11 @@
  *
  * ## 面板参数的家在哪
  *
- * ⭐ **在声明**（`mecha_site.py` 的 `monitor=MonitorSpec(...)`）—— 框架生成那份参数、
+ * ⭐ **在声明**（`mecha_site.py` 的 `monitor=MonitorSpec(...)`）—— 框架按它生成那份参数、
  * 由**框架自己的 patch** 带上的 host 插件经同源只读路由交给浏览器。
- * ⚠ `dsh/src/el-params.ts` 的 `EL_PANEL` **仍在**，因为 **host 半**那条"监控地址路由"
- * 仍由本仓经资产骨架注册（§7.3.8 末段如实登记为下一步）；两处必须同值，
- * 由 `test/re0-panel.test.ts` 的**声明对拍**钉住。
+ * ⭐ **2026-10-09 起连地址路由也归框架**：本仓**不再有**面板参数常量、也**不再注册**那条路由
+ * （`mountHostPlugin` 不传 `panelConfig`）⇒ 参数只剩**一个家**，没有"两处必须同值"这回事。
+ * ⚠ 判据 `test/re0-panel.test.ts` 钉着"不许再加回来"。
  *
  * ⚠ client 半经 tsdown 打成 CJS + `__ModuleLoader__.load` 包装；改本目录源码后须
  * `npm run bundle` 并重启 dsh 才生效。

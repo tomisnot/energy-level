@@ -23,7 +23,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { buildRequestInit } from '@mecha/dsh-panel/host/config.ts'
 import { hostPluginInject, mountHostPlugin } from '@mecha/dsh-panel/host/mount-host-plugin.ts'
 import { elResolveHubUrl, elRootFromPortFile } from './host/el-hub.ts'
-import { EL_BRIDGE, EL_PANEL, PLUGIN } from './el-params.ts'
+import { EL_BRIDGE, PLUGIN } from './el-params.ts'
 
 /** Cordis 插件显示名（诊断用）。**取自参数家**（`PLUGIN.name` 是唯一来源）。 */
 export const name = PLUGIN.name
@@ -80,7 +80,11 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
       maxDelayMs: config.reconnectMaxDelayMs,
       maxAttempts: config.reconnectMaxAttempts,
     },
-    panelConfig: EL_PANEL,
+    // ⭐ **不传 `panelConfig`**（2026-10-09）：监控地址路由**上提进框架**了
+    //    （框架的 host 插件按声明 + `MECHA_PANEL_PORT_FILES` 现取端口）
+    //    ⇒ ⚠ **同一条 `routePath` 注册两次是接线错误**，本仓不再注册它。
+    //    ⚠ 这也让参数只剩**一个家**：`energy-level/mecha_site.py` 的 `Service.monitor`
+    //      （本仓的面板参数常量已随之删除）。
     // ⚠ **不传 `registerCommand`**：那条"写 .mode-request 请看门人接手"的路已随三层架构删除。
     // 切写权改由**控制端点**（人侧/框架）做 ⇒ 本插件不再交任何 command（也不留死按钮）。
   })

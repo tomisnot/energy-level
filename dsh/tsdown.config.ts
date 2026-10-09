@@ -13,10 +13,11 @@ import { defineConfig } from 'tsdown'
  * 打包产物**缺代码**，只在运行时才炸。实测：不加这一项 bundle 从 36 kB 掉到 10 kB。
  * ⇒ 必须显式 `deps.alwaysBundle` 把它拉回来（两个半都要：host 用桥、client 用面板）。
  *
- * client 半 = dsh 界面：◈监控 按钮（开右栏 tab）+ 监控面板
- * （**地址不硬编码**：面板经资产包 `monitor-client.ts` 的 `fetchMonitorBase` 打 host 半的
- * 同源只读路由（路由由 `configurePanel(EL_PANEL)` 注入）取 base，再轮询其 `/history` + `/config`）。
+ * client 半 = dsh 界面：框架那份面板插件（`panel/auto.ts`，按声明挂 N 个 tab）
+ * （**地址不硬编码**：面板经资产包 `monitor-client.ts` 的 `fetchMonitorBase` 打**框架 host 插件**
+ * 注册的同源只读路由取 base，再轮询其 `/history` + `/config`）。
  * ⚠「切换至 GUI」按钮**已删**（三层架构：切写权走控制端点、不动进程）。
+ * ⚠ 2026-10-09：监控**地址路由**与**面板参数**都上提进框架（本仓不再有 `EL_PANEL`）。
  */
 const dshExternal = [/^@deepseek-ai\//]
 

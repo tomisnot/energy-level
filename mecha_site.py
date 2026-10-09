@@ -105,11 +105,11 @@ SITE = Site(
                 "再点「交还给 AI」即交还模型。⚠ 纯本地用户不经 mecha，"
                 "直接 `python app_entry.py --gui`（独立进程、不起端点）。"
             ),
-            #: ⭐ **监控面声明**（三层架构 §7.3.6）：路由 / 端口文件名 / 标题只在这里写一次。
+            #: ⭐ **监控面声明**（三层架构 §7.3.6）：路由 / 端口文件名 / 标题**只在这里写一次**。
             #: ⚠ 框架把它生成成参数、经**框架自己的 patch** 带上的插件交给浏览器
             #: ⇒ 本项目 dsh 侧只留一行 bootstrap（`dsh/src/client/index.ts`）。
-            #: ⚠ 与 `dsh/src/el-params.ts` 的 `EL_PANEL` **必须同值**（host 半那条监控地址
-            #: 路由仍由本项目经资产骨架注册）；由 `dsh/test/re0-panel.test.ts` 对拍钉住。
+            #: ⭐ 2026-10-09：**监控地址路由也由框架注册**（框架的 host 插件按 `port_file` 的
+            #: **绝对路径**现取端口）⇒ 这是那三个值的**唯一家**（项目侧的 `EL_PANEL` 已删）。
             monitor=MonitorSpec(
                 route_path="/re0-mecha/monitor-url",
                 port_file=".monitor-port",     # ⚠ 与 mcp 的 .mcp-port 是两个不同的文件
