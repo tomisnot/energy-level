@@ -36,7 +36,7 @@ import sys
 from pathlib import Path
 
 from mecha.authority import Mode
-from mecha.site import DSHSpec, ReadySpec, Service, Site
+from mecha.site import DSHSpec, MonitorSpec, ReadySpec, Service, Site
 
 #: 本仓根（本文件在仓根 ⇒ 即自身所在目录）。
 _SITE_ROOT = Path(__file__).resolve().parent
@@ -104,6 +104,16 @@ SITE = Site(
                 "（本机可信、无口令），窗口会在**同一进程内**打开；"
                 "再点「交还给 AI」即交还模型。⚠ 纯本地用户不经 mecha，"
                 "直接 `python app_entry.py --gui`（独立进程、不起端点）。"
+            ),
+            #: ⭐ **监控面声明**（三层架构 §7.3.6）：路由 / 端口文件名 / 标题只在这里写一次。
+            #: ⚠ 框架把它生成成参数、经**框架自己的 patch** 带上的插件交给浏览器
+            #: ⇒ 本项目 dsh 侧只留一行 bootstrap（`dsh/src/client/index.ts`）。
+            #: ⚠ 与 `dsh/src/el-params.ts` 的 `EL_PANEL` **必须同值**（host 半那条监控地址
+            #: 路由仍由本项目经资产骨架注册）；由 `dsh/test/re0-panel.test.ts` 对拍钉住。
+            monitor=MonitorSpec(
+                route_path="/re0-mecha/monitor-url",
+                port_file=".monitor-port",     # ⚠ 与 mcp 的 .mcp-port 是两个不同的文件
+                title="机甲监控",
             ),
             env=_ENV,
         ),

@@ -57,23 +57,41 @@ test('EL 注入的面板参数：值就是 EL 的，且注入能被读回（往�
 })
 
 // ---------------------------------------------------------------- 2 单一来源
-test('⭐ 单一来源：路由字面量只在 el-params.ts，两半都把 EL 的值交给资产', () => {
+test('⭐ 单一来源：路由字面量只在 el-params.ts 与**声明**里（两处同值，由本判据对拍）', () => {
   // host 半：注入 + 注册监控地址路由都归**骨架** ⇒ EL 只需把 `EL_PANEL` 交给它
   // （骨架内部才调 configurePanel，并用 panel.routePath / panel.portFile）。
   assert.match(read('index.ts'), /panelConfig:\s*EL_PANEL\b/,
     'host 半必须把 EL 的面板参数交给骨架（注入与注册由骨架做）')
-  // client 半：骨架管不到（两份 bundle）⇒ 它自己把 EL 的值交给资产。
-  // ⚠ 2026-10 阶段①：**交出方式**从"顶层 `configurePanel(EL_PANEL)`"变成
-  //   "`mountClientPanel(..., { panelConfig: EL_PANEL, ... })`"（按钮/tab 注册归框架）。
-  //   ⇒ 判据跟着改**机制**，但断言的**性质**不变：**client 半必须把 EL 那份交进去**
-  //   （资产未注入即抛 ⇒ 少了它就是"一路绿到浏览器里才炸"的那类故障）。
-  assert.match(read('client/index.ts'), /panelConfig:\s*EL_PANEL\b/,
-    'client 半必须把 EL 的面板参数交给框架 helper（另一份 bundle，host 那次到不了这里）')
+  // client 半：⭐ 2026-10 阶段② 起**它不再拿面板参数** —— 只接框架那**一行 bootstrap**
+  //   （参数的家在 `mecha_site.py` 的声明里，框架生成后经同源路由交给浏览器）。
+  //   ⇒ 断言的**性质**变了但没放宽：**client 半必须接上框架那份插件**
+  //   （少了它 = 右栏一个 tab 都没有，而那不会报错）。
+  assert.match(read('client/index.ts'),
+    /export \{ apply, name, inject \} from '@mecha\/dsh-panel\/panel\/auto\.ts'/,
+    'client 半必须有那一行 bootstrap（框架的代码，不是本项目的领域代码）')
   assert.match(read('el-params.ts'), /'\/re0-mecha\/monitor-url'/,
     '路由字面量必须住在 el-params.ts（EL 的参数家）')
   const offenders = literalOutsideParams(EL_PANEL.routePath,
     ['index.ts', 'client/index.ts', 'client/buttons.tsx'])
   assert.deepEqual(offenders, [], `路由字面量被抄进了：${offenders.join('、')}`)
+})
+
+/**
+ * ⭐ **声明 ↔ 参数家对拍**（阶段②新增）：面板参数的家搬到声明之后，两份值必须一致
+ * —— 不一致的症状是"右栏 tab 在、取数却打到别的路由"（浏览器里才看得见）。
+ */
+test('⭐ 声明与参数家同值：mecha_site.py 的 monitor 三项 = EL_PANEL', () => {
+  const decl = readFileSync(join(HERE, '..', '..', 'mecha_site.py'), 'utf8')
+  for (const [what, literal] of [
+    ['route_path', `route_path="${EL_PANEL.routePath}"`],
+    ['port_file', `port_file="${EL_PANEL.portFile}"`],
+    ['title', `title="${EL_PANEL.title}"`],
+  ] as const) {
+    assert.ok(decl.includes(literal),
+      `声明里没有 ${what} = ${literal}（两处必须同值：面板参数的家在声明，`
+      + 'host 半那条地址路由仍读 el-params.ts）')
+  }
+  assert.match(decl, /monitor=MonitorSpec\(/, '声明里没有 monitor=MonitorSpec(...)')
 })
 
 // ---------------------------------------------------------------- 3 反面语料
@@ -131,7 +149,12 @@ test('⭐ EL 入口 + 资产包的 import 闭包里没有 node:*（跟着 juncti
   assert.ok(seen.length >= 6, `闭包只走了 ${seen.length} 个文件 ⇒ 检查可能没生效：${seen}`)
   assert.ok(seen.some(s => s.startsWith('pkg/') && s.endsWith('/routes.ts')),
     `闭包必须走进资产包（junction 没被跟随？）：${seen}`)
-  assert.ok(seen.includes('el/el-params.ts'), `闭包里应当有 EL 的参数家：${seen}`)
+  // ⚠ 2026-10 阶段②：EL 的 client 半**只剩那一行 bootstrap** ⇒ 参数家（`el-params.ts`）
+  //   不再进这个闭包；改点名**框架那份插件**（否则"接上了框架"这条自证就落空了）。
+  assert.ok(seen.some(s => s.startsWith('pkg/') && s.endsWith('/panels.ts')),
+    `闭包必须走进框架那份 client 插件（面板参数靠它按声明挂 tab）：${seen}`)
+  assert.ok(seen.some(s => s.startsWith('pkg/') && s.endsWith('/auto.ts')),
+    `闭包必须走进框架的入口（那一行 bootstrap 指的就是它）：${seen}`)
   assert.ok(!seen.some(s => s.includes('monitor-url')),
     `client 半不许碰到 node-only 的 monitor-url.ts：${seen}`)
   // 对偶（不许空洞）：资产的 node 半**必须**仍然依赖 node——否则上一条"没东西可抓"

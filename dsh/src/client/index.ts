@@ -1,66 +1,43 @@
 /**
  * re0-mecha dsh 插件 —— **CLIENT 入口**（浏览器侧 Cordis 插件）。
  *
- * dsh 界面两件事（⚠ 原有「切换至 GUI」按钮**已按三层架构删除**）：
- *  1. 右栏 tab body（`MonitorTabBody`）→ 轮询权威**只读监控端点**的 `/history`（写事件，
- *     含 `mode`）+ `/config`（配置态树），显示"当前写权模式 + AI/人最近改了什么"。
- *  2. ⭐ 会话头部那个「◈监控」按钮**不再由本仓注册**——2026-10 阶段① 起**归框架**
- *     （`mountClientPanel` 注册**唯一一个**，语义 = **开右栏**）。⚠ 原先三家各注册一个
- *     ⇒ 3 个项目 = 3 个按钮；而用户要的是"唤醒**所有**监控面板"。
- *  ⚠ **曾经有第三件：会话头部「切换至 GUI」按钮**（经 `/re0-gui` command 让 host 写
- *     `.mode-request`、看门人接手做进程交接）。**三层架构（2026-10-08）删了整条链**：
- *     切写权现在走**控制端点**（`.control-port`）、**不动进程**、不留意图文件
- *     ⇒ 按钮与 command 都不该存在（留一个"按了没人接"的按钮正是本工程要禁的形态）。
+ * ## ⭐ 2026-10 阶段②：本文件 = **一行 bootstrap，别的都不写**
  *
- * **地址不再硬编码**（2026-09-25 第 2 段）：监控端点是**动态端口**，面板经共享资产的
- * `fetchMonitorBase` 去 host 半的**同源只读路由**取 `{base}`（host 读权威写的端口文件）。
- * 每一轮轮询都现取 ⇒ 权威重启换端口后下一拍即落在新端口，不需要重启 dsh、
- * 更不会"面板空白但没人报错"（空数据由 `empty` 档显式表达，不伪装成成功）。
+ * ```ts
+ * export { apply, name, inject } from '@mecha/dsh-panel/panel/auto.ts'   // ← 框架的代码
+ * ```
  *
- * **路由与端口文件名不再是本仓常量**（2026-10-01 依赖化）：两半都把自己那份
- * `EL_PANEL` 交出去（host 半经骨架、client 半经 `mountClientPanel`）——资产
- * `@mecha/dsh-panel` 经 junction 只有一份代码，项目**不能再改资产文件**；
- * 未交出去时资产会抛（刻意的响亮失败）。
+ * 那一行接上**框架自己的 client 插件**：它读框架起 dsh 时按**声明**
+ * （`energy-level/mecha_site.py` 的 `Service.monitor`）生成的那份参数，
+ * **按服务挂 N 个 tab**（三家各挂自己那一份），头部按钮**恒为 1 个**
+ * （`mountClientPanel` 的**跨 bundle 全局登记**）。
  *
- * ⚠ **为什么标题/取数不再落到别人那份**：原先写的是
- * `title: () => panelConfig().title` —— 那是**渲染时求值**的 thunk ⇒ 三家装进同一个 dsh 时
- * 三个 tab 全读"最后注册那一份"。现在参数**跟着这一次注册走**（helper 内部闭包捕获 +
- * 正文以显式 prop 收到自己那份）。
+ * ⚠ 为什么**不是**裸 `import`：cordis 只认**模块自己的** `name`/`inject`/`apply` ——
+ * 裸 import 只执行模块体、`apply` **不会被调**；且资产 `sideEffects:false` 还会把它摇掉。
+ * ⚠ 为什么用**显式子路径**：三家的"浏览器安全闭包"判据按**真实文件**解析 import
+ * （与三家既有的 `…/panel/MonitorTabBody.tsx` 写法一致）。
+ *
+ * ## 本仓这一半**没有**自定义 UI ⇒ 一行就够
+ *
+ * EL 没有附加页、也没有自己的会话头部按钮（⭐ 原先那个「切换至 GUI」按钮随三层架构
+ * 整条链**已删**：切写权现在走控制端点、不动进程、不留意图文件）⇒ 这一行之后没有别的事。
+ *
+ * ## 已删掉的东西（别往回加）
+ *
+ * - 会话头部「◈ 监控」按钮：阶段① 起归框架（全生态**唯一一个**，语义 = 开右栏）；
+ * - `sidebarRightTabs` / `sidebar.right.pane.tab` 的手写注册：同上，且
+ *   `title: () => panelConfig().title` 是**渲染时求值**的 thunk ⇒ 三家装进同一个 dsh 时
+ *   三个 tab 的标题与取数路由**全落到"最后注册那一份"**（阶段① 修掉的真缺陷）。
+ *
+ * ## 面板参数的家在哪
+ *
+ * ⭐ **在声明**（`mecha_site.py` 的 `monitor=MonitorSpec(...)`）—— 框架生成那份参数、
+ * 由**框架自己的 patch** 带上的 host 插件经同源只读路由交给浏览器。
+ * ⚠ `dsh/src/el-params.ts` 的 `EL_PANEL` **仍在**，因为 **host 半**那条"监控地址路由"
+ * 仍由本仓经资产骨架注册（§7.3.8 末段如实登记为下一步）；两处必须同值，
+ * 由 `test/re0-panel.test.ts` 的**声明对拍**钉住。
  *
  * ⚠ client 半经 tsdown 打成 CJS + `__ModuleLoader__.load` 包装；改本目录源码后须
  * `npm run bundle` 并重启 dsh 才生效。
  */
-import type { Context } from '@deepseek-ai/cordis'
-import { mountClientPanel } from '@mecha/dsh-panel/panel/mount-client-plugin.ts'
-import { MonitorTabBody } from '@mecha/dsh-panel/panel/MonitorTabBody.tsx'
-import { EL_PANEL, PLUGIN } from '../el-params.ts'
-
-/** Cordis 插件名（与 host 半一致）。**取自参数家**（`PLUGIN.name` 是唯一来源）。 */
-export const name = PLUGIN.name
-
-/** slots（tab body）+ layout（开右栏）+ 右栏 tab 服务。
- *  ⚠ 原交权按钮还另需 `remote` / `remote.commands`；那条链已删 ⇒ 不再声明（R17）。 */
-export const inject = ['slots', 'layout', 'sidebarRight', 'sidebarRightTabs']
-
-/** ⭐ §7.3.3 定案：逐服务一个 `kind` / 一个 `id`（契约拒绝重复 id 与同 tier 同 kind 二次注册）。 */
-const TAB_KIND = 'mecha:EL'
-const TAB_ID = 'mecha-panel:EL'
-
-export async function apply(ctx: Context): Promise<void> {
-  await ctx.effect(() => {
-    // ⚠ 这里**曾经**注册「切换至 GUI」按钮（发 /re0-gui command，host 写 .mode-request）。
-    // 三层架构删了整条链（切写权走控制端点、不动进程）⇒ 不留按钮、也不留 command。
-
-    // ⭐ 一次调用管全部：参数**跟着这次注册走**；头部按钮由框架注册**唯一一个**。
-    // 面板**自己取数**（原生形态）：取址/取数/归约/渲染全在资产里 ⇒ 不传 `bodyProps`
-    // （本仓没有附加页；原先那个 `resolveMonitorBase` 缝已被兜住，留着就是死缝）。
-    const dispose = mountClientPanel(ctx as never, {
-      panelConfig: EL_PANEL,
-      kind: TAB_KIND,
-      id: TAB_ID,
-      body: MonitorTabBody,
-      titlePrefix: '◈ 监控 · ',
-    })
-    return () => { dispose() }
-  }, 're0-mecha: client monitor UI')
-}
+export { apply, name, inject } from '@mecha/dsh-panel/panel/auto.ts'
