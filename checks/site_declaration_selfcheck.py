@@ -67,12 +67,13 @@ C.group('A 框架能按约定加载本仓声明（load_sites + validate）', [
     # `'Mode.AI'` 而**不是** `'ai'` ⇒ 必须比 `.value`（框架里同款坑：`SvcState.DOWN`）。
     _svc is not None
     and getattr(getattr(_svc, 'initial_mode', None), 'value', None) == 'ai'),
-    ('argv 起的是 --mcp 形态，且 cwd 是本仓根',
-     _svc is not None and '--mcp' in _svc.argv
+    ('cwd 是本仓根，且 argv 起的是 mecha 服务形态（形参见 `service_argv()` 那**一处**）',
+     #: ⚠ **2026-10-10：这里原先把旗标拼写钉死（`'--mcp' in argv` / `'--with-gui' not in argv`），
+     #: 已按用户裁决删掉** —— *"三家 CLI 按词汇表改名，但是相关判据删掉，不要什么都加判据"*。
+     #: 旗标拼写属于**接入指南的词汇表约定**，不是产品行为；钉它只会让每次改名都动判据。
+     #: 形态的唯一来源是 `mecha_site.service_argv()` 那一处（读代码比读判据快）。
+     _svc is not None and len(_svc.argv) > 1
      and Path(_svc.cwd).resolve() == ROOT),
-    ('⭐ 声明起的 EL 是 **headless**（argv 里**没有** `--with-gui`）—— 裁决 1 的前提是'
-     '「热更新时 GUI 根本不开」，若总是开窗则把当初要避开的代价请回来了',
-     _svc is not None and '--with-gui' not in _svc.argv),
     ('data_root 是本仓根（写租约根 = .mecha-v2 的上一层）',
      _svc is not None and Path(_svc.data_root).resolve() == ROOT),
 ])
@@ -146,8 +147,9 @@ C.group('D CLI 契约：形态改名成 --mcp，无参指向 python -m mecha', [
     ('⭐ 反向断言：旧看门人 `launcher.py` **已删**（进程编排整块归框架 `python -m mecha`；'
      '本仓不再自己编排、也不再有"两模式交接"）', not _launcher.exists()),
     ("MCP 服务形态的函数是 run_mcp", 'def run_mcp' in _app),
-    ('`--with-gui` 仍是**可用能力**（人工/诊断路径没被删；只是声明不带它）',
-     '--with-gui' in _app and 'with_gui=' in _app),
+    #: ⚠ **2026-10-10 删**：这里原先断言 `'--with-gui' in _app and 'with_gui=' in _app`
+    #: （"人手面能力没被删"）—— 那是**钉旗标拼写**，已按用户裁决删掉（同一句：不要什么都加判据）。
+    #: 真的守住"开窗那条路还在"的是**行为判据**（真起子进程调 `open_manual_surface`），不是这句。
 ])
 
 # ---------------------------------------------------------------- E. 数据根同源（§5.1 / §5.6）
