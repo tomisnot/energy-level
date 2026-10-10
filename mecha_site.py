@@ -15,7 +15,7 @@
 |---|---|
 | ``id="EL"`` | 暴露名会**小写化**成 ``el_<tool>``；`Site.validate` **大小写不敏感**查重（§2.2.1） |
 | ``argv=(python, "app_entry.py", "--mcp")`` | `--mcp` = MCP 服务形态（原 `--authority` 改名），**纯 headless**：argv **不带** `--with-gui` —— 裁决 1 的前提是「热更新时 GUI 根本不开」，见 `service_argv()`；`run_mcp()` 硬编码 `PROJ_ROOT` ⇒ **只需 cwd** |
-| ``ready.port_file=".mcp-port"`` | 与 `src/v2_bind.py` 的**默认发现文件**、`dsh/src/el-params.ts` 的 `mcpPortFile` **同一个名字**（跨语言单一事实） |
+| ``ready.port_file=".mcp-port"`` | 与 `src/v2_bind.py` 的**默认发现文件**是**同一个名字**（跨语言单一事实）。⚠ **2026-10-10 起只剩这两处**：原先的第三处（dsh 插件侧 `dsh/src/el-params.ts` 的 `mcpPortFile`）随**自愈 MCP 桥**一起删了（方案 A：工具面只有一条腿 = 框架的聚合端点）⇒ 判据 `checks/site_declaration_selfcheck.py` 的 B 组现在**反向钉住**"dsh 侧不许再长出第二条腿" |
 | ``ready.ok_codes=()`` | ⭐ **实测**：EL 的 `GET /mcp` 回 **406**（`application/json`；带 `Accept: text/event-stream` 回 400），该端口上**没有**任何 2xx 路由（`GET /` 回 404）。框架默认只认 2xx ⇒ 不放宽会**永远判不就绪**。含义是"**有 HTTP 响应即证明服务在听**"，不是"错误码无所谓" |
 | ``ready`` 仍带 `port_file` | 框架的判据是"**端口文件相对 spawn 前变化过**" **且** 真探活（§3 铁律 2）⇒ 旧 `launcher._wait_mcp_port` 那种"文件存在且非空"的假绿（曾把 11 天前的残留判成就绪）不再可能 |
 | ``data_root=EL 根`` | 写租约根（`.mecha-v2/` 的上一层）；**同一根同一时刻只能一个写宿主**（§3 铁律 4） |

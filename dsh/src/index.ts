@@ -1,91 +1,45 @@
 /**
- * re0-mecha dsh 插件 —— **HOST 入口**（Cordis 插件，函数形态）。
+ * re0-mecha dsh 插件 —— **HOST 半**（Cordis 插件，函数形态）。
  *
- * ## 机制全在**资产骨架**里（2026-10-01 上提）
+ * ## ⭐ 2026-10-10：它现在只是**载体**（工具面归框架的聚合端点）
  *
- * `@mecha/dsh-panel/host/mount-host-plugin.ts` 的 `mountHostPlugin(ctx, opts)` 接管了此前本文件
- * 手写的那约 100 行通用机制：会话工厂（含 **SDK 懒加载**）、建桥、logger 转发、
- * `onTools → syncTools` 两阶段 swap、`onStatus` 三态日志、监控地址路由的注册**与注销**、
- * 收尾顺序、面板参数注入。⇒ **本文件只剩 EL 的参数值与自身分支**。
+ * 用户裁决（**方案 A**）：**工具面只有一条腿** = 框架的聚合端点
+ * （dsh 侧由框架的 overlay 插 `@deepseek-ai/dsh-mcp-client`，EL 的工具名形如
+ * `mcp__mecha__el_<tool>`，**写权/开关元工具也在那条腿上**）。
+ * ⇒ 本仓原有的**自愈 MCP 桥**（`src/host/el-hub.ts` + 资产骨架 `mountHostPlugin`）
+ * **整块删除**，`src/el-params.ts`（桥的参数家）一并删除。
+ * ⚠ **代价（用户已认）**：**不经 mecha 单独跑 dsh 时，不再出现任何 EL 工具**
+ *   —— 那条路本来就不在架构的需求里（AI 面 = 一个聚合端点）。
  *
- * 骨架有什么 / EL 给什么：见该模块 docstring 的表；本文件只填值 + 交一个可选 command。
+ * | 事 | 现在谁做 |
+ * |---|---|
+ * | **AI 工具面**（含读/切写权、开关软件） | ⭐ **框架的聚合端点**（唯一一条腿） |
+ * | 监控端点的**地址路由**（读 `.monitor-port` 现取端口、**不回落**） | ⭐ **框架的 host 插件**（`mecha/dsh-panel/host-plugin/mecha-panel-host.mjs`，按 `MECHA_PANEL_PORT_FILES` 的**绝对**路径现读） |
+ * | 面板参数（路由 / 端口文件名 / 标题） | ⭐ **声明**（`energy-level/mecha_site.py` 的 `Service.monitor`）——本仓不再有第二份 |
+ * | 右栏 tab 的挂载 | ⭐ **框架的 client 插件**（`src/client/index.ts` 只留那一行 bootstrap） |
  *
- * 安全红线：**只 connect、绝不 spawn 权威**（框架起软件 = 那个进程）。
+ * ## ⚠ 那它为什么还在（"载体的代价"，如实记）
  *
- * ⚠ **曾经交一个可选 command**（`/re0-gui`：写 `.mode-request` 请看门人做进程交接）。
- * **三层架构（2026-10-08）删了整条链**：切写权现在走**控制端点**（`.control-port`）、
- * **不动进程** ⇒ "写文件请某某接手"那类东西没有存在理由，本插件**不再交任何 command**。
+ * dsh 的加载形状是"**一条 patch entry 带一个包**"：`dsh/cordis.patch.yml` 里
+ * `- id: re0-mecha / name: './lib/index.mjs'` 既加载**这个包的 host 半**，
+ * 也（经 `package.json` 的 `dsh.client`）把**这个包的 client 半**送进浏览器。
+ * ⇒ 少了这一件，**右栏一个 tab 都没有，而且那是静默的**。
  *
- * **资产是依赖包**：`@mecha/dsh-panel`（`file:` 依赖 ⇒ node_modules 里是 **junction**，
- * 磁盘上只有一份代码）；面板参数经 `panelConfig` 交给骨架注入（未注入时资产会**抛**）。
+ * ⚠ 删它需要**同时**改 `mecha_site.py`（`patches` / `plugin_artifacts`）与
+ * `package.json` 的 exports —— 而"换一种加载方式"是 **dsh 的机制**，不是本仓能定的
+ * ⇒ 保留这个空载体。⚠ 判据：`dsh/test/carrier.test.ts`（本文件**必须**是载体）
+ *   与框架的 `checks/panel_one_leg_selfcheck.py`（**三家同形**、桥不许回来）。
+ *
+ * 安全红线：本插件**不** spawn/kill 任何进程、不写任何文件、也不注册任何路由。
  */
-import type { Context } from '@deepseek-ai/cordis'
-import { buildRequestInit } from '@mecha/dsh-panel/host/config.ts'
-import { hostPluginInject, mountHostPlugin } from '@mecha/dsh-panel/host/mount-host-plugin.ts'
-import { elResolveHubUrl, elRootFromPortFile } from './host/el-hub.ts'
-import { EL_BRIDGE, PLUGIN } from './el-params.ts'
 
-/** Cordis 插件显示名（诊断用）。**取自参数家**（`PLUGIN.name` 是唯一来源）。 */
-export const name = PLUGIN.name
+/** Cordis 插件显示名（诊断用）。 */
+export const name = 're0-mecha'
 
-/**
- * 顶层 `inject`：骨架恒要 `tools`（+ `webServer` 供监控地址路由）。
- * ⚠ 原先还按交权开关另要 `commands`（注册 `/re0-gui`）—— 那条链已删 ⇒ 不再声明它（R17）。
- */
-export const inject = [...hostPluginInject()]
+/** ⚠ **不再需要任何服务**：地址路由归框架、工具面归聚合端点（原先这里要 `tools`）。 */
+export const inject: string[] = []
 
-/** 插件配置（cordis patch 的 entry `config:` 里给；全部可选）。 */
-export interface Config {
-  /** 显式 Hub MCP 端点；留空则从 mcpPortFile 解析。 */
-  hubUrl?: string
-  /** MCP 端口文件路径（框架起软件时由软件写；缺省项目根 `.mcp-port`）。 */
-  mcpPortFile?: string
-  /** 工具命名空间 `mcp__<serverName>__<tool>`；缺省 = `PLUGIN.serverName`。 */
-  serverName?: string
-  /** 远程 Hub 鉴权 token（→ Authorization: Bearer）；本地默认空。需求③远程接缝。 */
-  hubToken?: string
-  /** 额外请求头。 */
-  hubHeaders?: Record<string, string>
-  /** 重连退避：首次延迟 ms（**不给就用桥自己的默认**）。 */
-  reconnectInitialDelayMs?: number
-  /** 重连退避：上限 ms。 */
-  reconnectMaxDelayMs?: number
-  /** 重连最多尝试次数（0=无限后台重连）。 */
-  reconnectMaxAttempts?: number
-}
-
-/**
- * 挂载 host 半：**机制归骨架**，这里只填 EL 的值 + 交一个可选 command。
- *
- * ⚠ `logLabel` **同时就是服务名**（骨架特意把两者合并——拆开会把同一个词写两遍）。
- */
-export async function apply(ctx: Context, config: Config = {}): Promise<void> {
-  // 项目根（`.mcp-port` / `.control-port` / 监控端口文件都在这里）。
-  const root = elRootFromPortFile(config.mcpPortFile)
-
-  await mountHostPlugin(ctx, {
-    serverName: config.serverName || PLUGIN.serverName,
-    logLabel: PLUGIN.name,
-    projectRoot: root,
-    // 端点怎么算是**项目知识**（显式 URL > 端口文件 > 项目默认），骨架不猜；
-    // 它只保存函数引用、每次建会话现解（端口漂移自愈）。
-    resolveUrl: () => elResolveHubUrl(config),
-    clientInfo: { ...EL_BRIDGE.clientInfo },
-    offlineHint: EL_BRIDGE.offlineHint,
-    // 远程 Hub 鉴权头（需求③接缝；本地 hubToken 空 ⇒ 不带头）。
-    requestInit: buildRequestInit(config),
-    // 三个旋钮**只在部署显式给了值时才覆盖**（不给 ⇒ 桥自己的默认；不手抄第二处真值）。
-    reconnect: {
-      initialDelayMs: config.reconnectInitialDelayMs,
-      maxDelayMs: config.reconnectMaxDelayMs,
-      maxAttempts: config.reconnectMaxAttempts,
-    },
-    // ⭐ **不传 `panelConfig`**（2026-10-09）：监控地址路由**上提进框架**了
-    //    （框架的 host 插件按声明 + `MECHA_PANEL_PORT_FILES` 现取端口）
-    //    ⇒ ⚠ **同一条 `routePath` 注册两次是接线错误**，本仓不再注册它。
-    //    ⚠ 这也让参数只剩**一个家**：`energy-level/mecha_site.py` 的 `Service.monitor`
-    //      （本仓的面板参数常量已随之删除）。
-    // ⚠ **不传 `registerCommand`**：那条"写 .mode-request 请看门人接手"的路已随三层架构删除。
-    // 切写权改由**控制端点**（人侧/框架）做 ⇒ 本插件不再交任何 command（也不留死按钮）。
-  })
+/** 空的挂载点：本插件的价值在"**它被加载**"（client 半随之进 dsh），不在它做了什么。 */
+export async function apply(): Promise<void> {
+  // 有意为空（见文件头）。⚠ 不注册任何东西 ⇒ 也不留"按了没反应"的死缝。
 }

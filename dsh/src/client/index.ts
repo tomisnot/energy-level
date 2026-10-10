@@ -34,8 +34,11 @@
  * ⭐ **在声明**（`mecha_site.py` 的 `monitor=MonitorSpec(...)`）—— 框架按它生成那份参数、
  * 由**框架自己的 patch** 带上的 host 插件经同源只读路由交给浏览器。
  * ⭐ **2026-10-09 起连地址路由也归框架**：本仓**不再有**面板参数常量、也**不再注册**那条路由
- * （`mountHostPlugin` 不传 `panelConfig`）⇒ 参数只剩**一个家**，没有"两处必须同值"这回事。
- * ⚠ 判据 `test/re0-panel.test.ts` 钉着"不许再加回来"。
+ * ⇒ 参数只剩**一个家**，没有"两处必须同值"这回事。
+ * ⭐ **2026-10-10（方案 A）**：本仓的 host 半（`src/index.ts`）也退成**空载体**了 ——
+ * 那条"项目自己接 MCP"的自愈桥**整块删除**（工具面只有一条腿 = 框架的聚合端点）。
+ * 所以本文件里**不会**再出现 `mountHostPlugin` 那类名字。
+ * ⚠ 判据 `test/re0-panel.test.ts` 与 `test/carrier.test.ts` 钉着"不许再加回来"。
  *
  * ⚠ client 半经 tsdown 打成 CJS + `__ModuleLoader__.load` 包装；改本目录源码后须
  * `npm run bundle` 并重启 dsh 才生效。

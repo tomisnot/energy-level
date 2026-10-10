@@ -12,7 +12,7 @@
  * | ⭐ **"EL_PANEL 与声明两处同值"** | ⭐ **结构**：**只剩一个家**（`mecha_site.py` 的 `Service.monitor`）⇒ 没有第二个可漂的值；"声明 → 那份参数 → 每个 tab 各读各的"由 mecha 的 `phase13_panel_decl_selfcheck`（夹具↔三家真声明对拍）与 `panel/auto.test.ts`（②③）守 |
  * | ⭐ **"地址路由读 `.monitor-port` 现取端口"** | ⭐ **框架的 host 插件**：`mecha/dsh-panel/host-plugin/mecha-panel-host.test.ts`（含**与资产实现的等价判据**） |
  *
- * 本文件只守**EL 自己的接线**（三条，都会红）：
+ * 本文件只守**EL 自己的接线**（五条，都会红）：
  *  1. ⭐ **那一行 bootstrap**：client 半必须接上**框架的** client 插件
  *     （少了它 = 右栏一个 tab 都没有，而那不会报错）；
  *  2. ⭐ **不许再自己注册面板/地址路由**（`panelConfig` / `EL_PANEL` **不许回来**）：
@@ -20,6 +20,9 @@
  *  3. **反面语料**：历史默认端口 `8767` 不许出现在 EL 的面板源码里；
  *  4. ⭐ **EL 入口 + 资产包 的 import 闭包里没有 `node:*`**——闭包**跟着 junction 走**，
  *     所以它同时证明：资产包真的被解析到、且它的 client 半没把 node-only 模块拖进浏览器 bundle。
+ *  5. ⭐ **2026-10-10（方案 A）：host 半必须是空载体** —— 那条"项目自己接 MCP"的
+ *     自愈桥整块删除了；`src/host/` 不存在、`el-params.ts` 不存在、`mountHostPlugin`
+ *     与 `@mecha/dsh-panel/host/` **不许**出现在本仓源码里（工具面只有一条腿）。
  *
  * 跑：`npm test`（同仓其余单测一起）。
  */
@@ -160,4 +163,31 @@ test('⭐ 那个唯一家还在：`mecha_site.py` 里有 monitor=MonitorSpec(...
   assert.match(decl, /monitor=MonitorSpec\(/, '声明里没有 monitor=MonitorSpec(...)')
   assert.match(decl, /route_path="/, '声明里 monitor 缺 route_path（框架按它注册地址路由）')
   assert.match(decl, /port_file="/, '声明里 monitor 缺 port_file（框架按它现取端口）')
+})
+
+// ---------------------------------------------------------------- 6 ⭐ 空载体（方案 A）
+test('⭐ host 半是**空载体**：桥那套不许回来（工具面只有一条腿 = 框架的聚合端点）', () => {
+  // ⚠ 这是 **2026-10-10 用户裁决（方案 A）** 的机器守卫。为什么非要钉：
+  //   桥是"每个项目自己接 MCP"时代的产物，而聚合端点是**后加的** ⇒ 两条腿并存时
+  //   ① 只开一家也会加载别家的桥（`merge_dsh` 的 patches 是全站点并集）；② 工具名重复；
+  //   ③ ⭐ **能力不等**：写权/开关元工具只在聚合端点那条腿上。
+  //   ⇒ 删掉桥之后，三家**接法相同**；⚠ 代价（用户已认）：不经 mecha 单独跑 dsh 时无工具。
+  const idx = stripComments(read('index.ts'))
+  for (const needle of ['mountHostPlugin', 'hostPluginInject', 'dsh-panel/host']) {
+    assert.ok(!idx.includes(needle), `host 半不许再出现 ${needle}（桥已按方案 A 删除）`)
+  }
+  assert.match(idx, /export const inject: string\[\] = \[\]/,
+    'host 半必须**不依赖任何服务**（`inject = []`）——它只是载体')
+  assert.match(idx, /export async function apply\(\)/,
+    'host 半的 apply **不许**再接受 ctx/config（没有桥要装了）')
+
+  // 结构性：桥的家（`src/host/`）与桥的参数家（`el-params.ts`）都**不该存在**。
+  const src = sourceFiles()
+  assert.ok(!src.some(f => f.startsWith('host/')),
+    `src/host/ 又出现了（桥的家）：${src.join('、')}`)
+  assert.ok(!src.includes('el-params.ts'),
+    `el-params.ts 又出现了（桥的参数家）：${src.join('、')}`)
+  // R8 自证：本判据确实读到了源码（不是"文件都不存在所以全绿"）
+  assert.ok(src.includes('index.ts') && src.includes('client/index.ts'),
+    `判据没读到本仓源码：${src.join('、')}`)
 })

@@ -1,6 +1,20 @@
 # re0-mecha-dsh —— Re0 软件的 dsh 集成插件
 
-> ⚠ **旧库引用横幅（2026-09-25 加，主代理指令）**：本文主体（插件架构/加载/配置）仍有效；
+> ## ⛔ 2026-10-10：**自愈 MCP 桥已整块删除**（用户裁决 = 方案 A）—— 读本文前先看这条
+>
+> **工具面只有一条腿**：**框架的聚合端点**（dsh 侧由框架的 overlay 插
+> `@deepseek-ai/dsh-mcp-client`，EL 的工具名形如 `mcp__mecha__el_<tool>`，
+> **读/切写权与开关软件的元工具也在那条腿上**）。
+> ⇒ 本仓以下东西**已删除**：`src/host/`（`el-hub.ts` + 桥）、`src/el-params.ts`、
+> `test/config.test.ts`、`test/reconnect.test.ts`，以及依赖 `@modelcontextprotocol/sdk` / `ws`。
+> ⭐ **现状**：本包只有**面板**那一件事 —— host 半 = **空载体**（只为"一条 patch entry 带一个包"
+> 的加载形状），client 半 = 框架面板插件的**一行 bootstrap**。
+> ⚠ **代价（用户已认）**：**不经 mecha 单独跑 dsh 时，不再出现任何 EL 工具**。
+> ⚠ 反向判断：`dsh/test/re0-panel.test.ts` §6 与框架的 `checks/panel_one_leg_selfcheck.py`。
+> ⚠ **本文中凡描述"接管 MCP 连接生命周期 / 建桥 / 注册工具 / SDK 依赖"的段落都已失效**，
+> 原样保留只作历史记录（那段死区分析本身仍成立，只是**不再由本插件解决**）。
+>
+> ## ⚠ 旧库引用横幅（2026-09-25 加，主代理指令）：本文主体（插件架构/加载/配置）仍有效；
 > 其中提到 **`mecha-sdk`** 的地方只是**历史背景**（v1 的 client 半随该旧库一起消失）。
 > EL 现运行的框架是 **`mecha` 0.2.0**（本机位置见 `README.md` §4），
 > 与 0.1.0 模块集完全不同，故凡引用 `mecha-sdk/...py:行号` 的段落**已失效**，
@@ -44,8 +58,10 @@ types/dsh-shims.d.ts       本地最小类型 shim（@deepseek-ai/* 是宿主提
 
 ## 加载
 
-**⚠ 首次/新检出必先装依赖**：host 代码 import `@modelcontextprotocol/sdk` + `ws`，缺
-`dsh/node_modules` 则 dsh 加载插件即崩（`ERR_MODULE_NOT_FOUND: @modelcontextprotocol/sdk`）。
+**⚠ 首次/新检出仍需装依赖**：本包的 **client 半**要从 `@mecha/dsh-panel`（`file:` 依赖，
+junction 指向 mecha 仓）取框架那份面板插件 —— 缺 `dsh/node_modules` 时**构建**就失败。
+⚠ **2026-10-10 起 host 半不再 import `@modelcontextprotocol/sdk` / `ws`**（桥已删）
+⇒ "dsh 加载插件即崩 `ERR_MODULE_NOT_FOUND`"那个故障模式随桥一起消失。
 node_modules 不入 git，故覆盖/检出后必须重装：
 
 ```sh
@@ -61,6 +77,11 @@ dsh web --patch ./dsh/cordis.source.patch.yml
 cd dsh && npm run bundle && cd ..
 dsh web --patch ./dsh/cordis.patch.yml
 ```
+
+⚠ **本插件现在只提供"面板 + 载体"**：AI 的工具面**不来自本包**（`mcp` 那类工具）
+—— 它由**框架的聚合端点**提供（`python -m mecha` 起 dsh 时经 overlay 插入的
+`@deepseek-ai/dsh-mcp-client`）。单独 `dsh web --patch ./dsh/cordis.patch.yml`
+只能看到面板，**看不到任何 EL 工具**（方案 A 的既定代价）。
 
 配置（在 patch/profile 里给该 entry 的 `config`）：
 

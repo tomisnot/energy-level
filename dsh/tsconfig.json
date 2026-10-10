@@ -4,8 +4,10 @@
     "module": "esnext",
     "moduleResolution": "bundler",
     // ⭐ 必须开：`@mecha/dsh-panel` 经 **junction** 装进来，TypeScript 默认按资产的
-    // **真实路径**去找它的依赖 ⇒ 找不到装在本仓的 `@modelcontextprotocol/sdk`
-    // （TS2307，连带 TS7006）。开了之后按 node_modules 里的链接路径解析。
+    // **真实路径**去找它的依赖 ⇒ 会按 mecha 仓那份去找（TS2307，连带 TS7006）。
+    // 开了之后按 node_modules 里的链接路径解析。
+    // ⚠ **2026-10-10**：原先这条注释举例的是装在本仓的 `@modelcontextprotocol/sdk`
+    // —— 那个依赖随**自愈 MCP 桥**一起删了；这一项仍然要留（资产本体就在 junction 后面）。
     "preserveSymlinks": true,
     "lib": ["es2023", "dom"],
     "strict": true,
@@ -31,5 +33,5 @@
     "rootDir": ".",
     "types": ["node"]
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "test/**/*.ts", "types/**/*.d.ts"]
+  "include": ["src/**/*.ts", "src/**/*.tsx", "test/**/*.ts"]
 }

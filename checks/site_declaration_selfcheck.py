@@ -5,9 +5,12 @@
 
 - **A** 声明能被框架按约定加载：`mecha.launch.load_sites()`（`MECHA_SITE_ROOTS` 指本仓根）
   ⇒ 拿到 `Site`、`services` 里有 `EL`、`validate()` 不抛（框架在加载时已调一次，这里显式再来）；
-- **B** `ready` 的**跨语言单一事实**：声明的 `port_file` 必须与 Python 侧
-  （`src/v2_bind.py` 的默认发现文件）**和** dsh 插件侧（`dsh/src/el-params.ts` 的 `mcpPortFile`）
-  是**同一个名字**——三处任一漂了，"面板连不上/服务判不就绪"就会在**两个语言**之间对不上。
+- **B** `ready` 的**跨语言单一事实**：声明的 `port_file` 必须与软件侧
+  （`src/v2_bind.py` 的默认发现文件）是**同一个名字**——两处任一漂了，"服务判不就绪"就会
+  在**两个语言**之间对不上。
+  ⭐ **2026-10-10 收窄**：原口径还有第三处（dsh 插件侧 `dsh/src/el-params.ts` 的
+  `mcpPortFile`）—— 那处随**自愈 MCP 桥**一起删了（方案 A：工具面只有一条腿 = 框架的
+  聚合端点）⇒ 现在这里反过来钉住"**dsh 侧不许再长出第二条腿**"（反向判断）。
   ⚠ 同时钉住 `ok_codes=()`：**实测** `GET /mcp` 回 406（该端口上无 2xx 路由）⇒ 不许改回默认；
 - **C** ⭐ **状态根环境变量已钉死**（§5.6）：`RE0_V2_DATA_ROOT` 必须等于声明的 `data_root`
   （否则换腿后看到另一份 journal，且**无任何报错**）；`EL_NO_AI_SERVER` 必须**存在且为假值**
@@ -78,13 +81,39 @@ C.group('A 框架能按约定加载本仓声明（load_sites + validate）', [
 _pf = _svc.ready.port_file if (_svc and _svc.ready) else None
 _ok_codes = _svc.ready.ok_codes if (_svc and _svc.ready) else 'N/A'
 _v2 = (ROOT / 'src' / 'v2_bind.py').read_text(encoding='utf-8')
-_ts = (ROOT / 'dsh' / 'src' / 'el-params.ts').read_text(encoding='utf-8')
-C.group('B ready：端口文件名是**跨语言单一事实**，且 ok_codes 与实测一致', [
+
+
+def _strip_comments(src: str) -> str:
+    """剥掉 TS 注释（`//` 与 `/* */`）。
+
+    ⚠ **必须剥**：下面两条反向判断问的是"**代码**里还有没有桥"，而**注释里解释
+    "桥已删/不许回来"是该留的**（否则下一个人查不到为什么不能走老路）。
+    本轮**实测踩到**：载体文件的 docstring 里写了 `mountHostPlugin` 三个字 ⇒
+    不剥注释就把它自己的判据弄红了（与 EL `dsh/test/re0-panel.test.ts` 同一条教训）。
+
+    ⚠ 不许把 `http://…` 里的 `//` 当注释（`[^:]` 那一位）。
+    """
+    import re as _re
+    src = _re.sub(r'/\*.*?\*/', '', src, flags=_re.S)
+    return _re.sub(r'(^|[^:])//.*$', r'\1', src, flags=_re.M)
+
+
+#: ⭐ **dsh 侧的代码**（剥注释后；用来做反向判断：那条"项目自己接 MCP"的腿**已经删除**，
+#: 不许长回来）。⚠ 读**真文件**（R14：gitignore 的产物也要搜；这里读 src 下所有 .ts）。
+_dsh_src = _strip_comments('\n'.join(
+    p.read_text(encoding='utf-8')
+    for p in sorted((ROOT / 'dsh' / 'src').rglob('*.ts'))
+))
+C.group('B ready：端口文件名是**跨语言单一事实**（软件 ↔ 声明），且 dsh 侧**不再**有第二条腿', [
     ('声明里的 port_file = %r' % _pf, _pf == '.mcp-port'),
     ('Python 侧（src/v2_bind.py）用的是同一个名字',
      _pf is not None and ('"%s"' % _pf) in _v2),
-    ('dsh 插件侧（dsh/src/el-params.ts 的 mcpPortFile）也是同一个名字',
-     _pf is not None and ("mcpPortFile: '%s'" % _pf) in _ts),
+    ('⭐ **反向判断**：dsh 侧不再解析 MCP 端点（`mcpPortFile` / `hubUrl` 一个都不许有）'
+     '—— 工具面只有一条腿 = 框架的聚合端点（方案 A，2026-10-10）',
+     'mcpPortFile' not in _dsh_src and 'hubUrl' not in _dsh_src),
+    ('⭐ **反向判断**：dsh 侧不再 import 自愈桥那套'
+     '（`mountHostPlugin` / `@mecha/dsh-panel/host/` 都不许有）',
+     'mountHostPlugin' not in _dsh_src and 'dsh-panel/host/' not in _dsh_src),
     ('ok_codes=()（实测 GET /mcp 回 406，该端口无 2xx 路由 ⇒ 不放宽则永远不就绪）',
      isinstance(_ok_codes, tuple) and len(_ok_codes) == 0),
     ('probe 打的是 /mcp（不是根路径：GET / 回 404）',
