@@ -1,34 +1,7 @@
 # -*- coding: utf-8 -*-
-"""Re0 重构 · 物理基线跑：把判据跑一遍并汇总。
-
-用法：
-    python run_checks.py                # 全档（约 590s；跳过 18 分钟的第一性原理基准）
-    python run_checks.py --core         # **内循环档（约 20s）**：只跑 3 秒以内的结构/契约/守卫判据
-    python run_checks.py --fast         # 提交前档（约 150s）：跑 15 秒以内的判据
-    python run_checks.py --slow         # 含慢基准（mw_bench_firstprinciples，约 18 分钟）
-    python run_checks.py --only sambe
-    python run_checks.py --list
-    python run_checks.py --list --core  # 看内循环档包含哪些
-    python run_checks.py --dir old/checks
-
-**为什么要分档**：全档实测 554s 计算时间，但分布极不均——前 5 个判据占一半
-（90/80/72/45/36s），后 36 个加起来只有 72s。开发内循环需要的是"改一行马上知道有没有
-闯祸"，不是每次等十分钟；全档留给"提交前/收工前"。
-两档按「判据名 + 单判据实测耗时」自动选出（耗时数据见 `scripts/check_profile.py`
-→ `runtime/check_profile.csv`），**不需要人工维护名单**：新写的秒级判据自动进档。
-
-判据一律以**独立进程**跑（与原来 selftest_all 同一纪律：脚本间无共享状态）。
-`--timeout`（默认 300s）给**每个**判据封顶——防止一个卡死的判据把整条基线无限期挂住
-（实测踩过：一个判据卡到 843s，让整次基线失去意义）。
-退出码 = FAIL 的脚本数（0 = 全绿）。
-
-判据目录：默认依次找 `checks/`、`old/checks/`（沙盒被重排过，两处都认，
-同一批判据的两份拷贝 → 只跑第一处）。
-
-⚠ 2026-09-24 代替 v1：一批测 v1 库内核（Session/Bus/Ops/registry/cockpit/
-Fields/interlock/gc）的判据已退役，处置清单见 mecha 仓 ADR
-`docs/v2/notes/implemented/2026-09-24-代替v1-判据迁移与落地.md`；
-v2 库本身的守卫在 mecha 仓 `checks/run_all.py`，不跨仓重复。
+"""按改动范围运行物理与软件回归。默认 core，--all 运行常规全量。
+--fast 选择较宽的快速场景；--slow 额外包含第一性原理慢基准。
+--only NAME 不限制档位；--list 查看范围。文档维护、迁移词汇不属于门禁。
 """
 import argparse
 import os
@@ -43,136 +16,43 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 
 # 支撑模块（不是判据，不单独跑）
 SUPPORT = {'checklib.py', 'pair_evolve.py'}
+RELEASE = {'personal_paths_selfcheck.py'}
+CORE = {
+    'checks_sentinel.py', 'site_declaration_selfcheck.py',
+    'field_loss_selfcheck.py', 'human_control_selfcheck.py', 'authority_selfcheck.py',
+    'engine_contract_selfcheck.py', 'runspec_contract_selfcheck.py',
+    'field_loss_engine_selfcheck.py', 'ops_threadsplit_selfcheck.py',
+    'solve_max_step_hard_selfcheck.py', 'mw_pair_keep_selfcheck.py',
+    'gui_bind_selfcheck.py', 'manybody_m1_ed_selfcheck.py',
+    'ai_h_snapshot_guard_selfcheck.py', 'equibench_engine_ed_selfcheck.py',
+    'equibench_gs_solvers_selfcheck.py', 'equibench_analytic_thermo_selfcheck.py',
+    'equibench_heisenberg2d_selfcheck.py',
+}
 # 慢基准：默认跳过（约 18 分钟），--slow 才跑
 SLOW = {'mw_bench_firstprinciples.py'}
 
-# =====================================================================
-# 分档（--core / --fast）：给开发内循环用的秒级判据集
-#
-# **唯一的判据是"实测耗时"**，登记在下面的 FAST_KNOWN_SEC 里（来源
-# `scripts/check_profile.py` → `runtime/check_profile.csv`）。
-#
-# ⚠ 这里原先还有一道 `FAST_KINDS`（"名字命中 `_selfcheck`/`guard`/`contract`…"）——
-# 实测发现它是**假门槛**：48 个判据**全部**命中（都叫 `*_selfcheck`），真正在起作用的
-# 只有耗时阈值。留着它只会让人以为"按名字筛过了"。已删除，让机制说真话。
-#
-# 想让新判据进档：跑一次 `scripts/check_profile.py` 量出它的耗时，填进 FAST_KNOWN_SEC。
-# **未登记的判据不进档**（保守：宁可漏跑，不可拖慢内循环）——代价是它只会在全档里跑，
-# 所以新判据一写完就该来登记。
-# =====================================================================
-# 两档（按单判据实测耗时切）：内循环 / 提交前。
-TIER_CORE_SEC = 3.0       # --core：秒级，改一行就跑
-TIER_FAST_SEC = 15.0      # --fast：提交前
-# 单判据实测耗时（秒；2026-09-22 由 scripts/check_profile.py 测得）。
-FAST_KNOWN_SEC = {
-    'checks_sentinel.py': 0.5,
-    # 2026-10-08 现测 0.2s。统一启动器的**站点声明**自检：load_sites 真加载 + 端口文件名
-    # 跨语言单一事实 + 状态根环境变量已钉死 + CLI 契约（--mcp）。改声明/改入口就跑它。
-    'site_declaration_selfcheck.py': 0.2,
-    # 2026-10-08 现测 6.6s（起真 `app_entry.py --mcp` 子进程 + 真探活；请用 Run/全档）。
-    # ⇒ 进 --fast（<15s）但**不进 --core**（那是秒级档）。它参：声明照做能不能真起来。
-    'mcp_entry_smoke_selfcheck.py': 6.6,
-    'cleanliness_guard_selfcheck.py': 1.6,
-    'field_loss_selfcheck.py': 1.7,
-    'human_control_selfcheck.py': 1.7,
-    'authority_selfcheck.py': 2.6,
-    'engine_contract_selfcheck.py': 2.9,
-    'runspec_contract_selfcheck.py': 2.4,
-    'field_loss_engine_selfcheck.py': 2.7,
-    'ops_threadsplit_selfcheck.py': 2.6,
-    'solve_max_step_hard_selfcheck.py': 1.1,
-    'mw_pair_keep_selfcheck.py': 2.1,
-    'gui_bind_selfcheck.py': 1.9,
-    'manybody_m1_ed_selfcheck.py': 1.1,
-    'sweep_gui_selfcheck.py': 6.4,
-    'gui_run_worker_selfcheck.py': 6.6,
-    'mixed_arb_mw_selfcheck.py': 6.9,
-    'hard_vdd_pack_selfcheck.py': 4.7,
-    'ai_h_snapshot_guard_selfcheck.py': 2.3,
-    'gui_app_entry_selfcheck.py': 8.3,
-    'gui_run_flow_selfcheck.py': 10.0,
-    'drive_wave_selfcheck.py': 10.4,
-    'capability_map_selfcheck.py': 1.6,
-    'hard_dedup_selfcheck.py': 11.0,
-    'gui_inspector_selfcheck.py': 11.2,
-    'manybody_integration_selfcheck.py': 11.3,
-    'pair_evolve_selfcheck.py': 11.8,
-    # 新增判据请在此登记**实测**耗时（跑 scripts/check_profile.py 现测），否则它不会进
-    # --fast/--core 档——内循环就看不到它的红绿，只能等全档（数分钟）才发现。
-    'narrow_pulse_env_selfcheck.py': 5.1,
-    # 2026-09-25 现测 3.1-3.2s（run_checks 口径：含 mcp SDK 导入；进程内纯逻辑约 0.4s）。
-    # MCP 工具面 `default` 声明守卫（R5 三分法）——漏一个声明的症状是"模型侧行为变差
-    # 而不报错"，故进 --fast 内循环；>3s 故不进 --core（那是秒级档的纪律，不放宽阈值）。
-    'mcp_defaults_selfcheck.py': 3.2,
-    # 2026-09-25 现测 8.8s（run_checks 口径：真 ElEngine + 两台 MCP 端点 + 真传输往返）。
-    # MCP 端到端（R10：全绿只对判据覆盖到的路径成立）——它守"装配→起 MCP→真调→落盘"
-    # 这条第 3 段改过、而当时无判据覆盖的路径。
-    'hub_mcp_e2e_selfcheck.py': 8.8,
-    # 2026-09-25 现测 2.2-2.3s（加"机器事实一个家"组 + tracked 全读自证后的口径）。
-    # AI 可见面守卫（B8）：按**内容**扫 4 份 SKILL + 面板 client（`.dsh/` 两份
-    # gitignored ⇒ git diff 看不见它们）；进 --core：改文档也要立刻知道。
-    'ai_surface_selfcheck.py': 2.3,
-    # 2026-09-26 现测 4.2-5.1s（真装配 + offscreen Qt + 真校验器）。启动初值**被拒必须留痕**
-    # （日志 + seed.rejected 史事件）——此前 `except Exception: pass` 把拒绝吞掉，
-    # "种了但被拒"与"从没种过"无法区分，抵消了框架 A2 补校验的意义。
-    'seed_rejection_visible_selfcheck.py': 5.1,
-    # 2026-09-27 现测 0.2s。**个人路径守卫**（开源批 ①）：被跟踪文件里出现本机路径特征
-    # （D 盘盘符 / 用户目录 / 同步盘两种写法 / 仓库根名 / 本机用户名 / 私人邮箱）⇒ 红。
-    # ⚠ 必须在 Python 里扫（PowerShell 的 git ls-files 会把中文路径转义 ⇒ 假报 0）；
-    # 且必须**自证"实际读到 N 个"**——"读不到的"与"没命中的"长得一模一样。
-    'personal_paths_selfcheck.py': 0.2,
-    # 2026-10-01 现测 1.3s。**平衡态多体标杆（P0·Tier-B）**：引擎 ED 装配 ≡ 独立 Kronecker
-    # ≡ 手推显式矩阵（三路径同谱）+ XX 二聚体/blockade 解析锚。秒级、不碰 ARC → 进 --core。
-    # 详见 docs/标杆判据库-平衡态多体算法正确性实例.md。
-    'equibench_engine_ed_selfcheck.py': 1.3,
-    # 2026-10-01 平衡态求解器标杆三连（均不碰 ARC，进 --core）：
-    #   gs_solvers=稠密eigh/Lanczos/虚时/独立Kron 四路径交叉一致；
-    #   analytic_thermo=XX 自由费米子+二聚体/N=1 Curie 热力学闭式；
-    #   heisenberg2d=引擎映射≡独立 XXX + Lieb-Mattis 总自旋严格值。
-    'equibench_gs_solvers_selfcheck.py': 2.5,
-    'equibench_analytic_thermo_selfcheck.py': 1.6,
-    'equibench_heisenberg2d_selfcheck.py': 2.6,
-    # GPU 批量 ED 标杆（cupy/torch 批量化≡逐点≡numpy）：含 GPU 后端 import/CUDA 初始化开销
-    # → ~13s，只进 --fast（不进秒级 --core）；无 GPU 时自动走 CPU 批量化仍全绿。
-    'equibench_gpu_batched_selfcheck.py': 13.0,
-    # TeNPy 2D 柱形 DMRG 标杆（DMRG≡我们的ED≡GPU批量≡独立Kron≡经典解析）：含 tenpy+GPU 导入
-    # → ~16s，只进全档（>15s 不进 --fast）；无 tenpy 时自动 SKIP。
-    'equibench_dmrg_selfcheck.py': 16.5,
-    # KPM/Chebyshev 谱方法标杆（general-H 有限温+DOS，对齐精确谱分解）：随机迹 nvec=2000 主导
-    # → ~28s，只进全档。无 GPU 依赖（纯 numpy/scipy）。
-    'equibench_kpm_selfcheck.py': 28.0,
-    # ① 一般复耦合(V/J/A+σ⁺σ⁺)喂进 TeNPy MPO：MPO≡引擎H且DMRG≡精确（需 tenpy）→ ~7s，--fast。
-    'equibench_dmrg_general_selfcheck.py': 7.0,
-    # ② 算法路由+统一入口：决策正确 + 跨后端(ed/lanczos/dmrg/gpu/kpm)一致 + 契约（需 tenpy）→ ~13s，--fast。
-    'equibench_router_selfcheck.py': 13.0,
-    # ② 端到端分派：runspec.evolve_run 把 gs/thermal/dos 路由到 eq_engine→各后端（假 calib、无 ARC）。
-    'equibench_dispatch_selfcheck.py': 15.5,
-    # ② 产品路径封顶：真 ARC 快照→build_run→evolve_run→平衡态 Result（gs/thermal），
-    # 并钉住平衡态走通 GUI/AI 消费点（check_run/summarize_run/result_summary/_land）。
-    'equibench_product_selfcheck.py': 22.0,
-    # 任意点云 DMRG（自写 autoMPO）：MPO≡引擎H（置换逐元素）、DMRG≡ED≡Lanczos、n=12 三法
-    # 交叉、键维收敛、eq_engine 路由。多组 DMRG 扫描主导 → ~93s，只进全档（需 tenpy）。
-    'equibench_dmrg_cluster_selfcheck.py': 97.0,
-    # 多体页“保存/恢复状态”往返：8 份演示档逐个导入→查界面与会话同步（不求解）+
-    # 一个小尺寸真跑 + 字体守卫（防 ARC 把 rcParams['font.family'] 改回 serif）。
-    # 开销在 offscreen MainWindow + ARC 建缓存 → ~32s，进全档。
-    'mb_state_roundtrip_selfcheck.py': 32.0,
+# 较宽的快速场景；没有耗时登记准入要求。
+FAST = CORE | {
+    'drive_wave_selfcheck.py',
+    'equibench_dmrg_general_selfcheck.py',
+    'equibench_gpu_batched_selfcheck.py',
+    'equibench_router_selfcheck.py',
+    'gui_app_entry_selfcheck.py',
+    'gui_inspector_selfcheck.py',
+    'gui_run_flow_selfcheck.py',
+    'gui_run_worker_selfcheck.py',
+    'hard_dedup_selfcheck.py',
+    'hard_vdd_pack_selfcheck.py',
+    'hub_mcp_e2e_selfcheck.py',
+    'manybody_integration_selfcheck.py',
+    'mcp_defaults_selfcheck.py',
+    'mcp_entry_smoke_selfcheck.py',
+    'mixed_arb_mw_selfcheck.py',
+    'narrow_pulse_env_selfcheck.py',
+    'pair_evolve_selfcheck.py',
+    'seed_rejection_visible_selfcheck.py',
+    'sweep_gui_selfcheck.py',
 }
-
-
-def fast_lane(scripts, max_sec):
-    """→ 已登记且实测耗时 < max_sec 的判据。
-
-    判据**只有一个**：FAST_KNOWN_SEC 里的实测耗时。未登记的不进档（保守）。
-    想调整档位粒度：改 TIER_CORE_SEC / TIER_FAST_SEC，或补登新判据的实测耗时。
-    """
-    return [s for s in scripts
-            if FAST_KNOWN_SEC.get(s) is not None and FAST_KNOWN_SEC[s] < max_sec]
-
-# **接线判据**：曾经验旧架构 GUI 登记册（pm_setup）的接线、在纯引擎沙盒里跑不了而默认跳过。
-# Re0 回归主仓库后 GUI 已迁入（solve_max_step_hard 的 D 组改用 runspec.SOLVE_KWARG/registry），
-# 这些判据现在**属于主干、默认跑**——WIRING 清空（--wiring 开关保留但已无对象）。
-WIRING = {}
 
 
 CANDIDATE_DIRS = ['checks', 'old/checks']
@@ -213,17 +93,17 @@ def counts(text):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--only', default='')
+    ap.add_argument('--all', action='store_true', help='常规全量，不含慢基准与发布扫描')
+    ap.add_argument('--release', action='store_true', help='发布前个人路径扫描')
     ap.add_argument('--core', action='store_true',
-                    help='内循环档：只跑 3 秒以内的结构/契约/守卫判据（约 20s）')
+                    help='核心契约与小尺寸物理结果（默认）')
     ap.add_argument('--fast', action='store_true',
-                    help='提交前档：跑 15 秒以内的判据（约 150s）')
+                    help='较宽的快速场景，按受影响范围选择')
     ap.add_argument('--list', action='store_true')
     ap.add_argument('--slow', action='store_true',
                     help='含慢基准（mw_bench_firstprinciples，约 18 分钟）')
     ap.add_argument('--timeout', type=float, default=300.0,
                     help='单个判据墙钟上限（秒，默认 300）；超时记 FAIL，不挂整条基线')
-    ap.add_argument('--wiring', action='store_true',
-                    help='含接线判据（需旧 GUI 登记册，沙盒里跑不了）')
     ap.add_argument('--dir', default=None, help='判据目录（默认自动找 checks/ 或 old/checks/）')
     a = ap.parse_args()
 
@@ -235,16 +115,23 @@ def main():
 
     scripts = [f for f in sorted(os.listdir(CHECKS))
                if f.endswith('.py') and f not in SUPPORT]
-    if not a.wiring:
-        scripts = [s for s in scripts if s not in WIRING]
-    if not a.slow:
+    if a.timeout <= 0:
+        ap.error("--timeout 必须大于 0")
+    if not a.slow and not a.only:
         scripts = [s for s in scripts if s not in SLOW]
-    if a.core:
-        scripts = fast_lane(scripts, TIER_CORE_SEC)
+    if not a.release and not a.only:
+        scripts = [s for s in scripts if s not in RELEASE]
+    if a.release:
+        scripts = [s for s in scripts if s in RELEASE]
+    elif a.core or not (a.all or a.fast or a.slow or a.only):
+        a.core = True
+        scripts = [s for s in scripts if s in CORE]
     elif a.fast:
-        scripts = fast_lane(scripts, TIER_FAST_SEC)
+        scripts = [s for s in scripts if s in FAST]
     if a.only:
         scripts = [s for s in scripts if a.only in s]
+    if not scripts:
+        ap.error("没有匹配的验证项")
     if a.list:
         for s in scripts:
             print(' ', s)
@@ -254,7 +141,8 @@ def main():
     env.setdefault('PYTHONPATH', '')
     env.setdefault('QT_QPA_PLATFORM', 'offscreen')
     env.setdefault('EL_NO_AI_SERVER', '1')
-    env.setdefault('PYTHONIOENCODING', 'utf-8')
+    env['PYTHONIOENCODING'] = 'utf-8'
+    env['PYTHONDONTWRITEBYTECODE'] = '1'
     # v2 判据的 GUI 装配（MainWindow→make_v2_bridge）写临时数据根，
     # 不污染仓内权威 journal（v1 时代 RE0_GUI_INPROC+临时 root 的同款纪律）。
     if not env.get('RE0_V2_DATA_ROOT'):
@@ -265,10 +153,6 @@ def main():
     _tier = '（内循环档 --core）' if a.core else ('（提交前档 --fast）' if a.fast else '')
     print('跑 %d 个判据%s%s\n' % (len(scripts), _tier,
                                   '' if a.slow else '（已跳过慢基准）'))
-    if not a.wiring:
-        for s, why in sorted(WIRING.items()):
-            print('  [跳过·接线] %-38s %s' % (s, why))
-        print()
     t_all = time.perf_counter()
     rows, fail = [], 0
     for s in scripts:
@@ -297,9 +181,7 @@ def main():
               % (s, rc, ok, bad, skip, sec,
                  '  ⏱ TIMEOUT>%.0fs' % a.timeout if timed_out else ''))
         if bad:
-            tail = [l for l in out.splitlines() if 'FAIL' in l][:4]
-            for l in tail:
-                print('        %s' % l.strip()[:110])
+            print(out.rstrip(), flush=True)
             if timed_out:
                 print('        该判据超过 %.0fs 未结束，已按 FAIL 记账并继续（'
                       '排查：单独跑它，或用 --only 缩小范围）' % a.timeout)

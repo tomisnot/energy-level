@@ -9,8 +9,7 @@ whenToUse: 当需要操控 Energy Level 软件（改参数、加能级组、配�
 > 本文件是 AI harness 的 skill 说明书：连接方式、工具清单、工作流、单位约定、
 > 物理坑。AI 使用中若发现文档与实态不符，应回头修正本文件（自我迭代）。
 > **本版对齐 mecha v2**：工具面 = `mecha_v2/tools.py` 注册的 MCP 工具，共 **14 个**
-> （清单见下方「## 工具清单」表；该表由 `checks/ai_surface_selfcheck.py` 的 C 组与真
-> 注册表**双向互钉**，多一个/漏一个即判据红）。宿主 MCP 面**就是**这张注册表，
+> 常用工具见下方「## 工具清单」表；完整工具和参数以宿主提供的注册 schema 为准。宿主 MCP 面来自注册表，
 > **没有**额外的 `list_tools` 工具可调。v1 的 GUI 内嵌 AI 面
 > （run_python/submit_sweep/get_diag/screenshot/set_groups…）**在 v2 不存在**，
 > 见末节"v2 暂缺的能力"。
@@ -251,13 +250,7 @@ env 采样   = √[ (1 + δ(t)) / (1 + b) ]    # 峰值恰为 1
 | `.dsh/skills/energy-level/SKILL.md` | **镜像**（须与权威**逐字节相同**） | dsh 加载 |
 | `.dsh/skills/re0-mecha/SKILL.md` | **工作副本**（另一份文档：独立坑列表 + v1→v2 工具名对照） | **AI 实际读的那份** |
 
-改法与纪律：
+维护方式：
 
-- 先改**权威**，再同步镜像与工作副本。工具面的**唯一来源是注册表**
-  （`mecha_v2/tools.py`）；本文件的「工具清单」表与它互钉，**不许在别处再手抄一份**。
-- ⚠ **`.dsh/` 是 gitignored**：`git diff` / `git status` / 门禁**都看不见那两份**——
-  历史上正因此漏改过一处固定端口，而它恰是 AI 真正读的那份。查漂移要**按内容扫**：
-  `python run_checks.py --only ai_surface`（禁固定端口、禁退役工具名的活指令、
-  三份工具面一致、镜像逐字节一致）。
-- 新增第四份副本时**必须**登记进 `checks/ai_surface_selfcheck.py` 的 `SURFACES`：
-  未登记的文件会被该守卫判为违规（"漏登记"本身违规）。
+说明书侧重领域知识与工作流，完整能力由宿主工具 schema 提供。修改常用工具后检查受影响示例即可，不要求每个能力逐名出现在文档。
+技能通过 scripts/link_skills.py 链接到工作区，避免维护独立副本；不扫描整个仓库要求所有 SKILL.md 登记。

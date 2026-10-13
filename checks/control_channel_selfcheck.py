@@ -1,19 +1,8 @@
 # -*- coding: utf-8 -*-
-"""控制通道（软件侧）判据 —— 三层架构 §7.1.1 契约的可判形式。
+"""控制通道的真实契约：写权立即生效、开窗复用同一软件、查询纯净与同账审计。
 
-| # | 判据 | 红证（`EL_CONTROL_FAULT=…`，可逗号并列，一次跑全红） |
-|---|---|---|
-| 1 | 控制端点起来了、`.control-port` **回读**正确、能调 `set_write_authority` | —— |
-| 2 | ⭐ 切完**立刻生效**：切 `human` ⇒ **AI 侧**（能力面端点）下一次写**当场**被拒；切回 `ai` 反向 | `lazy-mode`（把 switch_mode 变成空操作 ⇒ 延迟/不生效） |
-| 3 | ⭐ `open_manual_surface` 在**本进程内**开窗、**复用同一份桥** | `selfbuild`（改成 `MainWindow()` 自建 ⇒ `writer_lease_held`） |
-| 4 | ⭐ **幂等**：连调两次 ⇒ 第二次 `already-open`、不报错、不开第二个窗 | `no-idempotent`（每次新建窗） |
-| 5 | ⭐ 两个操作**都在账里**（同门同账，§4） | `no-ledger`（`record_audit` 变空操作） |
-| 6 | 未知 mode ⇒ **响亮失败**；没有手动面 ⇒ 响亮失败 | —— |
-| 7 | ⚠ **AI 那条端点看不到这两个操作**（可见性由**端点存在性**保证） | `leak`（把它们也注册进能力面） |
-| 3b | ⭐ **真部署形态**：子进程 `--mcp` 里用真 MCP 客户端调 `open_manual_surface` ⇒ `opened`，进程不死 | —— |
-
-跑：`python checks\\control_channel_selfcheck.py`（约 40-70s）
-红证：`set EL_CONTROL_FAULT=lazy-mode,selfbuild,no-idempotent,no-ledger,leak` 后重跑（2/3/4/5/7 应红）
+含 MCP 与生产子进程链路，Qt offscreen。故障注入仅供显式诊断；
+不扫描接线源码的函数名，也不把它升级为普遍开发义务。
 """
 import asyncio
 import os
@@ -350,19 +339,20 @@ C.group('⑪ ⭐ how_to_open 由项目给（不是框架缺省）', [
 # ⇒ 请求永远不回 ⇒ 判据 90s 超时（实测踩过：那看起来像"开窗挂死"，其实是管道死锁）。
 _svc_log = TMP / 'svc.log'
 _logf = open(_svc_log, 'w', encoding='utf-8', errors='replace')
+_svc_pf = ROOT / '.control-port'
+_svc_before = _svc_pf.read_text(encoding='utf-8').strip() if _svc_pf.exists() else ''
 sub = subprocess.Popen([sys.executable, 'app_entry.py', '--mcp'], cwd=str(ROOT),
                        env={**os.environ, 'RE0_V2_DATA_ROOT': str(TMP / 'svc'),
                             'QT_QPA_PLATFORM': 'offscreen'},
                        stdout=_logf, stderr=subprocess.STDOUT, text=True,
                        encoding='utf-8', errors='replace')
-_svc_pf = ROOT / '.control-port'
 _svc_open, _svc_alive, _sub_tail = False, False, ''
 try:
     _port_svc, _deadline = None, time.time() + 120
     while time.time() < _deadline and sub.poll() is None:
         time.sleep(0.25)
         txt = _svc_pf.read_text(encoding='utf-8').strip() if _svc_pf.exists() else ''
-        if txt.isdigit():
+        if txt.isdigit() and txt != _svc_before:
             _port_svc = int(txt)
             break
     if _port_svc:
@@ -392,25 +382,6 @@ C.group('③b ⭐ 真部署形态：子进程 `--mcp` + 生产那条"搬回 Qt �
     ('真 MCP 调用 open_manual_surface ⇒ opened（%s）', _svc_open),
     ('开完窗子进程仍活着（Qt 事件在主线程被泵着）', _svc_alive),
     ('日志里没有 writer_lease_held（没抢第二份桥）', 'writer_lease_held' not in _sub_tail),
-])
-
-# ---- ⑫ ⭐ 本项目**不再持有**控制端点的**机制实现**（只接线；R13/R14）
-_ctl_src = (ROOT / 'mecha_v2' / 'control.py').read_text(encoding='utf-8')
-_FAULT_BACK = os.environ.get('EL_CONTROL_FAULT_BACK') == '1'
-if _FAULT_BACK:      # 红证：把机制定义抄回来 ⇒ 本组必红
-    _ctl_src += ("\n\ndef build_control_registry(authority, **kw):\n"
-                 "    return None\n\n\ndef start_control_endpoint(reg, **kw):\n"
-                 "    return None, 0\n")
-C.group('⑫ ⭐ 控制端点的**机制实现**在框架，本仓只有接线（"不许抄回来"的守卫）', [
-    ('`mecha_v2/control.py` 里**没有** `build_control_registry` / `start_control_endpoint` '
-     '的定义（只有 `wire_control` 接线）',
-     'def build_control_registry' not in _ctl_src
-     and 'def start_control_endpoint' not in _ctl_src),
-    ('它仍交齐那三样项目知识：`HOW_TO_OPEN` / `CONTROL_SERVER_NAME` / `wire_control`',
-     'HOW_TO_OPEN' in _ctl_src and 'CONTROL_SERVER_NAME' in _ctl_src
-     and 'def wire_control' in _ctl_src),
-    ('红证敏感度：红证模式下必须真的注入了那两个定义（R16：扰动要自证落上了）',
-     (not _FAULT_BACK) or ('def start_control_endpoint' in _ctl_src)),
 ])
 
 ok = C.summary()

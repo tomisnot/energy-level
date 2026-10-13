@@ -25,7 +25,7 @@
 ```
 
 **关键纪律**：
-- 每轮交付前**必须过一遍排版自查清单**（见 checklist.md）——只验证"功能对"
+- 涉及可见界面变化时过一遍相关排版自查（见 checklist.md）——只验证"功能对"
   不验证"排版好"会被用户一眼看穿；
 - 每轮结束跑一遍项目原有 UI 回归测试；
 - 把每轮发现的问题和修法记进 pitfalls.md——它们会反复出现。
@@ -87,8 +87,8 @@ PNG（不必构造窗口/填数据）——用于"真人此刻看到什么"；�
 `plt.rcParams['font.sans-serif']` 显式指定并设 `axes.unicode_minus = False`
 （否则负号与上标 σ⁺ 之类会成方框——`σ⁺/σ⁻` 用 `σ+/σ-` 写更稳）。
 
-**回归纪律（与本项目自检同源）**：UI 改完必须
-`python checks/selftest_all.py --tier fast --jobs 4`（约 1 分钟）全绿；
+**回归方式**：UI 改动运行受影响场景，例如
+`python run_checks.py --only gui_`；完整验证范围见 `checks/README.md`；
 涉及界面行为的**用户裁决项**（例如"那一行不得有某某按钮"）已有自检钉住——别只靠看图。
 
 **出图（figure）约定**：战役图统一放 `ui_design/screenshots/`；多面板并排时按物理对照组

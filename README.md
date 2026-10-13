@@ -69,7 +69,7 @@ python -m mecha_v2.hub --root .
 **跑判据**（改动前后都建议跑；分档运行，`--list` 看清单、`--only <子串>` 单跑）：
 
 ```bash
-python run_checks.py            # 全档
+python run_checks.py            # 默认核心；--all 为常规全量，详 checks/README.md
 python run_checks.py --fast     # 内循环档
 python run_checks.py --core     # 秒级档
 ```
