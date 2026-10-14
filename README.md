@@ -1,159 +1,117 @@
-# Energy Level · Re0 —— Rb-87 里德堡原子仿真软件
+# Energy Level
 
-把"静态能级计算 + 动态原子演化 + 多原子阵列"做成一台**人机共用**的仿真设备：
-**人**用桌面 GUI 开，**AI** 经 MCP 连接层开，两者共用**同一份**语义状态与同一条事件总线。
+Rb-87 里德堡原子的能级、驱动演化和多原子仿真软件，提供桌面 GUI 与供 AI 操作者调用的语义接口。
 
-这不是"给软件加一个 AI 按钮"：写权限、操作留痕、能力发现都是同一套机制，
-人和 AI 是**同一台设备上的两个操作者**。
+软件负责物理模型、数值计算、配置和运行记录；人和 AI 负责选择实验、探索参数和解释结果。GUI 与 AI 接口通过 mecha 接入写权与留痕机制。
 
----
+## 主要能力
 
-## 1. 这是什么
-
-| 能力 | 说明 |
+| 能力 | 内容 |
 |---|---|
-| **静态能级** | 能级组、AC/DC Stark、偶极矩阵元、谱线；静态页与动态页共用同一套能级基准 |
-| **动态演化** | 三款主力引擎（sambe / hard / mixed）+ RWA 数值权威参照；演化入口只有一个分派点 |
-| **多原子阵列** | 精确对角化（ED）引擎，覆盖建模 → 装配 → 求解 → 观测量全链 |
-| **并行扫描** | 声明式参数扫描，独立 runner 进程 |
+| 静态原子 | 能级组、AC/DC Stark、偶极矩阵元与谱线分析 |
+| 单体与两体演化 | sambe、hard、mixed 等引擎，以及 RWA 参照；具体适用范围见引擎文档 |
+| 多原子体系 | 阵列建模、相互作用、ED 等求解路径与观测量 |
+| 参数探索 | 计算成本估计、预览、配置变化量、组合调用和独立扫描 runner |
+| 交互与记录 | PyQt5 GUI、MCP 工具、后台任务、写权控制和只读监控 |
 
-三种控制方式（共用同一套状态与留痕）：
+选择引擎时应结合近似条件和计算规模。数值结果、算法边界和物理含义见 [物理引擎专家手册](docs/物理引擎-专家手册.md) 与 [引擎能力边界](docs/引擎能力边界-终稿.md)。
 
-| 方式 | 通道 |
-|---|---|
-| **GUI** | PyQt5 桌面程序；纯本地，不起任何网络端点，写权在人 |
-| **AI** | MCP 写通道：权威进程内起服务器，或独立进程跑 headless Hub；经语义寻址的工具面 |
-| **只读监控** | 权威进程内的只读 HTTP 端点（**动态端口**，端口号写在项目根的发现文件里；仅回环地址 + CORS）；供侧边栏监控面板轮询"AI 到底改了什么" |
+## 安装
 
-## 2. 怎么装
-
-**前置**：Python 3.10+；Windows / macOS / Linux 均可（GUI 与只读监控都是纯本地回环）。
+使用 Python 3.10+；桌面模式需要可用的 Qt 图形环境。数值依赖和版本在 `requirements.txt` 中声明。
 
 ```bash
-pip install -r requirements.txt
+git clone https://github.com/tomisnot/mecha.git
+git clone https://github.com/tomisnot/energy-level.git
+cd energy-level
+python -m venv .venv
 ```
 
-依赖里有两件事要看清楚：
-
-* **框架 `mecha` 是硬依赖**（不是"可选的 AI 依赖"）：缺它时软件直接导入失败、起不来，
-  **没有降级路径**。`requirements.txt` 写的是发布版直接引用
-  （`mecha @ git+https://github.com/tomisnot/mecha@v0.2.0`）——
-  ⚠ **该地址目前解析不了**：上游仓还没建（访问是 404），建仓并推 tag 之后才装得到。
-  **在那之前请装本机开发版**：`pip install -e ../mecha`
-  （前提：本仓与 `mecha` 是**兄弟目录**；布局不同就换成你自己的 mecha 仓路径）。
-  两条路任选其一，别都装。
-* **ARC 数据**：静态能级依赖 ARC。若引擎提示缺数据，用 `python scripts/setup_arcdata.py`
-  准备（它会给出数据目录与下载步骤）。
-
-## 3. 怎么跑
+激活虚拟环境：Windows PowerShell 使用 `.venv/Scripts/Activate.ps1`，Linux/macOS 使用 `source .venv/bin/activate`。随后在项目根执行：
 
 ```bash
-# 统一启动器（框架编排：起软件 + 就绪判据 + dsh；⚠ 各家不再自己编排进程）
-python -m mecha --all
+python -m pip install -r requirements.txt
+python -m pip install -e "../mecha[mcp]"
+```
 
-# 等价单跑 —— GUI 模式：纯本地软件，不起任何端点，写权在人
+依赖清单引用 mecha 的 `v0.2.0` 发布点；上面的最后一步将框架切到同时检出的源码版本，用于当前开发代码。目录布局不同，请替换 `../mecha`。
+
+mecha 是本软件的运行依赖，GUI 与 AI 接口都会使用它。静态能级依赖 ARC；遇到数据目录问题可运行 `python scripts/setup_arcdata.py` 查看准备步骤。
+
+## 启动
+
+```bash
+# 本地桌面界面
 python app_entry.py --gui
 
-# 等价单跑 —— AI 模式：headless 权威，进程内起 MCP 服务器 + 只读监控端点（动态端口）
+# 本软件的 MCP 服务与只读监控
 python app_entry.py --mcp
 
-# 独立进程 Hub（无 GUI 的 headless 部署）
-python -m mecha_v2.hub --root .
+# 在同一个软件进程中提供 MCP 并打开 GUI
+python app_entry.py --mcp --with-gui
+
+# 整站：由 mecha 编排软件与 AI 宿主
+python -m mecha --all --root .
 ```
 
-端口不是写死的：权威把实际端口写进项目根的发现文件（`.mcp-port` / `.monitor-port`），
-客户端每次现读 ⇒ 权威重启换端口后**下一拍自动跟上**，不需要重启客户端。
-旧文档里的 `python -m src.adapter.serve` / `python -m cockpit.server` 都是**死命令**
-（那两个模块随上一代实现退役，本仓已不存在）。
+独立 `--gui` 模式不启动网络端点。需要人机操作同一个运行实例时，使用 `--mcp --with-gui` 或统一启动器提供的手动面。
 
-**跑判据**（改动前后都建议跑；分档运行，`--list` 看清单、`--only <子串>` 单跑）：
+AI 服务与监控使用动态端口，通过项目根的发现文件供客户端读取。写权与进程存活独立：切换人/AI 写权不需要重启软件，也不需要删除运行记录。
+
+整站 AI 界面需要 dsh 可执行命令和本仓的 `dsh/` 插件资产。插件通过本地 `file:` 引用共享面板；换目录布局时，请先将 `dsh/package.json` 的 `@mecha/dsh-panel` 指向所用 mecha 仓的 `mecha/dsh-panel/`，再在 `dsh/` 执行 `npm install` 和 `npm run bundle`。
+
+## AI 使用方式
+
+AI 经工具面读配置、查能级、预览模型、估计成本、发起演化和读取结果。工具参数、配置键与单位见 [操作指南](skills/energy-level/SKILL.md)。
+
+- 配置写入经受控入口，留有操作理由与前后状态。
+- `run_actions` 支持组合调用、`spec_patch` 变化量和 `pick` 结果选择，便于参数探索。
+- `submit_job` / `read_job` / `cancel_job` 用于后台演化；取消是协作式请求，实际终态以任务查询为准。
+- AI 组合调用中的扫描目前按步骤串行执行；独立扫描 runner 的并行能力不等于工具面已有并行扫描入口。
+- 物理索引与配置值应从查询取得，失败按结构化提示纠正。
+
+mecha 提供连接与治理机制；原子模型、引擎适用条件、参数单位和物理判断属于本项目。
+
+## 开发与验证
 
 ```bash
-python run_checks.py            # 默认核心；--all 为常规全量，详 checks/README.md
-python run_checks.py --fast     # 内循环档
-python run_checks.py --core     # 秒级档
+python run_checks.py
+python run_checks.py --only sambe
+python run_checks.py --fast
+python run_checks.py --all
 ```
 
-判据是本仓的主要验收面：物理量对第三方权威逐位对拍、引擎契约、写权与留痕、
-GUI 接线、MCP 通道、只读监控端点的契约、以及若干"防假绿"的守卫
-（每个守卫都要能红，否则视为无效）。
+默认是核心契约与小尺寸物理结果；`--all` 运行常规全量，`--slow` 加入慢物理基准，`--release` 单独进行发布扫描。可用 `--list` 查看范围，详见 [验证说明](checks/README.md)。
 
-## 4. 目录导览
+验证保护数值结果、引擎契约和实际接线。按改动范围选择测试，不要求每次开发执行慢基准，也不以文档措辞、历史文件名或额外红证作为开发门禁。
 
-```
-src/core/          引擎本体（纯物理，不认识框架）
-    static_atom.py     ★ 能级基准的唯一处
-    static_pair.py     两体相互作用（V_dd / 交换耦合 / vdW）
-    runspec.py         ★ 唯一分派点：登记册快照 → RunSpec → 跑 → 结果摘要
-    sambe.py / hard.py / evolve_mixed.py / evolve_twofield.py / evolve_rwa.py
-    field_loss.py      场致加热与损失模型
-    param.py           ★ 就地参数声明（无覆写栈）
-    protocol.py        ★ 领域面协议（供胶水层适配成框架的引擎协议）
-    manybody/          多体 ED 引擎家族
-mecha_v2/           ★ 本仓自有的领域层（唯一同时 import core 与 mecha 的胶水）
-    engine.py          实现框架的引擎协议（schema / run / summary / estimate）
-    tools.py           工具面（AI 能调的那些动作）
-    bridge.py          GUI ↔ 同一道写权门的操作者适配器
-    hub.py             工具面 → MCP 服务器的投影 + 独立进程入口
-src/v2_bind.py     装配点：建桥 + 只读监控端点（动态端口 + 发现文件）
-src/ui/            GUI（含 widget ↔ 框架的绑定层）
-src/sweep/         并行扫描
-src/_archive/      封存的数值权威锚（仍被判据引用）
-checks/            判据与支撑模块
-dsh/               桌面宿主（dsh / Cordis）集成插件：自愈 MCP 桥 + 监控面板
-skills/            给 AI 的操作指南（权威源）
-docs/              技术文档（手册 / 物理与引擎 / 参考 / 决策史）
+修改 dsh 接线时，在 `dsh/` 执行 `npm test`，检查 TypeScript 和浏览器构建。
+
+## 代码与文档
+
+```text
+src/core/       物理模型、参数声明、数值引擎与统一运行分派
+src/ui/         桌面界面
+src/sweep/      独立扫描 runner
+mecha_v2/       领域引擎适配、工具、GUI 桥与 MCP 服务
+src/v2_bind.py  软件装配与服务接线
+dsh/            AI 宿主中的项目面板
+skills/         AI 操作指南
+checks/         结构、数值结果与集成验证
+docs/           物理、使用与设计文档
 ```
 
-**依赖方向是单向的**：`core`（纯物理）← 胶水层（`mecha_v2/` + `src/v2_bind.py`）
-→ `mecha`；`ui` / `sweep` / `dsh` 也依赖框架。
-⚠ **`core` 不许 import 框架**是**约定**（`src/core/` 里没有一处 import 框架），
-但**今天没有判据在守它**——这条挂起项与两种处置选项见
-[`docs/交接-给下一代.md`](docs/交接-给下一代.md) §8（"`core ↛ mecha` 这条纪律目前无人守"）。
+物理层与框架分开；`mecha_v2/` 将本项目的能力接到 [mecha](https://github.com/tomisnot/mecha)。同一框架也用于 [ML Toolbox](https://github.com/tomisnot/ml-toolbox)、[PaperPilot](https://github.com/tomisnot/get-paper) 和 Tutor，各项目独立维护自己的领域内容。
 
-## 5. 与另外三个项目的关系
+- [界面、原理与开发手册](docs/手册-界面·原理·开发.md)
+- [GUI 专家手册](docs/GUI界面-专家手册.md)
+- [引擎参数总表](docs/引擎参数总表.md)
+- [三引擎原理](docs/物理引擎原理-三引擎严格推导.md)
 
-这四个仓是**同一套框架 + 三个用它做的真实项目**（三个项目**不是**框架的一部分）：
+## 当前边界
 
-```
-mecha          —— 框架：人机同门（写权门 / 事件史 / 能力面 / 只读监控 + Provider 层）
-energy-level   —— 本仓：物理仿真，用 mecha 的 CodeAct 通道跑 AI 演化
-get-paper      —— 论文管理与推荐，用 mecha 的命令面 + 工具面（MCP）
-ml-toolbox     —— 机器学习方法试验台，用 mecha 的宿主适配 + 面板
-```
-
-框架的名字来自"机甲"：驾驶舱（人）+ 义体（AI）共用同一台机器，而不是各开一台。
-
-## 6. 给 AI 的接入口
-
-* **操作指南（权威源）**：`skills/energy-level/SKILL.md` —— 工具面、配置键、单位约定、
-  典型工作流与已知坑都在里面。
-* **工具面**：AI 能调的动作由 `mecha_v2/tools.py` 注册；每个工具"能写什么、写错会看到什么"
-  都由同一道写权门与同一套可教学错误决定。
-* **人机共用同一份留痕**：AI 与人的每一次写都进同一条事件史；
-  只读监控端点的 `/history` 就是"AI 到底干了什么"的原始记录，侧边栏面板只是它的一个视图。
-
-## 7. 已知限制（诚实交代）
-
-1. **GUI 的"人机共用"还在收口**：写权门控已有定义，但 GUI 侧尚未全面接线；
-   个别控件（窗口/光子块）在迁移后暂无人消费，处于静默失能状态。
-2. **提炼守卫只守 import**：本仓的"物理层不依赖框架"是 AST import 扫描，
-   `numpy` 在白名单里 ⇒ 语义级偏差在它盲区（判据全绿与个别设计瑕疵可以并存）。
-3. **`dsh/` 插件尚未独立成仓**：跨宿主分发还在路上。
-4. **`field.E_vpcm` 的量级待裁决**：表单允许的范围远大于高 n 态的 Inglis-Teller 极限。
-5. **历史上的一代自研框架（`mecha-sdk` 0.1.0）已退役**：它在第二个接入项目上被证伪
-   （领域无关性不成立、身份硬编码等），现用框架 `mecha` 是重写版，模块集完全不同。
-   本仓文档里凡提到 `mecha-sdk` 的地方都按**历史件**读。
-
-## 8. 工程纪律（沿用）
-
-1. **先证明等价，再换路** —— 逐位对拍，不接受"接口通了"。
-2. **覆盖只迁移、不删除** —— 判据换锚到新结构，子条件只增不减；文档过时**归档**不删。
-3. **每步一个可回滚提交**，先跑基线绿再动手。
-4. **不套层** —— 改引擎本身，不在外面加适配皮；新层必须是单一定义点。
-5. **注释写事实，不写编年史。**
-6. **假绿比红更危险** —— 跳过要显式计数，每个守卫都要有致死性证明（能红）。
+数值方法的近似条件与成本各不相同，大基组和多原子体系需要先评估规模。后台任务表保存在当前进程中；进程重启后的追踪与恢复不应仅依赖 `job_id`。本地 GUI、真实协议与数值标杆分别验证，具体覆盖和环境依赖见验证说明。
 
 ## 许可
 
-MIT（见 `LICENSE`）。
+[MIT](LICENSE)。
