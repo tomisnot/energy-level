@@ -95,7 +95,7 @@ def build_stack(el_root: str | Path, data_root: str | Path,
     from mecha_v2.bridge import el_summarizer
     engine = ElEngine(el_root)
     sw = assemble(root=Path(data_root), data_dir_name=data_dir_name,
-                  engine=engine, summarizer=el_summarizer,
+                  summarizer=el_summarizer,
                   validate=make_validator(engine), mode=Mode.LOCKED,
                   project="energy-level")
     ai = sw.channels["ai"]

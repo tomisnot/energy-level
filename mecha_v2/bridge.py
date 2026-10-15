@@ -84,12 +84,12 @@ def _build_gui_tools(engine, gate, authority, ai, jobs, surface=None):
     """GUI 进程内工具面（复用 tools.build_tool_registry）。
 
     surface 传入装配点建好的那份（含角色表）——审查缺口 B：serve_mcp 若再
-    `Surface(engine)` 新建，工具注册与角色登记就落在一张运行时不存在的图上，
+    计算协调器由 EL 自己持有，工具注册与角色登记落在 mecha 的同一能力面上，
     capability map 与运行时脱节。缺省自建仅供纯内存判据装配。
     """
     from .tools import build_tool_registry
     from mecha.surface import Surface
-    return build_tool_registry(engine, gate, surface or Surface(engine),
+    return build_tool_registry(engine, gate, surface or Surface(),
                                authority, ai, jobs)
 
 
@@ -146,7 +146,7 @@ class V2Bridge:
         from mecha.assembly import assemble
         from .engine import make_validator
         sw = assemble(root=Path(data_root), data_dir_name=data_dir_name,
-                      engine=engine, summarizer=el_summarizer,
+                      summarizer=el_summarizer,
                       validate=make_validator(engine), mode=mode,
                       project="energy-level")
         return cls(sw.gate, sw.history, sw.authority, engine=engine, cache=cache,

@@ -37,7 +37,7 @@ from collections.abc import Mapping
 from typing import Callable
 
 from mecha.authority import Authority, Mode
-from mecha.errors import MechaError
+from mecha.errors import MechaError, UnknownOp
 from mecha.gate import Channel, Gate
 from mecha.history import History
 from mecha.providers.codeact import Action, CodeAct
@@ -164,7 +164,7 @@ def build_tool_registry(engine: ElEngine, gate: Gate, surface: Surface,
         ),
         parameters={},
         output_schema={"type": "object", "required": ["ok", "est_sec"]},
-        execute=lambda: {"ok": True, **surface.estimate(gate.snapshot)},
+        execute=lambda: {"ok": True, **engine.estimate(gate.snapshot)},
         banned_words=("cost.py", "标定", "backend"),
     ))
 
@@ -192,7 +192,7 @@ def build_tool_registry(engine: ElEngine, gate: Gate, surface: Surface,
                     "description": "可选：超过此秒数自动请求取消"}},
         output_schema={"type": "object", "required": ["ok", "method"]},
         execute=lambda cancel_after_sec=None: _run_sim(
-            surface, gate, cancel_after_sec),
+            engine, gate, cancel_after_sec),
         banned_words=("evolve_run", "progress_arr", "engine_kwargs"),
     ))
 
@@ -222,7 +222,7 @@ def build_tool_registry(engine: ElEngine, gate: Gate, surface: Surface,
         ),
         parameters={},
         output_schema={"type": "object", "required": ["ok", "job_id"]},
-        execute=lambda: _submit_job(jobs, surface, gate),
+        execute=lambda: _submit_job(jobs, engine, gate),
         banned_words=("evolve_run", "队列", "worker"),
     ))
     reg.register(define_tool(
@@ -422,7 +422,21 @@ def _run_actions(surface: Surface, gate: Gate,
         acts.append(Action(op=op, args=args))
     actor = channel.actor                      # 恒为 'ai'（通道钉死，改不了）
     audit = History()                          # 临时审计史（不进域史，见 docstring）
-    codeact = CodeAct(surface, audit, lambda: actor)
+    def _dispatch(op, args, ctx):
+        if op == "run":
+            spec = args.get("spec")
+            if not isinstance(spec, Mapping):
+                raise MechaError("run 动作需要 args['spec'] 映射", kind="bad_action")
+            return engine.run(spec, context=ctx)
+        if op == "estimate":
+            return engine.estimate(dict(args.get("spec", {})))
+        if op == "summary":
+            return engine.summary()
+        if op == "schema":
+            return engine.schema()
+        raise UnknownOp(op, kind="unknown_action")
+
+    codeact = CodeAct(surface, audit, lambda: actor, dispatcher=_dispatch)
     res = codeact.run(acts, call_id=CURRENT_CALL_ID.get())
     # 实测报告 P1-6：结果要**带名字、可自读**——每步回执 {index, op, ok,
     # detail, output}（output 直接挂进步里，不再靠 index 与位置数组对齐）；
@@ -484,11 +498,11 @@ def _step_digest(out) -> str:
     return "ok" if out is not None else ""
 
 
-def _submit_job(jobs: JobRegistry, surface: Surface, gate: Gate):
+def _submit_job(jobs: JobRegistry, engine: ElEngine, gate: Gate):
     snap = dict(gate.snapshot)     # 提交时刻固定配置（在飞任务不受后续改动影响）
 
     def _work(ctx: ExecutionContext):
-        return surface.run(snap, context=ctx)
+        return engine.run(snap, context=ctx)
 
     job = jobs.submit(_work)
     return {"ok": True, "job_id": job.id, "state": job.state.value}
@@ -512,7 +526,7 @@ def _cancel_job(jobs: JobRegistry, job_id):
             "state": jobs.get(job_id).state.value}
 
 
-def _run_sim(surface: Surface, gate: Gate, cancel_after_sec):
+def _run_sim(engine: ElEngine, gate: Gate, cancel_after_sec):
     ctx = ExecutionContext()
     timer = None
     if cancel_after_sec:
@@ -520,7 +534,7 @@ def _run_sim(surface: Surface, gate: Gate, cancel_after_sec):
         timer = threading.Timer(float(cancel_after_sec), ctx.request_cancel)
         timer.start()
     try:
-        result = surface.run(gate.snapshot, context=ctx)
+        result = engine.run(gate.snapshot, context=ctx)
     finally:
         if timer is not None:
             timer.cancel()

@@ -6,7 +6,7 @@
 （B=Gauss、Rb-87 等）——框架反模式禁的是**库里**写死项目值。
 
 模块地图：
-- `engine.py`  ElEngine（Surface 的 Provider：schema/run/summary/estimate）+
+- `engine.py`  ElEngine（EL 项目的计算协调器）+
   make_validator（委托 src.core.protocol 的领域校验）
 - `tools.py`   build_tool_registry——AI 的工具面（set_config/run_sim/set_drive…）
 - `bridge.py`  V2Bridge——GUI ↔ 同一道 Gate 的操作者适配器（+ ElOps 线程拆分）

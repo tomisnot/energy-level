@@ -179,8 +179,7 @@ C.group('H estimate/preview/list_levels 走多体分支', [
 ])
 
 # ---------------- I. Surface.run 端到端（v2 ops 管道） ----------------
-surface = Surface(engine)
-r_sync = surface.run(snap, context=ExecutionContext())
+r_sync = engine.run(snap, context=ExecutionContext())
 C.group('I Surface.run 端到端（人机同路径；run_output_required 契约）', [
     ('run ok', r_sync.get('ok') is True),
     ('run 走 manybody（method=ed）', r_sync.get('method') == 'ed'),

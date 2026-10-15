@@ -1,4 +1,4 @@
-"""EL Engine Provider：把 src.core.protocol 包装成 v2 的 4 必实现。
+"""EL 项目自己的计算协调器：把 src.core.protocol 包装成 EL 的计算能力。
 
 领域现实与框架契约的两处适配（ADR phase5-el-provider 已登记）：
 - estimate 单体无 est_sec ⇒ 补保守粗估（锚点：6 态/50 点/5ns ≈ 2.4 s 实测）。
@@ -30,7 +30,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from mecha.errors import GateDenied, InvalidSpec, MechaError, UnknownKey
-from mecha.surface import Engine, ExecutionContext
+from mecha.surface import ExecutionContext
 
 
 def import_el(el_root: str | Path):
@@ -73,7 +73,7 @@ class CacheProxy:
         return attr
 
 
-class ElEngine(Engine):
+class ElEngine:
     """4 必实现 + 领域查询口（list_levels/preview/check 供工具层用）。
 
     **线程亲和**（ARC cache 是 SQLite，认建它的线程，EL 的 B-1① 约束）两种模式：
