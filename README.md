@@ -14,7 +14,7 @@ Rb-87 里德堡原子的能级、驱动演化和多原子仿真软件，提供�
 | 参数探索 | 计算成本估计、预览、配置变化量、组合调用和独立扫描 runner |
 | 交互与记录 | PyQt5 GUI、MCP 工具、后台任务、写权控制和只读监控 |
 
-选择引擎时应结合近似条件和计算规模。数值结果、算法边界和物理含义见 [物理引擎专家手册](docs/物理引擎-专家手册.md) 与 [引擎能力边界](docs/引擎能力边界-终稿.md)。
+选择引擎时应结合近似条件和计算规模。数值结果、算法边界和物理含义见 [用户手册](docs/用户手册.md) 与 [引擎能力边界](docs/引擎能力边界.md)。
 
 ## 安装
 
@@ -103,10 +103,10 @@ docs/           物理、使用与设计文档
 
 物理层与框架分开；`mecha_v2/` 将本项目的能力接到 [mecha](https://github.com/tomisnot/mecha)。同一框架也用于 [ML Toolbox](https://github.com/tomisnot/ml-toolbox)、[PaperPilot](https://github.com/tomisnot/get-paper) 和 Tutor，各项目独立维护自己的领域内容。
 
-- [界面、原理与开发手册](docs/手册-界面·原理·开发.md)
-- [GUI 专家手册](docs/GUI界面-专家手册.md)
-- [引擎参数总表](docs/引擎参数总表.md)
-- [三引擎原理](docs/物理引擎原理-三引擎严格推导.md)
+- [用户手册](docs/用户手册.md)
+- [开发者指南](docs/开发者指南.md)
+- [引擎能力边界](docs/引擎能力边界.md)
+- [历史文档](docs/history/)
 
 ## 当前边界
 
