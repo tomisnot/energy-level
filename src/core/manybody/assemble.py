@@ -33,14 +33,27 @@ _H4_ORDER = ('gg', 'gr', 'rg', 'rr')
 # =====================================================================
 # 几何与 V_dd 行抽取
 # =====================================================================
-def geometry(pos_i, pos_j):
-    """两原子坐标 → (R_µm, θ_deg, φ_deg)，n = (r_j−r_i)/R（与 static_pair 同约定）。"""
+def geometry(pos_i, pos_j, periods_um=None, return_winding=False):
+    """两原子坐标 → (R_µm, θ_deg, φ_deg)。
+
+    `periods_um=(Lx,Ly)` 时对 xy 平面取最小像，并可返回跨胞元整数 winding；
+    默认开放点云语义保持不变。
+    """
     d = np.asarray(pos_j, float) - np.asarray(pos_i, float)
+    winding = np.zeros(2, dtype=int)
+    if periods_um is not None:
+        L = np.asarray(periods_um, float).reshape(-1)
+        if L.size != 2 or np.any(~np.isfinite(L)) or np.any(L <= 0):
+            raise ValueError('periods_um 须为两个正数 (Lx,Ly)')
+        winding = np.rint(d[:2] / L).astype(int)
+        d[:2] = d[:2] - winding * L
     R = float(np.linalg.norm(d))
     if R <= 0.0:
         raise ValueError('两原子重合（R=0）')
     theta = float(np.degrees(np.arccos(np.clip(d[2] / R, -1.0, 1.0))))
     phi = float(np.degrees(np.arctan2(d[1], d[0])))
+    if return_winding:
+        return R, theta, phi, winding.tolist()
     return R, theta, phi
 
 
@@ -122,6 +135,44 @@ def calibrate_pair(cache, single, D, E, pair4, R, theta_deg, phi_deg,
     return dict(H4=H4, delta1=d1, delta2=d2, info=info)
 
 
+def decompose_pair_channels(single, D, pair4, R, theta_deg, phi_deg):
+    """分解一阶 4 维块的球基通道贡献。
+
+    返回值的 ``channels`` 是记录列表，每条记录含 ``q1``、``q2``、
+    ``tensor`` 和标准矩阵元序的 ``matrix``，其中
+
+    ``matrix = (_DD_CONV/R**3) T[q1,q2] d1[q1]⊗d2[q2]``
+
+    投影到 ``pair4=[gg,gr,rg,rr]`` 后的 4×4 矩阵。``total`` 是所有通道
+    的和，应该等于 ``calibrate_pair(..., second_order=False)['delta1']``。
+    这里明确只分解一阶偶极-偶极项；二阶 Löwdin 修正包含两个通道的交叉项，
+    不应被误标为单一的 ``q,q'`` 通道。该 API 不绑定具体晶格、原子种类或
+    论文模型，适用于任何由 ARC 产生的单原子基。
+    """
+    N = len(single)
+    k_idx = np.array([a * N + b for a, b in pair4], dtype=int)
+    T = _sp._vdd_tensor(theta_deg, phi_deg)
+    scale = _DD_CONV / float(R) ** 3
+    channels = []
+    total = np.zeros((4, 4), complex)
+    for ia, q1 in enumerate(_QS):
+        for ib, q2 in enumerate(_QS):
+            coeff = T[ia, ib]
+            if abs(coeff) < 1e-14:
+                continue
+            Tc = np.zeros((3, 3), complex)
+            Tc[ia, ib] = coeff
+            rows = np.stack([
+                np.asarray(_vdd_row(D, Tc, a, b, N).todense()).ravel()
+                for a, b in pair4]) * scale
+            matrix = np.conj(rows[:, k_idx])
+            channels.append(dict(q1=int(q1), q2=int(q2),
+                                 tensor=complex(coeff), matrix=matrix))
+            total += matrix
+    return dict(R_um=float(R), theta_deg=float(theta_deg), phi_deg=float(phi_deg),
+                channels=channels, total=total)
+
+
 # =====================================================================
 # 模型级标定（逐对扫描 + 项开关 + 诊断）
 # =====================================================================
@@ -164,7 +215,9 @@ def calibrate(cache, model, second_order=True, guard_mhz=1.0, log=None):
     for i in range(n):
         for j in range(i + 1, n):
             ai, aj = model.atoms[i], model.atoms[j]
-            R, th, ph = geometry(ai['pos'], aj['pos'])
+            periods = getattr(model, 'periods_um', None)
+            R, th, ph, winding = geometry(ai['pos'], aj['pos'], periods,
+                                           return_winding=True)
             if model.r_cut_um is not None and R > model.r_cut_um:
                 dropped.append(dict(i=i, j=j, R_um=R, reason='r_cut'))
                 continue
@@ -184,6 +237,8 @@ def calibrate(cache, model, second_order=True, guard_mhz=1.0, log=None):
                        raw_A=complex(H4[3, 0]),            # ⟨rr|V|gg⟩
                        delta=dict(gg=dg, gr=dgr, rg=drg, rr=dr),
                        info=res['info'])
+            if periods is not None:
+                rec['twist_winding'] = winding
             rec['V'] = rec['raw_V'] if 'I1' in use else 0.0
             rec['J'] = rec['raw_J'] if 'I2' in use else 0.0j
             rec['A'] = rec['raw_A'] if 'I3' in use else 0.0j
@@ -220,7 +275,8 @@ def to_json_dict(calib):
 # =====================================================================
 # ED 装配（2^N 基，bit=1 ↔ r）——稀疏为主，稠密仅 tiny-N 交叉对照
 # =====================================================================
-def build_H_sparse(calib, Om=None, delta=None, terms=None, gamma=None):
+def build_H_sparse(calib, Om=None, delta=None, terms=None, gamma=None,
+                   basis_indices=None):
     """calib → 2^N **稀疏** H（CSR，MHz，复）。Om/delta/gamma：逐原子（缺省 0）。
 
     H = Σ_i [δ_i n_i + (Ω_i/2)σˣ_i − (i/2)Γ_i n_i]
@@ -234,13 +290,24 @@ def build_H_sparse(calib, Om=None, delta=None, terms=None, gamma=None):
     对角取 -i·Γ×1e-3/(2·CONV) ⇒ 布居恰按 exp(-Γ×1e-3·t) 衰减（与 auto_decays/Lindblad 一致）。
     """
     n = len(calib['atoms'])
-    dim = 1 << n
+    full_dim = 1 << n
     use = set(calib['terms'] if terms is None else terms)
-    Om = np.zeros(n) if Om is None else np.asarray(Om, float)
+    Om = np.zeros(n, complex) if Om is None else np.asarray(Om, complex)
     delta = np.zeros(n) if delta is None else np.asarray(delta, float)
     gamma = np.zeros(n) if gamma is None else np.asarray(gamma, float)
-    s = np.arange(dim, dtype=np.int64)
-    bit = [((s >> (n - 1 - i)) & 1).astype(np.int8) for i in range(n)]
+    from .basis import basis_bits
+    if any(x.shape != (n,) or not np.isfinite(x).all() for x in (Om, delta, gamma)):
+        raise ValueError('Om/delta/gamma 须为有限、长度为 N 的数组')
+    s = (np.arange(full_dim, dtype=np.int64) if basis_indices is None
+         else np.asarray(basis_indices, dtype=np.int64))
+    if s.ndim != 1 or not len(s) or np.any(s < 0) or np.any(s >= full_dim):
+        raise ValueError('basis_indices 须为非空有效位编码')
+    dim = len(s)
+    permutation = np.argsort(s)
+    ordered = s[permutation]
+    if np.any(np.diff(ordered) == 0):
+        raise ValueError('basis_indices 不能重复')
+    bit = basis_bits(n, s)
 
     rows, cols, vals = [], [], []
     # ---- 对角：Σ δ_i n_i + Σ V_ij n_i n_j − (i/2)Σ Γ_i n_i ----
@@ -259,7 +326,9 @@ def build_H_sparse(calib, Om=None, delta=None, terms=None, gamma=None):
             continue
         t = s ^ (np.int64(1) << (n - 1 - i))
         rows.append(t); cols.append(s)
-        vals.append(np.full(dim, Om[i] / 2.0, complex))
+        # |g> -> |r> carries Ω/2; |r> -> |g> carries Ω*/2.
+        vals.append(np.where(bit[i] == 0, Om[i] / 2.0,
+                             np.conj(Om[i]) / 2.0).astype(complex))
 
     # ---- 交换 J（I2）+ 双激发 A（I3）：翻两位 ----
     for p in calib['pairs']:
@@ -283,9 +352,22 @@ def build_H_sparse(calib, Om=None, delta=None, terms=None, gamma=None):
                 rows.append((ss ^ mi) ^ mj); cols.append(ss)
                 vals.append(np.full(ss.size, v, complex))
 
-    return sp.coo_matrix(
-        (np.concatenate(vals), (np.concatenate(rows), np.concatenate(cols))),
-        shape=(dim, dim)).tocsr()          # tocsr 自动合并重复 (row,col)
+    # Map full-space bit identities into the requested basis without ever
+    # assembling the full-space matrix. Supports arbitrary basis ordering.
+    target, source = np.concatenate(rows), np.concatenate(cols)
+    values = np.concatenate(vals)
+    def locate(codes):
+        locations = np.searchsorted(ordered, codes)
+        valid = locations < dim
+        valid[valid] &= ordered[locations[valid]] == codes[valid]
+        return locations, valid
+    ri, valid_r = locate(target)
+    ci, valid_c = locate(source)
+    valid = valid_r & valid_c
+    return sp.coo_matrix((values[valid],
+                          (permutation[ri[valid]], permutation[ci[valid]])),
+                         shape=(dim, dim)).tocsr()
+
 
 
 def build_H_ed(calib, Om=None, delta=None, terms=None, gamma=None):

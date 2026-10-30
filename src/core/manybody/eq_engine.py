@@ -1,19 +1,16 @@
 # -*- coding: utf-8 -*-
-"""多体**平衡态**产品引擎：把 ED/GPU批量/Lanczos/KPM/DMRG 经唯一分派点接成"可调用"。
+"""多体平衡态产品适配：登记册快照 → RunSpec → eq_route。
 
-- `run_equilibrium(spec)`：`runspec.evolve_run` 在 `nbody=='many'` 且 `spec['equilibrium']` 时
-  调它（分派表 method ∈ gs/thermal/dos）。吃紧凑 calib + Om/delta（**不含时**），经
-  `eq_route.solve_equilibrium` 路由到后端，返回统一 Result（含 method/backend/states 契约键）。
-- `build_equilibrium(cache, params, want=..., method=...)`：登记册快照 → 平衡态 RunSpec
-  （复用 runspec_mb 的 model/calibrate/drive，**calibrate 碰 ARC ⇒ 主线程**）。
-- `solve_equilibrium(cache, params, ...)`：build+run 一步，**产品/AI 可直接调的入口**。
-
-任意点云几何都能被 ed/lanczos/kpm 直接吃（都从 build_H_sparse(calib) 出发）；
-'dmrg' 后端仅当 spec 带 'ladder' 时可用。
+build_equilibrium 只在 ARC cache 所属线程标定物理参数，run_equilibrium
+消费数值快照，提供公共进度/取消检查并合并配置警告。数值算法和任务路由
+由 eq_route 维护，参数默认值从 schema_mb 读取。
 """
 import numpy as np
 
 from . import eq_route, runspec_mb as _mb
+from .hamiltonian_plan import build_plan, plan_summary
+from .backends import normalize_equilibrium_backend
+from .runtime import check_cancel, report_progress
 
 __all__ = ['build_equilibrium', 'run_equilibrium', 'solve_equilibrium']
 
@@ -48,10 +45,13 @@ def _dmrg_ok(calib, Om=None, delta=None, max_cross=12, min_legs=2):
 
 
 def build_equilibrium(cache, params, want='gs', method=None, betas=None,
-                      num=400, nvec=1500, seed=3):
-    """快照 → 平衡态 RunSpec（紧凑 calib + 驱动，无时间轴）。calibrate 碰 ARC → 主线程。"""
+                      num=None, nvec=None, seed=None):
+    """快照 → 平衡态 RunSpec（紧凑 calib + 驱动，无时间轴）。calibrate 碰 ARC → cache 所属线程。"""
     p = params or {}
     warnings = []
+    num = _mb.mb_get(p, 'manybody.kpm_num') if num is None else num
+    nvec = _mb.mb_get(p, 'manybody.kpm_nvec') if nvec is None else nvec
+    seed = _mb.mb_get(p, 'manybody.seed') if seed is None else seed
     model = _mb.model_from_params(p, warnings=warnings)
     n = len(model.atoms)
     if n == 0:
@@ -62,20 +62,36 @@ def build_equilibrium(cache, params, want='gs', method=None, betas=None,
     calib = _mb.calibrate_memo(cache, model, second_order=second_order,
                                guard_mhz=guard_mhz)
     Om, delta, gamma = _mb.drive_from_model(model)
-    backend = (method or _mb.mb_get(p, 'manybody.eq_backend')
-               or _mb.mb_get(p, 'manybody.solver') or 'auto')
+    plan = build_plan(calib, Om=Om, delta=delta, gamma=gamma,
+                      terms=model.terms, constraint=p.get('manybody.constraint'), max_states=ed_max_dim)
+    backend = normalize_equilibrium_backend(method or _mb.mb_get(p, 'manybody.eq_backend'), want)
+    if betas is None:
+        betas = _mb.mb_get(p, 'manybody.betas')
+    if want == 'thermal' and betas is None:
+        betas = [1.]
     states = [{'label': 'atom%d' % a['id'], 'atom_id': a['id']} for a in calib['atoms']]
     dmrg_ok = _dmrg_ok(calib, Om, delta)
     return {
         'version': 1, 'nbody': 'many', 'equilibrium': True, 'two_body': False,
         'want': want, 'method': backend, 'method_in': backend, 'betas': betas,
-        'calib': calib, 'n_atoms': n, 'dim': 1 << n,
+        'calib': calib, 'hamiltonian_plan': plan, 'plan_summary': plan_summary(plan),
+        'n_atoms': n, 'dim': plan['dim'], 'full_dim': 1 << n,
+        'charge_sector': p.get('manybody.charge_sector'),
+        'return_state': bool(p.get('manybody.return_state', False)),
+        'memory_budget_mb': p.get('manybody.memory_budget_mb'),
+        'dtype': p.get('manybody.dtype') or 'float64',
+        'device': _mb.mb_get(p, 'manybody.device'),
+        'krylov_dim': _mb.mb_get(p, 'manybody.krylov_dim'),
         'Om': Om, 'delta': delta, 'gamma': gamma,
         'terms': list(model.terms), 'template': model.template,
         'kpm': dict(num=num, nvec=nvec, seed=seed),
-        'dmrg': dict(chi_max=int(p.get('manybody.chi_max') or 200),
-                     truncerr=float(p.get('manybody.truncerr') or 1e-10),
-                     max_sweeps=int(p.get('manybody.max_sweeps') or 60)),
+        'qmc': dict(sweeps=int(_mb.mb_get(p, 'manybody.qmc_sweeps')),
+                    burn_in=int(_mb.mb_get(p, 'manybody.qmc_burn_in')),
+                    measure_every=int(_mb.mb_get(p, 'manybody.qmc_measure_every')),
+                    M=p.get('manybody.qmc_M'), seed=seed),
+        'dmrg': dict(chi_max=int(_mb.mb_get(p, 'manybody.chi_max')),
+                     truncerr=float(_mb.mb_get(p, 'manybody.truncerr')),
+                     max_sweeps=int(_mb.mb_get(p, 'manybody.max_sweeps'))),
         'states': states, 'labels': [s['label'] for s in states],
         'warnings': warnings, 'ed_max_dim': ed_max_dim, 'dmrg_ok': dmrg_ok,
     }
@@ -86,15 +102,19 @@ def run_equilibrium(spec, log=None, progress_arr=None):
     log = log or (lambda *a: None)
     want = spec.get('want', 'gs')
     n = int(spec.get('n_atoms') or len(spec['calib']['atoms']))
-    if progress_arr is not None:
-        try:
-            progress_arr[0] = 0.3
-        except Exception:
-            pass
-    system = dict(calib=spec['calib'], Om=spec.get('Om'), delta=spec.get('delta'),
+    report_progress(progress_arr, 0.3)
+    system = dict(calib=spec['calib'], plan=spec.get('hamiltonian_plan'),
+                  Om=spec.get('Om'), delta=spec.get('delta'), gamma=spec.get('gamma'),
+                  terms=spec.get('terms'),
                   n_sites=n, is_ladder=bool(spec.get('ladder')),
                   ladder=spec.get('ladder'), batch=spec.get('batch', 1),
-                  dmrg_ok=bool(spec.get('dmrg_ok')))
+                  dmrg_ok=bool(spec.get('dmrg_ok')),
+                  charge_sector=spec.get('charge_sector'))
+    system['memory_budget_mb'] = spec.get('memory_budget_mb')
+    system['dtype'] = spec.get('dtype', 'float64')
+    system['device'] = spec.get('device', 'cuda')
+    system['krylov_dim'] = spec.get('krylov_dim', 48)
+    check_cancel(progress_arr)
     kp = spec.get('kpm') or {}
     dm = spec.get('dmrg') or {}      # DMRG 截断控制（不传则用下面的默认值）
     res = eq_route.solve_equilibrium(
@@ -103,18 +123,23 @@ def run_equilibrium(spec, log=None, progress_arr=None):
         chi_max=int(dm.get('chi_max', 200)),
         truncerr=float(dm.get('truncerr', 1e-10)),
         max_sweeps=int(dm.get('max_sweeps', 60)),
+        qmc_sweeps=int((spec.get('qmc') or {}).get('sweeps', 2000)),
+        qmc_burn_in=int((spec.get('qmc') or {}).get('burn_in', 500)),
+        qmc_measure_every=int((spec.get('qmc') or {}).get('measure_every', 5)),
+        qmc_M=(spec.get('qmc') or {}).get('M'),
+        memory_budget_mb=spec.get('memory_budget_mb'), dtype=spec.get('dtype', 'float64'),
+        return_state=bool(spec.get('return_state', False)),
         exact=bool(spec.get('exact', want == 'gs')))
+    check_cancel(progress_arr)
     res['method'] = want
     res['states'] = spec.get('states')
     res['labels'] = spec.get('labels')
     res['n_atoms'] = n
-    res['error_report'] = dict(warnings=list(spec.get('warnings') or []))
+    errors = dict(res.get('error_report') or {})
+    errors['warnings'] = list(errors.get('warnings') or []) + list(spec.get('warnings') or [])
+    res['error_report'] = errors
     log('[多体平衡态] want=%s → 后端 %s，n=%d' % (want, res.get('backend'), n))
-    if progress_arr is not None:
-        try:
-            progress_arr[0] = 1.0
-        except Exception:
-            pass
+    report_progress(progress_arr, 1.0)
     return res
 
 

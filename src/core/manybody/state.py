@@ -1,0 +1,260 @@
+# -*- coding: utf-8 -*-
+"""Generic local two-level state specifications shared by ED and MPS.
+
+The representation is deliberately model-independent: a product state is a
+list of normalized local vectors in the local basis ``(|g>, |r>)``.  A vortex
+is just one possible choice of their phases; the solver does not know about
+that interpretation.
+"""
+import numpy as np
+
+
+def make_mps_state(psi, order, charge_sector=None):
+    """An independent finite TeNPy MPS plus its atom/basis metadata.
+
+    This is a Python RunSpec payload, not a JSON object.  Use the HDF5
+    checkpoint helpers when transporting it between processes or sessions.
+    """
+    snapshot = psi.copy()
+    if snapshot.L > 1:
+        snapshot.canonical_form(renormalize=False, cutoff=0.)
+    state = dict(kind='mps', backend='tenpy', version=1, psi=snapshot,
+                 order=list(map(int, order)), local_basis=['g', 'r'],
+                 charge_sector=charge_sector)
+    validate_mps_state(state, len(order))
+    return state
+
+
+def validate_mps_state(state, n):
+    if state.get('backend') != 'tenpy' or state.get('version') != 1:
+        raise ValueError('CPU MPS state 需要 backend=tenpy, version=1')
+    from tenpy.networks.mps import MPS
+    psi = state.get('psi')
+    if not isinstance(psi, MPS) or psi.bc != 'finite' or psi.L != n:
+        raise ValueError('state.psi 必须是相同站点数的有限 TeNPy MPS')
+    if sorted(state.get('order', [])) != list(range(n)):
+        raise ValueError('MPS state.order 必须是原子下标的完整排列')
+    if state.get('local_basis') != ['g', 'r'] or any(s.dim != 2 for s in psi.sites):
+        raise ValueError('MPS state 的局部基必须是 g/r 二能级')
+    norm = float(np.real(psi.overlap(psi)))
+    if not np.isfinite(norm) or abs(norm-1.) > 1e-8:
+        raise ValueError('MPS state 必须归一；不会静默丢弃算符作用态的范数')
+
+
+def save_mps_checkpoint(state, path):
+    """Persist a trusted local finite MPS with charge and ordering metadata."""
+    from tenpy.tools import hdf5_io
+    validate_mps_state(state, len(state.get('order', [])))
+    hdf5_io.save(state, str(path))
+
+
+def load_mps_checkpoint(path):
+    """Read a locally produced TeNPy HDF5 checkpoint; no basis conversion."""
+    from tenpy.tools import hdf5_io
+    state = hdf5_io.load(str(path))
+    validate_mps_state(state, len(state.get('order', [])))
+    return state
+
+
+def _scalar(x):
+    if isinstance(x, (list, tuple)) and len(x) == 2:
+        return complex(float(x[0]), float(x[1]))
+    return complex(x)
+
+
+def state_vector(spec, n, basis_indices=None):
+    """Materialize a normalized state directly in the declared MSB basis.
+
+    Patterns and product states never allocate a full 2**N intermediate when
+    a projected basis is supplied. Initial weight outside the basis is an
+    error, rather than an implicit physical projection/renormalization.
+    """
+    from .basis import basis_bits
+    n = int(n)
+    basis = (np.arange(1 << n, dtype=np.int64) if basis_indices is None
+             else np.asarray(basis_indices, np.int64))
+    projected = basis_indices is not None
+    if isinstance(spec, np.ndarray):
+        full = np.asarray(spec, complex)
+        if full.shape != (1 << n,):
+            raise ValueError('初态向量形状必须是 (2**N,)；受限态需携带完整基身份')
+        norm = np.linalg.norm(full)
+        vec = full[basis] / norm if norm > 0 else full[basis]
+    elif isinstance(spec, (list, tuple)) and spec and isinstance(spec[0], str) and spec[0] == 'sup':
+        vec = np.zeros(len(basis), complex)
+        for component in spec[1]:
+            if (isinstance(component, (list, tuple)) and len(component) == 2
+                    and not isinstance(component[0], (list, tuple, dict))):
+                pattern, amplitude = component
+                vec += _scalar(amplitude) * state_vector(pattern, n, basis_indices)
+            else:
+                vec += state_vector(component, n, basis_indices)
+        norm = np.linalg.norm(vec)
+        if not np.isfinite(norm) or norm <= 0:
+            raise ValueError('多体初态零范数或包含非有限数值')
+        return vec / norm
+    elif isinstance(spec, (int, np.integer)) and not isinstance(spec, bool):
+        if not 0 <= int(spec) < (1 << n):
+            raise ValueError('多体初态索引越界')
+        vec = (basis == int(spec)).astype(complex)
+    elif (isinstance(spec, (list, tuple)) and len(spec) == (1 << n)
+          and not (len(spec) == n and all(isinstance(x, (str, int, np.integer)) for x in spec))):
+        return state_vector(np.asarray(spec, complex), n, basis_indices)
+    else:
+        vectors = product_vectors(spec, n)
+        if vectors is None:
+            raise ValueError('ground 初态必须由求解器从当前 Hamiltonian 准备')
+        bits = basis_bits(n, basis)
+        vec = np.ones(len(basis), complex)
+        for i, local in enumerate(vectors):
+            vec *= np.asarray(local)[bits[i]]
+    norm = float(np.linalg.norm(vec))
+    if not np.isfinite(norm) or norm <= 0:
+        raise ValueError('多体初态零范数或不在受限子空间')
+    if projected and abs(norm - 1.) > 1e-10:
+        raise ValueError('初态含受限子空间之外的幅度；不会静默投影')
+    return vec / norm
+
+
+def _local_vector(x):
+    if isinstance(x, str):
+        if x == 'g': return np.array([1., 0.], complex)
+        if x == 'r': return np.array([0., 1.], complex)
+        raise ValueError('局部二能级态字符串只接受 g 或 r')
+    if isinstance(x, (int, np.integer)) and not isinstance(x, bool):
+        if int(x) not in (0, 1): raise ValueError('局部二能级态索引只接受 0 或 1')
+        return np.eye(2, dtype=complex)[:, int(x)]
+    a = np.asarray([_scalar(v) for v in x], complex) if hasattr(x, '__len__') else None
+    if a is None or a.shape != (2,):
+        raise ValueError('局部态必须是 [a_g, a_r]，形状为 (2,)')
+    norm = float(np.linalg.norm(a))
+    if not np.isfinite(norm) or norm <= 0.0: raise ValueError('局部态不能是零向量或含非有限数值')
+    return a / norm
+
+
+def product_vectors(spec, n):
+    """Return local vectors or ``None`` for the special ``ground`` spec."""
+    if spec is None:
+        return [np.array([1., 0.], complex) for _ in range(int(n))]
+    if isinstance(spec, (int, np.integer)) and not isinstance(spec, bool):
+        if not 0 <= int(spec) < (1 << int(n)):
+            raise ValueError('多体初态索引越界')
+        return [_local_vector((int(spec) >> (int(n)-1-i)) & 1) for i in range(int(n))]
+    if isinstance(spec, str):
+        if spec == 'ground': return None
+        s = spec.replace('|', '').replace('>', '').replace(' ', '')
+        if len(s) != int(n) or any(c not in 'gr' for c in s):
+            raise ValueError('模式串须由长度为 N 的 g/r 组成')
+        return [_local_vector(c) for c in s]
+    if isinstance(spec, dict):
+        kind = spec.get('kind', 'product')
+        if kind != 'product':
+            raise ValueError('未知乘积态 kind=%r；请使用 kind=product + amplitudes' % kind)
+        raw = spec.get('amplitudes', spec.get('local_states'))
+        if raw is None:
+            raise ValueError('product 初态需要 amplitudes 或 local_states')
+        spec = raw
+    if isinstance(spec, (list, tuple)) and len(spec) == int(n):
+        # Strings/integers are the legacy pattern form; arrays are general
+        # local superpositions.
+        return [_local_vector(x) for x in spec]
+    raise ValueError('无法解析多体乘积初态')
+
+
+def product_vector(spec, n):
+    vecs = product_vectors(spec, n)
+    if vecs is None: return None
+    out = np.array([1. + 0j])
+    for a in vecs:
+        out = np.kron(out, a)
+    return out
+
+
+def validate_product_spec(spec, n):
+    """Validate without materializing the (2^N) vector."""
+    if isinstance(spec, str) and spec == 'ground': return
+    product_vectors(spec, n)
+
+
+def validate_psi_spec(spec, n):
+    """Validate a general RunSpec initial-state description without 2**N allocation.
+
+    This mirrors the public ED grammar (patterns, indices, product states and
+    ``['sup', ...]``) but deliberately does not construct a Hilbert-space
+    vector.  The execution backend still performs the final dimension check
+    when it actually needs the state.
+    """
+    n = int(n)
+    dim = 1 << n
+    if spec is None or (isinstance(spec, str) and spec == 'ground'):
+        return
+    if isinstance(spec, (int, np.integer)) and not isinstance(spec, bool):
+        if not 0 <= int(spec) < dim:
+            raise ValueError('多体初态索引 %d 越界（dim=%d）' % (int(spec), dim))
+        return
+    if isinstance(spec, str):
+        s = spec.replace('|', '').replace('>', '').replace(' ', '')
+        if len(s) != n or any(c not in 'gr' for c in s):
+            raise ValueError('模式串须由长度为 N 的 g/r 组成')
+        return
+    if isinstance(spec, dict):
+        if spec.get('kind') == 'mps':
+            if spec.get('backend') == 'tenpy':
+                validate_mps_state(spec, n)
+            else:
+                tensors = [np.asarray(t) for t in spec.get('tensors', [])]
+                order = spec.get('order', list(range(n)))
+                if (len(tensors) != n or sorted(order) != list(range(n))
+                        or any(t.ndim != 3 or t.shape[1] != 2 for t in tensors)
+                        or tensors[0].shape[0] != 1 or tensors[-1].shape[2] != 1
+                        or any(a.shape[2] != b.shape[0] for a,b in zip(tensors,tensors[1:]))
+                        or any(not np.isfinite(t).all() for t in tensors)):
+                    raise ValueError('MPS tensors/order 不合法')
+            return
+        if spec.get('kind') in ('peps', 'tensor_network'):
+            ts = spec.get('tensors')
+            if not isinstance(ts, (list, tuple)) or len(ts) != n:
+                raise ValueError('PEPS 初态 tensors 数量必须等于原子数')
+            return
+        validate_product_spec(spec, n)
+        return
+    if isinstance(spec, np.ndarray):
+        if spec.ndim != 1 or spec.shape != (dim,):
+            raise ValueError('多体初态向量形状应 (%d,)，得 %s' % (dim, spec.shape))
+        if not np.isfinite(np.asarray(spec, complex)).all() or np.linalg.norm(np.asarray(spec, complex)) <= 0:
+            raise ValueError('多体初态零范数')
+        return
+    if isinstance(spec, (list, tuple)):
+        if spec and isinstance(spec[0], str) and spec[0] == 'sup':
+            comps = spec[1] if len(spec) > 1 else []
+            if not isinstance(comps, (list, tuple)):
+                raise ValueError("多体叠加初态的第二项须是分量列表")
+            for comp in comps:
+                if (isinstance(comp, (list, tuple)) and len(comp) == 2
+                        and not isinstance(comp[0], (list, tuple, dict))):
+                    validate_psi_spec(comp[0], n)
+                    _scalar(comp[1])
+                else:
+                    validate_psi_spec(comp, n)
+            return
+        if len(spec) == n:
+            # A list of local vectors is the generic product-state form.
+            if all(isinstance(x, (str, int, np.integer)) and not isinstance(x, bool)
+                   for x in spec):
+                for x in spec:
+                    _local_vector(x)
+                return
+            if any(hasattr(x, '__len__') for x in spec):
+                validate_product_spec(spec, n)
+                return
+        if len(spec) == dim:
+            v = np.asarray(spec, complex)
+            if not np.isfinite(v).all() or np.linalg.norm(v) <= 0:
+                raise ValueError('多体初态零范数')
+            return
+    raise ValueError('无法解析多体初态 psi0=%r' % (spec,))
+
+
+__all__ = ['product_vectors', 'product_vector', 'validate_product_spec',
+           'validate_psi_spec', 'make_mps_state', 'validate_mps_state',
+           'save_mps_checkpoint', 'load_mps_checkpoint']

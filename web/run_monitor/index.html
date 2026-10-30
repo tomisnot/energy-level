@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#071021" />
+    <title>Energy Level · AI Run Monitor</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand-lockup">
+          <div class="brand-mark"><span></span><span></span><span></span></div>
+          <div><div class="brand-name">ENERGY LEVEL</div><div class="brand-subtitle">AI RUN MONITOR</div></div>
+        </div>
+        <div class="authority-card">
+          <div class="authority-head"><span class="status-dot live"></span><span>AI 模式运行中</span></div>
+          <div class="authority-meta">人类只读 · 观察与回看</div>
+          <div class="authority-row"><span>最近同步</span><strong id="last-sync">刚刚</strong></div>
+        </div>
+        <nav class="side-nav" aria-label="主导航">
+          <button class="side-nav-item active" data-view="runs"><span class="nav-icon">◈</span><span>运行卡片</span><b id="nav-run-count">4</b></button>
+          <button class="side-nav-item" data-view="activity"><span class="nav-icon">↯</span><span>活动时间线</span></button>
+          <button class="side-nav-item" data-view="config"><span class="nav-icon">⌘</span><span>当前配置</span></button>
+        </nav>
+        <div class="sidebar-foot">
+          <div class="connection-row"><span class="status-dot live"></span><span>MCP 已连接</span><span class="mono">:auto</span></div>
+          <div class="connection-row muted"><span>监控端点</span><span class="mono">.monitor-port</span></div>
+        </div>
+      </aside>
+
+      <main class="main-content">
+        <header class="topbar">
+          <div><div class="eyebrow">OBSERVABILITY / RUNS</div><p class="lede">最新运行在最上层 · 向下翻页回看配置、过程和结果</p></div>
+          <div class="readonly-badge"><span class="lock-icon">⊙</span><span>AI 模式 · 人类只读</span></div>
+        </header>
+
+        <section class="toolbar" aria-label="运行筛选">
+          <div class="filter-tabs" role="tablist">
+            <button class="filter-tab active" data-filter="all">全部 <span id="count-all">4</span></button>
+            <button class="filter-tab" data-filter="running">进行中 <span id="count-running">1</span></button>
+            <button class="filter-tab" data-filter="completed">已完成 <span id="count-completed">2</span></button>
+            <button class="filter-tab" data-filter="attention">需关注 <span id="count-attention">1</span></button>
+          </div>
+          <div class="toolbar-right"><label class="search-box"><span>⌕</span><input id="search" type="search" placeholder="搜索运行、方法或态" /></label><select id="sort-select" aria-label="排序"><option value="newest">最新在前</option><option value="oldest">最早在前</option><option value="status">按状态</option></select></div>
+        </section>
+
+        <section class="deck-header"><div><span class="section-kicker">RUN DECK</span><span class="deck-hint">滚轮 / ↑ ↓ 翻页</span></div><div class="deck-position"><strong id="deck-position-current">01</strong><span>/</span><span id="deck-position-total">04</span></div></section>
+        <section class="deck-shell" aria-label="运行卡片翻页区"><div class="deck-stage" id="deck-stage"><div class="deck" id="run-deck"></div></div><div class="deck-controls" aria-label="翻页控制"><button class="deck-control" id="deck-prev" title="上一张运行卡片">↑</button><button class="deck-control" id="deck-next" title="下一张运行卡片">↓</button></div></section>
+
+        <section class="empty-state" id="empty-state" hidden><div class="empty-orbit">◌</div><h2>没有匹配的运行</h2><p>换一个筛选条件，或等待 AI 发起下一次演化。</p></section>
+        <footer class="page-foot"><span>Energy Level · read-only cockpit</span><span>所有数据来自当前 AI 会话</span></footer>
+      </main>
+    </div>
+    <script src="app.js"></script>
+  </body>
+</html>

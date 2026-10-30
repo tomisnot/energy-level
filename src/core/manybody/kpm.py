@@ -18,8 +18,61 @@ import numpy as np
 import scipy.sparse as sp
 from scipy.sparse.linalg import eigsh
 from numpy.polynomial.chebyshev import chebinterpolate
+from .resources import budget_bytes, require_workspace
 
-__all__ = ['kpm_moments', 'kpm_thermal', 'kpm_dos', 'jackson_kernel']
+__all__ = ['kpm_moments', 'kpm_thermal', 'kpm_dos', 'kpm_moments_gpu', 'jackson_kernel']
+
+
+def kpm_moments_gpu(H, num=300, nvec=48, seed=0, device='cuda', chunk=32,
+                    memory_budget_mb=None, dtype='float64'):
+    """CUDA Hutchinson moments with block probes; keeps only two Krylov blocks.
+
+    Bounds are obtained through the existing CPU routine.  The operator is a
+    torch sparse COO matrix when possible, so no dense GPU copy is required.
+    """
+    import torch
+    if not torch.cuda.is_available() or str(device).startswith('cpu'):
+        raise RuntimeError('CUDA 不可用')
+    if dtype not in ('float32','float64'):
+        raise ValueError('dtype 必须为 float32/float64')
+    if int(num) < 1 or int(nvec) < 1:
+        raise ValueError('num 和 nvec 必须为正整数')
+    D = int(H.shape[0]); _, _, c, r = _bounds(H)
+    Hs = H.tocoo() if sp.issparse(H) else sp.coo_matrix(np.asarray(H))
+    itemsize = 8 if dtype == 'float32' else 16
+    base_bytes = (len(Hs.data)+D)*(itemsize+16)*3
+    budget = budget_bytes(memory_budget_mb)
+    require_workspace(base_bytes+D*itemsize*6, memory_budget_mb, 'GPU KPM 算子和单个 probe')
+    if budget is not None:
+        chunk = min(int(chunk), max(1,(budget-base_bytes)//(D*itemsize*6)))
+    dev = torch.device(device)
+    rows = torch.as_tensor(Hs.row, device=dev, dtype=torch.long)
+    cols = torch.as_tensor(Hs.col, device=dev, dtype=torch.long)
+    tdtype = torch.complex64 if dtype == 'float32' else torch.complex128
+    vals = torch.as_tensor((Hs.data / r), device=dev, dtype=tdtype)
+    A = torch.sparse_coo_tensor(torch.stack([rows, cols]), vals, (D, D)).coalesce()
+    diag = torch.arange(D,device=dev)
+    shift = torch.sparse_coo_tensor(torch.stack([diag,diag]),
+        torch.full((D,), c/r,device=dev,dtype=tdtype),(D,D))
+    A = (A-shift).coalesce()
+    chunk = max(1, min(int(chunk), int(nvec)))
+    gen = torch.Generator(device=dev); gen.manual_seed(int(seed))
+    acc = torch.zeros(num + 1, device=dev, dtype=torch.float64)
+    done = 0
+    while done < int(nvec):
+        b = min(chunk, int(nvec) - done)
+        z = torch.randint(0, 2, (D, b), device=dev, generator=gen,
+                           dtype=torch.int8).to(torch.float64).mul_(2).sub_(1)
+        zc = z.to(tdtype); t0 = zc; t1 = torch.sparse.mm(A, zc)
+        acc[0] += (t0.conj() * zc).real.sum(dtype=torch.float64)
+        if num >= 1: acc[1] += (t1.conj() * z).real.sum(dtype=torch.float64)
+        for n in range(2, int(num) + 1):
+            t2 = 2 * torch.sparse.mm(A, t1) - t0
+            acc[n] += (t2.conj() * z).real.sum(dtype=torch.float64)
+            t0, t1 = t1, t2
+        done += b
+    mu = (acc / (int(nvec) * D)).detach().cpu().numpy()
+    return mu, c, r
 
 
 def _dense(H):
@@ -29,13 +82,16 @@ def _dense(H):
 def _bounds(H):
     """谱界 [emin,emax]（eigsh SA/LA；小维直接 eigvalsh）+ 缩放中心 c、半径 r。"""
     D = H.shape[0]
-    if D <= 4096:
+    if D <= 16:
         w = np.linalg.eigvalsh(_dense(H))
         emin, emax = float(w[0]), float(w[-1])
     else:
         Hc = H if sp.issparse(H) else sp.csr_matrix(H)
-        emin = float(eigsh(Hc, k=1, which='SA', return_eigenvectors=False)[0])
-        emax = float(eigsh(Hc, k=1, which='LA', return_eigenvectors=False)[0])
+        # Fixed starting vectors keep the scaling (and hence seeded moments)
+        # reproducible after switching from full spectra to iterative bounds.
+        start = np.random.default_rng(0).standard_normal(D)
+        emin = float(eigsh(Hc, k=1, which='SA', v0=start.copy(), return_eigenvectors=False)[0])
+        emax = float(eigsh(Hc, k=1, which='LA', v0=start.copy(), return_eigenvectors=False)[0])
     c = 0.5 * (emin + emax)
     r = 0.5 * (emax - emin) * (1.0 + 1e-3) + 1e-12
     return emin, emax, c, r
@@ -58,6 +114,8 @@ def jackson_kernel(num):
 
 def kpm_moments(H, num=300, nvec=48, seed=0, exact=False):
     """→ (mu[num+1], c, r)：mu_n=(1/D)Tr(T_n(H̃))，H̃=(H−c)/r∈[−1,1]。"""
+    if int(num) < 1 or int(nvec) < 1:
+        raise ValueError('num 和 nvec 必须为正整数')
     D = H.shape[0]
     _, _, c, r = _bounds(H)
     mu = np.zeros(num + 1)
@@ -98,47 +156,50 @@ def _norm_trace_f(mu, a):
     return float(np.dot(a, mu))
 
 
+def _thermal_from_moments(H, betas, moments, num):
+    mu, c, r = moments; D = H.shape[0]
+    betas = np.atleast_1d(np.asarray(betas, float)); E=np.zeros_like(betas); C=np.zeros_like(betas); F=np.zeros_like(betas); Z=np.zeros_like(betas); lnZ=np.zeros_like(betas)
+    for i,b in enumerate(betas):
+        # Shift by a lower spectral bound; ratios remain unchanged and F is
+        # restored analytically. Avoid exp(-beta*E) overflow at low temperature.
+        shift = c-r
+        fZ=lambda x,b=b: np.exp(-b*(r*x+c-shift))
+        fE=lambda x,b=b: (r*x+c)*np.exp(-b*(r*x+c-shift))
+        fE2=lambda x,b=b: (r*x+c)**2*np.exp(-b*(r*x+c-shift))
+        z=_norm_trace_f(mu,_cheb_coeffs(fZ,num))*D
+        e1=_norm_trace_f(mu,_cheb_coeffs(fE,num))*D
+        e2=_norm_trace_f(mu,_cheb_coeffs(fE2,num))*D
+        if not np.isfinite(z) or z <= 0:
+            raise ValueError('KPM 配分函数非正；请增加 moments/probes 或降低 beta')
+        E[i]=e1/z; C[i]=b*b*max(e2/z-E[i]**2,0.)
+        F[i]=shift-np.log(z)/b if b>0 else np.nan
+        lnZ[i]=np.log(z)-b*shift
+        with np.errstate(over="ignore",under="ignore"):
+            Z[i]=np.exp(lnZ[i])
+    return dict(betas=betas,E=E,C=C,F=F,Z=Z,lnZ=lnZ)
+
+
+def _dos_from_moments(mu, c, r, energies, num, use_jackson=True):
+    x=(np.asarray(energies,float)-c)/r; xn=np.clip(x,-1+1e-9,1-1e-9); G=jackson_kernel(num) if use_jackson else np.ones(num+1)
+    series=mu[0]*np.ones_like(xn)
+    if num>=1:
+        t0=np.ones_like(xn); t1=xn.copy(); series += 2*G[1]*mu[1]*t1
+        for n in range(2,num+1):
+            t2=2*xn*t1-t0; series += 2*G[n]*mu[n]*t2; t0,t1=t1,t2
+    return np.maximum(series/(np.pi*np.sqrt(1-xn**2))/r,0.0)
+
+
 def kpm_thermal(H, betas, num=300, nvec=48, seed=0, exact=False):
     """有限温：→ dict(E,C,F,Z,chi_n?) per beta（betas 为 (1/MHz,) 数组，标量亦可）。
 
     E(β)=⟨H⟩、C(β)=β²Var(H)、F=−lnZ/β、Z=Tr e^{−βH}（全由 μ_n + 各 f 的 Chebyshev 系数得）。
     """
     mu, c, r = kpm_moments(H, num, nvec, seed, exact)
-    D = H.shape[0]
-    betas = np.atleast_1d(np.asarray(betas, float))
-    E = np.zeros_like(betas); C = np.zeros_like(betas)
-    F = np.zeros_like(betas); Z = np.zeros_like(betas)
-    for i, b in enumerate(betas):
-        fZ = lambda x, b=b: np.exp(-b * (r * x + c))
-        fE = lambda x, b=b: (r * x + c) * np.exp(-b * (r * x + c))
-        fE2 = lambda x, b=b: (r * x + c) ** 2 * np.exp(-b * (r * x + c))
-        z = _norm_trace_f(mu, _cheb_coeffs(fZ, num)) * D
-        e1 = _norm_trace_f(mu, _cheb_coeffs(fE, num)) * D
-        e2 = _norm_trace_f(mu, _cheb_coeffs(fE2, num)) * D
-        Z[i] = z
-        E[i] = e1 / z
-        var = max(e2 / z - E[i] ** 2, 0.0)
-        C[i] = b ** 2 * var
-        F[i] = -np.log(z) / b if b > 0 else float('nan')
-    return dict(betas=betas, E=E, C=C, F=F, Z=Z, num=num, nvec=nvec,
-                exact=bool(exact), backend='kpm-chebyshev')
+    result = _thermal_from_moments(H, betas, (mu,c,r), num)
+    return dict(result, num=num, nvec=nvec, exact=bool(exact), backend='kpm-chebyshev')
 
 
 def kpm_dos(H, energies, num=300, nvec=48, seed=0, exact=False, use_jackson=True):
     """态密度 ρ(E)（归一 ∫ρ dE = 1）。energies: 目标能量点（MHz）。"""
     mu, c, r = kpm_moments(H, num, nvec, seed, exact)
-    x = (np.asarray(energies, float) - c) / r
-    xn = np.clip(x, -1 + 1e-9, 1 - 1e-9)
-    G = jackson_kernel(num) if use_jackson else np.ones(num + 1)
-    # D(x)=1/(π√(1-x²)) [μ0 + 2Σ_{n≥1} G_n μ_n T_n(x)]
-    series = mu[0] * np.ones_like(xn)
-    if num >= 1:
-        T0 = np.ones_like(xn); T1 = xn.copy()
-        series = series + 2 * G[1] * mu[1] * T1
-        for n in range(2, num + 1):
-            T2 = 2 * xn * T1 - T0
-            series = series + 2 * G[n] * mu[n] * T2
-            T0, T1 = T1, T2
-    rho_x = series / (np.pi * np.sqrt(1 - xn ** 2))
-    rho = rho_x / r                                  # 变量换到 E：ρ(E)=D(x)/r
-    return np.maximum(rho, 0.0)
+    return _dos_from_moments(mu,c,r,energies,num,use_jackson)

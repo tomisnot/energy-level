@@ -4,10 +4,11 @@
 ⚠ 这些是"粗估不是承诺"：只用来决定"要不要走异步 / ED 是否可行 / 要不要降 N"，
 与 cost.py 同一纪律。标定常数 MB_*_CAL 目前是**量级估计**（未经 cost.py 那样的
 逐点实测标定），M1 先给保守外推；A8 锚（χ×N 耗时/内存实测）在 M3 细化。
-维度 dim=2^N 是唯一主约束（前置文档 §4.2 断言）。
+优先使用有效基维度；未提供约化信息时按全空间 2^N 粗估。
 """
 __all__ = ['MB_EIGH_CAL', 'MB_KRYLOV_CAL', 'MB_DENSE_MAX_DEFAULT',
-           'ed_feasible', 'estimate_mb_cost', 'estimate_mb_peak_gb']
+           'ed_feasible', 'estimate_mb_cost', 'estimate_mb_peak_gb',
+           'effective_dim_from_sector', 'effective_dim_from_edges']
 
 # 稠密 eigh 档标定（量级）：eigh 成本 ∝ dim³。以 dim=1024 复 eigh ≈ 0.3 s 为锚。
 MB_EIGH_CAL = {'dim': 1024, 'sec': 0.3}
@@ -17,20 +18,41 @@ MB_DENSE_MAX_DEFAULT = 4096          # 与 engine_ed._MB_DENSE_MAX 默认一致
 _MB_FULLPOP_MAX_DEFAULT = 65536
 
 
-def ed_feasible(n_atoms, ed_max_dim):
-    """dim=2^N 是否在 ED 上限内（solver=auto 据此判可行）。"""
-    return (1 << int(n_atoms)) <= int(ed_max_dim)
+def effective_dim_from_sector(n_atoms, sector):
+    """固定激发数 sector 的组合维度 C(N,k)。"""
+    import math
+    n, k = int(n_atoms), int(sector)
+    if k < 0 or k > n:
+        return 0
+    return int(math.comb(n, k))
+
+
+def effective_dim_from_edges(n_atoms, edges):
+    """Number of independent sets for an explicit blockade graph."""
+    from .basis import independent_set_count
+    return independent_set_count(n_atoms, edges)
+
+
+
+def ed_feasible(n_atoms, ed_max_dim, effective_dim=None, sector=None):
+    """有效维度是否在 ED 上限内；未提供约化信息时回退到 2^N。"""
+    dim = (int(effective_dim) if effective_dim is not None else
+           effective_dim_from_sector(n_atoms, sector) if sector is not None else
+           1 << int(n_atoms))
+    return dim <= int(ed_max_dim)
 
 
 def estimate_mb_cost(n_atoms, t_max_ns, npts=201,
-                     dense_max=MB_DENSE_MAX_DEFAULT):
+                     dense_max=MB_DENSE_MAX_DEFAULT, effective_dim=None,
+                     sector=None):
     """多体 ED 演化耗时**粗估**（秒）。分稠密 eigh / 稀疏 Krylov 两档外推。
 
     与 t_max 近似无关（步数由 npts 定，非 t_max）；稠密档一次 eigh 后全时刻向量化，
     稀疏档逐区间步进 ∝ npts。
     """
     n = int(n_atoms)
-    dim = 1 << n
+    dim = (int(effective_dim) if effective_dim is not None else
+           effective_dim_from_sector(n, sector) if sector is not None else 1 << n)
     npts = max(int(npts), 2)
     if dim <= int(dense_max):
         s = MB_EIGH_CAL['sec'] * (dim / MB_EIGH_CAL['dim']) ** 3
@@ -43,10 +65,12 @@ def estimate_mb_cost(n_atoms, t_max_ns, npts=201,
 
 
 def estimate_mb_peak_gb(n_atoms, npts=201, dense_max=MB_DENSE_MAX_DEFAULT,
-                        fullpop_max=_MB_FULLPOP_MAX_DEFAULT):
+                        fullpop_max=_MB_FULLPOP_MAX_DEFAULT, effective_dim=None,
+                        sector=None):
     """多体 ED 峰值内存**粗估**（GB）：H（稠密 dim² / 稀疏 N·dim）+ psi/pops 主导。"""
     n = int(n_atoms)
-    dim = 1 << n
+    dim = (int(effective_dim) if effective_dim is not None else
+           effective_dim_from_sector(n, sector) if sector is not None else 1 << n)
     npts = max(int(npts), 2)
     gb = 0.0
     if dim <= int(dense_max):

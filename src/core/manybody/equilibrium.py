@@ -17,9 +17,11 @@ import scipy.sparse as sp
 from scipy.sparse.linalg import eigsh, expm_multiply
 
 from .observables import bit_matrix, entropy_at_cut
+from .matrix_free import torch_lanczos_ground_state
 
 __all__ = ['ground_state', 'ground_state_imagtime', 'thermal_from_h',
-           'gs_observables', 'detect_gpu', 'batched_ground_state']
+           'gs_observables', 'thermal_from_spectrum', 'detect_gpu', 'batched_ground_state',
+           'torch_lanczos_ground_state']
 
 
 def _to_array_dim(H):
@@ -30,23 +32,52 @@ def _to_array_dim(H):
     return d
 
 
-def ground_state(H, dense_max=2048, seed=0, k=2, v0=None):
+def ground_state(H, dense_max=2048, seed=0, k=2, v0=None,
+                 sector=None, sector_labels=None, basis_indices=None,
+                 sector_check=True, return_evecs=False):
     """基态：小维稠密 `eigh`（精确），大维 `eigsh`(Lanczos, which='SA')。
 
     返回 dict(E0, gap, vec, backend)。E0=最小本征值(MHz)，gap=第一激发−基态。
     Lanczos 用固定 v0（种子）保确定性；退化基态时 vec 任取一线性组合（观测量按
     该 vec 计，不做子空间平均——调用方若基态简并需自行处理）。
     """
+    sector_idx = None
+    if basis_indices is not None:
+        sector_idx = np.asarray(basis_indices, dtype=int)
+        H = H[np.ix_(sector_idx, sector_idx)] if not isinstance(H, sp.linalg.LinearOperator) else H
+    elif sector is not None:
+        if sector_labels is None:
+            raise ValueError('sector 模式需要 sector_labels 或 basis_indices')
+        labels = np.asarray(sector_labels)
+        Hs = H if sp.issparse(H) else sp.csr_matrix(H)
+        if sector_check:
+            coo = Hs.tocoo(); nz = coo.data != 0
+            if np.any(labels[coo.row[nz]] != labels[coo.col[nz]]):
+                raise ValueError('H 不守恒 sector_labels，拒绝静默切片')
+        sector_idx = np.where(labels == int(sector))[0]
+        if len(sector_idx) == 0:
+            raise ValueError('请求 sector 为空')
+        H = Hs[sector_idx][:, sector_idx]
     dim = H.shape[0]
     is_lo = isinstance(H, sp.linalg.LinearOperator)   # LinearOperator 只能稀疏路
-    if dim <= dense_max and not is_lo:
-        Hd = np.asarray(H.todense()) if sp.issparse(H) else np.asarray(H)
+    if dim <= 0 or int(k) < 1:
+        raise ValueError('Hamiltonian 不能为空且 k 必须 >=1')
+    if (dim <= dense_max and not is_lo) or dim <= 3:
+        Hd = (np.column_stack([H @ np.eye(1, dim, j).ravel() for j in range(dim)])
+              if is_lo else np.asarray(H.todense()) if sp.issparse(H) else np.asarray(H))
         w, V = np.linalg.eigh(Hd)
-        return dict(E0=float(w[0]), gap=float(w[1] - w[0]) if len(w) > 1 else 0.0,
-                    vec=V[:, 0], backend='eq-eigh', evals=w[:k])
+        out = dict(E0=float(w[0]), gap=float(w[1] - w[0]) if len(w) > 1 else 0.0,
+                   vec=V[:, 0], backend='eq-eigh', evals=w[:k])
+        if return_evecs:
+            out['evecs'] = V[:, :k]
+        if sector_idx is not None: out.update(sector=int(sector) if sector is not None else None,
+                                               sector_idx=sector_idx, dim_sub=len(sector_idx))
+        return out
     rng = np.random.default_rng(seed)
     if v0 is None:
-        v0 = rng.standard_normal(dim) + 1j * rng.standard_normal(dim)
+        v0 = rng.standard_normal(dim)
+        if np.issubdtype(H.dtype, np.complexfloating):
+            v0 = v0 + 1j * rng.standard_normal(dim)
     if is_lo:
         Hd = H
     else:
@@ -55,9 +86,14 @@ def ground_state(H, dense_max=2048, seed=0, k=2, v0=None):
                  tol=0)
     order = np.argsort(w)
     w, V = w[order], V[:, order]
-    return dict(E0=float(w[0]),
+    out = dict(E0=float(w[0]),
                 gap=float(w[1] - w[0]) if len(w) > 1 else 0.0,
                 vec=V[:, 0], backend='eq-lanczos', evals=w)
+    if return_evecs:
+        out['evecs'] = V
+    if sector_idx is not None: out.update(sector=int(sector) if sector is not None else None,
+                                          sector_idx=sector_idx, dim_sub=len(sector_idx))
+    return out
 
 
 def ground_state_imagtime(H, beta_step=0.02, steps=4000, seed=0,
@@ -108,7 +144,28 @@ def gs_observables(H, n_atoms=None):
     return out
 
 
-def thermal_from_h(H, beta, n_atoms=None):
+def thermal_from_spectrum(evals, betas, return_weights=False):
+    """Exact Gibbs thermodynamics for an arbitrary spectrum (energies in MHz)."""
+    values = np.asarray(evals,float)
+    betas = np.atleast_1d(np.asarray(betas,float))
+    if values.ndim != 1 or not len(values) or not np.isfinite(values).all():
+        raise ValueError('能谱必须是非空有限数组')
+    if not np.isfinite(betas).all() or np.any(betas <= 0):
+        raise ValueError('betas 必须是有限正数')
+    e0 = values.min(); relative = values-e0
+    weights = np.exp(-betas[:,None]*relative)
+    shifted_Z = weights.sum(axis=1)
+    probabilities = weights/shifted_Z[:,None]
+    relative_mean = probabilities @ relative
+    variance = np.maximum(probabilities @ relative**2-relative_mean**2, 0.)
+    lnZ = np.log(shifted_Z)-betas*e0
+    result = dict(betas=betas,E=e0+relative_mean,C=betas**2*variance,F=-lnZ/betas,lnZ=lnZ)
+    if return_weights:
+        result['weights'] = probabilities
+    return result
+
+
+def thermal_from_h(H, beta, n_atoms=None, basis_indices=None):
     """精确有限温 Gibbs：由谱分解 e^{−βH}，给 E(β)、F(β)、C(β)、⟨n_i⟩_β、χ_β(Σn)。
 
     β=1/MHz（β→∞ 趋于基态）。小维稠密 `eigh`（精确，O(2^N)）。
@@ -116,21 +173,19 @@ def thermal_from_h(H, beta, n_atoms=None):
     """
     d = _to_array_dim(H)
     n = n_atoms if n_atoms is not None else d
-    dim = 1 << n
+    if basis_indices is not None:
+        idx = np.asarray(basis_indices, dtype=int)
+        H = H[np.ix_(idx, idx)]
+        bits = np.asarray([((idx >> (n-1-i)) & 1) for i in range(n)])
+    else:
+        bits = bit_matrix(n, 1 << n)
     Hd = np.asarray(H.todense()) if sp.issparse(H) else np.asarray(H)
     evals, evecs = np.linalg.eigh(Hd)
-    e0 = evals.min()
-    w = np.exp(-beta * (evals - e0))
-    Z_shift = w.sum()                            # Σ e^{−β(e−e0)}，数值稳定
-    lnZ = float(np.log(Z_shift) - beta * e0)     # 物理 lnZ = ln Σ e^{−βe}
-    pm = w / Z_shift                             # 各本征态占据
-    E = float(e0 + pm @ (evals - e0))
-    F = float(-lnZ / beta)
-    var_e = float(pm @ (evals - e0) ** 2 - (pm @ (evals - e0)) ** 2)
-    C = float(beta ** 2 * var_e)
+    thermal = thermal_from_spectrum(evals,[beta],return_weights=True)
+    pm = thermal['weights'][0]
+    E,F,C,lnZ = (float(thermal[key][0]) for key in ('E','F','C','lnZ'))
     # 组态对角占据 P_s = Σ_m pm_m |evecs[s,m]|²
     Ps = (np.abs(evecs) ** 2) @ pm
-    bits = bit_matrix(n, dim)
     n_atom = bits @ Ps
     m_tot = bits.sum(axis=0)                     # 总激发数算符（对角）
     mean_m = float(m_tot @ Ps)

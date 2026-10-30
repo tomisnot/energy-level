@@ -5,8 +5,8 @@
   （`src/core/__init__.py` 已把旧名注册进 sys.modules；这里让它们从 src 层也拿得到）。
 - **UI 惰性导出**（PEP 562）：`from src import fields/ui_dynamic/...` → `src.ui.*`。
   惰性 ⇒ `import src.core.X` 不连带拉起 PyQt5，并行扫描 runner/worker 保持 headless。
-- **ARC 数据补丁**：暂不装（沿用 Re0：走 `~/.arc-data`，与判据一致、导入快）。
-  打包/发布（Phase E）时再装 `.arcdata` 重定向补丁，届时重跑基线核对物理不变。
+- **ARC 数据补丁**：若仓内 `.arcdata/` 存在，导入时把 ARC 的数据目录重定向到仓内，
+  避免把 SQLite literatureDME 写到用户目录；没有仓内数据时保留 ARC 默认路径。
 """
 
 _ENGINE_ALIASES = ('core', 'pair_core', 'waveforms')
@@ -16,6 +16,29 @@ _LAZY_UI = ('fields', 'ui_theme', 'ui_single', 'ui_radar', 'ui_waves',
             'ui_dynamic', 'evolve_worker', 'app_state', 'ui_group',
             'ui_spectrum', 'hamiltonian_viewer', 'solver_inspector',
             'sweep_panel')
+
+
+def _configure_arc_data():
+    """把 ARC 的可写缓存优先放进当前 EL 仓库。
+
+    ARC 在 `Rubidium87()` 构造时会初始化/更新 SQLite。这个补丁必须发生在
+    原子对象创建前；缺少 ARC 或 `.arcdata` 时静默保留 ARC 默认行为，避免
+    `import src` 变成 ARC 的硬依赖。
+    """
+    import os
+    data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            '.arcdata')
+    if not os.path.isdir(data_dir):
+        return
+    try:
+        from arc.alkali_atom_functions import AlkaliAtom
+    except Exception:
+        return
+    AlkaliAtom.dataFolder = data_dir
+    globals()['_ARC_DATA_FOLDER'] = data_dir
+
+
+_configure_arc_data()
 
 
 def __getattr__(name):

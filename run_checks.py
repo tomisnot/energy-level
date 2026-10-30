@@ -27,12 +27,21 @@ CORE = {
     'ai_h_snapshot_guard_selfcheck.py', 'equibench_engine_ed_selfcheck.py',
     'equibench_gs_solvers_selfcheck.py', 'equibench_analytic_thermo_selfcheck.py',
     'equibench_heisenberg2d_selfcheck.py',
+    'manybody_mps_selfcheck.py', 'manybody_timeevolution_crosscheck.py', 'manybody_link_observable_selfcheck.py',
+    'manybody_mps_gpu_selfcheck.py',
+    'manybody_generic_input_selfcheck.py',
+    'equibench_qmc_selfcheck.py',
+    'manybody_plan_selfcheck.py',
+    'equibench_sector_matrixfree_selfcheck.py',
+    'manybody_state_solver_selfcheck.py',
+    'manybody_contract_selfcheck.py',
 }
 # 慢基准：默认跳过（约 18 分钟），--slow 才跑
 SLOW = {'mw_bench_firstprinciples.py'}
 
 # 较宽的快速场景；没有耗时登记准入要求。
 FAST = CORE | {
+    'run_monitor_selfcheck.py',
     'drive_wave_selfcheck.py',
     'equibench_dmrg_general_selfcheck.py',
     'equibench_gpu_batched_selfcheck.py',

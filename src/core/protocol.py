@@ -395,21 +395,33 @@ def _mb_estimate(cache, snap):
         return out
     dim = 1 << n
     out['dim'] = dim
+    c = (snap or {}).get('manybody.constraint') or {}
+    edges = c.get('edges') if isinstance(c, dict) else None
+    active_constraint = isinstance(c, dict) and c.get('kind') in ('blockade', 'pxp') and c.get('mode', 'project') == 'project'
+    if active_constraint and isinstance(edges, (list, tuple)):
+        try:
+            out['effective_dim'] = cost_mb.effective_dim_from_edges(n, edges)
+            out['reduction_ratio'] = round(out['effective_dim'] / dim, 6)
+        except ValueError as exc:
+            out['constraint_note'] = str(exc)
+    elif active_constraint and edges == 'auto':
+        out['constraint_note'] = 'edges=auto：需装配/标定后按 V 阈值确定有效维度'
     ed_max = int(_mb_schema.mb_get(snap, 'manybody.ed_max_dim'))
-    out['ed_feasible'] = cost_mb.ed_feasible(n, ed_max)
+    out['ed_feasible'] = cost_mb.ed_feasible(n, ed_max, effective_dim=out.get('effective_dim'))
     t_max = (snap or {}).get('dynamic.t_max')
     npts = (snap or {}).get('dynamic.npts')
     if t_max and npts:
-        out['est_sec'] = round(cost_mb.estimate_mb_cost(n, float(t_max),
-                                                        int(npts)), 1)
-        gb = cost_mb.estimate_mb_peak_gb(n, int(npts))
+        out['est_sec'] = round(cost_mb.estimate_mb_cost(n, float(t_max), int(npts),
+                                                        effective_dim=out.get('effective_dim')), 1)
+        gb = cost_mb.estimate_mb_peak_gb(n, int(npts), effective_dim=out.get('effective_dim'))
         out['est_peak_gb'] = round(gb, 3) if gb else None
-    out['note'] = ('多体 ED 成本 ∝ 2^N（N=%d, dim=%d）；est_sec 粗估，'
-                   '决定要不要走 async' % (n, dim))
+    eff = out.get('effective_dim', dim)
+    out['note'] = ('多体 ED 成本按有效维度估算（N=%d, full_dim=%d, effective_dim=%d）；'
+                   'est_sec 粗估，决定要不要走 async' % (n, dim, eff))
     if not out['ed_feasible']:
         out['warnings'].append(
-            'dim=2^%d=%d 超 ed_max_dim=%d——ED 不可行（等 M3 的 MPS/TEBD）'
-            % (n, dim, ed_max))
+            '有效维度=%d（full_dim=2^%d=%d）超 ed_max_dim=%d——ED 不可行，建议使用稀疏/MPS 后端'
+            % (eff, n, dim, ed_max))
     return out
 
 

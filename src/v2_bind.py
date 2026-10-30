@@ -91,6 +91,7 @@ def gc_report(root, *, dry_run=True, **_kw):
 
 #: 监控端口的发现文件（裸端口文本；与 `.mcp-port` 同在项目根）。
 MONITOR_PORT_FILE = ".monitor-port"
+RUN_MONITOR_PORT_FILE = ".run-monitor-port"
 
 def _el_schema_rows(bridge):
     """EL 的配置 schema 行（`/config` 建树的输入）：键全名 + family/unit/type/desc。
@@ -226,6 +227,21 @@ def make_v2_bridge(el_root, *, data_root=None, data_dir_name=".mecha-v2",
         endpoint = start_monitor_endpoint(bridge, port_file=mpf)
         bridge._monitor_endpoint = endpoint
         bridge._monitor_port = endpoint.port
+        # 项目自己的运行卡片只读面：同一份 bridge/run_monitor store，推送
+        # RunSpec、阶段进度和 result_summary；浏览器不接触 Gate 写口。
+        from mecha_v2.run_monitor import RunMonitorServer
+        rpf = str(Path(el_root) / RUN_MONITOR_PORT_FILE)
+        try:
+            run_web = RunMonitorServer(
+                bridge.run_monitor, Path(el_root) / "web" / "run_monitor",
+                bridge.effective, port_file=rpf).start()
+            bridge._run_monitor_server = run_web
+            bridge._run_monitor_port = run_web.port
+        except OSError as exc:
+            # 浏览器观察面不能阻断 MCP/计算服务；端口可用时自动接入。
+            run_web = None
+            print(f"[v2_bind] 运行卡片服务启动失败（计算服务仍可用）：{exc}", flush=True)
         print(f"[v2_bind] MCP 服务器 :{port}/mcp（工具经同一道 Gate）；"
-              f"只读监控 :{endpoint.port}（发现文件 {Path(mpf).name}；dsh 面板轮询）")
+              f"只读监控 :{endpoint.port}（发现文件 {Path(mpf).name}；dsh 面板轮询）；"
+              f"运行卡片 :{run_web.port if run_web else '未启用'}（发现文件 {Path(rpf).name}）")
     return bridge

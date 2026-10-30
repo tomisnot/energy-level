@@ -33,6 +33,7 @@ from mecha.gate import Channel, Gate
 from mecha.history import Event, History, fold
 from mecha.monitor import Claim, Monitor
 from mecha.providers.jobs import JobRegistry
+from .run_monitor import RunMonitorStore
 
 
 # actor 字符串 → 通道。宿主词表在这层，不在库。
@@ -134,6 +135,7 @@ class V2Bridge:
         self.monitor = monitor or Monitor(history.events, summarizer)
         # 单一 Job 注册表（本进程唯一，消 D-21）：GUI 与 MCP 线程共用它。
         self.jobs = jobs or JobRegistry()
+        self.run_monitor = RunMonitorStore()
 
     @classmethod
     def _assembled(cls, *, el_root: str | Path, data_root: str | Path,
@@ -290,6 +292,12 @@ class V2Bridge:
 
     def close(self) -> None:
         """关停：释放数据目录的写租约（宿主退出/租约交接用）。幂等。"""
+        endpoint = getattr(self, "_run_monitor_server", None)
+        if endpoint is not None:
+            try:
+                endpoint.stop()
+            except Exception:
+                pass
         self._history.close()
 
     @property
@@ -431,14 +439,24 @@ class ElOps:
         snap = self._b.effective()
         run = p.build_run(self._b.cache, snap, pump=pump, vdd=vdd, diag=diag)
         problems = p.check_run(run)
-        return {"run": run, "problems": problems, "actor": actor, "reason": reason}
+        monitor_id = self._b.run_monitor.begin(run, snap, actor=actor, reason=reason)
+        return {"run": run, "problems": problems, "actor": actor, "reason": reason,
+                "monitor_id": monitor_id}
 
     def execute(self, prepared: dict, *, actor: str = "gui", reason: str = "",
                 progress_arr=None, land_artifact: bool = True) -> dict:
         p = self._b._engine._protocol
         run = prepared["run"]
-        res = p.evolve_run(run, progress_arr=progress_arr, cache=self._b.cache)
-        summary = dict(p.result_summary(run, res))
+        monitor_id = prepared.get("monitor_id")
+        if monitor_id:
+            self._b.run_monitor.attach_progress(monitor_id, progress_arr)
+        try:
+            res = p.evolve_run(run, progress_arr=progress_arr, cache=self._b.cache)
+            summary = dict(p.result_summary(run, res))
+        except Exception as exc:
+            if monitor_id:
+                self._b.run_monitor.finish(monitor_id, error=exc)
+            raise
         problems = list(prepared.get("problems") or [])
         summary["problems"] = problems
         aid = ""
@@ -447,6 +465,8 @@ class ElOps:
             summary["artifact_id"] = aid
         # problems 同时放**顶层**：v1 的 RunWorker 消费 `res.get('problems')`
         # 发状态栏旁注（evolve_worker.py:45），只嵌 summary 会让旁注静默丢失。
+        if monitor_id:
+            self._b.run_monitor.finish(monitor_id, summary=summary, raw=res)
         return {"summary": summary, "problems": problems,
                 "artifact_id": aid, "ok": bool(summary.get("ok"))}
 
@@ -455,12 +475,10 @@ class ElOps:
         import uuid
         self.root.mkdir(parents=True, exist_ok=True)
         aid = uuid.uuid4().hex[:12]
-        # 含时载荷（pops/t/…）+ **平衡态载荷**（betas/E/C/F、energies/rho、n_atom）。
-        # 早先只认含时键 ⇒ 平衡态数组全部静默丢失（GUI 无图可画）。
-        arrays = {k: v for k, v in res.items()
-                  if k in ("pops", "t", "loss", "pops_2d", "states_2d",
-                           "loss_A", "loss_B", "om_mhz", "diag",
-                           "betas", "E", "C", "F", "energies", "rho", "n_atom")}
+        # Preserve the engine result contract, including basis identities,
+        # uncertainty and data descriptors. Large native states are opt-in at
+        # the solver; a second field whitelist here only loses research data.
+        arrays = dict(res)
         with (self.root / f"{aid}.pkl").open("wb") as f:
             pickle.dump((run.get("labels"), arrays), f, protocol=4)
         return aid

@@ -37,7 +37,7 @@ from ..core import core
 from . import _mecha_bind as MB
 from ..core import protocol as _proto
 # 模板→预设相互作用项的唯一真源在 core（本页**不复制**这张表，守 I2）
-from ..core.manybody.model import TEMPLATE_TERMS
+from ..core.manybody.backends import time_backend_names, equilibrium_backend_names
 # 观测量（M2）：只吃概率向量 ⇒ 可由 GUI 从联合 `pops` 重算，**不依赖 P1-8 的 artifact 边界**
 from ..core.manybody.observables import (bit_matrix as _bit_matrix,
                                          corr_matrix as _corr_matrix)
@@ -59,9 +59,7 @@ DECIDED_NO = (
 )
 
 # 「相互作用项」三态（与 schema 一一对应，D2：优先级写在界面上）
-_TERMS_MODES = ('跟随模板预设', '自定义勾选', '显式无相互作用')
 
-_TERMS = ('I1', 'I2', 'I3')
 _TERM_TIP = {'I1': '密度-密度 V·n_i n_j（vdW/blockade 主项）',
              'I2': '交换 J(σ⁺σ⁻)',
              'I3': '双激发 A(σ⁺σ⁺)'}
@@ -183,10 +181,10 @@ class ManyBodyPanel(QWidget):
         self.btn_mode_evolve.clicked.connect(lambda: self._set_mode('evolve'))
         self.btn_mode_eq.clicked.connect(lambda: self._set_mode('eq'))
         self.btn_mode_evolve.setToolTip(
-            '含时演化：给初态 ψ0，沿时间轴演化（求解器 auto/ed/tebd）')
+            '含时演化：给初态 ψ0，沿时间轴演化（求解器 auto/ed/tebd/tdvp）')
         self.btn_mode_eq.setToolTip(
             '平衡态：不求时间轴，直接解基态/有限温/态密度'
-            '（后端 auto/ed/gpu-batch/lanczos/kpm/dmrg）')
+            '（后端 auto/ed/gpu-batch/lanczos/kpm/dmrg/qmc）')
         mbar.addStretch(1)
         p.addLayout(mbar)
 
@@ -236,15 +234,18 @@ class ManyBodyPanel(QWidget):
         row = QHBoxLayout()
         row.addWidget(QLabel('含时求解器'))
         self.solver_cb = MB.combobox(
-            reg, 'manybody.solver', ['auto', 'ed', 'tebd'],
-            spec=MB.ParamSpec('str', options=['auto', 'ed', 'tebd'],
+            reg, 'manybody.solver', time_backend_names(),
+            spec=MB.ParamSpec('str', options=time_backend_names(),
                               desc='多体含时求解器'))
         self.solver_cb.setToolTip('auto：按 dim=2^N 与 ed_max_dim 自动判可行\n'
                                   'ed：精确对角化（M1）\n'
-                                  'tebd：TeNPy/MPS——**未实现**，选中会明确报错')
-        _si = self.solver_cb.findText('tebd')
-        if _si >= 0:
-            self.solver_cb.model().item(_si).setEnabled(False)
+                                  'tebd：最近邻 MPS（二阶 Suzuki–Trotter）\n'
+                                  'tebd-gpu：CUDA 最近邻 MPS（PyTorch）\n'
+                                  'swap-tebd-gpu：CUDA 任意键 SWAP-TEBD（二维/长程键）\n'
+                                  'tdvp：任意 MPO 的两站点 MPS 演化\n'
+                                  'tdvp-trajectories：开放系统量子轨迹\n'
+                                  'classical-spin：经典 Bloch/LLG\n'
+                                  'peps-real-time：二维 PEPS 局部门演化')
         row.addWidget(self.solver_cb)
         row.addStretch(1)
         self._ev_lay.addLayout(row)
@@ -266,16 +267,16 @@ class ManyBodyPanel(QWidget):
         rowe.addWidget(QLabel('后端'))
         self.backend_cb = MB.combobox(
             reg, 'manybody.eq_backend',
-            ['auto', 'ed', 'gpu-batch', 'lanczos', 'kpm', 'dmrg'],
+            equilibrium_backend_names(),
             spec=MB.ParamSpec('str',
-                              options=['auto', 'ed', 'gpu-batch', 'lanczos',
-                                       'kpm', 'dmrg'],
+                              options=equilibrium_backend_names(),
                               desc='平衡态求解后端'))
         self.backend_cb.setToolTip(
             'auto：按规模路由（小→ed、大稀疏→lanczos、有 GPU 且批量→gpu-batch、'
             'thermal/dos→kpm、大而几何规整→dmrg）\n'
-            'ed/gpu-batch/lanczos/kpm：显式指定\n'
-            'dmrg：TeNPy 柱形 DMRG——**任意点云**（多腿/无周期/逐键复 V·J·A）')
+            'ed/gpu-batch/lanczos/kpm/gpu-kpm/free-fermion：显式指定\n'
+            'dmrg：TeNPy 柱形 DMRG——任意点云（多腿/无周期/逐键复 V·J·A）\n'
+            'qmc：stoquastic SSE-QMC（有限温/低温，带统计误差）')
         rowe.addWidget(self.backend_cb)
         rowe.addStretch(1)
         self._eq_lay.addLayout(rowe)
@@ -342,7 +343,7 @@ class ManyBodyPanel(QWidget):
         rowe2.addWidget(QLabel('ED 维度上限'))
         self.edmax_sb = MB.intbox(reg, 'manybody.ed_max_dim', 1 << 20, 2, 1 << 24,
                                   spec=MB.ParamSpec('int', desc='ED 维度上限 2^N'))
-        self.edmax_sb.setToolTip('dim=2^N 超过本值 → solver=auto 明确报错（不静默降级）；\n'
+        self.edmax_sb.setToolTip('dim=2^N 超过本值 → solver=auto 选择 TDVP；\n'
                                  '调大需自负内存')
         rowe2.addWidget(self.edmax_sb)
         rowe2.addStretch(1)
@@ -606,92 +607,6 @@ class ManyBodyPanel(QWidget):
         self._draw_cloud()
         self.refresh_cost()
 
-    def _preset_terms(self):
-        """当前模板的预设项（core `TEMPLATE_TERMS`，不复制表）。"""
-        return list(TEMPLATE_TERMS.get(self.template_cb.currentText(), ('I1',)))
-
-    def _on_terms_mode_changed(self, idx):
-        """切换三态：**进入"自定义勾选"时以当前生效值为起点**，不凭空重置。
-
-        ⚠ 修一个真 bug（2026-09-22 自测发现）：模式 0（跟随预设）下勾选框显示的是
-        **模板预设**（如 ising→I1）。若切到模式 1 时直接沿用这几个勾选框，会把会话里
-        已有的**显式值**（如 ['I2']）静默改成预设（['I1']）——切个模式就把用户设置改了。
-        故：进入模式 1 前先从会话现值（None → 模板预设）播种勾选框。
-        """
-        if int(idx) == 1:
-            cur = None
-            br = getattr(self.main, 'app_bridge', None)
-            if br is not None:
-                try:
-                    cur = br.read('manybody.terms')
-                except Exception:                       # noqa: BLE001
-                    cur = None
-            seed = (list(cur) if isinstance(cur, (list, tuple))
-                    else self._preset_terms())
-            for t, cb in self.term_cbs.items():
-                cb.blockSignals(True)
-                cb.setChecked(t in seed)
-                cb.blockSignals(False)
-        self._write_terms()
-
-    def _refresh_terms_display(self):
-        """按三态刷新勾选框的可用性/勾选与提示（**只显示，不写 session**）。"""
-        mode = self.terms_mode_cb.currentIndex()
-        if mode == 0:                       # 跟随模板预设
-            eff = self._preset_terms()
-            for t, cb in self.term_cbs.items():
-                cb.blockSignals(True)
-                cb.setChecked(t in eff)
-                cb.setEnabled(False)
-                cb.blockSignals(False)
-            self.terms_hint.setText('跟随模板 %s → %s'
-                                    % (self.template_cb.currentText(),
-                                       '、'.join(eff) or '（无）'))
-        elif mode == 1:                     # 自定义勾选（显式）
-            for cb in self.term_cbs.values():
-                cb.setEnabled(True)
-            eff = [t for t in _TERMS if self.term_cbs[t].isChecked()]
-            self.terms_hint.setText('显式：%s（覆盖模板预设）'
-                                    % ('、'.join(eff) or '（空——请至少勾一项）'))
-        else:                               # 显式无相互作用 []
-            for t, cb in self.term_cbs.items():
-                cb.blockSignals(True)
-                cb.setChecked(False)
-                cb.setEnabled(False)
-                cb.blockSignals(False)
-            self.terms_hint.setText('显式 []（自由自旋，无 I1/I2/I3）')
-
-    def _write_terms(self):
-        """三态 → `manybody.terms`：None（跟随模板）/ 显式 list / 显式 []。
-
-        与 schema 一一对应；**显式覆盖模板**（core 侧若两者不一致会写 warning，
-        本页把优先级直接写在 combo 与提示里，D2）。
-        """
-        mode = self.terms_mode_cb.currentIndex()
-        if mode == 0:
-            val = None
-        elif mode == 2:
-            val = []
-        else:
-            val = [t for t in _TERMS if self.term_cbs[t].isChecked()]
-            if not val:
-                # 自定义模式下全不勾 = 语义含糊（None 还是 []？）⇒ 不猜，回退"跟随模板"
-                self.main.log('相互作用项：自定义模式下未勾任何项——已回退为'
-                              '「跟随模板预设」（要显式清空请选「显式无相互作用」）', 8000)
-                self.terms_mode_cb.blockSignals(True)
-                self.terms_mode_cb.setCurrentIndex(0)
-                self.terms_mode_cb.blockSignals(False)
-                val = None
-        br = getattr(self.main, 'app_bridge', None)
-        if br is not None:
-            try:
-                br.write('manybody.terms', val, reason='多体页：相互作用项',
-                         actor='gui')
-            except Exception as e:                      # noqa: BLE001
-                self.main.log('写 manybody.terms 失败：%s' % e)
-        self._refresh_terms_display()
-        self.refresh_cost()
-
     # ================= 模式（时间演化 / 平衡态）与平衡态参数 =================
     def _set_mode(self, mode):
         """模式按钮：切换可见组件 **并**把 `manybody.want` 写成对应值（演化=''）。"""
@@ -887,7 +802,8 @@ class ManyBodyPanel(QWidget):
             pops = pops[:, None]
         n_atoms = int(getattr(self, '_run_n_atoms', 0) or 0)
         dim_joint = (1 << n_atoms) if n_atoms else 0
-        joint = bool(n_atoms and pops.shape[1] == dim_joint)
+        joint = (res.get('pops_kind') == 'basis_probability' if 'pops_kind' in res
+                 else bool(n_atoms and pops.shape[1] == dim_joint))
         if len(labels) != pops.shape[1]:            # 退化：逐原子边缘（dim 超上限时）
             labels = (['atom%d' % i for i in range(pops.shape[1])]
                       if not joint else ['#%d' % i for i in range(pops.shape[1])])
@@ -896,14 +812,16 @@ class ManyBodyPanel(QWidget):
         order = np.argsort(avg)[::-1][:min(12, pops.shape[1])]
         for i in order:
             ax.plot(t, pops[:, i], lw=1.2, label=labels[i])
-        loss = res.get('loss')
+        loss = res.get('physical_loss')
+        if loss is None and not res.get('data_schema'):
+            loss = res.get('loss')
         if loss is not None and np.asarray(loss).max() > 1e-12:
             ax.plot(t, np.asarray(loss), lw=1.6, ls='--', color='#333',
                     label='loss（离场）')
         ax.margins(x=0)
         ax.set_xlim(float(t[0]), float(t[-1]))
         ax.legend(fontsize=6, ncol=1)
-        ax.set_title('产物态布居（前 %d）' % len(order), fontsize=9)
+        ax.set_title(('%s（前 %%d）' % ('产物态概率' if joint else '逐原子占据')) % len(order), fontsize=9)
         # ---- 中：逐原子 ⟨n_i⟩(t)（联合 → 重算；边缘 → 直接用） ----
         axa = self.res_ax_atom
         axa.set_xlabel('t (ns)')

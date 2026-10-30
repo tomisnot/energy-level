@@ -54,6 +54,23 @@ python app_entry.py --mcp --with-gui
 python -m mecha --all --root .
 ```
 
+### AI 运行卡片
+
+AI 服务启动时会尝试打开本机只读运行卡片，端口保存在 `.run-monitor-port`；设置
+`EL_OPEN_RUN_MONITOR=0` 可关闭自动打开。卡片采集桥接层 `ElOps.prepare/execute`
+的真实配置、进度和结果摘要，支持历史翻页和查看配置。当前仍是逐步接入的观察界面：
+独立的 `ElEngine.run` 调用路径尚未汇入卡片存储，前端也保留示例数据逻辑，不能据此认定
+所有 AI 运行已被完整监控。具体映射与边界见 [运行卡片说明](web/run_monitor/README.md)。
+
+单独查看静态视觉示例可运行：
+
+```bash
+python -m http.server 8765 --directory web/run_monitor
+```
+
+这个静态服务没有 `/api/runs`，展示的是示例数据。多体核心的数据契约与后端能力边界见
+[多体接口与维护约定](docs/多体接口与维护约定.md)。
+
 独立 `--gui` 模式不启动网络端点。需要人机操作同一个运行实例时，使用 `--mcp --with-gui` 或统一启动器提供的手动面。
 
 AI 服务与监控使用动态端口，通过项目根的发现文件供客户端读取。写权与进程存活独立：切换人/AI 写权不需要重启软件，也不需要删除运行记录。

@@ -112,13 +112,15 @@ def rydberg_ladder_model(length, V_r=0.0, J_r=0.0, A_r=0.0,
             site.add_op('P', np.array([[0, 0], [1, 0]], dtype=complex))
             site.add_op('M', np.array([[0, 1], [0, 0]], dtype=complex))
             site.add_op('SX', np.array([[0, 1], [1, 0]], dtype=complex))
+            site.add_op('SY', np.array([[0, -1j], [1j, 0]], dtype=complex))
             return site
 
         def init_terms(self, params):
-            # onsite: δ n̂ + (Ω/2) σˣ
+            # onsite: δ n̂ + (Ω σ⁺ + Ω* σ⁻)/2
             for u in range(len(self.lat.unit_cell)):
                 self.add_onsite(delta, u, 'Nhat')
-                self.add_onsite(Omega / 2.0, u, 'SX')
+                self.add_onsite(Omega / 2.0, u, 'P')
+                self.add_onsite(np.conj(Omega) / 2.0, u, 'M')
 
             def bond(typ, V, J, A):
                 if typ not in self.lat.pairs:
@@ -231,7 +233,7 @@ def cylinder_order(positions, tol=1e-6):
                        perm=perm)
 
 
-def terms_from_calib(calib, Om=None, delta=None):
+def terms_from_calib(calib, Om=None, delta=None, gamma=None):
     """引擎 calib（逐键复 V/J/A + 逐位 δ/Ω）→ (order, onsite, couplings, info)。
 
     与 `assemble.build_H_sparse` 同式：H = Σ δ_i n_i + Σ Ω_i/2 σˣ_i
@@ -243,12 +245,17 @@ def terms_from_calib(calib, Om=None, delta=None):
     """
     atoms = calib['atoms']
     n = len(atoms)
-    use = set(calib.get('terms') or ('I1', 'I2', 'I3'))
-    Om = np.zeros(n) if Om is None else np.asarray(Om, float)
+    use = set(calib.get('terms', ('I1', 'I2', 'I3')))
+    Om = np.zeros(n, complex) if Om is None else np.asarray(Om, complex)
     delta = np.zeros(n) if delta is None else np.asarray(delta, float)
+    gamma = np.zeros(n) if gamma is None else np.asarray(gamma, float)
     order, info = cylinder_order([a.get('pos') for a in atoms])
     perm = info['perm']
-    onsite = [(float(delta[order[k]]), float(Om[order[k]]) / 2.0) for k in range(n)]
+    # The imaginary onsite part is used by the MPS time evolvers for the same
+    # effective no-jump loss convention as engine_ed.  DMRG callers leave
+    # gamma=None and therefore retain the real Hamiltonian exactly.
+    onsite = [(complex(delta[order[k]], -0.5 * gamma[order[k]]),
+               complex(Om[order[k]]) / 2.0) for k in range(n)]
     couplings = []
 
     def two_site(coeff, s1, op1, s2, op2):
@@ -274,7 +281,7 @@ def terms_from_calib(calib, Om=None, delta=None):
     return order, onsite, couplings, info
 
 
-def rydberg_cluster_model(onsite, couplings):
+def rydberg_cluster_model(onsite, couplings, conserve=None, extra_onsite=None):
     """任意点云的 Rydberg MPO 模型（自写 autoMPO：逐位 δ/Ω + 逐键复耦合 + 任意程）。
 
     onsite: [(δ_i, Ω_i/2), …] 按 MPS 顺序；couplings: [(coeff, a, opA, b, opB), …]（a<b）。
@@ -295,14 +302,21 @@ def rydberg_cluster_model(onsite, couplings):
         raise ValueError('rydberg_cluster_model：没有格点')
 
     # 与引擎逐字同的单格点算符（up=g=[1,0], down=r=[0,1]）
-    site = SpinHalfSite(conserve=None)
+    site = SpinHalfSite(conserve=conserve)
     site.add_op('Nhat', np.array([[0, 0], [0, 1]], dtype=complex))
     site.add_op('P', np.array([[0, 0], [1, 0]], dtype=complex))
     site.add_op('M', np.array([[0, 1], [0, 0]], dtype=complex))
-    site.add_op('SX', np.array([[0, 1], [1, 0]], dtype=complex))
+    site.add_op('SZ', np.array([[1, 0], [0, -1]], dtype=complex))
+    if conserve is None:
+        site.add_op('SX', np.array([[0, 1], [1, 0]], dtype=complex))
+        site.add_op('SY', np.array([[0, -1j], [1j, 0]], dtype=complex))
     valid = ('Nhat', 'P', 'M', 'SX')
 
     delta = np.array([complex(d) for (d, _o) in onsite], dtype=complex)
+    # TeNPy drops an exactly zero MPO and cannot construct its terminal leg; retain
+    # a numerically null diagonal anchor for the legitimate H=0 model.
+    if not np.any(delta) and not np.any([complex(o) for (_d,o) in onsite]):
+        delta[0] = 1e-15
     om2 = np.array([complex(o) for (_d, o) in onsite], dtype=complex)
     groups = {}
     for (c, a, opA, b, opB) in couplings:
@@ -325,8 +339,12 @@ def rydberg_cluster_model(onsite, couplings):
 
         def init_terms(self, params):
             self.add_onsite(delta, 0, 'Nhat')
-            if np.any(om2):
-                self.add_onsite(om2, 0, 'SX')
+            for coeff, op in (extra_onsite or []):
+                self.add_onsite(np.asarray(coeff, complex), 0, op)
+            # Keep zero-valued P/M channels in the MPO graph.  TeNPy cannot infer the
+            # terminal charge leg for a pure diagonal one-site model otherwise.
+            self.add_onsite(om2, 0, 'P')
+            self.add_onsite(np.conj(om2), 0, 'M')
             for (opA, opB, m), arr in groups.items():
                 if np.any(arr):
                     self.add_coupling(arr, 0, opA, 0, opB, m)
@@ -359,7 +377,7 @@ _UNSET = object()     # 区分“不传（用 TeNPy 严格默认）”与“显�
 
 
 def dmrg_run(M, chi_max=200, truncerr=1e-10, max_sweeps=60, want_state=False,
-             max_trunc_err=_UNSET):
+             max_trunc_err=_UNSET, product_state=None):
     """在任意 TeNPy 模型上跑 TwoSiteDMRG → dict(E0, chi, S_mid, truncerr, n_sites, [psi])。
 
     `max_trunc_err`：TeNPy 的可靠性守卫——它比对的是**全部 sweep 的最大**截断误差
@@ -371,32 +389,33 @@ def dmrg_run(M, chi_max=200, truncerr=1e-10, max_sweeps=60, want_state=False,
     from tenpy.networks.mps import MPS
     from tenpy.algorithms.dmrg import TwoSiteDMRGEngine
     n = M.lat.N_sites
-    psi = MPS.from_product_state(M.lat.mps_sites(), [0] * n, bc='finite')
+    psi = MPS.from_product_state(M.lat.mps_sites(),
+                                 [0] * n if product_state is None else list(product_state),
+                                 bc='finite')
     opts = dict(max_sweeps=max_sweeps, min_sweeps=2, mixer=True,
-                trunc_params=dict(chi_max=chi_max, truncerr=truncerr))
+                trunc_params=dict(chi_max=chi_max, trunc_cut=truncerr))
     if max_trunc_err is not _UNSET:
         opts['max_trunc_err'] = (None if max_trunc_err is None
                                  else float(max_trunc_err))
     eng = TwoSiteDMRGEngine(psi, M, opts)
     E0, psi = eng.run()
-    try:
-        S_mid = float(np.asarray(psi.entanglement_entropy(1)).ravel()[0])
-    except Exception:
-        S_mid = 0.0
+    cut = n // 2
+    S_mid = (float(psi.entanglement_entropy(bonds=[cut])[0]) if n >= 2 else 0.0)
     try:
         terr = float(np.max(np.asarray(eng.trunc_err_list, dtype=float)))
     except Exception:
         terr = float('nan')
     out = dict(E0=float(E0), E0_per_site=float(E0) / n, n_sites=n,
                chi=int(max(psi.chi)) if len(psi.chi) else 1, S_mid=S_mid,
-               truncerr=terr)
+               truncerr=terr, entropy_cut=(cut if n >= 2 else None))
     if want_state:
         out['psi'] = psi
     return out
 
 
 def dmrg_rydberg_cluster(calib, Om=None, delta=None, chi_max=200,
-                         truncerr=1e-10, max_sweeps=60, max_trunc_err=_UNSET):
+                         truncerr=1e-10, max_sweeps=60, max_trunc_err=_UNSET,
+                         charge_sector=None, return_state=False):
     """任意点云（多腿/无周期）的 Rydberg DMRG 基态 —— 直接吃引擎 calib。
 
     → dict(E0, n_atom(按**原子原序**), chi, S_mid, truncerr, order, n_legs,
@@ -404,17 +423,36 @@ def dmrg_rydberg_cluster(calib, Om=None, delta=None, chi_max=200,
     """
     _require_tenpy()
     order, onsite, couplings, info = terms_from_calib(calib, Om, delta)
-    M = rydberg_cluster_model(onsite, couplings)
+    n = len(order)
+    conserve = None
+    product = None
+    if charge_sector is not None:
+        if any(abs(o) > 1e-14 for _d, o in onsite):
+            raise ValueError('DMRG Sz 守恒扇区要求 Omega=0')
+        if any(opA == 'P' and opB == 'P' or opA == 'M' and opB == 'M'
+               for _c, _a, opA, _b, opB in couplings):
+            raise ValueError('DMRG Sz 守恒扇区不支持 I3 双激发项')
+        if isinstance(charge_sector, (bool, np.bool_)) or int(charge_sector) != charge_sector:
+            raise ValueError('charge_sector 必须是整数')
+        k = int(charge_sector)
+        if not (0 <= k <= n):
+            raise ValueError('charge_sector 越界')
+        conserve = 'Sz'
+        product = [1] * k + [0] * (n - k)
+    M = rydberg_cluster_model(onsite, couplings, conserve=conserve)
     r = dmrg_run(M, chi_max, truncerr, max_sweeps, want_state=True,
-                 max_trunc_err=max_trunc_err)
+                 max_trunc_err=max_trunc_err, product_state=product)
     psi = r.pop('psi')
     n_mps = np.asarray(psi.expectation_value('Nhat'), float)      # MPS 顺序
     n = len(order)
     n_atom = np.zeros(n)
     for k, a in enumerate(order):                                 # 映回原子原序
         n_atom[int(a)] = n_mps[k]
+    from .state import make_mps_state
     return dict(E0=r['E0'], n_atom=n_atom, chi=r['chi'], S_mid=r['S_mid'],
                 truncerr=r['truncerr'],
+                entropy_cut=r['entropy_cut'],
+                **({'state': make_mps_state(psi, order, charge_sector)} if return_state else {}),
                 n_sites=n, order=order, n_legs=info['n_legs'],
                 leg_len=info['leg_len'],
                 mpo_bond_dim=max(int(W.shape[1]) for W in M.H_MPO._W),

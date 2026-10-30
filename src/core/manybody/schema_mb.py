@@ -9,9 +9,11 @@
 单位与全库一致：位置 µm、Ω/δ/Γ/V/J/A MHz、时间 ns、B Gauss。
 """
 from ..param import Param
+from .backends import time_backend_names, equilibrium_backend_names
 
 __all__ = ['CONFIG_SCHEMA_MB', 'SOLVE_META_MB', 'validate_atom_list', 'mb_get',
-           'validate_drive_segments', 'MB_N_WINDOW', 'MB_GUARD_MHZ',
+           'validate_drive_segments', 'validate_loops', 'validate_link_pairs',
+           'MB_N_WINDOW', 'MB_GUARD_MHZ',
            'MB_ED_MAX_DIM']
 
 # 标定/维度默认（就地 Param：值+元数据同处，被 protocol.engine_params 扫出；
@@ -20,32 +22,30 @@ MB_N_WINDOW = Param(3, '单原子基伙伴态窗口 |Δn|≤n_window（补 vdW �
                     tier='run')
 MB_GUARD_MHZ = Param(1.0, 'Löwdin downfolding 近简并中间态剔除阈',
                      unit='MHz', lo=0.0, tier='run')
-MB_ED_MAX_DIM = Param(1 << 20, 'ED 维度上限 2^N（solver=auto 据此判可行）',
+MB_ED_MAX_DIM = Param(1 << 20, 'ED 有效基维度上限（solver=auto 据此判可行）',
                       lo=2, tier='run')
 
 # `manybody.*` → build_run 读的登记册快照键。type='atom_list'/'mb_psi' 是多体
 # 专有类型：atom_list 经 validate_atom_list 当场校验；mb_psi 结构灵活，由
 # resolve_mb_psi 在 build 阶段校验（需原子数上下文，set 阶段拿不到）。
 CONFIG_SCHEMA_MB = {
-    'manybody.template': dict(
-        type='str', enum=['ising', 'xy', 'potts3'], default='ising',
-        desc='局部空间/相互作用**预设**：ising→terms=I1（密度-密度 V·n_i n_j）、'
-             'xy→terms=I2（交换 J σ⁺σ⁻）；两者都是**每原子 2 能级**，横向场由逐原子 '
-             'Ω 提供。**显式 manybody.terms 优先于本预设**（相互作用内容只有一个真源）。'
-             'potts3=3 能级/原子（M1 未实现，选了会明确报错）'),
-    'manybody.terms': dict(
-        type='list', default=None,
-        desc='相互作用项开关：I1=密度-密度 V·n_i n_j / I2=交换 J(σ⁺σ⁻) / I3=双激发 A(σ⁺σ⁺)。'
-             '**None（默认）= 跟随 manybody.template 的预设**（ising→[I1] / xy→[I2]）；'
-             '显式给出（含空表 []=不要任何相互作用项）则以此为准'),
     'manybody.atoms': dict(
         type='atom_list', default=[],
         desc='任意点云：逐原子 {g:(n,l,j,m), r:(n,l,j,m), pos:(x,y,z)µm, '
-             'Omega_mhz, delta_mhz, gamma_mhz}'),
+             'Omega_mhz（幅值）, Omega_phase_rad, delta_mhz, gamma_mhz}；'
+             '物理横向项为 (Ωσ⁺+Ω*σ⁻)/2'),
     'manybody.psi0': dict(
         type='mb_psi', default=None,
         desc="初态：None=全基态|g…g⟩ / int=产物态索引 / 'grg'=模式串 / "
-             "'ground'=Lanczos 基态 / ['sup',[[模式或索引,amp],…]]=叠加"),
+             "'ground'=Lanczos 基态 / ['sup',[[模式或索引,amp],…]]=叠加；"
+             "一般局部乘积态可用 {kind:'product', amplitudes:[[a_g,a_r],…]}，"
+             "振幅可为复数或 [实部,虚部]；PEPS 可用 {kind:'peps', tensors:[…]} 提供五阶张量；"
+             "Python RunSpec 可用返回的 kind=mps 原生状态接续，跨会话请使用 HDF5 checkpoint"),
+    'manybody.return_state': dict(
+        type='bool', default=False,
+        desc='显式返回基态向量或有限 MPS 状态以供后续演化；可能占用额外内存，原始态不放入摘要'),
+    'manybody.periods_um': dict(type='list', default=None,
+        desc='可选 xy 周期边界 [Lx,Ly]，单位 µm；None=开放边界'),
     'manybody.B_gauss': dict(
         type='float', unit='Gauss', default=None,
         desc='静磁场（Zeeman）；None=复用 field.B_gauss'),
@@ -60,19 +60,32 @@ CONFIG_SCHEMA_MB = {
     # 能量窗要配 `ref_energy_mhz`（参考能量），而 schema 里没有这个键。二阶中间态的
     # 截断已由 `n_window`（伙伴态窗）+ `guard_mhz`（近简并剔除）覆盖，不需要第三个旋钮。
     'manybody.solver': dict(
-        type='str', enum=['auto', 'ed', 'tebd'], default='auto',
-        desc='**含时演化**求解器：auto=按维度选 / ed=精确对角化 / tebd=TeNPy MPS（未实现）。'
-             '平衡态不看本键，看 `manybody.eq_backend`。'),
+        type='str', enum=time_backend_names(), default='auto',
+        desc='**含时演化**求解器：auto=小系统 ED、大系统 TDVP / ed=精确对角化 / '
+             'tebd=最近邻 MPS / tebd-gpu=CUDA 最近邻 MPS / swap-tebd-gpu=CUDA 任意键 SWAP-TEBD / tdvp=两站点 TDVP / tdvp-single=单站点 TDVP / '
+             'tdvp-adaptive=两站点到单站点自适应 TDVP。平衡态不看本键，看 `manybody.eq_backend`。'),
+    'manybody.collapse_ops': dict(type='list', default=None, desc='开放系统局部跳跃通道：[{site, rate, operator|matrix}]，供 tdvp-trajectories'),
+    'manybody.n_trajectories': dict(type='int', default=32, lo=1, hi=100000, desc='量子轨迹条数'),
+    'manybody.seed': dict(type='int', default=0, desc='量子轨迹、QMC 与 KPM 的随机种子'),
+    'manybody.max_step_ns': dict(type='float', default=0.1, lo=1e-6,
+                                 desc='MPS/PEPS/轨迹/经典自旋内部最大步长（ns）；ED 使用指数传播，无此步长旋钮'),
+    'manybody.classical_damping': dict(type='float', default=0.0, lo=0.0, desc='classical-spin Landau-Lifshitz 阻尼系数'),
+    'manybody.grid_shape': dict(type='list', default=None, desc='PEPS 矩形网格 [rows,cols]'),
     'manybody.eq_backend': dict(
-        type='str', enum=['auto', 'ed', 'gpu-batch', 'lanczos', 'kpm', 'dmrg'],
+        type='str', enum=equilibrium_backend_names(),
         default='auto',
         desc='**平衡态**求解后端：auto=按规模路由 / ed=稠密对角 / gpu-batch=批量本征 / '
-             'lanczos=稀疏迭代 / kpm=Chebyshev 谱 / dmrg=TeNPy 柱形 DMRG'
+             'gpu-lanczos=CUDA 矩阵自由 Lanczos / lanczos=稀疏迭代 / kpm=Chebyshev 谱 / dmrg=TeNPy 有限 MPS DMRG / '
+             'gpu-kpm=CUDA 分块 KPM / free-fermion=适用范围内二次费米子 / qmc=stoquastic SSE（带统计误差）'
              '（**任意点云**：多腿/无周期/逐键复耦合，自写 autoMPO）。'),
     'manybody.want': dict(
         type='str', enum=['', 'gs', 'thermal', 'dos'], default='',
         desc="''=含时演化（默认）；gs=基态、thermal=有限温（配 manybody.betas）、"
              "dos=态密度——非空即走平衡态路径（runspec 委托 eq_engine 路由）。"),
+    'manybody.kpm_num': dict(type='int', default=400, lo=2,
+        desc='KPM Chebyshev 阶数'),
+    'manybody.kpm_nvec': dict(type='int', default=1500, lo=1,
+        desc='KPM 随机迹探针数'),
     'manybody.betas': dict(
         type='list', default=None,
         desc='thermal 的逆温度清单（1/MHz），如 [0.1,1,10]；None=[1.0]。'),
@@ -80,13 +93,37 @@ CONFIG_SCHEMA_MB = {
     # 要当场权衡精度↔时长的旋钮，故上 UI）。
     'manybody.chi_max': dict(
         type='int', default=200, lo=2, hi=4000,
-        desc='DMRG 最大键维 χ（越大越准越慢；键数 ~χ³）'),
+        desc='MPS/PEPS/量子轨迹最大键维 χ（越大越准越慢；键数 ~χ³）'),
     'manybody.truncerr': dict(
         type='float', default=1e-10, lo=0.0, hi=1e-2,
-        desc='DMRG 单次截断误差目标（保得越紧越慢）'),
+        desc='MPS 单次截断误差目标（保得越紧越慢）'),
+    'manybody.krylov_dim': dict(
+        type='int', default=20, lo=4, hi=200,
+        desc='TDVP Krylov 子空间维数（越大越准越慢）'),
+    'manybody.krylov_tol': dict(
+        type='float', default=1e-10, lo=1e-14, hi=1e-2,
+        desc='TDVP Krylov 误差容限'),
+    'manybody.tdvp_adaptive_switch_chi': dict(
+        type='int', default=16, lo=2, hi=4000,
+        desc='自适应 TDVP 达到该键维后从两站点切换到单站点'),
+    'manybody.tdvp_adaptive_min_steps': dict(
+        type='int', default=1, lo=0,
+        desc='自适应 TDVP 至少运行多少个两站点内部步后允许切换'),
     'manybody.max_sweeps': dict(
         type='int', default=60, lo=2, hi=500,
-        desc='DMRG 最大 sweep 数'),
+        desc='DMRG 最大 sweep 数（TEBD/TDVP 忽略）'),
+    'manybody.qmc_sweeps': dict(
+        type='int', default=2000, lo=10, hi=10_000_000,
+        desc='SSE-QMC 测量 sweep 数（越大统计误差越小）'),
+    'manybody.qmc_burn_in': dict(
+        type='int', default=500, lo=0, hi=10_000_000,
+        desc='SSE-QMC 热化步数'),
+    'manybody.qmc_measure_every': dict(
+        type='int', default=5, lo=1, hi=100_000,
+        desc='SSE-QMC 每隔多少步采样'),
+    'manybody.qmc_M': dict(
+        type='int', default=None, lo=4,
+        desc='SSE operator string 长度；None=按原子数自动设置'),
     'manybody.second_order': dict(
         type='bool', default=True,
         desc='二阶 Löwdin downfolding（vdW C6 从伙伴态涌现）；关=只一阶 V_dd'),
@@ -95,20 +132,42 @@ CONFIG_SCHEMA_MB = {
         desc='近简并中间态剔除阈（|E−E_m|<guard 剔除并计数上报，不许静默）'),
     'manybody.ed_max_dim': dict(
         type='int', default=int(MB_ED_MAX_DIM), lo=2,
-        desc='ED 维度上限（solver=auto 据此判可行；超过明确报错，等 M3 的 MPS）'),
-    # `manybody.seed` 已于 2026-09-22 **删除**（工单 P2-1）：它声明了却**从不生效**
-    # ——消费端 `model_from_params` 不传它，`model.add_array(jitter=…)` 读的是 Python
-    # kwarg。而 registry 路径**只调 `add_atom`（逐原子显式坐标）、从不调 `add_array`**
-    # ⇒ 就算把 seed 接进模型，登记册路径也没有任何随机性可播种。
-    # 处置：删掉这个"声明了却不生效"的键（比留着更诚实），Python API 的
-    # `ManyBodyModel.add_array(..., seed=)` 保留（脚本仍可复现）。
-    # 若将来要"按模板一键摆阵列"，应同时加 `manybody.array={kind,n,spacing_um,jitter}`
-    # 并把 seed 一起接上——那是 P3-1（多体页）范围，届时一并恢复本键。
+        desc='ED 维度上限（solver=auto 据此在 ED 与 TDVP 间路由）'),
     'manybody.drive_segments': dict(
         type='list', default=None,
-        desc='分段常数驱动 [{t0,Om:[…],delta:[…]},…]（缺省=静态，用 atoms 的 Ω/δ）。'
+        desc='分段常数驱动 [{t0,Om:[…],phase:[…],delta:[…]},…]（缺省=静态，用 atoms 的 Ω/δ）。'
              '结构在 build 阶段当场校验（schema_mb.validate_drive_segments）：'
-             '每段须是 dict、t0 为 ≥0 数值、Om/delta 为长度=原子数的数值序列'),
+             'Om 为幅值、phase 为弧度，Om/delta/phase 为长度=原子数的数值序列'),
+    'manybody.constraint': dict(
+        type='dict', default=None,
+        desc='Hamiltonian 约束：{kind:none|blockade|pxp, mode:full|project, '
+             'threshold_mhz:..., edges:auto|[[i,j],...]}；在装配层生成 HamiltonianPlan'),
+    'manybody.want_observables': dict(
+        type='bool', default=True,
+        desc='含时结果是否输出公共观测契约：逐时 X/Y/Z、升降算符、局部相位、'
+             '请求的 link_corr 与 loop_phase/winding'),
+    'manybody.loops': dict(
+        type='list', default=None,
+        desc='要计算的闭环原子下标列表；输出 loop_phase 与 loop_winding，None=不计算'),
+    'manybody.link_pairs': dict(
+        type='list', default=None,
+        desc='逐时链路关联的原子对 [[i,j],…]；输出 link_corr。若同时给 loops，'
+             '闭环边会自动并入测量集合'),
+    'manybody.charge_sector': dict(
+        type='int', default=None, lo=0,
+        desc='DMRG/ED 可选固定总激发数扇区；仅守恒 Hamiltonian 生效'),
+    'manybody.memory_budget_mb': dict(
+        type='float', default=None, lo=1,
+        desc='ED/GPU 工作区或 PEPS 中间张量内存预算（MiB，保守估计）'),
+    'manybody.dtype': dict(
+        type='str', enum=['float32', 'float64'], default='float64',
+        desc='GPU 多体计算精度'),
+    'manybody.device': dict(
+        type='str', default='cuda',
+        desc='GPU 多体后端设备（如 cuda、cuda:0）；CPU 后端忽略'),
+    'manybody.svd_driver': dict(
+        type='str', enum=['auto', 'gesvdj', 'gesvd'], default='auto',
+        desc='GPU MPS SVD 驱动；auto 使用 PyTorch 默认稳定路径，gesvdj 可尝试加速'),
 }
 
 # M1 无多体 solve.* 运行旋钮：所有多体配置走 manybody.*（含标定/维度旋钮）。
@@ -118,7 +177,8 @@ SOLVE_META_MB = {}
 
 
 def _num(x):
-    return isinstance(x, (int, float)) and not isinstance(x, bool)
+    import math
+    return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
 
 
 def validate_drive_segments(segments, n_atoms=None, err=None):
@@ -148,12 +208,12 @@ def validate_drive_segments(segments, n_atoms=None, err=None):
     for i, s in enumerate(segments):
         tag = 'segment[%d]' % i
         if not isinstance(s, dict):
-            raise err('%s 须是 dict（{t0, Om, delta}，得到 %s）'
+            raise err('%s 须是 dict（{t0, Om, phase, delta}，得到 %s）'
                       % (tag, type(s).__name__))
         t0 = s.get('t0')
         if not _num(t0) or float(t0) < 0.0:
             raise err('%s 缺 t0 或非法（须 ≥0 的数值，得到 %r）' % (tag, t0))
-        for key in ('Om', 'delta'):
+        for key in ('Om', 'phase', 'delta'):
             v = s.get(key)
             if v is None:
                 continue
@@ -169,6 +229,53 @@ def validate_drive_segments(segments, n_atoms=None, err=None):
             if not all(_num(x) for x in v):
                 raise err('%s %s 须全为数值（得到 %r）' % (tag, key, v))
     return list(segments)
+
+
+def validate_loops(loops, n_atoms=None, err=None):
+    """Validate user-specified loops without assigning lattice meaning."""
+    if loops is None:
+        return None
+    if err is None:
+        err = ValueError
+    if not isinstance(loops, (list, tuple)):
+        raise err('manybody.loops 须是闭环列表')
+    n = None if n_atoms is None else int(n_atoms)
+    out = []
+    for i, loop in enumerate(loops):
+        if not isinstance(loop, (list, tuple)) or len(loop) < 2:
+            raise err('manybody.loops[%d] 须至少含两个原子下标' % i)
+        q = []
+        for x in loop:
+            if not isinstance(x, int) or isinstance(x, bool):
+                raise err('manybody.loops[%d] 含非整数下标 %r' % (i, x))
+            if n is not None and not (0 <= int(x) < n):
+                raise err('manybody.loops[%d] 下标 %d 越界（N=%d）' % (i, x, n))
+            q.append(int(x))
+        out.append(q)
+    return out
+
+
+def validate_link_pairs(pairs, n_atoms=None, err=None):
+    """Validate directed link pairs for the common observable contract."""
+    if pairs is None:
+        return None
+    if err is None:
+        err = ValueError
+    if not isinstance(pairs, (list, tuple)):
+        raise err('manybody.link_pairs 须是 [[i,j],…]')
+    n = None if n_atoms is None else int(n_atoms)
+    out = []
+    for q, pair in enumerate(pairs):
+        if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+            raise err('manybody.link_pairs[%d] 须包含两个原子下标' % q)
+        a, b = pair
+        if (not isinstance(a, int) or isinstance(a, bool) or
+                not isinstance(b, int) or isinstance(b, bool)):
+            raise err('manybody.link_pairs[%d] 须全为整数' % q)
+        if n is not None and not (0 <= int(a) < n and 0 <= int(b) < n):
+            raise err('manybody.link_pairs[%d] 下标越界（N=%d）' % (q, n))
+        out.append((int(a), int(b)))
+    return out
 
 
 def mb_get(p, key):
@@ -206,8 +313,9 @@ def validate_atom_list(atoms, err=None):
             raise err('%s pos 须是 (x,y,z) µm 三元组（得到 %r）' % (tag, pos))
         if not all(_num(x) for x in pos):
             raise err('%s pos 须全数值（得到 %r）' % (tag, pos))
-        for key in ('Omega_mhz', 'delta_mhz', 'gamma_mhz'):
+        for key in ('Omega_mhz', 'Omega_phase_rad', 'delta_mhz', 'gamma_mhz'):
             v = a.get(key)
             if v is not None and not _num(v):
-                raise err('%s %s 须是数值 MHz（得到 %r）' % (tag, key, v))
+                unit = 'rad' if key == 'Omega_phase_rad' else 'MHz'
+                raise err('%s %s 须是数值 %s（得到 %r）' % (tag, key, unit, v))
     return list(atoms)

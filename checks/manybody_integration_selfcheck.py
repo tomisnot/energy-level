@@ -55,8 +55,6 @@ def _atom(pos, Om=0.0):
 MB = {
     'dynamic.mode': 2,
     'dynamic.t_max': 50.0, 'dynamic.npts': 51,
-    'manybody.template': 'ising',
-    'manybody.terms': ['I1', 'I2'],
     'manybody.atoms': [_atom((0., 0., 0.), 2 * np.pi * 2.0),
                        _atom((6., 0., 0.), 2 * np.pi * 2.0)],
     'manybody.solver': 'auto',
@@ -67,8 +65,8 @@ MB = {
 cs = CP.config_schema()
 sk = CP.settable_keys()
 C.group('A manybody.* 进 config_schema/settable_keys（solve 不膨胀）', [
-    ('config_schema 含 manybody.atoms/template/psi0',
-     all(k in cs for k in ('manybody.atoms', 'manybody.template',
+    ('config_schema 含 manybody.atoms/solver/psi0',
+     all(k in cs for k in ('manybody.atoms', 'manybody.solver',
                            'manybody.psi0'))),
     ('settable_keys 含 manybody.atoms', 'manybody.atoms' in sk),
     ('solve_schema 仍 5（M1 多体不加 solve.*）', len(CP.solve_schema()) == 5),

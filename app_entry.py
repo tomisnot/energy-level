@@ -585,6 +585,16 @@ def run_mcp(with_gui=False):
     """
     import threading
     bridge = make_v2_bridge(PROJ_ROOT)
+    # AI 模式启动时打开只读运行卡片；无桌面/测试环境可用 EL_OPEN_RUN_MONITOR=0 关闭。
+    if os.environ.get('EL_OPEN_RUN_MONITOR', '1').lower() not in ('0', 'false', 'no'):
+        try:
+            import webbrowser
+            run_port = getattr(bridge, '_run_monitor_port', None)
+            if run_port:
+                webbrowser.open(f'http://127.0.0.1:{run_port}/')
+                print('[mcp] 已打开只读运行卡片：: %s' % run_port, flush=True)
+        except Exception as exc:  # noqa: BLE001 - 浏览器不可用不影响计算服务
+            print('[mcp] 运行卡片浏览器打开失败（服务仍可用）：%s' % exc, flush=True)
     #: 初始写权：**启动者声明**（§5.1）——缺省 = 本仓声明的 AI。⚠ `Mode` 是 str-Enum，
     #: 所以传 `.value` 给桥（桥的 `switch_mode` 吃字符串）。
     bridge.switch_mode(_initial_mode().value, actor='human')

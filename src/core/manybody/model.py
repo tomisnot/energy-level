@@ -2,14 +2,16 @@
 """多体模型卡（纯数据，可序列化）：任意点云 + 逐原子 2 能级 + 项开关。
 
 设计口径（内部记录（未随仓发布，存档在仓外） §3，2026-09-17 裁决）：
-- 几何完全自由：atoms 就是逐原子 (x,y,z) 点云，无任何晶格对称性假设；
+- 几何完全自由：atoms 就是逐原子 (x,y,z) 点云，无任何晶格对称性假设；可选 `periods_um`
+  开启 xy 环面最小像与跨胞元 winding；缺省仍为开放边界；
 - 每原子局部空间 = 2 个选定子能级 (g, r)，身份用 (n,l,j,m) 四元组；
 - 相互作用 = 对空间 V_dd 全精确标定（assemble.py），项开关 I1/I2/I3；
 - 单位：位置 µm，Ω/δ/V/J/A MHz，时间 ns。
 """
 import json
+import numpy as np
 
-TEMPLATES = ('ising', 'xy', 'potts3')
+TEMPLATES = ('full', 'ising', 'xy', 'potts3')
 TERMS = ('I1', 'I2', 'I3')          # I1=nn V, I2=交换 J, I3=双激发 A
 # 模板 → `terms` 预设（2026-09-22，工单 P2-1）。**这就是 template 的全部功能**：
 # 它是"相互作用项开关"的**预设选择器**，不是一个独立的物理开关。
@@ -19,14 +21,14 @@ TERMS = ('I1', 'I2', 'I3')          # I1=nn V, I2=交换 J, I3=双激发 A
 # ——这样"相互作用内容"始终只有一个真源，不会出现两个开关互相打架。
 # 原实现里 template **完全不被 build_H_sparse 引用**（ising≡xy 恒等），是个静默无效的
 # 选择器；本表把它变成有定义的功能，且默认路径（ising→I1）与改前**逐位一致**。
-TEMPLATE_TERMS = {'ising': ('I1',), 'xy': ('I2',)}
+TEMPLATE_TERMS = {'full': TERMS, 'ising': ('I1',), 'xy': ('I2',)}
 
 
 class ManyBodyModel:
     """多体页的"模型卡"：一次标定、多次运行、可存档往返。"""
 
     def __init__(self, template='ising', terms=None, B_gauss=0.0,
-                 n_window=3, r_cut_um=None):
+                 n_window=3, r_cut_um=None, periods_um=None):
         if template not in TEMPLATES:
             raise ValueError(f'template 须为 {TEMPLATES}，收到 {template!r}')
         # terms=None ⇒ 取 template 的预设；显式给 terms（含空表 = 不要任何相互作用项）
@@ -41,11 +43,19 @@ class ManyBodyModel:
         self.B_gauss = float(B_gauss)
         self.n_window = int(n_window)
         self.r_cut_um = None if r_cut_um is None else float(r_cut_um)
+        if periods_um is None:
+            self.periods_um = None
+        else:
+            pp = tuple(map(float, periods_um))
+            if len(pp) != 2 or any((not np.isfinite(x) or x <= 0) for x in pp):
+                raise ValueError('periods_um 须为两个正数 (Lx,Ly)')
+            self.periods_um = pp
         self.atoms = []            # [{id, g:(n,l,j,m), r:(n,l,j,m), pos:(x,y,z)}]
         self.beams = []            # I5 串扰标定用（M0 只占位，不接线）
 
     # ---- 摆点（生成器只是便利，产出仍是任意点云） ----
-    def add_atom(self, g, r, pos, Omega_mhz=0.0, delta_mhz=0.0, gamma_mhz=0.0):
+    def add_atom(self, g, r, pos, Omega_mhz=0.0, delta_mhz=0.0,
+                 gamma_mhz=0.0, Omega_phase_rad=0.0):
         """g/r = (n,l,j,m) 四元组；pos = (x,y,z) µm；Ω/δ/Γ = 逐原子驱动/失谐/衰减（MHz）。
 
         Ω/δ/Γ 是**运行级**量（calibrate 只读 g/r/pos，不读驱动 ⇒ 改驱动不重标定）；
@@ -61,8 +71,20 @@ class ManyBodyModel:
         if len(pos) != 3:
             raise ValueError(f'位置须为 (x,y,z) µm，收到 {pos!r}')
         i = len(self.atoms)
+        # ``Omega_mhz`` remains the signed transverse amplitude for backward
+        # compatibility.  A separate phase is the natural JSON/Runspec
+        # representation of a complex transverse field:
+        # H_Omega = (Omega sigma+ + Omega* sigma-)/2.
+        if isinstance(Omega_mhz, complex):
+            if abs(Omega_mhz.imag) > 1e-12 and float(Omega_phase_rad) == 0.0:
+                Omega_phase_rad = float(__import__('math').atan2(
+                    Omega_mhz.imag, Omega_mhz.real))
+                Omega_mhz = abs(Omega_mhz)
+            else:
+                Omega_mhz = float(Omega_mhz.real)
         self.atoms.append(dict(id=i, g=g, r=r, pos=pos,
                                Omega_mhz=float(Omega_mhz),
+                               Omega_phase_rad=float(Omega_phase_rad),
                                delta_mhz=float(delta_mhz),
                                gamma_mhz=float(gamma_mhz)))
         return i
@@ -104,6 +126,7 @@ class ManyBodyModel:
             pos = pos + rng.normal(0.0, float(jitter), pos.shape)
         ids = [self.add_atom(g, r, p,
                              Omega_mhz=kw.get('Omega_mhz', 0.0),
+                             Omega_phase_rad=kw.get('Omega_phase_rad', 0.0),
                              delta_mhz=kw.get('delta_mhz', 0.0),
                              gamma_mhz=kw.get('gamma_mhz', 0.0)) for p in pos]
         return ids
@@ -117,9 +140,12 @@ class ManyBodyModel:
         return dict(template=self.template, terms=list(self.terms),
                     B_gauss=self.B_gauss, n_window=self.n_window,
                     r_cut_um=self.r_cut_um,
+                    periods_um=(None if self.periods_um is None
+                                else list(self.periods_um)),
                     atoms=[dict(id=a['id'], g=list(a['g']), r=list(a['r']),
                                 pos=list(a['pos']),
                                 Omega_mhz=a.get('Omega_mhz', 0.0),
+                                Omega_phase_rad=a.get('Omega_phase_rad', 0.0),
                                 delta_mhz=a.get('delta_mhz', 0.0),
                                 gamma_mhz=a.get('gamma_mhz', 0.0))
                            for a in self.atoms],
@@ -132,11 +158,13 @@ class ManyBodyModel:
         # 已由 `n_window`（伙伴态窗）+ `guard_mhz`（近简并剔除）覆盖。旧存档里若带它，
         # 这里**明确忽略并留给调用方看见**（不静默当作已生效）。
         m = cls(d['template'], d.get('terms'), d.get('B_gauss', 0.0),
-                d.get('n_window', 3), d.get('r_cut_um'))
+                d.get('n_window', 3), d.get('r_cut_um'),
+                d.get('periods_um'))
         for a in d['atoms']:
             m.atoms.append(dict(id=a['id'], g=tuple(a['g']),
                                 r=tuple(a['r']), pos=tuple(a['pos']),
                                 Omega_mhz=float(a.get('Omega_mhz', 0.0)),
+                                Omega_phase_rad=float(a.get('Omega_phase_rad', 0.0)),
                                 delta_mhz=float(a.get('delta_mhz', 0.0)),
                                 gamma_mhz=float(a.get('gamma_mhz', 0.0))))
         m.beams = list(d.get('beams', []))

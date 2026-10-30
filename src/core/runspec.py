@@ -84,14 +84,15 @@ _ENGINE_TABLE = {
     ('sambe', 'pair'): ('.sambe', 'evolve_sambe_pair'),
     ('hard', 'single'): ('.hard', 'evolve_hard'),
     ('hard', 'pair'): ('.hard', 'evolve_hard_pair'),
-    ('ed', 'many'): ('.manybody.engine_ed', 'evolve_manybody'),
-    ('tebd', 'many'): ('.manybody.engine_ed', 'evolve_tebd_stub'),
     # 平衡态产品入口（manybody.eq_engine）：method 即请求量，走 eq_route 路由到
     # ed/gpu-batch/lanczos/kpm/dmrg。spec['equilibrium']=True 时由 evolve_run 旁路。
     ('gs', 'many'): ('.manybody.eq_engine', 'run_equilibrium'),
     ('thermal', 'many'): ('.manybody.eq_engine', 'run_equilibrium'),
     ('dos', 'many'): ('.manybody.eq_engine', 'run_equilibrium'),
 }
+
+from .manybody.backends import engine_entries
+_ENGINE_TABLE.update(engine_entries())
 
 _NBODY_OF_BOOL = {False: 'single', True: 'pair'}
 
@@ -681,11 +682,16 @@ def evolve_run(run, progress_arr=None, log=None, cache=None):
             return fn(run, progress_arr=progress_arr, log=log)
         # 多体含时：唯一分派表取 engine_fn(meth,'many')；分支只备料（透传 calib/驱动/psi0）
         fn = engine_fn(meth, 'many')
-        return fn(run['calib'], run.get('psi0'), run['t'],
+        result = fn(run['calib'], run.get('psi0'), run['t'],
                   Om=run.get('Om'), delta=run.get('delta'),
                   gamma=run.get('gamma'), terms=run.get('terms'),
                   segments=run.get('segments'),
-                  progress_arr=progress_arr, log=log, **ek)
+                  progress_arr=progress_arr, log=log,
+                  plan=run.get('hamiltonian_plan'), **ek)
+        result['requested_backend'] = run.get('method_in', meth)
+        result['resolved_backend'] = meth
+        result['used_options'] = dict(ek)
+        return result
     tb = bool(run['two_body'])
     # 引擎函数来自**唯一分派表**；下面的分支只负责"给这个引擎备料"
     # （mixed 的 cache 透传、sambe 单体的"仅显式覆写 DEFAULT_RTOL 才传 tol"等）。
