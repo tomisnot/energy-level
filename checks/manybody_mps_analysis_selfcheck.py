@@ -99,7 +99,7 @@ for name,cal in [('real',real_cal),('complex',complex_cal)]:
 
 # Compiled real MPOs with unused complex local operators still select float.
 _,on,cp,_=dmrg.terms_from_calib(real_cal,delta=delta,order=order)
-model=dmrg.rydberg_cluster_model(on,cp,conserve='Sz',mps_dtype='complex')
+model=dmrg.cluster_model(on,cp,conserve='Sz',mps_dtype='complex')
 real_model=select_mpo_dtype(model.H_MPO)
 alias=eq_route.solve_equilibrium(dict(calib=real_cal,n_sites=n,delta=delta),backend='dmrg',
     sector=3,chi_max=16,max_sweeps=6,return_state=True)
@@ -114,7 +114,7 @@ C.group('DMRG honors explicit research terms without mutating calibration',[
     ('calibration unchanged',real_cal['terms']==['I1','I2'])])
 C.group('strict dtype and gauge-safe copies',[
     ('compiled real detected',real_model.dtype.kind=='f'),
-    ('forced real complex H refused',rejects(lambda: dmrg.dmrg_rydberg_cluster(complex_cal,delta=delta,mps_dtype='real'))),
+    ('forced real complex H refused',rejects(lambda: dmrg.dmrg_cluster(complex_cal,delta=delta,mps_dtype='real'))),
     ('complex state refused',rejects(lambda: select_mps_dtype(kicked['psi'],'real'))),
     ('original MPO unchanged',model.H_MPO.dtype.kind=='c'),
     ('invalid policy refused',rejects(lambda:select_mpo_dtype(model.H_MPO,'float32')))])
@@ -146,14 +146,14 @@ C.group('non-Hermitian permutation on qudits',[
     ('orientation and complex value',abs(r['permutation_overlap']-np.vdot(v,permuted(v,p,3)))<1e-12)])
 
 # Non-Hermitian *parts* must produce the residual of their sum, not <H^2>.
-model=dmrg.rydberg_cluster_model([(0.,0.)]*3,[(.7+.4j,0,'P',2,'M')],mps_dtype='complex')
+model=dmrg.cluster_model([(0.,0.)]*3,[(.7+.4j,0,'P',2,'M')],mps_dtype='complex')
 from tenpy.algorithms.exact_diag import ExactDiag
 ed=ExactDiag(model);ed.build_full_H_from_mpo();h=ed.full_H.to_ndarray()
 sites=model.lat.mps_sites();v=rng.normal(size=8)+1j*rng.normal(size=8);v/=np.linalg.norm(v)
 psi=MPS.from_full(sites,npc.Array.from_ndarray(v.reshape(2,2,2),[s.leg for s in sites],labels=['p0','p1','p2']),bc='finite')
 r=mpo_sum_variance(psi,[model.H_MPO]);e=np.vdot(v,h@v)
 C.check('non-Hermitian sum uses H-dagger H',abs(r['energy_variance']-np.linalg.norm(h@v-e*v)**2)<1e-12)
-other=dmrg.rydberg_cluster_model([(0.,0.)]*3,[(-.2+.3j,0,'M',1,'P')],mps_dtype='complex')
+other=dmrg.cluster_model([(0.,0.)]*3,[(-.2+.3j,0,'M',1,'P')],mps_dtype='complex')
 ed=ExactDiag(other);ed.build_full_H_from_mpo();summed=h+ed.full_H.to_ndarray()
 r=mpo_sum_variance(psi,[model.H_MPO,other.H_MPO]);e=np.vdot(v,summed@v)
 C.check('non-Hermitian cross terms retain complex conjugation',abs(r['energy_variance']-np.linalg.norm(summed@v-e*v)**2)<1e-12)
@@ -162,7 +162,7 @@ C.check('non-Hermitian cross terms retain complex conjugation',abs(r['energy_var
 cal=graph(4,True);cal['terms']=['I1','I2','I3']
 for bond in cal['pairs']:bond['A']=.17+.09j
 _,on,cp,_=dmrg.terms_from_calib(cal,delta=delta[:4],order=list(range(4)))
-parity_model=dmrg.rydberg_cluster_model(on,cp,conserve='parity',mps_dtype='auto')
+parity_model=dmrg.cluster_model(on,cp,conserve='parity',mps_dtype='auto')
 pg=dmrg.dmrg_run(parity_model,chi_max=8,max_sweeps=6,want_state=True)['psi']
 phase_kick(pg,1,[1.,1j]);pv=atom_vector(make_mps_state(pg,list(range(4))))
 ph=build_H_sparse(cal,delta=delta[:4]).toarray();pe=np.vdot(pv,ph@pv)
@@ -205,10 +205,10 @@ with tempfile.TemporaryDirectory() as folder:
         ('ED propagated state',abs(abs(np.vdot(exact,atom_vector(r['state'])))-1)<1e-10),
         ('one-site ED propagation',abs(abs(np.vdot(exact,atom_vector(single['state'])))-1)<1e-10),
         ('input remains unchanged',abs(abs(old.overlap(state['psi']))-1)<1e-12),
-        ('mismatched order refused',rejects(lambda:dmrg.dmrg_rydberg_cluster(real_cal,delta=delta,psi0=restored,order=list(range(n))))),
+        ('mismatched order refused',rejects(lambda:dmrg.dmrg_cluster(real_cal,delta=delta,psi0=restored,order=list(range(n))))),
         ('bad integer order refused',rejects(lambda:dmrg.terms_from_calib(real_cal,order=[0,1,2,3,4,4]))),
-        ('charge mismatch refused',rejects(lambda:dmrg.dmrg_rydberg_cluster(real_cal,psi0=restored,charge_sector=2)))])
-    C.check('charged product state is not silently projected',rejects(lambda:dmrg.dmrg_rydberg_cluster(
+        ('charge mismatch refused',rejects(lambda:dmrg.dmrg_cluster(real_cal,psi0=restored,charge_sector=2)))])
+    C.check('charged product state is not silently projected',rejects(lambda:dmrg.dmrg_cluster(
         real_cal,charge_sector=3,psi0=dict(kind='product',amplitudes=[[1.,1.]]*6))))
 
 params={'dynamic.mode':2,'manybody.want':'gs','manybody.eq_backend':'auto',

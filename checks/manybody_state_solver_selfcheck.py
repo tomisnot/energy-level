@@ -103,7 +103,7 @@ else:
 
 with warnings.catch_warnings(record=True) as caught:
     warnings.simplefilter('always')
-    gs = dmrg.dmrg_rydberg_cluster(cal,delta=delta,charge_sector=1,
+    gs = dmrg.dmrg_cluster(cal,delta=delta,charge_sector=1,
         chi_max=16,max_sweeps=6,truncerr=1e-12,return_state=True)
 check('DMRG ED energy agreement',abs(gs['E0']-ev[0])<1e-10)
 check('DMRG truncation option consumed',not any('unused option' in str(w.message)

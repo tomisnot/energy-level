@@ -14,7 +14,7 @@ from tenpy.networks.mps import MPS
 
 C=Checker('manybody_mps_symmetry');rng=np.random.default_rng(3103101)
 n=6;order=[2,5,0,3,1,4]
-model=dmrg.rydberg_cluster_model([(0.,0.)]*n,[])
+model=dmrg.cluster_model([(0.,0.)]*n,[])
 sites=model.lat.mps_sites();v=rng.normal(size=64)+1j*rng.normal(size=64);v/=np.linalg.norm(v)
 psi=MPS.from_full(sites,npc.Array.from_ndarray(v.reshape([2]*n),[s.leg for s in sites],
                     labels=[f'p{i}' for i in range(n)]),bc='finite')
@@ -79,7 +79,7 @@ C.group('unsupported/zero/resource-limited projections refuse explicitly',[
     ('budget',rejects(lambda:project_permutation_sector(state,p,1,memory_budget_mb=1e-6))),
     ('invalid chi',rejects(lambda:project_permutation_sector(state,p,1,chi_max=0)))])
 
-large=18;large_model=dmrg.rydberg_cluster_model([(0.,0.)]*large,[])
+large=18;large_model=dmrg.cluster_model([(0.,0.)]*large,[])
 product=MPS.from_product_state(large_model.lat.mps_sites(),[1]+[0]*(large-1),bc='finite')
 large_result=project_permutation_sector(make_mps_state(product,list(range(large))),list(reversed(range(large))),1,
                                        memory_budget_mb=2.)
@@ -89,7 +89,7 @@ C.group('long reflection projection stays in the MPS representation',[
     ('actual parity',abs(large_result['permutation_overlap']-1)<1e-11),
     ('analytic end occupations',abs(occup[0]-.5)<1e-11 and abs(occup[-1]-.5)<1e-11 and np.max(abs(occup[1:-1]))<1e-11)])
 
-cm=dmrg.rydberg_cluster_model([(0.,0.)]*4,[(.7+.2j,i,'P',i+1,'M') for i in range(3)]+
+cm=dmrg.cluster_model([(0.,0.)]*4,[(.7+.2j,i,'P',i+1,'M') for i in range(3)]+
     [(.7-.2j,i,'M',i+1,'P') for i in range(3)],conserve='Sz')
 cg=dmrg.dmrg_run(cm,chi_max=8,max_sweeps=6,want_state=True,product_state=[1,0,0,0])['psi']
 cs=make_mps_state(cg,[2,0,3,1],1);cp=[3,2,1,0];cv=atom_vec(cs)

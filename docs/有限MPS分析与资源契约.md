@@ -39,7 +39,7 @@ next_out = solve_equilibrium(
     backend='dmrg', chi_max=512, return_state=True)
 ```
 
-直接 `dmrg_rydberg_cluster` 使用参数 `psi0/order/mps_dtype/diagnostics/memory_budget_mb`；统一路由中的 order 则位于 `system['mps_order']`。直接数值模型可调用 `terms_from_calib(..., order=...)`，所有时间分段沿用同一显式顺序。接续 CPU 时间演化时，若使用了自定义顺序，应明确传 `evolve_mps(..., mps_order=order)`，或者产品配置 `manybody.mps_order`。
+直接 `dmrg_cluster` 使用参数 `psi0/order/mps_dtype/diagnostics/memory_budget_mb`；统一路由中的 order 则位于 `system['mps_order']`。直接数值模型可调用 `terms_from_calib(..., order=...)`，所有时间分段沿用同一显式顺序。接续 CPU 时间演化时，若使用了自定义顺序，应明确传 `evolve_mps(..., mps_order=order)`，或者产品配置 `manybody.mps_order`。
 
 ## 无相位丢失的 dtype 策略
 
@@ -53,7 +53,7 @@ MPS 使用公共构造器复制，保留局部基、荷、规范形式、奇异�
 
 CPU 时间演化在 `exp(-iHt)` 前显式升回复数，包括单站点 TDVP；静态实数策略不能强制时间容器保持实数。已有 GPU `manybody.dtype=float32/float64` 仍是独立精度协议。
 
-低层使用已编译模型时，可先通过 `rydberg_cluster_model(..., mps_dtype=...)` 或 `select_mpo_dtype` 选择 MPO 表示，再交给 `dmrg_run`；后者选择与模型兼容的 MPS dtype，不原地修改调用方的模型。统一 calib 入口会完成这两步。研究 API 的显式 `system['terms']` 同样传入 DMRG，且不修改共享 calib；产品配置仍固定全相互作用。
+低层使用已编译模型时，可先通过 `cluster_model(..., mps_dtype=...)` 或 `select_mpo_dtype` 选择 MPO 表示，再交给 `dmrg_run`；后者选择与模型兼容的 MPS dtype，不原地修改调用方的模型。统一 calib 入口会完成这两步。研究 API 的显式 `system['terms']` 同样传入 DMRG，且不修改共享 calib；产品配置仍固定全相互作用。
 
 ## 精确 MPO 和方差
 

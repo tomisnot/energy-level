@@ -151,7 +151,7 @@ for name, atoms, rows, cols in CASES:
     dl = list(-0.4 + 0.3 * np.arange(n))
     cal = calib_of(atoms, nn_bonds(atoms, rows, cols))
     order, onsite, coups, info = dm.terms_from_calib(cal, Om, dl)
-    Hm, nm = dm.rydberg_cluster_full_hamiltonian(onsite, coups)
+    Hm, nm = dm.cluster_full_hamiltonian(onsite, coups)
     He = eng_dense(cal, Om, dl)
     p = perm_array(order)
     err = float(np.abs(Hm - He[np.ix_(p, p)]).max())
@@ -169,7 +169,7 @@ for c in range(4):
     pairs_j.append(pair(c, 4 + c, 0.0, -0.2j * (c + 1), 0.0))
 cal_j = calib_of(atoms_j, pairs_j, terms=('I2',))
 oj, ons_j, cp_j, inf_j = dm.terms_from_calib(cal_j, [1.1] * 8, [-0.2] * 8)
-Hj, _ = dm.rydberg_cluster_full_hamiltonian(ons_j, cp_j)
+Hj, _ = dm.cluster_full_hamiltonian(ons_j, cp_j)
 poj = perm_array(oj)
 Ej = eng_dense(cal_j, [1.1] * 8, [-0.2] * 8)
 err_j = float(np.abs(Hj - Ej[np.ix_(poj, poj)]).max())
@@ -190,7 +190,7 @@ for name, atoms, rows, cols in [('3leg×3 (n=9)', grid(3, 3), 3, 3),
     gs = eq.ground_state(Hs, dense_max=1 << n)          # 只算一次（旧写法算了三遍）
     E_ed = gs['E0']
     n_ed = eq.bit_matrix(n, 1 << n) @ (np.abs(gs['vec']) ** 2)
-    r = dm.dmrg_rydberg_cluster(cal, Om, dl, chi_max=48, truncerr=1e-8,
+    r = dm.dmrg_cluster(cal, Om, dl, chi_max=48, truncerr=1e-8,
                                 max_sweeps=30)
     subs_d.append(('%s：DMRG E0 ≡ 稠密 ED（Δ=%.2e，MPO 键维=%d）'
                    % (name, abs(r['E0'] - E_ed), r['mpo_bond_dim']),
@@ -219,7 +219,7 @@ Om_big = [1.0] * 12
 dl_big = [-0.3] * 12
 _o_big, _ons_big, _cp_big, _info_big = dm.terms_from_calib(cal_big, Om_big, dl_big)
 _rng_big = max(abs(b - a) for (_c, a, _x, b, _y) in _cp_big)
-_r_d = dm.dmrg_rydberg_cluster(cal_big, Om_big, dl_big, chi_max=48,
+_r_d = dm.dmrg_cluster(cal_big, Om_big, dl_big, chi_max=48,
                                truncerr=1e-8, max_sweeps=30)
 E_ed_big = eq.ground_state(asm.build_H_sparse(cal_big, Om_big, dl_big),
                            dense_max=1 << 12)['E0']
@@ -252,7 +252,7 @@ C.group('路由决策：dmrg_ok 新参数（不破坏 is_ladder 语义）', subs
 def _guard_raises():
     """故意用小 chi + 紧 truncerr 且不放宽守卫 → TeNPy 必须**报错**而非静默降级。"""
     try:
-        dm.dmrg_rydberg_cluster(cal_c, Om_c, dl_c, chi_max=4, truncerr=1e-12)
+        dm.dmrg_cluster(cal_c, Om_c, dl_c, chi_max=4, truncerr=1e-12)
         return False
     except Exception:                                    # noqa: BLE001
         return True
@@ -264,14 +264,14 @@ dl_c = [-0.3] * nc
 cal_c = calib_of(atoms_c, nn_bonds(atoms_c, 2, 5))
 E_ed_c = eq.ground_state(asm.build_H_sparse(cal_c, Om_c, dl_c),
                          dense_max=1 << nc)['E0']
-E4 = dm.dmrg_rydberg_cluster(cal_c, Om_c, dl_c, chi_max=8, truncerr=1e-6,
+E4 = dm.dmrg_cluster(cal_c, Om_c, dl_c, chi_max=8, truncerr=1e-6,
                              max_sweeps=20, max_trunc_err=None)
 E_ch4 = E4['E0']
-E16r = dm.dmrg_rydberg_cluster(cal_c, Om_c, dl_c, chi_max=16, truncerr=1e-6,
+E16r = dm.dmrg_cluster(cal_c, Om_c, dl_c, chi_max=16, truncerr=1e-6,
                                max_sweeps=20, max_trunc_err=None)
 E16_trunc = E16r['truncerr']
 E_ch16 = E16r['E0']
-E_ch64 = dm.dmrg_rydberg_cluster(cal_c, Om_c, dl_c, chi_max=64, truncerr=1e-8,
+E_ch64 = dm.dmrg_cluster(cal_c, Om_c, dl_c, chi_max=64, truncerr=1e-8,
                                  max_sweeps=30)['E0']
 C.group('键维收敛：chi↑ ⇒ E0 单调不升、误差估计下降、趋 ED', [
     ('chi 8(%g) ≥ chi 16(%g) ≥ chi 64(%g)（变分序）'

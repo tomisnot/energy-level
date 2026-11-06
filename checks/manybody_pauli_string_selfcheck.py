@@ -50,7 +50,7 @@ def random_vector(n, seed):
 
 
 def engine_site(conserve=None):
-    """与 `rydberg_cluster_model` 同款站点（SZ/P/M 是固定矩阵，与 conserve 无关）。"""
+    """与 `cluster_model` 同款站点（SZ/P/M 是固定矩阵，与 conserve 无关）。"""
     from tenpy.networks.site import SpinHalfSite
     site = SpinHalfSite(conserve=conserve)
     site.add_op('Nhat', np.array([[0, 0], [0, 1]], dtype=complex))

@@ -7,7 +7,7 @@ from .couplings import active_terms
 import numpy as np
 from scipy.linalg import expm
 from ..evolve_util import CONV
-from .dmrg import terms_from_calib, rydberg_cluster_model, _require_tenpy
+from .dmrg import terms_from_calib, cluster_model, _require_tenpy
 from .state import product_vectors
 from .engine_mps import _measure, _compile_link_groups
 from .observables import link_loop_observables
@@ -107,7 +107,7 @@ def evolve_trajectories(calib, psi0=None, t_grid=None, Om=None, delta=None,
         mapped = pauli_specs_to_mps_order(pauli_strings, order)
         pauli_labels = [spec['label'] for spec in pauli_strings]
         pauli_plan = PauliPlan(n, mapped, kind='mps')
-    model = rydberg_cluster_model(onsite, couplings)
+    model = cluster_model(onsite, couplings)
     if gamma is not None:
         ga = np.asarray(gamma, float)
         if ga.shape != (n,) or np.any(ga < 0): raise ValueError("trajectory gamma 必须是非负长度 N 数组")

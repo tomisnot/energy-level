@@ -32,7 +32,7 @@ def gauge_output(engine):
 
 try:
     with patch.object(TwoSiteDMRGEngine,'run',gauge_output):
-        out=dmrg.dmrg_rydberg_cluster(cal,delta=delta,charge_sector=3,chi_max=16,max_sweeps=6,
+        out=dmrg.dmrg_cluster(cal,delta=delta,charge_sector=3,chi_max=16,max_sweeps=6,
             return_state=True,diagnostics=dict(variance=True,permutation=list(range(n))))
     C.group('finite normalized noncanonical optimizer output',[
         ('input physical norm',abs(raw_norm[0]-1)<1e-11),

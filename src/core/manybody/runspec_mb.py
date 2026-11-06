@@ -421,7 +421,7 @@ def _prepare_ground_of(spec, *, n_sites, solver, warnings, mps_order,
     module = TIME_BACKENDS[normalize_time_backend(solver)].module
     if module in ('engine_mps', 'engine_mps_gpu'):
         from . import dmrg as _dm
-        out = _dm.dmrg_rydberg_cluster(calib0, None, None, chi_max=int(chi_max),
+        out = _dm.dmrg_cluster(calib0, None, None, chi_max=int(chi_max),
                                        max_sweeps=int(max_sweeps), return_state=True,
                                        charge_sector=charge_sector, order=mps_order,
                                        memory_budget_mb=memory_budget_mb)
@@ -488,7 +488,7 @@ def _product_mps_state(calib, base, order, charge_sector):
     p_state = [int(round(abs(v[1]) ** 2)) for v in vectors]   # 0=|g⟩(up) 1=|r⟩(down)
     _, onsite, couplings, _info = _dm.terms_from_calib(calib, None, None)
     conserve = 'Sz' if charge_sector is not None else None
-    model = _dm.rydberg_cluster_model(onsite, couplings, conserve=conserve)
+    model = _dm.cluster_model(onsite, couplings, conserve=conserve)
     psi = MPS.from_product_state(model.lat.mps_sites(),
                                  [p_state[int(a)] for a in order], bc='finite')
     return make_mps_state(psi, order, charge_sector)

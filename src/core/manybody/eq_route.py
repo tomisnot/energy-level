@@ -631,7 +631,7 @@ def _solve_ground(system, base, *, sector, k, v0, sector_check, chi_max,
             if charge is not None or return_state:
                 raise ValueError('ladder 快捷入口不支持 charge_sector/return_state；请使用通用 calib')
             # 均匀 2-leg 阶梯快捷入口（equibench_dmrg* 钉的就是这条）
-            out = _dm.dmrg_rydberg_ladder(chi_max=chi_max,
+            out = _dm.dmrg_ladder(chi_max=chi_max,
                                           **_ladd_to_kwargs(system['ladder']))
             return dict(base, E0=out['E0'], gap=out.get('gap'),
                         S=out.get('S_mid'), chi=out.get('chi'))
@@ -641,7 +641,7 @@ def _solve_ground(system, base, *, sector, k, v0, sector_check, chi_max,
         selected_calib=system['calib']
         if system.get('terms') is not None:
             selected_calib=dict(selected_calib,terms=list(system['terms']))
-        out = _dm.dmrg_rydberg_cluster(
+        out = _dm.dmrg_cluster(
             selected_calib, system.get('Om'), system.get('delta'),
             chi_max=chi_max, truncerr=truncerr, max_sweeps=max_sweeps,
             charge_sector=charge, return_state=return_state,psi0=system.get('psi0'),order=system.get('mps_order'),
@@ -784,6 +784,6 @@ def _run_qmc(system, betas, options):
 
 
 def _ladd_to_kwargs(lp):
-    """ladder dict → dmrg_rydberg_ladder kwargs（校验键）。"""
+    """ladder dict → dmrg_ladder kwargs（校验键）。"""
     need = {'length', 'V_r', 'J_r', 'A_r', 'V_l', 'J_l', 'A_l', 'delta', 'Omega'}
     return {k: lp[k] for k in need if k in lp}

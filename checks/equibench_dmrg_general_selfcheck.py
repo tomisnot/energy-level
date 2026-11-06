@@ -71,13 +71,13 @@ cases = [
 subs = []
 for cs in cases:
     L = cs['length']
-    Ht, n = dm.rydberg_ladder_full_hamiltonian(**cs)
+    Ht, n = dm.ladder_full_hamiltonian(**cs)
     He = engine_ladder_H(L, cs['V_r'], cs['J_r'], cs['A_r'], cs['V_l'], cs['J_l'],
                          cs['A_l'], cs['delta'], cs['Omega'])
     st = np.sort(np.linalg.eigvalsh(Ht))
     se = np.sort(np.linalg.eigvalsh(He))
     E0 = float(st[0])
-    E_dmrg = dm.dmrg_rydberg_ladder(L, cs['V_r'], cs['J_r'], cs['A_r'], cs['V_l'],
+    E_dmrg = dm.dmrg_ladder(L, cs['V_r'], cs['J_r'], cs['A_r'], cs['V_l'],
                                     cs['J_l'], cs['A_l'], cs['delta'], cs['Omega'])['E0']
     tag = 'L=%d J_r=%s A_r=%s A_l=%s' % (L, cs['J_r'], cs['A_r'], cs['A_l'])
     subs += [

@@ -289,7 +289,7 @@ def link_loop_observables(link_corr, link_pairs, loops):
 #
 # 单格点矩阵一律用**标准 Pauli**，基为 (|g⟩,|r⟩)=(index 0,index 1)：
 #     σˣ=[[0,1],[1,0]]  σʸ=[[0,-i],[i,0]]  σᶻ=[[1,0],[0,-1]]
-# ⚠ 本仓的 `sp/sm` 是 ⟨|r⟩⟨g|⟩ / ⟨|g⟩⟨r|⟩（Rydberg 意义的"激发/退激发"），
+# ⚠ 本仓的 `sp/sm` 是 ⟨|r⟩⟨g|⟩ / ⟨|g⟩⟨r|⟩（局部基 |r⟩/|g⟩ 的激发/退激发），
 #   即 σ⁺_本仓 = (σˣ − iσʸ)/2、σ⁻_本仓 = (σˣ + iσʸ)/2，与"按 σᶻ 升降"的教科书
 #   编号相反。要用 sp/sm 组合时按这个关系换，别按名字猜。
 PAULI_LOCAL = {
@@ -370,7 +370,7 @@ def normalize_pauli_strings(spec, n_atoms=None, err=None):
     return out
 
 
-# MPS 侧的算符名 → 系数。**必须用簇模型自己注册的算符**（`rydberg_cluster_model`
+# MPS 侧的算符名 → 系数。**必须用簇模型自己注册的算符**（`cluster_model`
 # 加的是 SZ/P/M，见 dmrg.py），不能用 TeNPy 自带的 Sigmaz/Sp/Sm：
 #   · TeNPy 在 conserve='Sz' 下会把局部基**按电荷重排**（index(up)=1），
 #     于是 'Sigmaz' 与 EL 的 diag(+1,−1) 差一个符号、'Sp'/'Sm' 互换；

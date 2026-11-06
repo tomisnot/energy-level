@@ -18,7 +18,7 @@ except Exception:
     C.skip('TeNPy DMRG 热启动', 'TeNPy unavailable')
     sys.exit(0 if C.summary() else 1)
 
-from src.core.manybody.dmrg import dmrg_rydberg_cluster
+from src.core.manybody.dmrg import dmrg_cluster
 
 
 def _calib(n=8):
@@ -38,13 +38,13 @@ def main():
     Om = np.zeros(n)
     de = np.zeros(n)
     t0 = time.perf_counter()
-    cold = dmrg_rydberg_cluster(cal, Om=Om, delta=de, chi_max=32,
+    cold = dmrg_cluster(cal, Om=Om, delta=de, chi_max=32,
                                 truncerr=1e-10, max_sweeps=4,
                                 charge_sector=4, return_state=True)
     t_cold = time.perf_counter() - t0
     state = cold['state']
     t0 = time.perf_counter()
-    warm = dmrg_rydberg_cluster(cal, Om=Om, delta=de, chi_max=32,
+    warm = dmrg_cluster(cal, Om=Om, delta=de, chi_max=32,
                                 truncerr=1e-10, max_sweeps=4,
                                 charge_sector=4, return_state=True, psi0=state)
     t_warm = time.perf_counter() - t0
@@ -60,7 +60,7 @@ def main():
     bad = dict(state)
     bad['order'] = list(reversed(state['order']))
     try:
-        dmrg_rydberg_cluster(cal, Om=Om, delta=de, chi_max=32,
+        dmrg_cluster(cal, Om=Om, delta=de, chi_max=32,
                              max_sweeps=1, charge_sector=4,
                              return_state=True, psi0=bad, order=list(range(n)))
         C.check('热启动顺序不匹配被拒绝', False, '应拒绝')

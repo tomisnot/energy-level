@@ -12,7 +12,7 @@ from .couplings import active_terms
 import numpy as np
 
 from ..evolve_util import CONV
-from .dmrg import (terms_from_calib, rydberg_cluster_model, dmrg_run,
+from .dmrg import (terms_from_calib, cluster_model, dmrg_run,
                    _require_tenpy)
 from .state import product_vectors, make_mps_state, validate_mps_state
 from .matrix_free import check_number_conserving
@@ -233,7 +233,7 @@ def evolve_mps(calib, psi0=None, t_grid=None, Om=None, delta=None, gamma=None,
         pauli_labels = [spec['label'] for spec in pauli_strings]
         pauli_plan = PauliPlan(n, mapped, kind='mps')
     conserve = 'Sz' if charge_sector is not None else None
-    model = rydberg_cluster_model(onsite, couplings, conserve=conserve)
+    model = cluster_model(onsite, couplings, conserve=conserve)
     model_build_s = time.perf_counter() - t_model0
     if alg == 'tebd':
         max_range = max((b - a for _c, a, _oa, b, _ob in couplings), default=1)
@@ -365,7 +365,7 @@ def evolve_mps(calib, psi0=None, t_grid=None, Om=None, delta=None, gamma=None,
             if seg_changed:
                 t_seg_model0 = time.perf_counter()
                 _, on_k, cp_k, _ = terms_from_calib(selected, Om_k, de_k, gamma, order=order)
-                model_k = rydberg_cluster_model(on_k, cp_k, conserve=conserve)
+                model_k = cluster_model(on_k, cp_k, conserve=conserve)
                 if alg == 'tebd':
                     model_k = NearestNeighborModel.from_MPOModel(model_k)
                 timing['segment_model_s'] += time.perf_counter() - t_seg_model0

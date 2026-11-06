@@ -20,8 +20,8 @@ from .observables import bit_matrix
 from .couplings import active_terms
 
 __all__ = ['dmrg_ising_ladder', 'ising_ladder_model', 'ising_ladder_full_hamiltonian',
-           'cylinder_order', 'terms_from_calib', 'rydberg_cluster_model',
-           'dmrg_rydberg_cluster', 'rydberg_cluster_full_hamiltonian', 'dmrg_run']
+           'cylinder_order', 'terms_from_calib', 'cluster_model',
+           'dmrg_cluster', 'cluster_full_hamiltonian', 'dmrg_run']
 
 _HAS_TENPY = None
 
@@ -91,12 +91,12 @@ def dmrg_ising_ladder(length, Jz=1.0, hx=0.5, hz=0.0, chi_max=200,
 
 
 # =====================================================================
-# 一般复耦合 Rydberg 阶梯（逐键 V·nn + J·σ⁺σ⁻ + A·σ⁺σ⁺ + 位δn + Ω/2 σˣ）
+# 一般复耦合二能级 ladder（逐键 V·nn + J·σ⁺σ⁻ + A·σ⁺σ⁺ + 位δn + Ω/2 σˣ）
 #   与 assemble.build_H_sparse 逐字同（n=½Î−Ŝz, σˣ=2Ŝx, 引擎σ⁺=TeNPy 'Sm'）。
 # =====================================================================
-def rydberg_ladder_model(length, V_r=0.0, J_r=0.0, A_r=0.0,
+def ladder_model(length, V_r=0.0, J_r=0.0, A_r=0.0,
                          V_l=0.0, J_l=0.0, A_l=0.0, delta=0.0, Omega=0.0):
-    """2-leg Rydberg 阶梯，rung/leg 分型复耦合；返回 TeNPy CouplingMPOModel。
+    """2-leg 二能级 ladder，rung/leg 分型复耦合；返回 TeNPy CouplingMPOModel。
 
     基矢 up=|g⟩(bit0)、down=|r⟩(bit1)，与引擎一致。δ/Ω 均匀，V 实、J/A 复。
     """
@@ -104,7 +104,7 @@ def rydberg_ladder_model(length, V_r=0.0, J_r=0.0, A_r=0.0,
     from tenpy.models.model import CouplingMPOModel
     from tenpy.networks.site import SpinHalfSite
 
-    class _RydbergLadder(CouplingMPOModel):
+    class _LadderModel(CouplingMPOModel):
         def init_sites(self, params):
             # 注册与引擎逐字同的单格点算符（基 up=g=[1,0], down=r=[0,1]）：
             #   Nhat=|r><r|, P=σ⁺=|r><g|, M=σ⁻=|g><r|, SX=σˣ
@@ -139,7 +139,7 @@ def rydberg_ladder_model(length, V_r=0.0, J_r=0.0, A_r=0.0,
             bond('rung_NN', V_r, J_r, A_r)
             bond('leg_NN', V_l, J_l, A_l)
 
-    return _RydbergLadder(dict(lattice='Ladder', L=int(length), bc_MPS='finite'))
+    return _LadderModel(dict(lattice='Ladder', L=int(length), bc_MPS='finite'))
 
 
 def _run_dmrg(M, chi_max=200, truncerr=1e-10, max_sweeps=60):
@@ -149,21 +149,21 @@ def _run_dmrg(M, chi_max=200, truncerr=1e-10, max_sweeps=60):
     return out
 
 
-def dmrg_rydberg_ladder(length, V_r=0.0, J_r=0.0, A_r=0.0, V_l=0.0, J_l=0.0,
+def dmrg_ladder(length, V_r=0.0, J_r=0.0, A_r=0.0, V_l=0.0, J_l=0.0,
                         A_l=0.0, delta=0.0, Omega=0.0, chi_max=200,
                         truncerr=1e-10, max_sweeps=60):
-    """一般复耦合 Rydberg 阶梯的 DMRG 基态（含 σ⁺σ⁻/σ⁺σ⁺/复耦合）。"""
+    """一般复耦合二能级 ladder的 DMRG 基态（含 σ⁺σ⁻/σ⁺σ⁺/复耦合）。"""
     _require_tenpy()
-    M = rydberg_ladder_model(length, V_r, J_r, A_r, V_l, J_l, A_l, delta, Omega)
+    M = ladder_model(length, V_r, J_r, A_r, V_l, J_l, A_l, delta, Omega)
     return _run_dmrg(M, chi_max, truncerr, max_sweeps)
 
 
-def rydberg_ladder_full_hamiltonian(length, V_r=0.0, J_r=0.0, A_r=0.0,
+def ladder_full_hamiltonian(length, V_r=0.0, J_r=0.0, A_r=0.0,
                                     V_l=0.0, J_l=0.0, A_l=0.0, delta=0.0, Omega=0.0):
     """一般阶梯的稠密 2^N H（TeNPy ExactDiag）——验证 MPO=引擎 H 与 DMRG。"""
     _require_tenpy()
     from tenpy.algorithms.exact_diag import ExactDiag
-    M = rydberg_ladder_model(length, V_r, J_r, A_r, V_l, J_l, A_l, delta, Omega)
+    M = ladder_model(length, V_r, J_r, A_r, V_l, J_l, A_l, delta, Omega)
     ed = ExactDiag(M)
     ed.build_full_H_from_mpo()
     fh = ed.full_H
@@ -290,8 +290,8 @@ def terms_from_calib(calib, Om=None, delta=None, gamma=None, *, order=None):
     return order, onsite, couplings, info
 
 
-def rydberg_cluster_model(onsite, couplings, conserve=None, extra_onsite=None, *, mps_dtype='complex'):
-    """任意点云的 Rydberg MPO 模型（自写 autoMPO：逐位 δ/Ω + 逐键复耦合 + 任意程）。
+def cluster_model(onsite, couplings, conserve=None, extra_onsite=None, *, mps_dtype='complex'):
+    """任意点云的二能级簇 MPO 模型（自写 autoMPO：逐位 δ/Ω + 逐键复耦合 + 任意程）。
 
     onsite: [(δ_i, Ω_i/2), …] 按 MPS 顺序；couplings: [(coeff, a, opA, b, opB), …]（a<b）。
 
@@ -308,7 +308,7 @@ def rydberg_cluster_model(onsite, couplings, conserve=None, extra_onsite=None, *
 
     n = len(onsite)
     if n == 0:
-        raise ValueError('rydberg_cluster_model：没有格点')
+        raise ValueError('cluster_model：没有格点')
 
     # 与引擎逐字同的单格点算符（up=g=[1,0], down=r=[0,1]）
     site = SpinHalfSite(conserve=conserve)
@@ -339,7 +339,7 @@ def rydberg_cluster_model(onsite, couplings, conserve=None, extra_onsite=None, *
             groups[(opA, opB, m)] = arr
         arr[a] += complex(c)
 
-    class _RydbergCluster(CouplingMPOModel):
+    class _ClusterModel(CouplingMPOModel):
         def init_sites(self, params):
             return site
 
@@ -359,7 +359,7 @@ def rydberg_cluster_model(onsite, couplings, conserve=None, extra_onsite=None, *
                     self.add_coupling(arr, 0, opA, 0, opB, m)
 
     from .mps_dtype import select_mpo_dtype
-    model = _RydbergCluster(dict())
+    model = _ClusterModel(dict())
     model.H_MPO = select_mpo_dtype(model.H_MPO, mps_dtype)
     return model
 
@@ -378,10 +378,10 @@ def _mpo_dense(M):
     return np.asarray(H, dtype=complex)
 
 
-def rydberg_cluster_full_hamiltonian(onsite, couplings):
+def cluster_full_hamiltonian(onsite, couplings):
     """→ (稠密 2^n H, n_sites)（MPS 顺序）——验「自写 MPO ≡ 引擎 H」。"""
     _require_tenpy()
-    M = rydberg_cluster_model(onsite, couplings)
+    M = cluster_model(onsite, couplings)
     return _mpo_dense(M), M.lat.N_sites
 
 
@@ -452,12 +452,12 @@ def dmrg_run(M, chi_max=200, truncerr=1e-10, max_sweeps=60, want_state=False,
     return out
 
 
-def dmrg_rydberg_cluster(calib, Om=None, delta=None, chi_max=200,
+def dmrg_cluster(calib, Om=None, delta=None, chi_max=200,
                          truncerr=1e-10, max_sweeps=60, max_trunc_err=_UNSET,
                          charge_sector=None, return_state=False, *, psi0=None, order=None,
                          mps_dtype='auto', diagnostics=None, memory_budget_mb=None,
                          pauli_strings=None, progress_arr=None):
-    """任意点云（多腿/无周期）的 Rydberg DMRG 基态 —— 直接吃引擎 calib。
+    """任意点云（多腿/无周期）的二能级簇 DMRG 基态 —— 直接吃引擎 calib。
 
     ``pauli_strings``：``[{'label','terms':[(原子下标, 轴),…]}]``（原子**原序**）→
     每条的期望值进 ``pauli_strings`` 列表。与 ``conserve`` 无关（走约化密度矩阵）。
@@ -507,7 +507,7 @@ def dmrg_rydberg_cluster(calib, Om=None, delta=None, chi_max=200,
         product=[vectors[i] for i in order]
     if native and charge_sector is not None and abs(np.real(np.sum(initial.expectation_value('Nhat')))-charge_sector)>1e-8:
         raise ValueError('Warm-start state occupation does not match charge metadata')
-    M = rydberg_cluster_model(onsite, couplings, conserve=conserve,mps_dtype=mps_dtype)
+    M = cluster_model(onsite, couplings, conserve=conserve,mps_dtype=mps_dtype)
     r = dmrg_run(M, chi_max, truncerr, max_sweeps, want_state=True,
                  max_trunc_err=max_trunc_err, product_state=product,initial_state=initial,
                  mps_dtype=mps_dtype,progress_arr=progress_range(progress_arr,0.,.8 if diagnostic_options else 1.))

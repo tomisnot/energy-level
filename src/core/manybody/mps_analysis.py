@@ -229,7 +229,7 @@ def permutation_expectation(psi, permutation, *, blocks=None, order=None, memory
 
 def partition_model_terms(onsite, couplings, *, conserve=None, groups=1, mps_dtype='auto'):
     """Split explicit generic one/two-site terms without spatial assumptions."""
-    from .dmrg import rydberg_cluster_model
+    from .dmrg import cluster_model
     if isinstance(groups,(bool,np.bool_)) or not isinstance(groups,(int,np.integer)) or groups<1:
         raise ValueError('groups must be a positive integer')
     onsite=list(onsite);couplings=list(couplings)
@@ -239,9 +239,9 @@ def partition_model_terms(onsite, couplings, *, conserve=None, groups=1, mps_dty
         on=[pair if first<=i<last else (0.,0.) for i,pair in enumerate(onsite)]
         cp=[term for term in couplings if first<=term[1]<last]
         if cp or any(abs(d)+abs(o)>0 for d,o in on):
-            parts.append(rydberg_cluster_model(on,cp,conserve=conserve,mps_dtype=mps_dtype).H_MPO)
+            parts.append(cluster_model(on,cp,conserve=conserve,mps_dtype=mps_dtype).H_MPO)
     if not parts:
-        parts=[rydberg_cluster_model(onsite,couplings,conserve=conserve,mps_dtype=mps_dtype).H_MPO]
+        parts=[cluster_model(onsite,couplings,conserve=conserve,mps_dtype=mps_dtype).H_MPO]
     return parts
 
 
