@@ -157,6 +157,8 @@ run_sim()
 - `manybody.constraint`：`{kind:"none"/"blockade"/"pxp",mode:"full"/"project",threshold_mhz,edges}`；投影基当前主要给 ED。
 - `manybody.drive_segments`：`[{t0,Om:[N],delta:[N],phase:[N]}]`；长度必须=N。
 - `manybody.loops` / `manybody.link_pairs`：环路/有向边；闭环边自动并入 `link_pairs`。
+- GPU `manybody.dtype="float32"` = complex64，短程实测约 2×；它是近似开关，长时窗需 float64 对拍。
+  24 点长程 `swap-tebd` 仍是 O(pair×distance) SVD，不建议当扫描工具。
 - `manybody.pauli_strings`：见 §9。
 - `manybody.chi_max/truncerr/max_sweeps/mps_order/mps_dtype/mps_diagnostics/return_state/memory_budget_mb/dtype/device`：MPS/资源选项。
 
