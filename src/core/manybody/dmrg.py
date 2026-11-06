@@ -17,6 +17,7 @@ ExactDiag / 我们的 ED / 我们的 GPU 批量 —— 四方对齐即证明本�
 import numpy as np
 
 from .observables import bit_matrix
+from .couplings import active_terms
 
 __all__ = ['dmrg_ising_ladder', 'ising_ladder_model', 'ising_ladder_full_hamiltonian',
            'cylinder_order', 'terms_from_calib', 'rydberg_cluster_model',
@@ -233,7 +234,7 @@ def cylinder_order(positions, tol=1e-6):
                        perm=perm)
 
 
-def terms_from_calib(calib, Om=None, delta=None, gamma=None):
+def terms_from_calib(calib, Om=None, delta=None, gamma=None, *, order=None):
     """引擎 calib（逐键复 V/J/A + 逐位 δ/Ω）→ (order, onsite, couplings, info)。
 
     与 `assemble.build_H_sparse` 同式：H = Σ δ_i n_i + Σ Ω_i/2 σˣ_i
@@ -245,11 +246,19 @@ def terms_from_calib(calib, Om=None, delta=None, gamma=None):
     """
     atoms = calib['atoms']
     n = len(atoms)
-    use = set(calib.get('terms', ('I1', 'I2', 'I3')))
+    use = set(active_terms(calib))
     Om = np.zeros(n, complex) if Om is None else np.asarray(Om, complex)
     delta = np.zeros(n) if delta is None else np.asarray(delta, float)
     gamma = np.zeros(n) if gamma is None else np.asarray(gamma, float)
-    order, info = cylinder_order([a.get('pos') for a in atoms])
+    default_order, info = cylinder_order([a.get('pos') for a in atoms])
+    if order is None:
+        order = default_order
+    else:
+        if (len(order) != n or any(isinstance(i,(bool,np.bool_)) or not isinstance(i,(int,np.integer)) for i in order)
+                or sorted(order) != list(range(n))):
+            raise ValueError('order 必须是原子下标的完整整数排列')
+        order = list(map(int,order))
+        info = dict(info, perm={a:k for k,a in enumerate(order)}, ordering='explicit')
     perm = info['perm']
     # The imaginary onsite part is used by the MPS time evolvers for the same
     # effective no-jump loss convention as engine_ed.  DMRG callers leave
@@ -281,7 +290,7 @@ def terms_from_calib(calib, Om=None, delta=None, gamma=None):
     return order, onsite, couplings, info
 
 
-def rydberg_cluster_model(onsite, couplings, conserve=None, extra_onsite=None):
+def rydberg_cluster_model(onsite, couplings, conserve=None, extra_onsite=None, *, mps_dtype='complex'):
     """任意点云的 Rydberg MPO 模型（自写 autoMPO：逐位 δ/Ω + 逐键复耦合 + 任意程）。
 
     onsite: [(δ_i, Ω_i/2), …] 按 MPS 顺序；couplings: [(coeff, a, opA, b, opB), …]（a<b）。
@@ -349,7 +358,10 @@ def rydberg_cluster_model(onsite, couplings, conserve=None, extra_onsite=None):
                 if np.any(arr):
                     self.add_coupling(arr, 0, opA, 0, opB, m)
 
-    return _RydbergCluster(dict())
+    from .mps_dtype import select_mpo_dtype
+    model = _RydbergCluster(dict())
+    model.H_MPO = select_mpo_dtype(model.H_MPO, mps_dtype)
+    return model
 
 
 def _mpo_dense(M):
@@ -377,7 +389,8 @@ _UNSET = object()     # 区分“不传（用 TeNPy 严格默认）”与“显�
 
 
 def dmrg_run(M, chi_max=200, truncerr=1e-10, max_sweeps=60, want_state=False,
-             max_trunc_err=_UNSET, product_state=None):
+             max_trunc_err=_UNSET, product_state=None, *, initial_state=None,
+             mps_dtype='auto', progress_arr=None):
     """在任意 TeNPy 模型上跑 TwoSiteDMRG → dict(E0, chi, S_mid, truncerr, n_sites, [psi])。
 
     `max_trunc_err`：TeNPy 的可靠性守卫——它比对的是**全部 sweep 的最大**截断误差
@@ -389,16 +402,37 @@ def dmrg_run(M, chi_max=200, truncerr=1e-10, max_sweeps=60, want_state=False,
     from tenpy.networks.mps import MPS
     from tenpy.algorithms.dmrg import TwoSiteDMRGEngine
     n = M.lat.N_sites
-    psi = MPS.from_product_state(M.lat.mps_sites(),
-                                 [0] * n if product_state is None else list(product_state),
-                                 bc='finite')
+    from .mps_dtype import select_mps_dtype
+    from .runtime import check_cancel, report_progress
+    check_cancel(progress_arr)
+    if initial_state is None:
+        psi = MPS.from_product_state(M.lat.mps_sites(),
+                                     [0] * n if product_state is None else list(product_state),
+                                     bc='finite', dtype=complex)
+    else:
+        if (initial_state.bc != 'finite' or initial_state.L != n or
+                any(a.leg != b.leg for a,b in zip(initial_state.sites,M.lat.mps_sites()))):
+            raise ValueError('Warm-start MPS physical bases/charges do not match model')
+        psi = initial_state
+    psi = select_mps_dtype(psi,mps_dtype,complex_required=np.issubdtype(M.H_MPO.dtype,np.complexfloating))
     opts = dict(max_sweeps=max_sweeps, min_sweeps=2, mixer=True,
                 trunc_params=dict(chi_max=chi_max, trunc_cut=truncerr))
     if max_trunc_err is not _UNSET:
         opts['max_trunc_err'] = (None if max_trunc_err is None
                                  else float(max_trunc_err))
-    eng = TwoSiteDMRGEngine(psi, M, opts)
+    class CancellableDMRG(TwoSiteDMRGEngine):
+        def run_iteration(self):
+            check_cancel(progress_arr)
+            result = super().run_iteration()
+            check_cancel(progress_arr)
+            report_progress(progress_arr,min(.99,self.sweeps/max(2,max_sweeps+2)))
+            return result
+    eng = CancellableDMRG(psi, M, opts)
     E0, psi = eng.run()
+    # Sweep-limited/mixer outputs can retain a noncanonical gauge. Measure a
+    # canonical copy, preserving the physical norm and the optimizer's state.
+    psi = psi.copy()
+    psi.canonical_form(renormalize=False, cutoff=0.)
     cut = n // 2
     S_mid = (float(psi.entanglement_entropy(bonds=[cut])[0]) if n >= 2 else 0.0)
     try:
@@ -407,23 +441,49 @@ def dmrg_run(M, chi_max=200, truncerr=1e-10, max_sweeps=60, want_state=False,
         terr = float('nan')
     out = dict(E0=float(E0), E0_per_site=float(E0) / n, n_sites=n,
                chi=int(max(psi.chi)) if len(psi.chi) else 1, S_mid=S_mid,
-               truncerr=terr, entropy_cut=(cut if n >= 2 else None))
+               truncerr=terr, entropy_cut=(cut if n >= 2 else None),
+               error_report=dict(solver_converged=bool(eng.is_converged()),sweeps=int(eng.sweeps),
+                   max_trunc_err=terr,final_trunc_err=float(eng.sweep_stats['max_trunc_err'][-1]),
+                   tensor_dtype=str(psi.dtype),mpo_dtype=str(M.H_MPO.dtype),
+                   canonical_measurement_copy=True))
     if want_state:
         out['psi'] = psi
+    report_progress(progress_arr,1.)
     return out
 
 
 def dmrg_rydberg_cluster(calib, Om=None, delta=None, chi_max=200,
                          truncerr=1e-10, max_sweeps=60, max_trunc_err=_UNSET,
-                         charge_sector=None, return_state=False):
+                         charge_sector=None, return_state=False, *, psi0=None, order=None,
+                         mps_dtype='auto', diagnostics=None, memory_budget_mb=None,
+                         pauli_strings=None, progress_arr=None):
     """任意点云（多腿/无周期）的 Rydberg DMRG 基态 —— 直接吃引擎 calib。
+
+    ``pauli_strings``：``[{'label','terms':[(原子下标, 轴),…]}]``（原子**原序**）→
+    每条的期望值进 ``pauli_strings`` 列表。与 ``conserve`` 无关（走约化密度矩阵）。
 
     → dict(E0, n_atom(按**原子原序**), chi, S_mid, truncerr, order, n_legs,
            mpo_bond_dim, backend)
     """
     _require_tenpy()
-    order, onsite, couplings, info = terms_from_calib(calib, Om, delta)
+    from .mps_dtype import validate_policy
+    from .state import validate_mps_state, product_vectors
+    from .mps_analysis import analyze_mps, partition_model_terms, variance_workspace_bytes, validate_diagnostics
+    from .resources import budget_bytes
+    from .runtime import progress_range
+    validate_policy(mps_dtype);budget_bytes(memory_budget_mb)
+    native = isinstance(psi0,dict) and psi0.get('kind')=='mps'
+    initial = None
+    if native:
+        validate_mps_state(psi0,len(calib['atoms']))
+        if order is None:order=list(psi0['order'])
+        if charge_sector is None:charge_sector=psi0.get('charge_sector')
+        elif psi0.get('charge_sector') != charge_sector:raise ValueError('Warm-start charge metadata mismatch')
+        initial=psi0['psi']
+    order, onsite, couplings, info = terms_from_calib(calib, Om, delta, order=order)
+    if native and list(psi0['order'])!=order:raise ValueError('Warm-start order mismatch; no implicit reordering')
     n = len(order)
+    diagnostic_options=validate_diagnostics(diagnostics,n)
     conserve = None
     product = None
     if charge_sector is not None:
@@ -439,9 +499,18 @@ def dmrg_rydberg_cluster(calib, Om=None, delta=None, chi_max=200,
             raise ValueError('charge_sector 越界')
         conserve = 'Sz'
         product = [1] * k + [0] * (n - k)
-    M = rydberg_cluster_model(onsite, couplings, conserve=conserve)
+    if not native and not (psi0 is None or isinstance(psi0,str) and psi0=='ground'):
+        vectors=product_vectors(psi0,n)
+        if charge_sector is not None:
+            if any(np.count_nonzero(v)!=1 for v in vectors) or abs(sum(abs(v[1])**2 for v in vectors)-charge_sector)>1e-8:
+                raise ValueError('Product initial state must lie entirely in charge_sector')
+        product=[vectors[i] for i in order]
+    if native and charge_sector is not None and abs(np.real(np.sum(initial.expectation_value('Nhat')))-charge_sector)>1e-8:
+        raise ValueError('Warm-start state occupation does not match charge metadata')
+    M = rydberg_cluster_model(onsite, couplings, conserve=conserve,mps_dtype=mps_dtype)
     r = dmrg_run(M, chi_max, truncerr, max_sweeps, want_state=True,
-                 max_trunc_err=max_trunc_err, product_state=product)
+                 max_trunc_err=max_trunc_err, product_state=product,initial_state=initial,
+                 mps_dtype=mps_dtype,progress_arr=progress_range(progress_arr,0.,.8 if diagnostic_options else 1.))
     psi = r.pop('psi')
     n_mps = np.asarray(psi.expectation_value('Nhat'), float)      # MPS 顺序
     n = len(order)
@@ -449,10 +518,58 @@ def dmrg_rydberg_cluster(calib, Om=None, delta=None, chi_max=200,
     for k, a in enumerate(order):                                 # 映回原子原序
         n_atom[int(a)] = n_mps[k]
     from .state import make_mps_state
+    state=(make_mps_state(psi,order,charge_sector) if return_state or diagnostic_options else None)
+    if charge_sector is not None and abs(n_mps.sum()-charge_sector)>1e-8:
+        raise ValueError('DMRG initial/final occupation does not match charge_sector')
+    analysis={}
+    if diagnostic_options:
+        parts=None
+        if diagnostic_options.get('variance'):
+            limit=512. if memory_budget_mb is None else memory_budget_mb
+            groups=1
+            while True:
+                parts=partition_model_terms(onsite,couplings,conserve=conserve,groups=groups,mps_dtype=mps_dtype)
+                estimate=max(variance_workspace_bytes(psi,a,b) for i,a in enumerate(parts) for b in parts[i:])
+                if estimate<=budget_bytes(limit):break
+                if groups>=n:raise ValueError('Exact variance cannot fit budget even with individual term groups')
+                groups=min(n,groups*2)
+        # variance/permutation/blocks 才需要 MPO 分析；只求 corr 时跳过 analyze_mps。
+        if parts is not None or diagnostic_options.get('permutation') is not None \
+                or diagnostic_options.get('blocks') is not None:
+            analysis=analyze_mps(state,mpos=parts,permutation=diagnostic_options.get('permutation'),
+                blocks=diagnostic_options.get('blocks'),memory_budget_mb=512. if memory_budget_mb is None else memory_budget_mb,
+                progress_arr=progress_range(progress_arr,.8,1.))
+        if diagnostic_options.get('corr'):
+            # 连通占据关联 C_ij = ⟨n_i n_j⟩ − ⟨n_i⟩⟨n_j⟩。代价 O(N²) 次收缩，
+            # 只有显式声明 mps_diagnostics={'corr': True} 才算（不默认跑）。
+            cc = np.asarray(psi.correlation_function('Nhat', 'Nhat',
+                            sites1=list(range(n)), sites2=list(range(n)),
+                            hermitian=True), dtype=complex).real
+            corr_mps = cc - np.outer(n_mps, n_mps)
+            corr = np.zeros((n, n), float)
+            corr[np.ix_(order, order)] = corr_mps        # MPS 顺序 → 原子原序
+            analysis['corr'] = corr
+    pauli_out = {}
+    if pauli_strings:
+        # 任意阶 Pauli 字符串：走**约化密度矩阵**而不是 expectation_value_term，
+        # 因为 conserve='Sz' 的格点上 σˣ/σʸ 不注册（只有 Sp/Sm/Sz/Id），
+        # 而那正是含 U(1) 时的默认路径——不绕开它，手性类算符根本算不了。
+        # ⚠ 站点下标是**原子原序**（与 n_atom 同口径），内部按 order 映射到 MPS 序。
+        from .observables import measure_pauli_strings, pauli_specs_to_mps_order
+        mapped = pauli_specs_to_mps_order(pauli_strings, order)
+        vals = measure_pauli_strings(psi, mapped)
+        pauli_out = {'pauli_strings': [complex(v) for v in vals],
+                     'pauli_string_labels': [d['label'] for d in pauli_strings]}
     return dict(E0=r['E0'], n_atom=n_atom, chi=r['chi'], S_mid=r['S_mid'],
                 truncerr=r['truncerr'],
                 entropy_cut=r['entropy_cut'],
-                **({'state': make_mps_state(psi, order, charge_sector)} if return_state else {}),
+                **({'state': state} if return_state else {}),
+                **({'corr': analysis['corr']} if 'corr' in analysis else {}),
+                error_report=r['error_report'],charge_sector=charge_sector,
+                used_options=dict(mps_dtype=mps_dtype,memory_budget_mb=memory_budget_mb,diagnostics=diagnostics),
+                **({'diagnostics':analysis} if analysis else {}),
+                **{k:analysis[k] for k in ['energy_variance','permutation_overlap'] if k in analysis},
+                **pauli_out,
                 n_sites=n, order=order, n_legs=info['n_legs'],
                 leg_len=info['leg_len'],
                 mpo_bond_dim=max(int(W.shape[1]) for W in M.H_MPO._W),

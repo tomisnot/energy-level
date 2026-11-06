@@ -188,6 +188,15 @@ def validate_psi_spec(spec, n):
     dim = 1 << n
     if spec is None or (isinstance(spec, str) and spec == 'ground'):
         return
+    if isinstance(spec, np.ndarray):
+        # 任意态矢（Python API 用；如脉冲后 exp(-iεO)|0⟩）。与 state_vector 同一
+        # 口径：必须是**全空间** (2^N,)，投影基由执行层按 basis_indices 处理。
+        if spec.shape != (dim,):
+            raise ValueError('多体初态向量形状须是 (2**N,) = (%d,)，收到 %r'
+                             % (dim, spec.shape))
+        if not np.isfinite(spec).all() or np.linalg.norm(spec) <= 0:
+            raise ValueError('多体初态向量零范数或含非有限数值')
+        return
     if isinstance(spec, (int, np.integer)) and not isinstance(spec, bool):
         if not 0 <= int(spec) < dim:
             raise ValueError('多体初态索引 %d 越界（dim=%d）' % (int(spec), dim))

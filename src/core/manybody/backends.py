@@ -17,6 +17,9 @@ class TimeBackend:
     gamma: bool = False
     return_state: bool = False
     charge: bool = False
+    #: Pauli 串能力：''=不支持；'full'=全空间/受限基态矢；'mps'=TeNPy MPS；
+    #: 'torch'=CUDA 张量 MPS；'ensemble'=轨迹系综；'factorized'=经典因子化。
+    pauli: str = ''
     native_state: str = ''
     algorithm: str = ''
 
@@ -24,7 +27,7 @@ class TimeBackend:
 STEP = (('max_step_ns', 'max_step_ns'),)
 TRUNCATION = (('chi_max', 'chi_max'), ('truncerr', 'truncerr'))
 KRYLOV = (('krylov_dim', 'krylov_dim'), ('krylov_tol', 'krylov_tol'))
-CPU_MPS = TRUNCATION + STEP + KRYLOV + (('max_sweeps', 'max_sweeps'),)
+CPU_MPS = TRUNCATION + STEP + KRYLOV + (('max_sweeps', 'max_sweeps'), ('mps_order','mps_order'))
 GPU_MPS = TRUNCATION + STEP + (('dtype', 'dtype'), ('device', 'device'),
                              ('svd_driver', 'svd_driver'),
                              ('memory_budget_mb', 'memory_budget_mb'))
@@ -32,38 +35,44 @@ GPU_MPS = TRUNCATION + STEP + (('dtype', 'dtype'), ('device', 'device'),
 TIME_BACKENDS = {
     'ed': TimeBackend('engine_ed', 'evolve_manybody',
                       options=(('memory_budget_mb', 'memory_budget_mb'),), segments=True,
-                      projected=True, gamma=True, return_state=True),
+                      projected=True, gamma=True, return_state=True, pauli='full'),
     'tebd': TimeBackend('engine_mps', 'evolve_mps', options=CPU_MPS,
-                        segments=True, return_state=True, charge=True, native_state='tenpy'),
+                        segments=True, return_state=True, charge=True,
+                        pauli='mps', native_state='tenpy'),
     'tebd-gpu': TimeBackend('engine_mps_gpu', 'evolve_mps_gpu',
                             aliases=('mps-gpu', 'cuda-tebd', 'tebd-cuda'), options=GPU_MPS,
-                            segments=True, return_state=True, native_state='torch', algorithm='tebd'),
+                            segments=True, return_state=True, pauli='torch',
+                            native_state='torch', algorithm='tebd'),
     'swap-tebd-gpu': TimeBackend('engine_mps_gpu', 'evolve_mps_gpu',
                                  aliases=('swap-tebd', 'tebd-gpu-swap', 'cuda-swap-tebd'),
                                  options=GPU_MPS, segments=True, return_state=True,
+                                 pauli='torch',
                                  native_state='torch', algorithm='swap-tebd'),
     'tdvp': TimeBackend('engine_mps', 'evolve_mps', aliases=('mps', 'mps_mpo'),
                         options=CPU_MPS, segments=True, return_state=True,
-                        charge=True, native_state='tenpy'),
+                        charge=True, pauli='mps', native_state='tenpy'),
     'tdvp-single': TimeBackend('engine_mps', 'evolve_mps',
                                aliases=('tdvp-1site', 'tdvp1', 'single-site-tdvp'),
                                options=CPU_MPS, segments=True, return_state=True,
-                               charge=True, native_state='tenpy'),
+                               charge=True, pauli='mps',
+                               native_state='tenpy'),
     'tdvp-adaptive': TimeBackend('engine_mps', 'evolve_mps',
                                  aliases=('tdvp-hybrid', 'adaptive-tdvp'),
                                  options=CPU_MPS + (
                                      ('tdvp_adaptive_switch_chi', 'adaptive_switch_chi'),
                                      ('tdvp_adaptive_min_steps', 'adaptive_min_steps')),
                                  segments=True, return_state=True, charge=True,
-                                 native_state='tenpy'),
+                                 pauli='mps', native_state='tenpy'),
     'tdvp-trajectories': TimeBackend('engine_trajectories', 'evolve_trajectories',
                                      aliases=('trajectories', 'mcwf'), gamma=True,
                                      options=TRUNCATION + STEP + KRYLOV + (
                                          ('n_trajectories', 'n_trajectories'),
-                                         ('collapse_ops', 'collapse_ops'), ('seed', 'seed'))),
+                                         ('collapse_ops', 'collapse_ops'), ('seed', 'seed')),
+                                     pauli='ensemble'),
     'classical-spin': TimeBackend('classical_spin', 'evolve_classical_spin',
                                   aliases=('classical', 'llg'),
-                                  options=STEP + (('classical_damping', 'damping'),)),
+                                  options=STEP + (('classical_damping', 'damping'),),
+                                  pauli='factorized'),
     'peps-real-time': TimeBackend('engine_peps', 'evolve_peps', aliases=('peps',),
                                   options=TRUNCATION + STEP + (
                                       ('grid_shape', 'grid_shape'),
@@ -71,15 +80,43 @@ TIME_BACKENDS = {
 }
 
 EQ_BACKENDS = {
-    'ed': ('gs', 'thermal', 'dos'),
-    'gpu-batch': ('gs',), 'gpu-lanczos': ('gs',), 'lanczos': ('gs',),
+    'ed': ('gs', 'thermal', 'dos', 'spectrum'),
+    'gpu-batch': ('gs',), 'gpu-lanczos': ('gs',), 'lanczos': ('gs', 'spectrum'),
     'kpm': ('thermal', 'dos'), 'gpu-kpm': ('thermal', 'dos'),
     'free-fermion': ('gs',), 'dmrg': ('gs',), 'qmc': ('gs', 'thermal'),
 }
 
+# Optional finite-MPS facilities, separate from task/backend selection.
+# Public dispatch checks this declaration before forwarding these options.
+MPS_DTYPES = ('auto', 'real', 'complex')
+EQ_FEATURES = {'dmrg': frozenset(('mps_dtype', 'mps_analysis', 'mps_order', 'mps_initial_state'))}
+
+
+def require_equilibrium_features(backend, features):
+    unsupported=set(features)-EQ_FEATURES.get(backend,frozenset())
+    if unsupported:
+        raise ValueError('%s does not support equilibrium options: %s' %
+                         (backend, ', '.join(sorted(unsupported))))
+
 
 def time_backend_names():
     return ['auto', *TIME_BACKENDS]
+
+
+def backend(name):
+    """规范名 → TimeBackend（未知名报错，不返回 None）。"""
+    return TIME_BACKENDS[normalize_time_backend(name)]
+
+
+def pauli_backends():
+    """能给出纯态 Pauli 串的含时后端（按能力声明，不手抄名单）。"""
+    return [name for name, b in TIME_BACKENDS.items()
+            if b.pauli in ('full', 'mps', 'torch')]
+
+
+def equilibrium_pauli_backends():
+    """平衡态 gs 里能算 Pauli 串的后端。"""
+    return ['ed', 'lanczos', 'gpu-lanczos', 'dmrg']
 
 
 def equilibrium_backend_names():
@@ -111,9 +148,16 @@ def engine_entries():
 
 def validate_time_capabilities(name, *, segments=None, plan=None, gamma=None,
                                return_state=False, charge_sector=None, psi0=None,
-                               collapse_ops=None):
+                               collapse_ops=None, mps_order=None, pauli_strings=None):
     import numpy as np
     backend = TIME_BACKENDS[normalize_time_backend(name)]
+    if pauli_strings and not backend.pauli:
+        alts = ' / '.join(pauli_backends())
+        raise ValueError(
+            '%s 不提供可求 Pauli 串的多体态（能力=%r）；请改用 %s。'
+            '该键不会被静默忽略' % (name, backend.pauli or 'none', alts))
+    if mps_order is not None and backend.native_state != 'tenpy':
+        raise ValueError('%s does not support explicit mps_order' % name)
     if segments and not backend.segments:
         raise ValueError('%s 尚不支持 drive_segments' % name)
     if plan and plan.get('projected') and not backend.projected:

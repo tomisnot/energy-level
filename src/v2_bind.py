@@ -58,10 +58,53 @@ def load_artifact(root, aid):
     return (labels, arrays, {})
 
 
-def gc_report(root, *, dry_run=True, **_kw):
-    """v2 数据回收垫片：未实现，如实报告（不静默）。GUI 回收按钮走这里。"""
-    return {"ok": False, "dry_run": dry_run,
-            "note": "mecha v2 未接 gc（保留策略等第二项目，见 D-9）；本目录未清理"}
+#: 产物目录的磁盘保留预算（默认 1 GiB，可用 EL_ARTIFACT_BUDGET_BYTES 覆盖）。
+GC_BUDGET_BYTES = int(os.environ.get("EL_ARTIFACT_BUDGET_BYTES") or 1024 ** 3)
+
+
+def gc_report(root, *, dry_run=True, max_bytes=None, **_kw):
+    """产物目录的保留策略：总量超过预算就从**最老**的文件开始删。
+
+    ⚠ 这是**宿主**的责任，不是框架的：mecha 的 ArtifactStore 明写"不做删除 /
+    GC —— 删除策略是宿主的保留策略"（`mecha/artifacts.py`），所以规则落在这里。
+    只管 ``root`` 这一层文件（``*.pkl`` 与 mecha 的 ``artifact-*.bin/.json``），
+    不递归、不猜目录结构。``dry_run=True`` 只报告要删什么。
+    """
+    base = Path(root)
+    budget = int(max_bytes if max_bytes is not None else GC_BUDGET_BYTES)
+    if not base.is_dir():
+        return {"ok": True, "dry_run": bool(dry_run), "budget_bytes": budget,
+                "before_bytes": 0, "remaining_bytes": 0, "removed": [],
+                "note": "产物目录不存在，无需回收"}
+    files = [p for p in base.iterdir() if p.is_file()]
+    sizes = {p: p.stat().st_size for p in files}
+    total = sum(sizes.values())
+    before = total
+    removed, freed = [], 0
+    for path in sorted(files, key=lambda p: p.stat().st_mtime_ns):
+        if total <= budget:
+            break
+        size = sizes[path]
+        if not dry_run:
+            try:
+                path.unlink()
+            except OSError:
+                continue
+        total -= size
+        freed += size
+        removed.append({"name": path.name, "bytes": size})
+    return {"ok": True, "dry_run": bool(dry_run), "budget_bytes": budget,
+            "before_bytes": before, "remaining_bytes": total,
+            "freed_bytes": freed, "removed": removed,
+            "note": ("仅报告，未删除（dry_run）" if dry_run and removed
+                     else "总量在预算内，未删除" if not removed
+                     else "已按最老优先删除")}
+
+
+def gc_run(root, **kw):
+    """实际执行回收（:= ``gc_report(..., dry_run=False)``）。"""
+    kw.pop("dry_run", None)
+    return gc_report(root, dry_run=False, **kw)
 
 
 # ---------------- 监控端点（只读；路由/投影/生命周期归 mecha.cockpit）----------------
@@ -229,12 +272,18 @@ def make_v2_bridge(el_root, *, data_root=None, data_dir_name=".mecha-v2",
         bridge._monitor_port = endpoint.port
         # 项目自己的运行卡片只读面：同一份 bridge/run_monitor store，推送
         # RunSpec、阶段进度和 result_summary；浏览器不接触 Gate 写口。
+        # ⭐ 卡片**落盘**（`<data>/.mecha-v2/run-cards/`）：启动时只读最新 30 张的
+        # 元数据，所以"什么时候启动都显示磁盘上最新的 N 条"；载荷按需读、带 LRU。
         from mecha_v2.run_monitor import RunMonitorServer
+        try:
+            bridge.run_monitor.configure(Path(el_root) / ".mecha-v2" / "run-cards")
+        except OSError as exc:
+            print(f"[v2_bind] 运行卡片目录不可用（仅内存视图）：{exc}", flush=True)
         rpf = str(Path(el_root) / RUN_MONITOR_PORT_FILE)
         try:
             run_web = RunMonitorServer(
                 bridge.run_monitor, Path(el_root) / "web" / "run_monitor",
-                bridge.effective, port_file=rpf).start()
+                bridge.effective, port_file=rpf,artifact_root=bridge.ops.root).start()
             bridge._run_monitor_server = run_web
             bridge._run_monitor_port = run_web.port
         except OSError as exc:

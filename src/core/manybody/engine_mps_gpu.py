@@ -75,7 +75,7 @@ def evolve_mps_gpu(calib, psi0=None, t_grid=None, Om=None, delta=None, gamma=Non
                    dtype='float64', device='cuda', order=2, algorithm='tebd',
                    plan=None, memory_budget_mb=None, max_dim=None, diag=False,
                    profile_timing=False, svd_driver=None,
-                   return_state=False,
+                   return_state=False, pauli_strings=None,
                    **kwargs):
     """Finite two-level MPS evolution with first/second-order Trotter splitting.
 
@@ -105,6 +105,8 @@ def evolve_mps_gpu(calib, psi0=None, t_grid=None, Om=None, delta=None, gamma=Non
     n = len(calib.get('atoms') or [])
     if n < 1:
         raise ValueError('GPU MPS calib has no atoms')
+    if pauli_strings and not want_observables:
+        raise ValueError('manybody.pauli_strings 需要 want_observables=true')
     Om = np.zeros(n, complex) if Om is None else np.asarray(Om, complex)
     delta = np.zeros(n) if delta is None else np.asarray(delta, float)
     gamma = np.zeros(n) if gamma is None else np.asarray(gamma, float)
@@ -139,6 +141,12 @@ def evolve_mps_gpu(calib, psi0=None, t_grid=None, Om=None, delta=None, gamma=Non
     atom_order, onsite, couplings, info = terms_from_calib(selected, Om, delta, gamma)
     atom_order = list(map(int, atom_order))
     inv = {a: i for i, a in enumerate(atom_order)}
+    pauli_mapped = []
+    pauli_labels = []
+    if pauli_strings:
+        from .observables import pauli_specs_to_mps_order
+        pauli_labels = [spec['label'] for spec in pauli_strings]
+        pauli_mapped = pauli_specs_to_mps_order(pauli_strings, atom_order)
     if algorithm == 'tebd' and any(b-a != 1 for _, a, _, b, _ in couplings):
         raise ValueError('GPU TEBD requires MPS 最近邻 couplings; select swap-tebd-gpu or CPU TDVP for long-range pairs')
     ts = _initial_tensors(torch, psi0, n, atom_order, tdtype, dev)
@@ -200,6 +208,8 @@ def evolve_mps_gpu(calib, psi0=None, t_grid=None, Om=None, delta=None, gamma=Non
     obs_series = ({k: np.zeros((N, n), dtype=complex if k in ('sm', 'sp') else float)
                    for k in ('sx', 'sy', 'sz', 'sm', 'sp', 'phase')} if want_observables else None)
     link_series = np.zeros((N, len(pairs)), complex) if want_observables else None
+    pauli_series = (np.zeros((N, len(pauli_strings)), complex)
+                    if want_observables and pauli_strings else None)
     xy_last = corr_last = None
     mps_pairs = [(inv[a], inv[b]) for a, b in pairs]
 
@@ -219,6 +229,8 @@ def evolve_mps_gpu(calib, psi0=None, t_grid=None, Om=None, delta=None, gamma=Non
                              ('sz', 1-2*p), ('phase', np.where(abs(sm)>1e-14, np.angle(sm), np.nan))):
                 obs_series[key][k, atom_order] = val
             link_series[k] = links.cpu().numpy()
+        if pauli_series is not None:
+            pauli_series[k] = state.pauli_expectation(pauli_mapped, ops)
         if want_entropy:
             entropy[k] = state.entropy(n//2)
         if k == N-1:
@@ -315,6 +327,9 @@ def evolve_mps_gpu(calib, psi0=None, t_grid=None, Om=None, delta=None, gamma=Non
         obs = dict(obs_series, xy_corr=xy_last, link_corr=link_series, link_pairs=pairs,
                    loop_phase=final_lp, loop_winding=final_lw,
                    loop_phase_series=lp, loop_winding_series=lw)
+        if pauli_series is not None:
+            obs['pauli_strings'] = pauli_series
+            obs['pauli_string_labels'] = pauli_labels
     backend = '%s-torch-cuda' % algorithm
     err = dict(backend=backend, algorithm=algorithm, n_atoms=n, n_t=N, chi_max=int(chi_max),
                truncerr=float(truncerr), max_chi=state.max_chi, max_norm_dev=float(abs(norms-1).max()),
@@ -322,7 +337,8 @@ def evolve_mps_gpu(calib, psi0=None, t_grid=None, Om=None, delta=None, gamma=Non
                n_internal_steps=nsteps, n_two_site_updates=state.gate_count, n_swaps=state.swap_count,
                max_step_ns=max_step_ns, order=order, device=str(dev), dtype=str(tdtype),
                svd_driver=svd_driver, profile_timing=profile_timing,
-               mps_order=atom_order, nearest_neighbour_only=(algorithm == 'tebd'),
+               mps_order=atom_order, entropy_cut=n//2 if want_entropy else None,
+               nearest_neighbour_only=(algorithm == 'tebd'),
                timings_s=timing)
     return dict(t=t, pops=pops, pops_atom=pops, states=[dict(label='atom%d'%i, atom_id=i) for i in range(n)],
                 **({'state': dict(kind='mps', backend='torch', order=atom_order,

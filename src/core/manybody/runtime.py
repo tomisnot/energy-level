@@ -20,6 +20,21 @@ def report_progress(progress_arr, fraction):
         progress_arr[0] = float(fraction)
 
 
+def progress_range(progress_arr, start, stop):
+    """Compose subtask progress while forwarding the shared cancel flag."""
+    if not 0 <= start < stop <= 1:
+        raise ValueError('Progress range must satisfy 0 <= start < stop <= 1')
+    if progress_arr is None:
+        return None
+    class Range:
+        def __getitem__(self,index):
+            return ((progress_arr[0]-start)/(stop-start) if index==0 else progress_arr[index])
+        def __setitem__(self,index,value):
+            if index==0:progress_arr[0]=start+(stop-start)*float(value)
+            else:progress_arr[index]=value
+    return Range()
+
+
 def reject_options(options):
     if options:
         raise TypeError('不支持的多体引擎选项：%s' % ', '.join(sorted(options)))

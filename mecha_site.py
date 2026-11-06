@@ -35,7 +35,7 @@ import sys
 from pathlib import Path
 
 from mecha.authority import Mode
-from mecha.site import DSHSpec, MonitorSpec, ReadySpec, Service, Site
+from mecha.site import DSHSpec, MonitorSpec, ReadySpec, Service, Site, TaskSpec
 
 #: 本仓根（本文件在仓根 ⇒ 即自身所在目录）。
 _SITE_ROOT = Path(__file__).resolve().parent
@@ -113,6 +113,18 @@ SITE = Site(
                 route_path="/re0-mecha/monitor-url",
                 port_file=".monitor-port",     # ⚠ 与 mcp 的 .mcp-port 是两个不同的文件
                 title="机甲监控",
+            ),
+            #: ⭐ 长任务交给 DSH 的 job 桥：提交后不占住一次工具调用，由桥按
+            #: read_job 的 `state` 轮询到终态。字段与真实签名对齐（别猜）：
+            #:   * `submit_tool="submit_job"` → 回执里的 `job_id`；
+            #:   * `state_field="state"` → `read_job` 返回的 `state`（pending/running/
+            #:     done/failed/cancelled）；终态用默认集合；
+            #:   * `wait_field=None` ⇒ **必须**：带 `wait="terminal"` 会让服务端单次
+            #:     调用阻塞到 540 s，DSH 那次 HTTP 会撞 undici 的 300 s 上限（同 ML 的
+            #:     实测结论）；置 None 后由桥**短轮询**凑出"等到终态"。
+            long_tasks=(
+                TaskSpec(submit_tool="submit_job", status_tool="read_job",
+                         cancel_tool="cancel_job", wait_field=None),
             ),
             env=_ENV,
         ),

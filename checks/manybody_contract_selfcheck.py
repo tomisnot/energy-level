@@ -41,42 +41,65 @@ def calibration(n):
 def params(cal):
     return {'dynamic.mode': 2, 'dynamic.t_max': .2, 'dynamic.npts': 2,
             'manybody.max_step_ns': .1,
-            'manybody.atoms': [dict(g=[50,0,.5,.5], r=[51,0,.5,.5], pos=a['pos'],
-                                   Omega_mhz=1.+i, delta_mhz=.1*i)
-                              for i,a in enumerate(cal['atoms'])]}
+            'manybody.calib': {'atoms': [dict(id=i, pos=list(a['pos']),
+                                             Omega_mhz=1. + i, delta_mhz=.1 * i)
+                                         for i, a in enumerate(cal['atoms'])],
+                               'pairs': list(cal.get('pairs') or [])}}
 
 
 cal = calibration(2)
 schema = protocol.config_schema()
 C.check('retired interaction controls are not writable',
         not {'manybody.terms','manybody.template'} & set(protocol.settable_keys()))
+C.check('legacy model keys are gone from the schema',
+        not {'manybody.atoms', 'manybody.calib_file', 'manybody.n_window',
+             'manybody.r_cut_um', 'manybody.second_order', 'manybody.guard_mhz',
+             'manybody.periods_um', 'manybody.B_gauss'} & set(protocol.settable_keys()))
 C.check('schema and backend entries agree',
         schema['manybody.solver']['enum'] == time_backend_names()
         and all(callable(runspec.engine_fn(name,'many')) for name in TIME_BACKENDS))
 C.check('every mapped backend option has a schema default', all(
     'manybody.'+suffix in schema for backend in TIME_BACKENDS.values()
     for suffix, _kw in backend.options))
-legacy_warnings=[]
-model=mb.model_from_params(dict(params(cal), **{'manybody.terms':[]}), legacy_warnings)
-C.check('legacy snapshots migrate with an explicit warning',len(model.terms)==3 and bool(legacy_warnings))
-key=mb._calib_key(model, True, 1.)
-model.periods_um=(10.,10.)
-C.check('periodic geometry invalidates calibration cache',key != mb._calib_key(model,True,1.))
+
+# calib 只认行内形态：file/arc/terms 都必须当场拒
+for bad, why in (({'file': 'x.json'}, 'file'), ({'arc': {'B_gauss': 1.}}, 'arc'),
+                 (dict(cal, terms=['I2']), 'terms')):
+    rejects('calib rejects %s form' % why, lambda b=bad: mb.validate_calib(b))
+
+# 通道由数值推导（没有 terms 输入）
+_derived = mb.validate_calib({'atoms': [{'id': 0, 'pos': [0, 0, 0]},
+                                        {'id': 1, 'pos': [1, 0, 0]}],
+                              'pairs': [{'i': 0, 'j': 1, 'J': 1.5},
+                                        {'i': 0, 'j': 1, 'V': 0.0, 'A': 0.0}]})
+C.check('active channels are derived from pair numbers',
+        _derived['terms'] == ['I2'], _derived['terms'])
+_withV = mb.validate_calib({'atoms': [{'id': 0, 'pos': [0, 0, 0]},
+                                      {'id': 1, 'pos': [1, 0, 0]}],
+                            'pairs': [{'i': 0, 'j': 1, 'J': 1.0, 'V': 2.0}]})
+C.check('V≠0 turns on I1', 'I1' in _withV['terms'], _withV['terms'])
+
+# 指纹：同样数字同样指纹；改一个数就变
+_fp1 = mb.calib_summary(_derived)['fingerprint']
+_changed = mb.validate_calib({'atoms': [{'id': 0, 'pos': [0, 0, 0]},
+                                        {'id': 1, 'pos': [1, 0, 0]}],
+                              'pairs': [{'i': 0, 'j': 1, 'J': 1.5000001}]})
+C.check('calib fingerprint is content-addressed',
+        _fp1 == mb.calib_summary(_derived)['fingerprint']
+        and _fp1 != mb.calib_summary(_changed)['fingerprint'], _fp1)
 
 for solver, kw in [('swap-tebd-gpu','max_step_ns'),('peps-real-time','chi_max'),
                    ('tdvp-trajectories','truncerr'),('tebd-gpu','memory_budget_mb')]:
     request=dict(params(cal), **{'manybody.solver':solver,'manybody.max_step_ns':.123,
                  'manybody.chi_max':7,'manybody.truncerr':1e-7,'manybody.memory_budget_mb':512.})
-    with patch.object(mb,'calibrate_memo',return_value=cal):
-        spec=runspec.build_run(None,request)
+    spec=runspec.build_run(None,request)
     expected={'max_step_ns':.123,'chi_max':7,'truncerr':1e-7,'memory_budget_mb':512.}[kw]
     C.check('%s forwards %s'%(solver,kw),spec['engine_kwargs'][kw]==expected)
 
 for solver in ('classical-spin','peps-real-time','tdvp-trajectories'):
-    with patch.object(mb,'calibrate_memo',return_value=cal):
-        rejects('RunSpec rejects unsupported segments '+solver,lambda: runspec.build_run(
-            None,dict(params(cal),**{'manybody.solver':solver,
-                                    'manybody.drive_segments':[dict(t0=0.,Om=[1.,2.])]})))
+    rejects('RunSpec rejects unsupported segments '+solver,lambda: runspec.build_run(
+        None,dict(params(cal),**{'manybody.solver':solver,
+                                'manybody.drive_segments':[dict(t0=0.,Om=[1.,2.])]})))
 for fn in (evolve_classical_spin,evolve_peps,evolve_trajectories):
     rejects('direct entry rejects segments '+fn.__name__, lambda: fn(cal,t_grid=[0.,.1],segments=[dict(t0=0.)]))
     rejects('direct entry cancels '+fn.__name__, lambda: fn(cal,t_grid=[0.,.1],progress_arr=[0.,1]))
@@ -141,10 +164,9 @@ rejects('unsupported equilibrium task/backend refused',lambda:eq_route.solve_equ
     dict(calib=cal,n_sites=2),want='thermal',backend='dmrg'))
 rejects('explicit exact thermal computation respects memory budget',lambda:eq_route.solve_equilibrium(
     dict(calib=cal,n_sites=2),want='thermal',backend='ed',memory_budget_mb=.0001))
-with patch.object(mb,'calibrate_memo',return_value=cal):
-    thermal_spec=runspec.build_run(None,dict(params(cal),**{
-        'manybody.want':'thermal','manybody.eq_backend':'ed','manybody.betas':[.3,1.],
-        'manybody.kpm_num':32,'manybody.kpm_nvec':1,'manybody.qmc_burn_in':0}))
+thermal_spec=runspec.build_run(None,dict(params(cal),**{
+    'manybody.want':'thermal','manybody.eq_backend':'ed','manybody.betas':[.3,1.],
+    'manybody.kpm_num':32,'manybody.kpm_nvec':1,'manybody.qmc_burn_in':0}))
 thermal=runspec.evolve_run(thermal_spec)
 C.check('thermal product entry carries beta axes and preserves zero options',
         np.array_equal(thermal['betas'],[.3,1.]) and thermal_spec['qmc']['burn_in']==0
@@ -164,9 +186,8 @@ for name in TIME_BACKENDS:
         if not torch.cuda.is_available():
             C.skip('public entry '+name,'CUDA unavailable')
             continue
-    with patch.object(mb,'calibrate_memo',return_value=cal):
-        spec=runspec.build_run(None,dict(params(cal),**{'manybody.solver':name,
-            'manybody.n_trajectories':1,'manybody.chi_max':4}))
+    spec=runspec.build_run(None,dict(params(cal),**{'manybody.solver':name,
+        'manybody.n_trajectories':1,'manybody.chi_max':4}))
     progress=[0.,0]
     out=runspec.evolve_run(spec,progress_arr=progress)
     C.check('public entry '+name,out['pops'].shape[1]==len(out['states'])

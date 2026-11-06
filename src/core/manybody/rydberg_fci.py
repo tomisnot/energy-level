@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Rydberg 分数陈绝缘体引擎（FCI）—— arXiv:2202.00699 精读复现（2026-10-02）。
+"""Rydberg 分数陈绝缘体引擎（FCI）—— arXiv:2202.00699 的模型适配器。
 
 论文：S. Weber, R. Bai, N. Makki, J. Mögerle, T. Lahaye, A. Browaeys,
 M. Daghofer, N. Lang, H. P. Büchler, "Experimentally accessible scheme for a
@@ -473,9 +473,9 @@ def bloch_H(k, *, Delta, t_a, t_b, w, l_um=12.0):
                     i0, j0 = 2 * s1, 2 * s2
                     # 相位约定：布洛赫基按格点位置 e^{ik·(R+d_s)} 展开，
                     # 全部矩阵元统一乘 ph = e^{ik·(源−汇)}；厄米性由
-                    # (s2,s1,−D) 镜像对自动保证，**不要**手动 conj——
-                    # （2026-10-02 抓到：b→a 项误用 conj(ph) ⇒ H(k) 非厄米，
-                    # eigvalsh 默认读下三角把错谱静默吞掉 → C/平坦度全废）
+                    # (s2,s1,−D) 镜像对自动保证，**不要**手动 conj：
+                    # b→a 项若误用 conj(ph)，H(k) 非厄米；eigvalsh 默认读下三角
+                    # 会把错谱静默吞掉，导致 C/平坦度全废。
                     Hk[i0, j0] += -t_a[shell] * ph            # a→a
                     Hk[i0 + 1, j0 + 1] += -t_b[shell] * ph    # b→b
                     Hk[i0, j0 + 1] += w[shell] * np.exp(-2j * phi) * ph   # ⟨a|H|b⟩
@@ -576,10 +576,9 @@ def band_metrics(params=None, l_um=12.0, Nk=24):
 def sweep_profile(tau, Omega_max=1.0, delta0=0.0, delta1=0.0):
     """三段式 ramp 剖面（论文 Fig.4(a) 的扫描协议）：τ∈[0,1] → (Ω(τ), δ(τ))。
 
-    ⚠ **这是论文协议，不是通用求解动词**（2026-10-02 晚裁决）。δ 端点的取法
-    （真空稳定侧 µ_c(0→1)−offset、N=n_target 平台中央）与 Ω 的三段升降划分，
-    都是本文的做法——换一个扫描协议就全变了，通用引擎不该持有唯一的 ramp 波形。
-    曾一度收进 `eq_route`（"求解动词收敛"方案 §4.2），已摘回本模块。
+    ⚠ **这是论文协议，不是通用求解动词**。δ 端点的取法（真空稳定侧
+    µ_c(0→1)−offset、N=n_target 平台中央）与 Ω 的三段升降划分，都是本文的做法；
+    换一个扫描协议就全变了，通用引擎不持有唯一的 ramp 波形。
     本函数是**零依赖纯函数**（只 numpy），故可随本模块被按文件路径独立加载
     （sim 脚本与自检都走 `spec_from_file_location`，不经 `src.core` 包导入）。
 

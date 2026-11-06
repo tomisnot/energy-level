@@ -42,6 +42,10 @@ def describe_result(result, calib=None, *, loss_kind='norm_drift', approximation
     add('corr', 'connected_occupation_correlation', ('site', 'site'))
     add('energy', 'energy', ('time',), 'MHz')
     add('E0', 'ground_state_energy', (), 'MHz')
+    add('energy_expectation', 'energy_expectation', (), 'MHz')
+    add('energy_variance', 'energy_residual_variance', (), 'MHz^2')
+    add('permutation_overlap', 'site_permutation_expectation', (), '1')
+    add('projection_weight', 'symmetry_projection_weight', (), '1')
     add('gap', 'energy_gap', (), 'MHz')
     add('evals', 'eigenenergy', ('eigenstate',), 'MHz')
     for key, quantity, unit in (('E', 'energy', 'MHz'), ('C', 'heat_capacity', '1'),
@@ -49,6 +53,11 @@ def describe_result(result, calib=None, *, loss_kind='norm_drift', approximation
         add(key, quantity, ('beta',), unit)
     add('E_err', 'standard_error', ('beta',) if out.get('betas') is not None else (), 'MHz', of='E')
     add('rho', 'density_of_states', ('energy',), '1/MHz')
+    # 源态谱（want=spectrum）：横轴用 `energies`（频率网格），纵轴是谱函数。
+    # 未展宽的求积权重留在结果里（程序化用），不声明成可绘制的 dataset——它的横轴
+    # 是 Ritz 节点，与 `energies` 是两条不同的坐标轴。
+    add('spectral', 'spectral_function', ('energy',), '1/MHz')
+    add('source_norm', 'source_state_weight', (), '1')
     for key, quantity, unit in (('gaps','energy_gap','MHz'),
                                  ('ns','occupation_density','1'),
                                  ('Om_t','drive_amplitude','MHz'),
@@ -63,6 +72,11 @@ def describe_result(result, calib=None, *, loss_kind='norm_drift', approximation
                              ('loop_phase_series', ('time', 'loop'), 'rad'),
                              ('loop_winding_series', ('time', 'loop'), '1')):
         add('observables.'+key, key, axes, unit)
+    # 任意阶 Pauli 字符串：含时是 (time, string)，平衡态是 (string,)（同一条字符串
+    # 在两种请求下语义相同，只是含时多一个时间轴）。
+    add('observables.pauli_strings', 'pauli_string_expectation',
+        ('time', 'string') if out.get('t') is not None else ('string',), '1')
+    add('pauli_strings', 'pauli_string_expectation', ('string',), '1')
     add('observables.loop_phase', 'loop_phase', ('loop',), 'rad')
     add('observables.loop_winding', 'loop_winding', ('loop',))
     if out.get('loss') is not None:

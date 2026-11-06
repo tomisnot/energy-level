@@ -6,7 +6,7 @@
   A schema 合并（config_schema/settable_keys 含 manybody.*，solve_schema 不膨胀）
   B engine_params 扫到 manybody 就地 Param（扫描器递归子包）
   C I6 交叉：runspec_mb 实读的 manybody.* 都在 schema（防漂）
-  D v2 validate（make_validator）对 atom_list 真契约：拒非法结构、放行合法
+  D v2 validate（make_validator）对 calib 真契约：拒非法结构、放行合法
   E Gate choke point 往返 → effective 快照（写经门、记事件）
   F build_run(mode=2) → 多体 RunSpec（携带紧凑 calib，不带 H）
   G evolve_run 唯一分派 → Result 契约 + result_summary/labels/summarize/check
@@ -44,19 +44,16 @@ C = Checker('manybody_integration')
 EL_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 engine = ElEngine(EL_ROOT, own_thread=False)   # cache 建在主线程（判据线程）
 
-G = (60, 0, 0.5, 0.5)                     # 60S_1/2 m=+1/2
-R = (60, 1, 1.5, 1.5)                     # 60P_3/2 m=+3/2
-
-
-def _atom(pos, Om=0.0):
-    return {'g': list(G), 'r': list(R), 'pos': list(pos), 'Omega_mhz': Om}
-
-
 MB = {
     'dynamic.mode': 2,
     'dynamic.t_max': 50.0, 'dynamic.npts': 51,
-    'manybody.atoms': [_atom((0., 0., 0.), 2 * np.pi * 2.0),
-                       _atom((6., 0., 0.), 2 * np.pi * 2.0)],
+    'manybody.calib': {
+        'atoms': [
+            {'id': 0, 'pos': [0., 0., 0.], 'Omega_mhz': 2 * np.pi * 2.0},
+            {'id': 1, 'pos': [6., 0., 0.], 'Omega_mhz': 2 * np.pi * 2.0},
+        ],
+        'pairs': [{'i': 0, 'j': 1, 'V': 0.0, 'J': 0.5, 'A': 0.0}],
+    },
     'manybody.solver': 'auto',
     'manybody.psi0': None,
 }
@@ -65,13 +62,13 @@ MB = {
 cs = CP.config_schema()
 sk = CP.settable_keys()
 C.group('A manybody.* 进 config_schema/settable_keys（solve 不膨胀）', [
-    ('config_schema 含 manybody.atoms/solver/psi0',
-     all(k in cs for k in ('manybody.atoms', 'manybody.solver',
+    ('config_schema 含 manybody.calib/solver/psi0',
+     all(k in cs for k in ('manybody.calib', 'manybody.solver',
                            'manybody.psi0'))),
-    ('settable_keys 含 manybody.atoms', 'manybody.atoms' in sk),
+    ('settable_keys 含 manybody.calib', 'manybody.calib' in sk),
     ('solve_schema 仍 5（M1 多体不加 solve.*）', len(CP.solve_schema()) == 5),
-    ('manybody.atoms 类型 = atom_list',
-     cs['manybody.atoms'].get('type') == 'atom_list'),
+    ('manybody.calib 类型 = dict',
+     cs['manybody.calib'].get('type') == 'dict'),
 ])
 
 # ---------------- B. engine_params 扫到 manybody Param ----------------
@@ -92,30 +89,32 @@ _declared = set(cs) | set(CP.solve_schema())
 mb_lit = [k for k in lit if k.startswith('manybody.')]
 C.group('C I6：runspec_mb 实读的 manybody.* 都在 schema（防漂）', [
     ('扫到 manybody.* 实读键 >= 8（含 mb_get 口）', len(mb_lit) >= 8),
-    ('无漏声明（所有实读键都在 config+solve schema）',
-     all(k in _declared for k in lit)),
+    ('无漏声明（manybody.* 实读键都在 config+solve schema）',
+     all(k in _declared for k in mb_lit)),
 ])
 
-# ---------------- D. v2 validate 对 atom_list 真契约 ----------------
+# ---------------- D. v2 validate 对 calib 真契约 ----------------
 validate = make_validator(engine)
 
 
 def _bad(v):
     try:
-        validate('manybody.atoms', v)
+        validate('manybody.calib', v)
         return False
     except MechaError:                                          # noqa: BLE001
         return True
 
 
-C.group('D v2 validate（make_validator）atom_list 真契约（拒非法结构）', [
-    ('合法 atoms 通过（不抛）', _bad(MB['manybody.atoms']) is False),
-    ('空 list 拒', _bad([])),
-    ('g 非四元组拒', _bad([{'g': [60, 0, 0.5], 'r': list(R), 'pos': [0, 0, 0]}])),
-    ('pos 非三元组拒', _bad([{'g': list(G), 'r': list(R), 'pos': [0, 0]}])),
+C.group('D v2 validate（make_validator）calib 真契约（拒非法结构）', [
+    ('合法 calib 通过（不抛）', _bad(MB['manybody.calib']) is False),
+    ('空 atoms 拒', _bad({'atoms': [], 'pairs': []})),
+    ('pairs 缺 i/j 拒', _bad({'atoms': [{'id': 0, 'pos': [0, 0, 0]}],
+                             'pairs': [{'J': 1.0}]})),
+    ('pos 非三元组拒', _bad({'atoms': [{'id': 0, 'pos': [0, 0]}],
+                            'pairs': []})),
     ('非 dict 拒', _bad(['x'])),
-    ('Omega 非数值拒',
-     _bad([{'g': list(G), 'r': list(R), 'pos': [0, 0, 0], 'Omega_mhz': 'big'}])),
+    ('Omega 非数值拒', _bad({'atoms': [{'id': 0, 'pos': [0, 0, 0],
+                                      'Omega_mhz': 'big'}], 'pairs': []})),
 ])
 
 # ---------------- E. Gate choke point 往返 ----------------
@@ -130,7 +129,8 @@ for k, v in MB.items():
     gate.set(chan, k, v, reason='mb integration')
 snap = br.effective()
 C.group('E Gate 往返 → effective 快照（choke point，写经门记事件）', [
-    ('manybody.atoms 写后可读回', len(snap.get('manybody.atoms') or []) == 2),
+    ('manybody.calib 写后原子数可读回',
+     len((snap.get('manybody.calib') or {}).get('atoms') or []) == 2),
     ('dynamic.mode=2 落快照', snap.get('dynamic.mode') == 2),
     ('写入各产生事件（seq 递增）', hist.last_seq >= len(MB)),
 ])

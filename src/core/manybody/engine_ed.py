@@ -13,7 +13,7 @@ method='ed'）唯一分派点被调用；GUI 与 AI 走同一段代码（I5）�
   只持一个态矢，支持非厄米 −iΓ/2 与大 dim）。⚠ expm_multiply **不接受 tol 参数**。
 
 单位：H/Ω/δ/Γ=MHz，t=ns，相位 = CONV·(MHz)·(ns)，CONV=2π×1e-3（同各引擎）。
-耗散（裁决③）：非厄米对角 −(i/2)Γ_i n_i 为**接缝**，默认 gamma=0（厄米）；
+耗散（约定）：非厄米对角 −(i/2)Γ_i n_i 为**接缝**，默认 gamma=0（厄米）；
 完整 Lindblad 交叉验证留 M4。
 
 Result 契约（与六引擎同键，result_labels/result_summary 零改动可用）：
@@ -28,6 +28,7 @@ import scipy.sparse as sp
 from scipy.sparse.linalg import expm_multiply
 
 from ..evolve_util import CONV
+from .couplings import active_terms
 from ..param import Param
 from .state import state_vector
 from .basis import basis_bits
@@ -38,6 +39,7 @@ from .observables import (bit_matrix, popcount, corr_matrix, entropy_at_cut,
                           product_label, spin_observables, entropy_in_basis, loop_observables,
                           link_loop_observables)
 from .observables import spin_observables_basis
+from .observables import PauliPlan
 
 # 内部数值保护（tier='internal'，默认不对 AI/GUI 露面；可经 solve.* 覆写）
 _MB_DENSE_MAX = Param(4096, 'ED 稠密 eigh 维度上限（超过走稀疏 Krylov 步进）',
@@ -154,7 +156,7 @@ def evolve_manybody(calib, psi0=None, t_grid=None, Om=None, delta=None,
                     use_sectors='auto', dense_max=None, fullpop_max=None,
                     max_dim=None, entropy_cut=None, record_psi=False,
                     diag=False, plan=None, want_observables=True, loops=None,
-                    want_xy_corr=True, link_pairs=None,
+                    want_xy_corr=True, link_pairs=None, pauli_strings=None,
                     memory_budget_mb=None):
     """多体 ED 含时演化 → 统一 Result 契约 dict。
 
@@ -164,6 +166,10 @@ def evolve_manybody(calib, psi0=None, t_grid=None, Om=None, delta=None,
     segments：分段常数驱动 [{t0,Om,delta}, …]（缺省 None=静态 Om/delta）。
     use_sectors：True/False/'auto'——守恒时按激发数扇区块对角化（auto=守恒则用）。
     dense_max/fullpop_max/max_dim：数值分档上限（缺省用本模块 Param）。
+    pauli_strings：``[{'label','terms':[(site,axis),…]}]``（经
+        ``schema_mb.validate_pauli_strings`` 规范化）→ 每个输出时刻算一遍期望，
+        结果在 ``observables.pauli_strings``（复数组 (n_t, n_strings)）与
+        ``observables.pauli_string_labels``。
     """
     from ..coupling import stage_progress
     log = log or (lambda *a: None)
@@ -207,7 +213,7 @@ def evolve_manybody(calib, psi0=None, t_grid=None, Om=None, delta=None,
     Om = np.zeros(n, complex) if Om is None else np.asarray(Om, complex)
     delta = np.zeros(n) if delta is None else np.asarray(delta, float)
     gamma = np.zeros(n) if gamma is None else np.asarray(gamma, float)
-    use = set(calib['terms'] if terms is None else terms)
+    use = set(active_terms(calib) if terms is None else terms)
     hermitian = not bool(np.any(np.abs(gamma) > 0.0))
 
     if isinstance(psi0, str) and psi0 == 'ground':
@@ -221,9 +227,8 @@ def evolve_manybody(calib, psi0=None, t_grid=None, Om=None, delta=None,
 
     bits = basis_bits(n, basis_indices) if projected else bit_matrix(n, dim)
     cut = int(entropy_cut if entropy_cut is not None else max(1, n // 2))
-    # entropy_cut 的**入口校验**（2026-09-22，工单 P2-3）：原来把越界值一直带到
-    # `_reduce` 里（传播中途）才由 entropy_at_cut 静默返 0 —— 那是"算错了伪装成
-    # 没纠缠"。现在 n≥2 时在此早失败并点名；n<2 时 S 恒 0 是物理事实（下方记 note）。
+    # entropy_cut 的**入口校验**：越界必须在传播前失败。若拖到 `_reduce` 才由
+    # entropy_at_cut 返 0，会把"参数错"伪装成"没纠缠"。n<2 时 S 恒 0 是物理事实。
     if want_entropy and n >= 2 and not (1 <= cut <= n - 1):
         raise ValueError('多体：entropy_cut=%d 越界（n_atoms=%d 时须 ∈[1,%d]）'
                          % (cut, n, n - 1))
@@ -237,6 +242,13 @@ def evolve_manybody(calib, psi0=None, t_grid=None, Om=None, delta=None,
     smv = np.zeros((n_t, n), complex); phase = np.full((n_t, n), np.nan)
     link_series = (np.full((n_t, len(link_pairs)), np.nan + 0j, complex)
                    if link_pairs is not None else None)
+    if pauli_strings and not want_observables:
+        raise ValueError('manybody.pauli_strings 需要 want_observables=true'
+                         '（它挂在公共观测契约的 observables 下，不会单独开一份结果）')
+    pauli_series = (np.zeros((n_t, len(pauli_strings)), complex)
+                    if pauli_strings else None)
+    pauli_plan = (PauliPlan(n, pauli_strings, basis_states=basis_indices)
+                  if pauli_strings else None)
     xy_last = None
     joint = np.zeros((n_t, dim)) if dim <= fullpop_max else None
     holder = {'p': None, 'psi': None}
@@ -262,6 +274,8 @@ def evolve_manybody(calib, psi0=None, t_grid=None, Om=None, delta=None,
                 link_series[k] = [ob['xy_corr'][a, b] for a, b in link_pairs]
             if k == n_t - 1 and want_xy_corr:
                 xy_last = ob['xy_corr']
+        if pauli_series is not None:
+            pauli_series[k] = pauli_plan.expect(psi)
 
     stage_progress(progress_arr, 1, 0.0)
     used_sectors = False
@@ -323,7 +337,10 @@ def evolve_manybody(calib, psi0=None, t_grid=None, Om=None, delta=None,
                 xy_corr=xy_last, loop_phase=loop_phase,
                 loop_winding=loop_winding, loop_phase_series=loop_phase_series,
                 loop_winding_series=loop_winding_series, link_corr=link_series,
-                link_pairs=link_pairs) if want_observables else None)
+                link_pairs=link_pairs,
+                pauli_strings=pauli_series,
+                pauli_string_labels=([d['label'] for d in pauli_strings]
+                                     if pauli_strings else [])) if want_observables else None)
     return dict(
         t=t, pops=pops, states=states, method='manybody', backend=backend,
         pops_atom=pops_atom, S=S_mid, corr=corr, loss=loss, norms=norm,

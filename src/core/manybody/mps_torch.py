@@ -173,6 +173,54 @@ class TorchMPS:
                 last = hi
         return local, links, norm
 
+    def pauli_expectation(self, specs, ops):
+        """Arbitrary Pauli strings on the device-resident MPS (MPS order).
+
+        ``specs`` terms are already in MPS order.  σˣ/σʸ are expanded into
+        P/M exactly as the CPU path does; σᶻ uses the registered Z operator.
+        The contraction reuses the same left/right environments as the local
+        observables, so a batch of strings costs one environment sweep.
+        """
+        torch = self.torch
+        left, right = self.environments()
+        norm = left[-1][0, 0].real
+        out = []
+        for spec in specs:
+            terms = [(int(s), str(a)) for s, a in spec['terms']]
+            if not terms:
+                out.append(complex(norm.item()))
+                continue
+            choices = []
+            for _site, axis in terms:
+                if axis == 'z':
+                    choices.append([(1.0 + 0j, ops['Z'])])
+                elif axis == 'x':
+                    choices.append([(1.0 + 0j, ops['P']), (1.0 + 0j, ops['M'])])
+                elif axis == 'y':
+                    choices.append([(1j, ops['P']), (-1j, ops['M'])])
+                else:
+                    raise ValueError('Pauli 串轴须为 x/y/z，得到 %r' % (axis,))
+            first = min(s for s, _ in terms)
+            last = max(s for s, _ in terms)
+            total = 0j
+            stack = [(0, 1.0 + 0j, {})]
+            while stack:
+                idx, coef, chosen = stack.pop()
+                if idx == len(terms):
+                    env = left[first]
+                    for k in range(first, last + 1):
+                        env = self.transfer_left(torch, env, self.tensors[k],
+                                                 chosen.get(k))
+                    total += coef * complex((env * right[last + 1]).sum().item() / norm.item())
+                    continue
+                site, _axis = terms[idx]
+                for c, op in choices[idx]:
+                    nxt = dict(chosen)
+                    nxt[site] = op
+                    stack.append((idx + 1, coef * c, nxt))
+            out.append(complex(total))
+        return out
+
     def entropy(self, cut):
         if len(self.tensors) < 2:
             return 0.0

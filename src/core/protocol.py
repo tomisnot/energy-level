@@ -26,7 +26,7 @@ from . import static_atom as SA          # 静态查询（P1-6）要 build_level
 
 __all__ = ['CONFIG_SCHEMA', 'SOLVE_META', 'config_schema', 'solve_schema',
            'solve_map', 'engine_params', 'engine_param_names', 'settable_keys',
-           'validate_wave_list', 'validate_atom_list', 'build_run', 'check_run',
+           'validate_wave_list', 'build_run', 'check_run',
            'evolve_run', 'result_summary', 'summarize_run', 'make_cache',
            'estimate', 'preview', 'list_levels', 'count_waves',
            'wave_acfg', 'address_cfg_from_snapshot',
@@ -295,15 +295,6 @@ def validate_wave_list(waves, err=None):
     return waves
 
 
-def validate_atom_list(atoms, err=None):
-    """多体 `manybody.atoms` 逐原子真校验（委托 schema_mb；adapter 注入 InvalidValue）。
-
-    与 validate_wave_list 同角色：把“橡皮图章”换成当场报错（g/r 四元组 /
-    pos 三元组 / Ω・δ・Γ 数值）。core 不认识 mecha 错误类型，故 err 由 adapter 注入。
-    """
-    return _mb_schema.validate_atom_list(atoms, err=err)
-
-
 # =====================================================================
 # 3. 运行（复用 runspec 唯一分派）+ cache 工厂 + 波形计数
 # =====================================================================
@@ -385,13 +376,13 @@ def _is_many(snap):
 def _mb_estimate(cache, snap):
     """多体 dry-run 成本预估：dim=2^N + ED 可行性 + cost_mb 外推（不标定、不演化）。"""
     from .manybody import cost_mb, runspec_mb
-    model = runspec_mb.model_from_params(snap)
-    n = len(model.atoms)
+    n = runspec_mb.atom_count(snap)
     solver = (snap or {}).get('manybody.solver') or 'auto'
     out = {'backend': 'sim', 'method': solver, 'two_body': False,
            'nbody': 'many', 'n_atoms': n, 'warnings': []}
     if n == 0:
-        out['warnings'].append('manybody.atoms 为空——先摆原子才能预估')
+        out['warnings'].append('manybody.calib 为空——先给模型才能预估'
+                               '（文件/ARC 用 el_build_calib 转成 calib）')
         return out
     dim = 1 << n
     out['dim'] = dim
@@ -426,33 +417,28 @@ def _mb_estimate(cache, snap):
 
 
 def _mb_preview(cache, snap):
-    """多体行为预览：标定（碰 ARC，主线程；记忆化预热）→ 耦合对/blockade/被丢项。
+    """多体行为预览：模型摘要 + 耦合对/blockade/被丢项。
 
-    标定失败**不致命**：降级为几何-only 预览 + note（preview 是纯查询，不该因
-    ARC 问题整体失败）。
+    只有一条路：``manybody.calib``（行内模型，不碰 ARC）。文件/ARC 已由
+    ``el_build_calib`` 转换好；没有模型就返回空预览 + note，不报错。
     """
     from .manybody import runspec_mb
-    model = runspec_mb.model_from_params(snap)
-    n = len(model.atoms)
-    out = {'backend': 'sim', 'nbody': 'many', 'n_atoms': n, 'dim': 1 << n,
-           'template': model.template, 'terms': list(model.terms),
-           'waves': [], 'driven': [], 'notes': []}
+    explicit = runspec_mb.calib_from_params(snap)
+    out = {'backend': 'sim', 'nbody': 'many', 'waves': [], 'driven': [], 'notes': []}
+    if explicit is None:
+        out.update({'n_atoms': 0, 'dim': 0, 'basis_enough': False})
+        out['notes'].append('manybody.calib 为空——先给模型（文件/ARC 用 el_build_calib 转换）')
+        return out
+    calib = runspec_mb.validate_calib(explicit)
+    atoms = calib['atoms']
+    n = len(atoms)
+    out.update({'n_atoms': n, 'dim': 1 << n, 'terms': list(calib['terms'])})
     if n == 0:
-        out['notes'].append('manybody.atoms 为空——先摆原子')
+        out['notes'].append('manybody.calib.atoms 为空——先给模型')
         out['basis_enough'] = False
         return out
-    Oms = [abs(float(a.get('Omega_mhz', 0.0) or 0.0)) for a in model.atoms]
+    Oms = [abs(float(a.get('Omega_mhz', 0.0) or 0.0)) for a in atoms]
     out['max_Omega_mhz'] = round(max(Oms), 6) if Oms else 0.0
-    try:
-        second_order = bool(_mb_schema.mb_get(snap, 'manybody.second_order'))
-        guard = float(_mb_schema.mb_get(snap, 'manybody.guard_mhz'))
-        calib = runspec_mb.calibrate_memo(cache, model,
-                                          second_order=second_order,
-                                          guard_mhz=guard)
-    except Exception as e:                          # noqa: BLE001
-        out['notes'].append('标定失败（降级为几何预览，不影响规模报告）：%s' % e)
-        out['basis_enough'] = True
-        return out
     pairs = calib.get('pairs') or []
     out['n_pairs'] = len(pairs)
     out['n_dropped'] = len(calib.get('dropped') or [])
@@ -465,26 +451,36 @@ def _mb_preview(cache, snap):
         out['blockade_note'] = ('max|V|/max|Ω|=%.3g（≫1 为 blockade 区）'
                                 % (out['max_V_mhz'] / out['max_Omega_mhz']))
     out['basis_enough'] = True
-    out['notes'].append('多体预览：%d 原子、%d 耦合对、dim=2^%d=%d（标定碰 ARC，'
-                        '已记忆化预热）' % (n, len(pairs), n, 1 << n))
+    out['notes'].append('多体预览：%d 原子、%d 耦合对、dim=2^%d=%d'
+                        % (n, len(pairs), n, 1 << n))
     return out
 
 
 def _mb_list_levels(cache, snap):
-    """多体：逐原子 (g,r) 身份 + 产物态寻址说明（供 psi0 选择；不碰 cache）。"""
+    """多体：逐原子身份 + 产物态寻址说明（供 psi0 选择；不碰 cache）。
+
+    calib 里的原子没有 (n,l,j,m) 能级身份（``g``/``r`` 为 None）；基仍是 2^N 个
+    产物态 |g/r⟩^N（原子 0 在左/MSB）。
+    """
     from .manybody import runspec_mb
-    model = runspec_mb.model_from_params(snap)
-    n = len(model.atoms)
-    atoms = [{'id': i, 'g': list(a['g']), 'r': list(a['r']),
-              'pos': list(a['pos']), 'Omega_mhz': a.get('Omega_mhz', 0.0),
+    hint = ('设 manybody.psi0：None=全基态|g…g⟩ / "grg"模式串 / '
+            'int产物态索引 / "ground"(Lanczos基态) / '
+            '["sup",[["grg",amp],…]]叠加')
+    explicit = runspec_mb.calib_from_params(snap)
+    if explicit is None:
+        return {'n_atoms': 0, 'dim': 0, 'nbody': 'many', 'atoms': [],
+                'psi0_hint': hint,
+                'note': 'manybody.calib 为空——先给模型（文件/ARC 用 el_build_calib 转换）'}
+    calib = runspec_mb.validate_calib(explicit)
+    atoms = [{'id': a['id'], 'g': None, 'r': None, 'pos': list(a['pos']),
+              'Omega_mhz': a.get('Omega_mhz', 0.0),
               'delta_mhz': a.get('delta_mhz', 0.0)}
-             for i, a in enumerate(model.atoms)]
+             for a in calib['atoms']]
+    n = len(atoms)
     return {'n_atoms': n, 'dim': 1 << n, 'nbody': 'many', 'atoms': atoms,
-            'psi0_hint': ('设 manybody.psi0：None=全基态|g…g⟩ / "grg"模式串 / '
-                          'int产物态索引 / "ground"(Lanczos基态) / '
-                          '["sup",[["grg",amp],…]]叠加'),
-            'note': ('多体基是 2^%d=%d 个产物态 |g/r⟩^N（原子 0 在左/MSB）；'
-                     '布居/关联/纠缠熵见结果 pops_atom/corr/S' % (n, 1 << n))}
+            'psi0_hint': hint,
+            'note': ('原子没有 (n,l,j,m) 能级身份（g/r=None）；'
+                     '基仍是 2^%d=%d 个产物态 |g/r⟩^N（原子 0 在左/MSB）' % (n, 1 << n))}
 
 
 def estimate(cache, snap):

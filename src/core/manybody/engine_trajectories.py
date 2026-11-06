@@ -3,6 +3,7 @@
 from .runtime import time_grid, check_cancel, report_progress, reject_options
 from .backends import validate_time_capabilities
 from .results import time_result
+from .couplings import active_terms
 import numpy as np
 from scipy.linalg import expm
 from ..evolve_util import CONV
@@ -72,7 +73,7 @@ def evolve_trajectories(calib, psi0=None, t_grid=None, Om=None, delta=None,
                         truncerr=1e-9, seed=0, max_step_ns=0.25,
                         want_observables=True, link_pairs=None, loops=None, segments=None,
                         plan=None, progress_arr=None, log=None, krylov_dim=20,
-                        krylov_tol=1e-10, **kwargs):
+                        krylov_tol=1e-10, pauli_strings=None, **kwargs):
     """MPS quantum trajectories with local arbitrary 2x2 collapse channels.
 
     Rates are supplied in the public physical convention (1/ns = rate*1e-3
@@ -91,12 +92,21 @@ def evolve_trajectories(calib, psi0=None, t_grid=None, Om=None, delta=None,
     if max_step_ns <= 0: raise ValueError("max_step_ns 必须 >0")
     n = len(calib.get("atoms") or [])
     if n == 0: raise ValueError("trajectory calib 没有原子")
+    if pauli_strings and not want_observables:
+        raise ValueError('manybody.pauli_strings 需要 want_observables=true')
     nt = int(n_trajectories)
     if nt < 1: raise ValueError("n_trajectories 必须 >=1")
     if str(algorithm).lower() not in ("tdvp-trajectories", "trajectories", "tdvp"): raise ValueError("trajectory algorithm 只支持 tdvp-trajectories")
-    selected = dict(calib, terms=calib['terms'] if terms is None else list(terms))
+    selected = dict(calib, terms=active_terms(calib) if terms is None else list(terms))
     order, onsite, couplings, info = terms_from_calib(selected, Om, delta)
     link_groups = _compile_link_groups(order, link_pairs)
+    pauli_plan = None
+    pauli_labels = []
+    if pauli_strings:
+        from .observables import PauliPlan, pauli_specs_to_mps_order
+        mapped = pauli_specs_to_mps_order(pauli_strings, order)
+        pauli_labels = [spec['label'] for spec in pauli_strings]
+        pauli_plan = PauliPlan(n, mapped, kind='mps')
     model = rydberg_cluster_model(onsite, couplings)
     if gamma is not None:
         ga = np.asarray(gamma, float)
@@ -113,6 +123,8 @@ def evolve_trajectories(calib, psi0=None, t_grid=None, Om=None, delta=None,
     obs_acc = None
     link_acc = (np.zeros((nt, len(t), len(link_pairs)), complex)
                 if want_observables and link_pairs is not None else None)
+    pauli_acc = (np.zeros((nt, len(t), len(pauli_strings)), complex)
+                 if pauli_plan is not None else None)
     for itr in range(nt):
         check_cancel(progress_arr)
         psi = MPS.from_product_state(model.lat.mps_sites(), p_mps, bc="finite", dtype=complex)
@@ -130,6 +142,8 @@ def evolve_trajectories(calib, psi0=None, t_grid=None, Om=None, delta=None,
                     obs_acc[key][itr, k] = oo[key]
                 if link_acc is not None:
                     link_acc[itr, k] = oo['link_corr']
+                if pauli_acc is not None:
+                    pauli_acc[itr, k] = pauli_plan.expect(psi)
             else:
                 p = np.asarray(psi.expectation_value("Nhat"), float)
             if want_observables:
@@ -180,5 +194,8 @@ def evolve_trajectories(calib, psi0=None, t_grid=None, Om=None, delta=None,
                         loop_phase_series=lps, loop_winding_series=lws,
                         link_corr=mean_links, link_pairs=link_pairs,
                         approximation='trajectory ensemble average')
+        if pauli_acc is not None:
+            mean_obs['pauli_strings'] = pauli_acc.mean(axis=0)
+            mean_obs['pauli_string_labels'] = pauli_labels
         obs = mean_obs
     return dict(t=t, pops=mean, pops_atom=mean, stderr=sem, states=[{"label":"atom%d"%i,"atom_id":i} for i in range(n)], method="manybody", backend="tdvp-trajectories", loss=1-survival.mean(axis=0), survival_weight=survival.mean(axis=0), jump_counts=jumps, observables=obs, error_report=dict(backend="tdvp-trajectories", n_atoms=n, n_trajectories=nt, chi_max=int(chi_max), truncerr=float(truncerr), max_step_ns=float(max_step_ns), first_order_jump_split=True, max_jump_probability=float(max_step_ns*1e-3*sum(c["rate"] for c in cops)), mps_order=list(order), n_legs=int(info.get("n_legs",0))))

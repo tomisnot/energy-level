@@ -132,13 +132,12 @@ check('DMRG to TDVP preserves charge',whole['error_report']['charge_sector']==1
 check('split evolution matches continuous evolution',
       np.max(np.abs(whole['pops_atom'][-1]-second['pops_atom'][-1]))<1e-9)
 check('charged local observables are supported',np.max(np.abs(whole['observables']['sx']))<1e-10)
-params={'manybody.atoms':[dict(g=[50,0,.5,.5],r=[51,0,.5,.5],pos=a['pos'])
-                          for a in cal['atoms']],
+params={'manybody.calib':{'atoms':[dict(id=a['id'],pos=a['pos']) for a in cal['atoms']],
+                          'pairs':list(cal.get('pairs') or [])},
         'manybody.psi0':state,'manybody.solver':'auto','manybody.return_state':True,
         'dynamic.t_max':.05/CONV,'dynamic.npts':2,'manybody.max_step_ns':.05/CONV}
-with patch.object(runspec_mb,'calibrate_memo',return_value=cal):
-    prepared=runspec_mb.build_run_manybody(None,params)
-    routed=runspec.evolve_run(prepared)
+prepared=runspec_mb.build_run_manybody(None,params)
+routed=runspec.evolve_run(prepared)
 check('RunSpec routes native state and returns successor',prepared['method']=='tdvp'
       and routed['state']['charge_sector']==1)
 from types import SimpleNamespace

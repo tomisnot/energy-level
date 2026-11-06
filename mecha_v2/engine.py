@@ -31,6 +31,7 @@ from pathlib import Path
 
 from mecha.errors import GateDenied, InvalidSpec, MechaError, UnknownKey
 from mecha.surface import ExecutionContext
+from .run_monitor import RunMonitorStore
 
 
 def import_el(el_root: str | Path):
@@ -87,6 +88,8 @@ class ElEngine:
 
     def __init__(self, el_root: str | Path, *, atom: str = "Rubidium87",
                  own_thread: bool = True) -> None:
+        self.run_monitor = RunMonitorStore()
+        self.artifact_writer = None
         self._atom = atom
         self._own_thread = own_thread
         if own_thread:
@@ -139,34 +142,45 @@ class ElEngine:
             daemon=True)
         watcher.start()
         try:
-            return self._on_engine(self._run_on_engine, snap, progress_arr)
+            return self._on_engine(self._run_on_engine, snap, progress_arr,
+                                   str(opts.get('reason') or 'AI 运行'))
         finally:
             stop.set()
             watcher.join(timeout=1.0)
             context.report_progress(1.0, "evolve done")
 
-    def _run_on_engine(self, snap: dict, progress_arr: list) -> Mapping[str, object]:
+    def _run_on_engine(self, snap: dict, progress_arr: list, reason='AI 运行') -> Mapping[str, object]:
         """build → check → evolve → summary，全程在引擎线程（cache 亲和）。"""
         p = self._protocol
+        store = self.run_monitor
+        rid = store.begin(config=snap,actor='ai',reason=reason)
+        store.attach_progress(rid,progress_arr)
+        res = None
+        summ = None
         try:
-            run = p.build_run(self._cache, snap)
-        except ValueError as e:
-            raise InvalidSpec(
-                f"配置无法组装成运行规格：{e}",
-                kind="build_failed",
-                hint="先 query_params 看必填键；groups.list/dynamic.t_max/npts 是骨架",
-                suggest="estimate_run 可无副作用地探一探配置",
-            ) from None
-        method = str(run.get("method", ""))
-        problems = p.check_run(run)
-        res = p.evolve_run(run, progress_arr=progress_arr, cache=self._cache)
-        summ = dict(p.result_summary(run, res))
-        summ["method"] = method
-        if not summ.get("ok"):
-            summ["hint"] = "演化无结果（可能被取消或引擎契约破坏）；可先 estimate_run 探规模"
-        if problems:
-            summ["warnings"] = problems  # 非致命问题（如改道说明）如实带出
-        return summ
+            try:
+                run = p.build_run(self._cache,snap)
+            except ValueError as exc:
+                raise InvalidSpec(f"配置无法组装成运行规格：{exc}",kind='build_failed',
+                                  hint='先 query_params 查看配置契约',
+                                  suggest='estimate_run 可先检查规模') from None
+            store.update_run(rid,run,snap)
+            problems = p.check_run(run)
+            res = p.evolve_run(run,progress_arr=progress_arr,cache=self._cache)
+            summ = dict(p.result_summary(run,res))
+            summ['method'] = str(run.get('method',''))
+            summ['monitor_id'] = rid
+            if not summ.get('ok'):
+                summ['hint'] = '运行无有效结果；可检查取消状态或引擎诊断'
+            if problems:
+                summ['warnings'] = problems
+            if self.artifact_writer and res is not None:
+                summ['artifact_id'] = self.artifact_writer(run,res)
+            store.finish(rid,summary=summ,raw=res)
+            return summ
+        except Exception as exc:
+            store.finish(rid,summary=summ,raw=res,error=exc)
+            raise
 
     @staticmethod
     def _watch_cancel(context: ExecutionContext, arr: list,
@@ -213,6 +227,48 @@ class ElEngine:
 
     def preview(self, snap: Mapping[str, object]) -> Mapping[str, object]:
         return dict(self._on_engine(self._protocol.preview, self._cache, dict(snap)))
+
+    # ---- 模型构造器（RunSpec 之前的一步：文件/ARC → calib 的数）----
+
+    def build_calib(self, payload: Mapping[str, object]) -> Mapping[str, object]:
+        """``{"file": …}`` 或 ``{"atoms": […], "arc": {…}}`` → ``{calib, summary, provenance}``。
+
+        在引擎线程执行（ARC 标定要碰 cache/ARC）。产物是一份**行内 calib**，
+        由工具层写进 ``manybody.calib``；RunSpec 只认这个结果。
+        """
+        return dict(self._on_engine(self._build_calib_on_engine, dict(payload)))
+
+    def _build_calib_on_engine(self, payload: dict) -> Mapping[str, object]:
+        import importlib
+        base = self._protocol.__name__.rsplit('.', 1)[0]
+        mb = importlib.import_module(base + '.manybody.runspec_mb')
+        build = dict(payload.get('build') or {})
+        # 显式参数优先，并归一成同一份 build（写回快照的就是它，不存第二份）
+        if payload.get('file'):
+            build = dict(build, source='file', file=str(payload['file']))
+        if payload.get('atoms'):
+            build = dict(build, source='arc', atoms=payload['atoms'])
+        if payload.get('arc'):
+            build = dict(build, source='arc', arc=dict(payload['arc']))
+        source = str(build.get('source') or '').lower()
+        if source == 'file' or build.get('file'):
+            name = build.get('file')
+            if not name:
+                raise ValueError('manybody.build 缺 file（source=file）')
+            calib = mb.build_calib_from_file(str(name))
+        elif source == 'arc' or build.get('atoms'):
+            atoms, arc = build.get('atoms'), build.get('arc')
+            if not atoms or not arc:
+                raise ValueError('manybody.build 的 ARC 路需要 atoms 与 arc')
+            calib = mb.build_calib_from_arc(self._cache,
+                                            {'atoms': atoms, 'arc': dict(arc),
+                                             'terms': build.get('terms')})
+        else:
+            raise ValueError('manybody.build 需要 {source:"file",file} 或 '
+                             '{source:"arc",atoms,arc}')
+        return {'calib': calib, 'build': build,
+                'summary': mb.calib_summary(calib),
+                'receipt': mb.calib_receipt(calib)}
 
     # ---- 驱动手感（②b：set_drive 的物理换算，全程引擎线程，cache 亲和）----
 
@@ -295,6 +351,10 @@ def make_validator(engine: ElEngine):
                           hint="值不合法；query_params 看每个键的类型/单位/值域")
 
     def validate(key: str, value: object) -> None:
+        if key not in settable and value is None:
+            # 写 None = 清掉该键。对**已从 schema 删除的旧键**也放行，
+            # 否则 reset_config 收拾不了历史快照里的退役键（它们不该阻塞清台）。
+            return
         if key in engine_params:
             raise UnknownKey(
                 f"engine.{key} 是只读引擎常量",
@@ -335,10 +395,16 @@ def make_validator(engine: ElEngine):
             raise _gate_err(f"{key} 须是映射")
         if tname == "wave_list":
             p.validate_wave_list(value, err=_gate_err)
-        if tname == "atom_list":
-            # 多体 atoms 的真契约（g/r 四元组 / pos 三元组 / Ω 数值）——委托
-            # EL core（schema_mb），与 wave_list 同角色：类型级校验在门上。
-            p.validate_atom_list(value, err=_gate_err)
+        if key == "manybody.calib" and value is not None:
+            # calib 的真契约在 build 阶段本来就校验；这里提前到 set，让"结构写错"
+            # 当场被点名（而不是等到 run_sim 才报）。与 atom_list 同一分工：
+            # 结构校验在门上，物理适用性（U(1)、后端能力）仍在 build/evolve。
+            try:
+                from src.core.manybody.runspec_mb import validate_calib
+                validate_calib(value)
+            except ValueError as exc:
+                raise GateDenied(f"manybody.calib 不合法：{exc}", kind="bad_calib",
+                                 hint="结构：atoms[{id,pos}] + pairs[{i,j,V,J,A}] + terms⊆{I1,I2,I3}") from None
         lo, hi = rec.get("lo"), rec.get("hi")
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             if lo is not None and value < lo:

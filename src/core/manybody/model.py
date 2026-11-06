@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """多体模型卡（纯数据，可序列化）：任意点云 + 逐原子 2 能级 + 项开关。
 
-设计口径（内部记录（未随仓发布，存档在仓外） §3，2026-09-17 裁决）：
+设计口径：
 - 几何完全自由：atoms 就是逐原子 (x,y,z) 点云，无任何晶格对称性假设；可选 `periods_um`
   开启 xy 环面最小像与跨胞元 winding；缺省仍为开放边界；
 - 每原子局部空间 = 2 个选定子能级 (g, r)，身份用 (n,l,j,m) 四元组；
@@ -13,14 +13,10 @@ import numpy as np
 
 TEMPLATES = ('full', 'ising', 'xy', 'potts3')
 TERMS = ('I1', 'I2', 'I3')          # I1=nn V, I2=交换 J, I3=双激发 A
-# 模板 → `terms` 预设（2026-09-22，工单 P2-1）。**这就是 template 的全部功能**：
-# 它是"相互作用项开关"的**预设选择器**，不是一个独立的物理开关。
-# 约定（教科书对应）：Ising = 密度-密度 Σ V n_i n_j ⇒ I1；XY = 交换 Σ J(σ⁺σ⁻+h.c.) ⇒ I2。
+# 模板 → `terms` 预设。template 只是"相互作用项开关"的预设选择器，不是独立物理开关。
+# 教科书对应：Ising = 密度-密度 Σ V n_i n_j ⇒ I1；XY = 交换 Σ J(σ⁺σ⁻+h.c.) ⇒ I2。
 # 横向场由逐原子 Ω（σˣ）提供，与模板无关。
-# ⚠ **显式 `terms` 优先**（见 `__init__`）：给 terms 就以 terms 为准，template 只供预设
-# ——这样"相互作用内容"始终只有一个真源，不会出现两个开关互相打架。
-# 原实现里 template **完全不被 build_H_sparse 引用**（ising≡xy 恒等），是个静默无效的
-# 选择器；本表把它变成有定义的功能，且默认路径（ising→I1）与改前**逐位一致**。
+# **显式 `terms` 优先**（见 `__init__`）：给 terms 就以 terms 为准，template 只供预设。
 TEMPLATE_TERMS = {'full': TERMS, 'ising': ('I1',), 'xy': ('I2',)}
 
 
@@ -93,12 +89,10 @@ class ManyBodyModel:
                   g=None, r=None, **kw):
         """便利摆点：chain/square/ring。全部原子共用同一对 (g,r) 能级。
 
-        ⚠ **仅 Python API**（2026-09-22，工单 P2-1）：登记册路径
-        （`runspec_mb.model_from_params`）只调 `add_atom`（逐原子显式坐标），
-        **不调本函数** ⇒ `manybody.seed` 已因此从 schema 删除（声明了却不生效）。
-        脚本要复现抖动请显式给 `seed=`（经 `kw`）或自建 `rng`。
-        若将来登记册也要"按模板摆阵列"，需新增 `manybody.array` 键并把 seed 接上
-        ——那是 P3-1（多体页）范围。
+        ⚠ **仅 Python API**：登记册路径（`runspec_mb.model_from_params`）只调
+        `add_atom`（逐原子显式坐标），**不调本函数**；要复现抖动请显式给 `seed=`
+        （经 `kw`）或自建 `rng`。登记册若要按模板摆阵列，需要新增 `manybody.array`
+        键并把 seed 接上；当前不支持。
         """
         import numpy as np
         if g is None or r is None:
@@ -153,10 +147,9 @@ class ManyBodyModel:
 
     @classmethod
     def from_dict(cls, d):
-        # `energy_window_mhz` 已于 2026-09-22 删除（工单 P2-1）：它**按声明就无法实现**
-        # ——能量窗要配 `ref_energy_mhz` 而 schema 里没有这个键；且"二阶中间态截断"
-        # 已由 `n_window`（伙伴态窗）+ `guard_mhz`（近简并剔除）覆盖。旧存档里若带它，
-        # 这里**明确忽略并留给调用方看见**（不静默当作已生效）。
+        # `energy_window_mhz` 不是支持的键：能量窗需要 `ref_energy_mhz`，schema 里
+        # 没有这个键；中间态截断由 `n_window`（伙伴态窗）+ `guard_mhz`（近简并剔除）
+        # 覆盖。输入里若带它，明确忽略并留给调用方看见（不静默当作已生效）。
         m = cls(d['template'], d.get('terms'), d.get('B_gauss', 0.0),
                 d.get('n_window', 3), d.get('r_cut_um'),
                 d.get('periods_um'))

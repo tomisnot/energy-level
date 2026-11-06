@@ -10,7 +10,7 @@ import numpy as np
 from . import eq_route, runspec_mb as _mb
 from .hamiltonian_plan import build_plan, plan_summary
 from .backends import normalize_equilibrium_backend
-from .runtime import check_cancel, report_progress
+from .runtime import check_cancel, report_progress, progress_range
 
 __all__ = ['build_equilibrium', 'run_equilibrium', 'solve_equilibrium']
 
@@ -26,19 +26,25 @@ def _dmrg_ok(calib, Om=None, delta=None, max_cross=12, min_legs=2):
     try:
         from . import dmrg as _dm
         _dm._require_tenpy()
-        order, _onsite, coups, info = _dm.terms_from_calib(calib, Om, delta)
+        # 只数“跨切割键”，不编译 MPO/不建 TeNPy 模型：路由决策不需要数值模型。
+        positions = [a.get('pos', (float(i), 0.0, 0.0))
+                     for i, a in enumerate(calib.get('atoms') or [])]
+        order, info = _dm.cylinder_order(positions)
         n = len(order)
         if n < 4 or info.get('n_legs', 0) < min_legs:
             return False
-        if not coups:
+        pos = {int(a): k for k, a in enumerate(order)}
+        bonds = set()
+        for p in calib.get('pairs') or []:
+            if not any(abs(complex(p.get(k, 0))) > 0.0 for k in ('V', 'J', 'A')):
+                continue
+            a, b = pos[int(p['i'])], pos[int(p['j'])]
+            bonds.add((a, b) if a < b else (b, a))
+        if not bonds:
             return True
-        # 按**去重后的原子对**计：一个键会因 V / J+h.c. / A+h.c. 展开成最多 5 项，
-        # 数项会高估代价近 5 倍（实测把好好的 2×4 梯子误拒）。
-        bonds = {(int(a), int(b)) for (_co, a, _o1, b, _o2) in coups}
-        cross = 0
-        for k in range(n - 1):
-            c = sum(1 for (a, b) in bonds if a <= k < b)
-            cross = max(cross, c)
+        # 按**去重后的原子对**计：一个键会因 V / J+h.c. / A+h.c. 展开成多项。
+        cross = max(sum(1 for (a, b) in bonds if a <= k < b)
+                    for k in range(n - 1))
         return cross <= max_cross
     except Exception:
         return False
@@ -52,18 +58,16 @@ def build_equilibrium(cache, params, want='gs', method=None, betas=None,
     num = _mb.mb_get(p, 'manybody.kpm_num') if num is None else num
     nvec = _mb.mb_get(p, 'manybody.kpm_nvec') if nvec is None else nvec
     seed = _mb.mb_get(p, 'manybody.seed') if seed is None else seed
-    model = _mb.model_from_params(p, warnings=warnings)
-    n = len(model.atoms)
-    if n == 0:
-        raise ValueError('多体平衡态：manybody.atoms 为空——先摆原子')
-    second_order = bool(_mb.mb_get(p, 'manybody.second_order'))
-    guard_mhz = float(_mb.mb_get(p, 'manybody.guard_mhz'))
     ed_max_dim = int(_mb.mb_get(p, 'manybody.ed_max_dim'))
-    calib = _mb.calibrate_memo(cache, model, second_order=second_order,
-                               guard_mhz=guard_mhz)
-    Om, delta, gamma = _mb.drive_from_model(model)
+    # 唯一装配路：行内 manybody.calib（文件/ARC 已由 el_build_calib 转好）
+    calib, model, terms = _mb.resolve_model(p, cache, warnings=warnings)
+    n = len(calib['atoms'])
+    if n == 0:
+        raise ValueError('多体平衡态：manybody.calib.atoms 为空')
+    Om, delta, gamma = _mb.drive_from_calib(calib)
     plan = build_plan(calib, Om=Om, delta=delta, gamma=gamma,
-                      terms=model.terms, constraint=p.get('manybody.constraint'), max_states=ed_max_dim)
+                      terms=terms, constraint=p.get('manybody.constraint'), max_states=ed_max_dim)
+    pauli_specs = _mb.validate_pauli_strings(p.get('manybody.pauli_strings'), n_atoms=n)
     backend = normalize_equilibrium_backend(method or _mb.mb_get(p, 'manybody.eq_backend'), want)
     if betas is None:
         betas = _mb.mb_get(p, 'manybody.betas')
@@ -71,19 +75,52 @@ def build_equilibrium(cache, params, want='gs', method=None, betas=None,
         betas = [1.]
     states = [{'label': 'atom%d' % a['id'], 'atom_id': a['id']} for a in calib['atoms']]
     dmrg_ok = _dmrg_ok(calib, Om, delta)
+    source = p.get('manybody.source')
+    spectrum_options = p.get('manybody.spectrum')
+    if want == 'spectrum' and not source:
+        raise ValueError('want=spectrum 需要 manybody.source'
+                         '（vector/diagonal/sparse/full_sparse）')
+    # 制备态初态（另一个模型的基态 / 置换扇区投影）：平衡态也要按后端落地。
+    # DMRG 走 MPS 通道（原生 TeNPy 态，同 order/charge），其余走 ED 向量通道。
+    psi0 = _mb.mb_get(p, 'manybody.psi0')
+    quench_meta = None
+    if isinstance(psi0, dict) and psi0.get('kind') in _mb.PREPARE_KINDS:
+        psi0, quench_meta = _mb.prepare_initial_state(
+            psi0, n_sites=n, solver=('tdvp' if backend == 'dmrg' else 'ed'),
+            warnings=warnings,
+            mps_order=p.get('manybody.mps_order'),
+            charge_sector=p.get('manybody.charge_sector'),
+            chi_max=int(_mb.mb_get(p, 'manybody.chi_max')),
+            max_sweeps=int(_mb.mb_get(p, 'manybody.max_sweeps')),
+            memory_budget_mb=p.get('manybody.memory_budget_mb'),
+            calib=calib, terms=terms)
+        warnings.append('[平衡态] 初态由制备流程给出：%s' % (quench_meta or {}))
     return {
         'version': 1, 'nbody': 'many', 'equilibrium': True, 'two_body': False,
         'want': want, 'method': backend, 'method_in': backend, 'betas': betas,
-        'calib': calib, 'hamiltonian_plan': plan, 'plan_summary': plan_summary(plan),
+        'calib': calib, 'calib_summary': _mb.calib_summary(calib),
+        'build': p.get('manybody.build'),
+        'label': p.get('manybody.label'),
+        'notes': p.get('manybody.notes'),
+        'build_receipt': _mb.calib_receipt(calib),
+        'hamiltonian_plan': plan, 'plan_summary': plan_summary(plan),
         'n_atoms': n, 'dim': plan['dim'], 'full_dim': 1 << n,
+        'source': source, 'spectrum': spectrum_options,
+        'pauli_strings': pauli_specs,
         'charge_sector': p.get('manybody.charge_sector'),
         'return_state': bool(p.get('manybody.return_state', False)),
+        'psi0': psi0,
+        'quench': quench_meta,
+        'mps_order': _mb.mb_get(p, 'manybody.mps_order'),
+        'mps_dtype': _mb.mb_get(p, 'manybody.mps_dtype'),
+        'mps_diagnostics': _mb.mb_get(p, 'manybody.mps_diagnostics'),
         'memory_budget_mb': p.get('manybody.memory_budget_mb'),
         'dtype': p.get('manybody.dtype') or 'float64',
         'device': _mb.mb_get(p, 'manybody.device'),
         'krylov_dim': _mb.mb_get(p, 'manybody.krylov_dim'),
         'Om': Om, 'delta': delta, 'gamma': gamma,
-        'terms': list(model.terms), 'template': model.template,
+        'terms': list(terms),
+        'template': (model.template if model is not None else 'calib'),
         'kpm': dict(num=num, nvec=nvec, seed=seed),
         'qmc': dict(sweeps=int(_mb.mb_get(p, 'manybody.qmc_sweeps')),
                     burn_in=int(_mb.mb_get(p, 'manybody.qmc_burn_in')),
@@ -110,6 +147,11 @@ def run_equilibrium(spec, log=None, progress_arr=None):
                   ladder=spec.get('ladder'), batch=spec.get('batch', 1),
                   dmrg_ok=bool(spec.get('dmrg_ok')),
                   charge_sector=spec.get('charge_sector'))
+    system['psi0'] = spec.get('psi0')
+    system['source'] = spec.get('source')
+    system['spectrum'] = spec.get('spectrum')
+    system['pauli_strings'] = spec.get('pauli_strings')
+    system['mps_order'] = spec.get('mps_order')
     system['memory_budget_mb'] = spec.get('memory_budget_mb')
     system['dtype'] = spec.get('dtype', 'float64')
     system['device'] = spec.get('device', 'cuda')
@@ -129,6 +171,8 @@ def run_equilibrium(spec, log=None, progress_arr=None):
         qmc_M=(spec.get('qmc') or {}).get('M'),
         memory_budget_mb=spec.get('memory_budget_mb'), dtype=spec.get('dtype', 'float64'),
         return_state=bool(spec.get('return_state', False)),
+        mps_dtype=spec.get('mps_dtype','auto'),mps_diagnostics=spec.get('mps_diagnostics'),
+        progress_arr=progress_range(progress_arr,.3,1.),
         exact=bool(spec.get('exact', want == 'gs')))
     check_cancel(progress_arr)
     res['method'] = want

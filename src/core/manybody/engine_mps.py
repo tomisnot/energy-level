@@ -8,6 +8,7 @@ TEBD 只接受 MPS 顺序上的最近邻 MPO；任意点云和长程偶极耦合
 import time
 from .results import time_result
 from .runtime import segment_drive, segment_intervals, reject_options
+from .couplings import active_terms
 import numpy as np
 
 from ..evolve_util import CONV
@@ -15,7 +16,7 @@ from .dmrg import (terms_from_calib, rydberg_cluster_model, dmrg_run,
                    _require_tenpy)
 from .state import product_vectors, make_mps_state, validate_mps_state
 from .matrix_free import check_number_conserving
-from .observables import loop_observables, link_loop_observables
+from .observables import loop_observables, link_loop_observables, PauliPlan
 
 __all__ = ['evolve_mps']
 
@@ -141,7 +142,8 @@ def evolve_mps(calib, psi0=None, t_grid=None, Om=None, delta=None, gamma=None,
                link_pairs=None,
                max_step_ns=None,
                charge_sector=None, return_state=False, krylov_dim=20, krylov_tol=1e-10,
-               adaptive_switch_chi=16, adaptive_min_steps=1,
+               adaptive_switch_chi=16, adaptive_min_steps=1, mps_order=None,
+               pauli_strings=None,
                **kwargs):
     """用 TeNPy 的 TEBD 或两站点 TDVP 演化多体二能级阵列。
 
@@ -174,6 +176,8 @@ def evolve_mps(calib, psi0=None, t_grid=None, Om=None, delta=None, gamma=None,
     n = len(calib.get('atoms') or [])
     if n == 0:
         raise ValueError('MPS 多体演化：calib 没有原子')
+    if pauli_strings and not want_observables:
+        raise ValueError('manybody.pauli_strings 需要 want_observables=true')
     if link_pairs is not None:
         link_pairs = [(int(a), int(b)) for a, b in link_pairs]
         if any(a < 0 or a >= n or b < 0 or b >= n for a, b in link_pairs):
@@ -217,10 +221,17 @@ def evolve_mps(calib, psi0=None, t_grid=None, Om=None, delta=None, gamma=None,
         check_number_conserving(calib, Om, terms)
         for segment in segments or []:
             check_number_conserving(calib, segment.get('Om'), terms)
-    selected = dict(calib, terms=list((calib.get('terms') or []) if terms is None else terms))
-    order, onsite, couplings, info = terms_from_calib(selected, Om, delta, gamma)
+    selected = dict(calib, terms=list(active_terms(calib) if terms is None else terms))
+    order, onsite, couplings, info = terms_from_calib(selected, Om, delta, gamma,order=mps_order)
     order = np.asarray(order, dtype=int)
     link_groups = _compile_link_groups(order, link_pairs)
+    pauli_plan = None
+    pauli_labels = []
+    if pauli_strings:
+        from .observables import pauli_specs_to_mps_order
+        mapped = pauli_specs_to_mps_order(pauli_strings, order)
+        pauli_labels = [spec['label'] for spec in pauli_strings]
+        pauli_plan = PauliPlan(n, mapped, kind='mps')
     conserve = 'Sz' if charge_sector is not None else None
     model = rydberg_cluster_model(onsite, couplings, conserve=conserve)
     model_build_s = time.perf_counter() - t_model0
@@ -258,6 +269,10 @@ def evolve_mps(calib, psi0=None, t_grid=None, Om=None, delta=None, gamma=None,
         if abs(actual-charge_sector) > 1e-8:
             raise ValueError('初态占据数 %.16g 不等于 charge_sector=%d' % (actual, charge_sector))
 
+    # Real static DMRG states must be promoted before exp(-i H t), including
+    # one-site TDVP where updating a real container could otherwise lose phase.
+    from .mps_dtype import select_mps_dtype
+    psi = select_mps_dtype(psi,'complex',complex_required=True)
     state_init_s = time.perf_counter() - t_state0
     cut = int(n // 2)
     if want_entropy and n >= 2 and not (1 <= cut <= n - 1):
@@ -274,6 +289,8 @@ def evolve_mps(calib, psi0=None, t_grid=None, Om=None, delta=None, gamma=None,
                           phase=np.full((len(t), n), np.nan))
     link_series = (np.full((len(t), len(link_pairs)), np.nan + 0j, complex)
                    if link_pairs is not None else None)
+    pauli_series = (np.zeros((len(t), len(pauli_strings)), complex)
+                    if pauli_strings else None)
     xy_last = None
     timing = dict(measure_s=0.0, record_s=0.0, corr_measure_s=0.0,
                   local_measure_s=0.0, link_measure_s=0.0,
@@ -300,6 +317,8 @@ def evolve_mps(calib, psi0=None, t_grid=None, Om=None, delta=None, gamma=None,
                 xy_last = oo['xy_corr']
             if oo.get('link_corr') is not None:
                 link_series[k] = oo['link_corr']
+        if pauli_series is not None:
+            pauli_series[k] = pauli_plan.expect(psi)
         timing['measure_s'] += time.perf_counter() - t_record0
         timing['record_s'] += time.perf_counter() - t_record0
 
@@ -335,7 +354,7 @@ def evolve_mps(calib, psi0=None, t_grid=None, Om=None, delta=None, gamma=None,
             # and remains compatible because all models use the same Chain.
             if segments:
                 t_seg_model0 = time.perf_counter()
-                _, on_k, cp_k, _ = terms_from_calib(selected, Om_k, de_k, gamma)
+                _, on_k, cp_k, _ = terms_from_calib(selected, Om_k, de_k, gamma,order=order)
                 model_k = rydberg_cluster_model(on_k, cp_k, conserve=conserve)
                 if alg == 'tebd':
                     model_k = NearestNeighborModel.from_MPOModel(model_k)
@@ -403,7 +422,8 @@ def evolve_mps(calib, psi0=None, t_grid=None, Om=None, delta=None, gamma=None,
                timings_s=dict(timing, model_build_s=float(model_build_s),
                               state_init_s=float(state_init_s),
                               total_s=float(time.perf_counter() - t_total0)),
-               mps_order=list(order), n_legs=int(info.get('n_legs', 0)),
+               mps_order=list(order), entropy_cut=cut if want_entropy else None,
+               n_legs=int(info.get('n_legs', 0)),
                charge_sector=charge_sector, conserve=conserve,
                long_range=(alg == 'tdvp'))
     lp, lw = loop_observables(xy_last, loops) if (
@@ -417,6 +437,9 @@ def evolve_mps(calib, psi0=None, t_grid=None, Om=None, delta=None, gamma=None,
                 loop_winding_series=loop_winding_series,
                 link_corr=link_series,
                 link_pairs=link_pairs) if want_observables else None)
+    if obs is not None and pauli_series is not None:
+        obs['pauli_strings'] = pauli_series
+        obs['pauli_string_labels'] = pauli_labels
     return dict(t=t, pops=pops_atom, states=states, method='manybody', backend=backend,
                 pops_atom=pops_atom, S=S if want_entropy else None, corr=corr_last, loss=1.0 - norms,
                 error_report=err,

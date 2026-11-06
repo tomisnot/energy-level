@@ -89,6 +89,7 @@ _ENGINE_TABLE = {
     ('gs', 'many'): ('.manybody.eq_engine', 'run_equilibrium'),
     ('thermal', 'many'): ('.manybody.eq_engine', 'run_equilibrium'),
     ('dos', 'many'): ('.manybody.eq_engine', 'run_equilibrium'),
+    ('spectrum', 'many'): ('.manybody.eq_engine', 'run_equilibrium'),
 }
 
 from .manybody.backends import engine_entries
@@ -507,10 +508,10 @@ def build_run(cache, params, *, pump=None, vdd=True, method=None, diag=False,
     mode = int(p.get('dynamic.mode') or 0)
     if mode == 2:
         # 多体（N 原子阵列）：同一 RunSpec 契约；calibrate 在此主线程碰 ARC/SQLite。
-        # 平衡态请求 manybody.want∈gs/thermal/dos → 委托 eq_engine（不走时间轴，
-        # 经 eq_route 路由 ed/gpu-batch/lanczos/kpm/dmrg）；否则走含时 ED 演化。
+        # 平衡态/谱请求 manybody.want∈gs/thermal/dos/spectrum → 委托 eq_engine（不走
+        # 时间轴，经 eq_route 路由 ed/gpu-batch/lanczos/kpm/dmrg）；否则走含时 ED 演化。
         _w = str(p.get('manybody.want') or '').lower()
-        if _w in ('gs', 'thermal', 'dos'):
+        if _w in ('gs', 'thermal', 'dos', 'spectrum'):
             from .manybody.eq_engine import build_equilibrium
             return build_equilibrium(cache, p, want=_w,
                                      method=(p.get('manybody.eq_backend')
@@ -832,25 +833,56 @@ def _equilibrium_summary(run, res):
         na = res.get('n_atom')
         if na is not None:
             out['n_atom'] = [r6(v) for v in np.asarray(na).ravel()]
+        if res.get('pauli_strings') is not None:
+            # 任意阶 Pauli 字符串：摘要里给前若干条的实部（复数值保留虚部时用 [re, im]）
+            vals = np.asarray(res['pauli_strings'], complex).ravel()
+            labs = list(res.get('pauli_string_labels') or [])
+            head = min(len(vals), 12)
+            out['pauli_strings'] = {
+                (labs[i] if i < len(labs) else '#%d' % i):
+                    (round(float(vals[i].real), 9) if vals[i].imag == 0.0
+                     else [round(float(vals[i].real), 9), round(float(vals[i].imag), 9)])
+                for i in range(head)}
+            out['pauli_strings_total'] = int(len(vals))
         return out
     if want == 'thermal':
-        b = np.asarray(res.get('betas') or [], float)
+        b = np.asarray([] if res.get('betas') is None else res['betas'], float)
         out['n_betas'] = int(b.size)
         if b.size:
             out['betas'] = [r6(v) for v in b[:8]]
             for key in ('E', 'C', 'F'):
-                a = np.asarray(res.get(key) or [], float)
+                a = np.asarray([] if res.get(key) is None else res[key], float)
                 if a.size == b.size:
                     out['%s_first_last' % key] = [r6(a[0]), r6(a[-1])]
         return out
     if want == 'dos':
-        e = np.asarray(res.get('energies') or [], float)
-        rho = np.asarray(res.get('rho') or [], float)
+        e = np.asarray([] if res.get('energies') is None else res['energies'], float)
+        rho = np.asarray([] if res.get('rho') is None else res['rho'], float)
         out['n_bins'] = int(e.size)
         if e.size and rho.size:
             out['E_range'] = [r6(e[0]), r6(e[-1])]
             out['rho_max'] = r6(rho.max())
             out['E_at_rho_max'] = r6(float(e[int(np.argmax(rho))]))
+        return out
+    if want == 'spectrum':
+        # 摘要只给读数；峰值位置是"窗内最大值"，不是物理判定（判定归调用方）。
+        out['source_kind'] = (res.get('error_report') or {}).get('source_kind')
+        for key in ('eta', 'source_norm'):
+            if res.get(key) is not None:
+                out[key] = r6(res[key])
+        kry = res.get('krylov') or {}
+        out['krylov_n'] = kry.get('n')
+        out['krylov_converged'] = kry.get('converged')
+        e = np.asarray([] if res.get('energies') is None else res['energies'], float)
+        s = np.asarray([] if res.get('spectral') is None else res['spectral'], float)
+        if e.size and s.size == e.size:
+            i = int(np.argmax(s))
+            out['window'] = [r6(e[0]), r6(e[-1])]
+            out['peak_energy'] = r6(e[i])
+            out['peak_height'] = r6(s[i])
+            rep = res.get('error_report') or {}
+            if rep.get('integral_ratio') is not None:
+                out['integral_ratio'] = r6(rep['integral_ratio'])
         return out
     return {'ok': False, 'msg': '平衡态 want=%r 不认识（应为 gs/thermal/dos）' % want}
 
@@ -866,12 +898,12 @@ def check_run(run):
         # 平衡态（gs/thermal/dos）**不走时间轴** ⇒ 不能套用含时的时网格/空演化判据
         #（旧写法在 `run['t']` 直接 KeyError，GUI/AI 经 ops.prepare 就挂）。
         if int(run.get('n_atoms') or 0) <= 0:
-            problems.append('多体平衡态：没有原子（manybody.atoms 为空）')
+            problems.append('多体平衡态：没有原子（manybody.calib 为空）')
         w = str(run.get('want') or '')
-        if w not in ('gs', 'thermal', 'dos'):
-            problems.append('多体平衡态：want 需为 gs/thermal/dos，实=%r' % w)
+        if w not in ('gs', 'thermal', 'dos', 'spectrum'):
+            problems.append('多体平衡态：want 需为 gs/thermal/dos/spectrum，实=%r' % w)
         if w == 'thermal':
-            bt = [float(b) for b in (run.get('betas') or [])]
+            bt = [float(b) for b in ([] if run.get('betas') is None else run['betas'])]
             if not bt:
                 problems.append('thermal 需要 betas（逆温度清单，1/MHz，如 [0.1,1,10]）')
             elif any(b <= 0 for b in bt):
@@ -889,7 +921,7 @@ def check_run(run):
         # 多体无"波形"概念（驱动来自 atoms 的 Ω/δ）：只查原子数，不套用
         # 单/两体的"既无波形也无耗散=空演化"判据（对多体是误报）
         if int(run.get('n_atoms') or 0) <= 0:
-            problems.append('多体：没有原子（manybody.atoms 为空）')
+            problems.append('多体：没有原子（manybody.calib 为空）')
         return problems
     n_w = run.get('n_waves') or {}
     if not sum(int(v or 0) for v in n_w.values()):

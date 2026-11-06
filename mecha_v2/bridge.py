@@ -135,7 +135,10 @@ class V2Bridge:
         self.monitor = monitor or Monitor(history.events, summarizer)
         # 单一 Job 注册表（本进程唯一，消 D-21）：GUI 与 MCP 线程共用它。
         self.jobs = jobs or JobRegistry()
-        self.run_monitor = RunMonitorStore()
+        self.run_monitor = getattr(engine,'run_monitor',None) or RunMonitorStore()
+        if engine is not None and hasattr(engine,'_run_on_engine'):
+            engine.run_monitor = self.run_monitor
+            engine.artifact_writer = self.ops._land
 
     @classmethod
     def _assembled(cls, *, el_root: str | Path, data_root: str | Path,
@@ -437,38 +440,40 @@ class ElOps:
                 diag: bool = False, pump=None, vdd: bool = True) -> dict:
         p = self._b._engine._protocol
         snap = self._b.effective()
-        run = p.build_run(self._b.cache, snap, pump=pump, vdd=vdd, diag=diag)
-        problems = p.check_run(run)
-        monitor_id = self._b.run_monitor.begin(run, snap, actor=actor, reason=reason)
-        return {"run": run, "problems": problems, "actor": actor, "reason": reason,
-                "monitor_id": monitor_id}
-
-    def execute(self, prepared: dict, *, actor: str = "gui", reason: str = "",
-                progress_arr=None, land_artifact: bool = True) -> dict:
-        p = self._b._engine._protocol
-        run = prepared["run"]
-        monitor_id = prepared.get("monitor_id")
-        if monitor_id:
-            self._b.run_monitor.attach_progress(monitor_id, progress_arr)
+        monitor_id = self._b.run_monitor.begin(config=snap,actor=actor,reason=reason)
         try:
-            res = p.evolve_run(run, progress_arr=progress_arr, cache=self._b.cache)
-            summary = dict(p.result_summary(run, res))
+            run = p.build_run(self._b.cache,snap,pump=pump,vdd=vdd,diag=diag)
+            problems = p.check_run(run)
+            self._b.run_monitor.update_run(monitor_id,run,snap)
+            return dict(run=run,problems=problems,actor=actor,reason=reason,monitor_id=monitor_id)
         except Exception as exc:
-            if monitor_id:
-                self._b.run_monitor.finish(monitor_id, error=exc)
+            self._b.run_monitor.finish(monitor_id,error=exc)
             raise
-        problems = list(prepared.get("problems") or [])
-        summary["problems"] = problems
-        aid = ""
-        if land_artifact and res is not None:
-            aid = self._land(run, res)
-            summary["artifact_id"] = aid
-        # problems 同时放**顶层**：v1 的 RunWorker 消费 `res.get('problems')`
-        # 发状态栏旁注（evolve_worker.py:45），只嵌 summary 会让旁注静默丢失。
-        if monitor_id:
-            self._b.run_monitor.finish(monitor_id, summary=summary, raw=res)
-        return {"summary": summary, "problems": problems,
-                "artifact_id": aid, "ok": bool(summary.get("ok"))}
+
+    def execute(self,prepared:dict,*,actor:str='gui',reason:str='',
+                progress_arr=None,land_artifact:bool=True)->dict:
+        p = self._b._engine._protocol
+        run = prepared['run']
+        store = self._b.run_monitor
+        rid = prepared.get('monitor_id')
+        if not store.is_running(rid):
+            rid = store.begin(run,actor=actor,reason=reason)
+        store.attach_progress(rid,progress_arr)
+        res = summary = None
+        try:
+            res = p.evolve_run(run,progress_arr=progress_arr,cache=self._b.cache)
+            summary = dict(p.result_summary(run,res))
+            problems = list(prepared.get('problems') or [])
+            summary['problems'] = problems
+            aid = self._land(run,res) if land_artifact and res is not None else ''
+            if aid:
+                summary['artifact_id'] = aid
+            store.finish(rid,summary=summary,raw=res)
+            return dict(summary=summary,problems=problems,artifact_id=aid,
+                        monitor_id=rid,ok=bool(summary.get('ok')))
+        except Exception as exc:
+            store.finish(rid,summary=summary,raw=res,error=exc)
+            raise
 
     def _land(self, run: dict, res: dict) -> str:
         import pickle

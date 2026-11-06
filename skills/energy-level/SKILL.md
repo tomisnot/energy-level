@@ -1,256 +1,296 @@
 ---
 name: energy-level
-description: 通过 MCP 操控 Rb-87 里德堡原子仿真软件 Energy Level（mecha v2）——管理能级组、场与微波/光波形，运行含时演化，并解读布居转移结果。含单位约定、v2 工具面、典型工作流与已知物理坑。
-whenToUse: 当需要操控 Energy Level 软件（改参数、加能级组、配波形、跑演化计算、取布居结果）或解读其计算结果时。软件由人经统一启动器 `python -m mecha --all` 起（写权在 AI 侧），MCP 端点见项目根 .mcp-port；GUI 模式下 AI 物理不可见（无端点）。
+description: 通过 MCP 操控 Rb-87 里德堡原子仿真软件 Energy Level（mecha v2）——配置能级/场/波形，运行单体、两体、多体含时与平衡态计算，读取布居、关联、纠缠熵和 Pauli 字符串。含工具签名、返回字段、完整调用示例、单位与拒绝面。
+whenToUse: 需要操作 Energy Level（改参数、加能级组、建驱动、跑演化或平衡态、读结果）时。软件由人经统一启动器 `python -m mecha --all` 起，MCP 地址在项目根 `.mcp-port`；`app_entry.py --gui` 是纯本地独立进程，AI 看不到。
 ---
 
-# SKILL: Energy Level — Rb-87 里德堡原子仿真（AI 操作指南 · mecha v2）
+# Energy Level · AI 调用手册
 
-> 本文件是 AI harness 的 skill 说明书：连接方式、工具清单、工作流、单位约定、
-> 物理坑。AI 使用中若发现文档与实态不符，应回头修正本文件（自我迭代）。
-> **本版对齐 mecha v2**：工具面 = `mecha_v2/tools.py` 注册的 MCP 工具，共 **14 个**
-> 常用工具见下方「## 工具清单」表；完整工具和参数以宿主提供的注册 schema 为准。宿主 MCP 面来自注册表，
-> **没有**额外的 `list_tools` 工具可调。v1 的 GUI 内嵌 AI 面
-> （run_python/submit_sweep/get_diag/screenshot/set_groups…）**在 v2 不存在**，
-> 见末节"v2 暂缺的能力"。
+这份文档是 MCP 工具面的**唯一操作说明**。工具 schema 与 `query_params` 的运行时返回是最终权威；
+本文给的是“怎么组合、参数长什么样、返回什么、什么时候会被拒”。不要凭 v1 记忆或猜键名调用。
 
-## 连接
+## 0. 先建立心智模型
 
-**软件怎么起**（人经统一启动器 `python -m mecha --all`；切写权**随时可切**）：
+```
+配置快照（扁平键）  +  manybody.calib（多体模型，唯一货币）
+        │
+        ├─ 单体/两体：groups.list + field.* + dynamic.*（波形/初态/衰变）
+        └─ 多体：manybody.*（含 time / gs / thermal / dos / spectrum）
+        │
+        ▼  estimate_run / preview_run（可选，不跑）
+        run_sim（同步，回摘要）／ submit_job（异步，回 job_id）
+        │
+        ▼
+摘要（top 态、布居、E0/gap…） + artifact（完整数组，pickle）+ 运行卡片
+```
 
-- **默认（headless）**：软件进程（无 GUI 窗口）+ dsh。软件进程
-  起 MCP 服务器，端口写项目根 `.mcp-port`（裸端口，兼容 dsh `resolveHubUrl`），
-  你 attach 到 `http://127.0.0.1:<port>/mcp`。**写权自动在 AI 侧**（人授权了
-  这个模式）。
-- **人接管时**：写权切到人侧 ⇒ ⚠ **你的写会被当场拒**（**进程不重启、连接不断**），
-  但**读仍照常**。等人在面板上点「交还给 AI」即可。
-  ⚠ 另有「纯本地」形态（`app_entry.py --gui`，独立进程、不起任何端点，AI 物理看不见它）
-  —— 那不是 mecha 起的。
+三条铁律：
 
-**端点换端口/换进程**（实测报告 §0）：权威重启后端口会变（自动选空闲口）。
-**re0-mecha dsh 插件已自愈**：每次重连现读 `.mcp-port`，漂移后下一次调用自动
-连上新端口，无需重启 dsh。但**插件之外的客户端**（自写 MCP 客户端、写死 URL 的
-IDE 配置）不会自愈——那些须新开会话/改配置。
+1. **写只经 `set_config` / `set_drive` / `reset_config` / `build_calib`**；读用 `read_config` / `query_params` / `query_levels` / `read_waves` / `read_write_authority`。
+2. **不要自己实现库里已有的能力**：多体装配、ED/MPS/DMRG/KPM/QMC、Pauli 串、源态谱、运行卡片都在库里；MCP 没暴露的走 GUI / Python API / artifact，见 §8。
+3. **失败先读 `error.info.kind` / `hint` / `suggest`**，不要重试硬撞；写被拒先 `read_write_authority`。
 
-**监控面**：权威进程另起**只读**监控端点（`/status`、`/activity`、`/history`、
-`/config`），dsh 右侧栏「机甲监控」面板消费它——飞行记录仪（每笔写
-seq/actor/before→after/reason，逐行可折叠）+ 配置态（族→前缀分层树）。
-**端口是动态分配的**（OS 选，写在项目根 `.monitor-port`）；面板自己经 dsh 同源只读
-路由 `/re0-mecha/monitor-url` 取地址，**没有人需要抄端口**，也没有硬编码端口可漂移。
-**控制权不经你这条端点**：人的夺权/交权走**控制端点**（`.control-port`，只给框架/面板
-⇒ 你**拿不到它的地址**）。你要知道自己此刻能不能写，就调只读的 `read_write_authority()`。
-AI 面改不了写权模式、伪造不了 human 归因（Authority 的通道判定，与端点无关）。
+## 1. 连接与写权
 
-**其他 IDE / 客户端接入**：本仓**当前没有** `.trae/mcp.json`（该配置曾存在，已不在
-仓内——2026-09-25 核实）。要用别的 MCP 客户端，请让它指向
-`http://127.0.0.1:<.mcp-port 里的端口>/mcp`，并在该客户端里**新开会话**生效
-（工具在会话启动时加载）。注意这类写死 URL 的客户端**不会**像 dsh 插件那样自愈。
+- MCP 端点：`http://127.0.0.1:<.mcp-port>/mcp`（streamable HTTP，仅 localhost）。
+- 端口每次重启会变；dsh 插件会现读 `.mcp-port` 自愈，自写客户端需重连/改配置。
+- `read_write_authority()` 只读：返回当前谁能写。AI 侧写恒归因 `ai`，不能改模式、不能伪造 human。
+- 写被拒（`wrong_side` / `locked`）时**读仍可用**；等人切回 AI，不要杀进程/重启软件。
+- 改 `.py` 源码后必须由人重启 EL（Python 不热加载）；不要自己 `app_entry.py`。
 
-## 工具清单
+## 2. 工具清单（15 个领域工具 + 1 个只读元工具）
 
-| 工具 | 作用 | 关键参数 |
-|---|---|---|
-| `query_params` | 可写配置键的元数据：type/unit/lo/hi/enum/desc/default | — |
-| `query_levels` | 基组每个子能级：**label + 身份键 key + 能量 MHz** | — |
-| `read_config` | 当前所有已设配置键（快照）——确认改动是否生效 | — |
-| `read_waves` | 当前驱动波清单（逐波摘要，不内联大数组） | `atom("single"/"A"/"B")` |
-| `set_config` | 写一个配置键（过门校验；类型/枚举/值域/wave_list 当场判）。回执自带回读：`before`（写前旧值）+`resolved`（落地的值）+`readback`（读回的值）——写一次就自证，不必再查 | `key, value, reason`（中文摘要进留痕） |
-| `reset_config` | 把当前所有已设键清空回默认（含驱动波）——**上手先收拾台面用它**。回执列 `cleared` 清单 | `reason` |
-| `set_drive` | **在跃迁上建驱动**：给 Rabi/光强 + 脉冲形状 → 自动算频率/光强/时长。可选参数（pol/detuning_mhz/mode/atom/name）**不传即用默认**（π/0/append/single/drive） | `src, tgt, rabi_mhz｜intensity_mwcm2, pulse("pi"/"pi2")｜duration_ns, pol, detuning_mhz, atom("single"/"A"/"B"), mode("append"/"replace"), name` |
-| `estimate_run` | dry-run 成本（不跑演化）；单体回 `est_sec` 粗估 | — |
-| `preview_run` | 行为预览：驱动哪些跃迁 / **基组够不够**（`basis_enough`） | — |
-| `run_sim` | 跑演化，回终态布居摘要（不含大数组） | `cancel_after_sec`（可选超时取消） |
-| `submit_job` | 长任务提交后台，立即回 `job_id`（提交时刻固定配置） | — |
-| `read_job` | 查任务：给 `job_id` 查单个（done 含 result），省略则列全部 | `job_id` |
-| `cancel_job` | 请求取消后台任务（下一步边界生效） | `job_id` |
-| `run_actions` | **多步编排**：一串 `{op,args}` 按序执行，任一步失败即停在该步 | `actions` |
+| 工具 | 作用 | 参数 | 成功回执关键字段 |
+|---|---|---|---|
+| `query_params` | 可写键元数据 | — | `keys{key:{type,unit,lo,hi,enum,desc,default}}` |
+| `query_levels` | 当前基组态 | — | `n_states`, `states[{label,key,E_mhz,…}]` |
+| `read_config` | 当前快照 | — | `config`（可能很大，含 calib） |
+| `read_waves` | 驱动波摘要 | `atom="single"/"A"/"B"` | `waves[{name,freq_mhz,intensity_mwcm2,pol,offset_ns,envelope}]` |
+| `set_config` | 写一个键 | `key,value,reason` | `applied,before,resolved,readback` |
+| `reset_config` | 全部清回默认（含波形/calib） | `reason` | `cleared,n` |
+| `build_calib` | 文件/ARC → `manybody.calib` | `build` 或 `file` 或 `atoms`+`arc`；`reason` | `calib_summary,build_receipt,build` |
+| `set_drive` | 在跃迁上建波 | `src,tgt`；`rabi_mhz` 或 `intensity_mwcm2`；`pulse` 或 `duration_ns`；`pol,detuning_mhz,mode,atom,name,reason` | `key,wave,n_waves,pulse_end_ns,t_max_note?` |
+| `estimate_run` | 干跑成本 | — | `est_sec` 及规模字段 |
+| `preview_run` | 干跑预览 | — | `basis_enough`, 驱动/模型摘要 |
+| `run_sim` | 同步跑一次 | `cancel_after_sec?` | `ok,method,n_t,n_states,top_states_avg_pop,final_top_pop,monitor_id,artifact_id?,warnings?` |
+| `submit_job` | 后台任务 | — | `job_id,state` |
+| `read_job` | 查任务 | `job_id?`（省略=列表） | `state`；done 带 `result`，failed 带 `error` |
+| `cancel_job` | 请求取消 | `job_id` | `state`（协作式，终态以 `read_job` 为准） |
+| `run_actions` | 多步编排 | `actions,spec?,spec_patch?,pick?` | `steps[{index,op,ok,detail,output}],stopped_at` |
+| `read_write_authority` | 只读自省 | — | 当前 mode/谁能写 |
 
-### 两种驱动形态的选择
-| 场景 | 用什么 | 原因 |
-|---|---|---|
-| 单步探索、需人逐步监督 | 细粒度工具（`set_config`/`run_sim`/…） | 每步在对话+GUI 双通道可见 |
-| 参数扫描、批量对比、多步组合 | `run_actions`（CodeAct 结构化动作） | 一次调用=多步，省回合 |
+没有 `list_tools`；工具表就是宿主注册表。不要再找 `set_groups`、`run_compute`、`get_state` 这类 v1 名字。
 
-`run_actions` 约定：
-- 每步是 `{"op": 名称, "args": 对象}`。op 可为内置 `estimate`/`summary`/`run`/`schema`
-  （顶层工具名 `estimate_run`/`run_sim` 也可直接当 op 用），
-  或只读查询名 `read_config`/`query_params`/`preview_run`/`query_levels`/`read_waves`。
-- **不 eval 任意代码**（库只编排自家工具，任意代码是宿主 code-runtime 的权力）。
-- run/estimate 的配置三种给法：`args.spec` 整表替换；**`args.spec_patch` 只改列出的键、
-  其余沿用当前配置（扫描首选——别每点重抄全量）**；都不给=当前配置。顶层 `spec_patch`
-  同义（步没给才生效）。
-- **`pick`**：键路径列表（如 `["final_top_pop.60P_{3/2} m_J=-0.5","method"]`，点分层、
-  整键优先匹配），投影每步 output 只回关注量——多点扫描控体积用它；写错的键如实列进
-  `_missing`（不静默 null）。
-- 回执 `{ok, steps:[{index,op,ok,detail,output}], stopped_at}`——**每步自带
-  output**（不用再按位置对齐）与 detail（成功=短摘要，失败=原因）；`stopped_at=-1` = 全成。
-- 每步留可追溯记录（逐子调用审计，不污染账）。
+## 3. 单体最小可跑流程
 
-**失败长什么样**（机器可判别）：工具失败时回执 `isError=true`，正文是
-`{"ok": false, "error": {"message", "info": {"kind", "hint", "suggest"}}}` 的
-JSON——**读 `info.kind` 决定怎么改**（如 `unknown_key`/`bad_enum`/`bad_value`），
-hint 给下一步指引。成功回执才是普通 JSON 正文。
+```jsonc
+// 1) 能级组
+set_config("groups.list", [{"n":60,"l":0,"j":0.5},{"n":60,"l":1,"j":1.5}])
+// 2) 取身份键
+query_levels()
+// → states: [{"label":"60S 1/2 m_J=+0.5","key":["mJ",60,0,0.5,0.5,0.0],"E_mhz":…}, …]
+// 3) 初态：原样回传 key
+set_config("dynamic.psi_single", ["mJ",60,0,0.5,0.5,0.0])
+// 4) 驱动（自动算频率/光强/时长）
+set_drive(src=<60S key>, tgt=<60P key>, rabi_mhz=5.0, pulse="pi", pol="σ-")
+// 5) 时间/方法
+set_config("dynamic.mode", 0)
+set_config("dynamic.method", "mixed")      // 可选 mixed / sambe / hard
+set_config("dynamic.t_max", 500)
+set_config("dynamic.npts", 501)
+// 6) 预检与运行
+preview_run(); estimate_run(); run_sim()
+```
 
-## 配置键（`set_config` 的 key）
+读结果：`final_top_pop` 是**演化窗口末端**的布居；`top_states_avg_pop` 是时间平均。
+要“脉冲结束瞬间”的布居，把 `t_max` 调到 `set_drive` 回执的 `pulse_end_ns` 附近。
 
-可写面 = `query_params` 返回的清单（唯一权威）。除标量外这些结构化键也可整表写：
+补充：
 
-- `groups.list`（必填）：`[{"n":60,"l":0,"j":0.5}, …]` 能级组；逐子能级裁剪见坑 6
-- `field.B_gauss`(Gauss) · `field.E_vpcm`(V/cm)
-- `dynamic.mode`(0单原子/1双原子/2多体) · `dynamic.method`(`mixed`｜`sambe`｜`hard`) ·
-  `dynamic.t_max`(ns,>0) · `dynamic.npts`(≥2) · `dynamic.decay_index`(0自动/1禁/2自定义)
-- `dynamic.psi_single` / `psi_A` / `psi_B`：初态**身份键**（query_levels 的 `key`，非索引，跨 B 稳定）
-- `dynamic.psi_pair`：两体纠缠初态 spec（见坑 4），两体模式下**取代** psi_A/psi_B
-- `dynamic.decays`：自定义衰变通道 list，元素 `{'from':态键,'to':态键|None,'gamma_mhz':Γ}`（见坑 5）
-- `dynamic.waves_single` / `waves_A` / `waves_B`：波形——**用 `set_drive` 建、`read_waves` 读，别手搓**
-- `solve.*`：运行级旋钮（`MAX_STEP`/`MAX_STEP_HARD`/`PER_FREQ_M`/`FROZEN_H_NS`/`COST_BUDGET`）
-- `engine.*`：**只读引擎常量**，`set_config` 会被当场拒（`readonly_key`）——改模型不是运行级的事
+- 逐子能级裁剪：`groups.list` 元素可带 `ms:[mJ,…]` 或 `Fs:[[F,m_F],…]`（互斥）；
+  不写=全展开。裁完重新 `query_levels`。
+- 耗散：`dynamic.decay_index` 0/1/2（自动/禁/自定义）；自定义写
+  `dynamic.decays=[{"from":<key>,"to":<key>|null,"gamma_mhz":Γ}]`；两体只支持 `to=null`。
 
-## 单位约定（务必遵守）
+## 4. 两体
 
-- 磁场 B：**Gauss**；静电场 E：**V/cm**
-- 微波频率：**MHz**（波形 freq_mhz）；光频：**Hz**；光强：**mW/cm²**
-- 时间轴 t_max / 波形包络参数：**ns**；衰变率 Γ：**MHz**
-- 能级组：n 主量子数（1-200）、l 轨道角动量（0-199）、j 半整数/整数
+```jsonc
+set_config("dynamic.mode", 1)
+set_config("dynamic.psi_A", <A key>)
+set_config("dynamic.psi_B", <B key>)
+set_config("dynamic.pair.R_um", 6.0)
+set_config("dynamic.pair.theta_deg", 90.0)
+set_config("dynamic.pair.phi_deg", 0.0)
+set_drive(src=…, tgt=…, rabi_mhz=1.0, pulse="pi2", atom="A")
+set_drive(src=…, tgt=…, rabi_mhz=1.0, pulse="pi2", atom="B")
+```
 
-## 典型工作流
+- 两体只读 `waves_A`/`waves_B`；`waves_single` 在 mode=1 被忽略。
+- 两体 + `psi_pair` 时仍要给 `psi_A`/`psi_B`（占位也可）；`psi_pair` 的对称组合可能是暗态。
+  形状：`["pair_sup", [[nA,lA,jA,mA,nB,lB,jB,mB,re,im], …]]`。
+- 两体寿命/耗散只支持“落点=丢失”（`to=None`）。
 
-**复现一次微波 π 脉冲**：
-1. `set_config('groups.list',[{"n":60,"l":0,"j":0.5},{"n":60,"l":1,"j":1.5}])`
-2. `query_levels` → 拿 60S / 60P 各子能级的**身份键 key**
-3. `set_config('dynamic.psi_single', <60S 的 key>)` 设初态（用 key 不用 label）
-4. `set_drive(src=<60S key>, tgt=<60P key>, rabi_mhz=5.0, pulse='pi', pol='σ-')`
-   —— 频率/光强/时长自动算
-5. `set_config('dynamic.method','hard')`、`set_config('dynamic.t_max',500)`
-6. `preview_run` 看基组够不够 → `estimate_run` 看耗时 → `run_sim` 跑
-7. 从回执 `final_top_pop` / `top_states_avg_pop` 解读布居转移
+## 5. 多体：`calib` 是唯一模型输入
 
-**两体纠缠初态（"交换后的结果"当初态）**：
-`set_config('dynamic.psi_pair', ['pair_sup', [[nA,lA,jA,mA, nB,lB,jB,mB, re, im], …]])`
-→ `set_config('dynamic.mode', 1)` → `submit_job` 异步跑。注意对称组合（两 amp 都 1）
-是**暗态**，布居不摆（坑 4）。
+```jsonc
+"manybody.calib": {
+  "atoms": [{"id":0,"pos":[0,0,0],"Omega_mhz":0,"Omega_phase_rad":0,
+             "delta_mhz":0,"gamma_mhz":0}],
+  "pairs": [{"i":0,"j":1,"V":0.0,"J":"0.7+0.2j","A":0.0}]
+}
+```
 
-**参数扫描**：`run_actions` 串多步，每步 `{"op":"run","args":{"spec_patch":{只写变化量}}}`，
-顶层带 `pick` 只回关注量（如 `["final_top_pop.<目标态label>"]`）——别每点重抄全量 spec、
-也别把 50 点全量布居灌进上下文。或循环调 `submit_job` + `read_job` 轮询。
-别往 context 灌大数组（run_sim 只回摘要，全量在 artifact）。
+- 位置 µm、能量/耦合 MHz、时间 ns；`V` 必须实数；`J/A` 可为复，JSON 里用字符串 `"0.7+0.2j"`（或实数）。
+- **没有 `terms` 输入**：V≠0→I1、J≠0→I2、A≠0→I3；不用的通道写精确 `0.0`。
+- 文件/ARC 不是 RunSpec 写法：用 `build_calib` 转成 calib。
 
-## 波形格式（`set_drive` 建、`read_waves` 读；手搓 `set_config` 时的元素形状）
+```jsonc
+// 文件（读 <EL>/.mecha-v2/calib/ 下的 JSON）
+build_calib(build={"source":"file","file":"n36.json"})
+// ARC（原子 g/r 四元组 + pos）
+build_calib(build={"source":"arc",
+  "atoms":[{"g":[60,0,0.5,0.5],"r":[60,1,1.5,1.5],"pos":[0,0,0]}],
+  "arc":{"B_gauss":21.7,"n_window":3,"r_cut_um":7.0,"second_order":true,"guard_mhz":1.0}})
+```
+
+直接 `set_config("manybody.calib", {...})` 也能写，但大 calib 的 `before` 会全量回显；
+换模型优先 `build_calib`。`manybody.build` 是构造器入参，运行时不读。
+
+## 6. 多体时间演化
+
+```jsonc
+set_config("dynamic.mode", 2)
+set_config("dynamic.t_max", 1000)
+set_config("dynamic.npts", 501)
+set_config("manybody.solver", "ed")        // auto/ed/tdvp/tebd/tdvp-single/tdvp-adaptive/...
+set_config("manybody.psi0", "rggrgg")      // 模式串 / 产物态索引 / ['sup',…] / {kind:"product",…}
+set_config("manybody.want", "")            // 空 = 含时
+set_config("manybody.max_step_ns", 0.1)    // MPS/PEPS/经典/轨迹的内部步长
+run_sim()
+```
+
+常用可写键（完整清单以 `query_params` 为准）：
+
+- `manybody.solver`：含时后端；`auto` 只在 ED/TDVP 间选。
+- `manybody.psi0`：初态；`"ground"`、`{kind:"product"}`、`{kind:"mps"}`、`{kind:"ground_of",…}`、`{kind:"permutation_sector",…}`。
+- `manybody.charge_sector`：固定激发数（ED/Lanczos/DMRG；非守恒输入会拒）。
+- `manybody.constraint`：`{kind:"none"/"blockade"/"pxp",mode:"full"/"project",threshold_mhz,edges}`；投影基当前主要给 ED。
+- `manybody.drive_segments`：`[{t0,Om:[N],delta:[N],phase:[N]}]`；长度必须=N。
+- `manybody.loops` / `manybody.link_pairs`：环路/有向边；闭环边自动并入 `link_pairs`。
+- `manybody.pauli_strings`：见 §7。
+- `manybody.chi_max/truncerr/max_sweeps/mps_order/mps_dtype/mps_diagnostics/return_state/memory_budget_mb/dtype/device`：MPS/资源选项。
+
+## 7. 多体平衡态与谱
+
+```jsonc
+set_config("dynamic.mode", 2)
+set_config("manybody.want", "gs")           // gs / thermal / dos / spectrum
+set_config("manybody.eq_backend", "ed")     // ed/lanczos/gpu-lanczos/dmrg/kpm/qmc/free-fermion
+set_config("manybody.charge_sector", 4)     // 可选
+run_sim()
+```
+
+- `want="thermal"` 配 `manybody.betas`（1/MHz）；`want="dos"` 由 KPM 生成 `energies/rho`
+  （`manybody.kpm_num`/`kpm_nvec` 控精度）。
+- `want="spectrum"` 需 `manybody.source`：`{kind:"vector"|"diagonal"|"sparse"|"full_sparse"|"site_weights"}`；源态谱只支持 ED/Lanczos 类后端，DMRG/QMC/KPM 会拒。
+- 平衡态结果：`E0`、`gap`、`n_atom`、`corr`（小维）、`evals`；热态 `E/C/F` + `betas`；DOS `energies/rho`；谱 `spectral/energies/source_norm`。
+- `estimate_run` 对多体 `charge_sector` 不缩维（按 2^N 估，偏高）；`preview_run` 对多体是模型摘要，不是跃迁预览。
+
+## 8. Pauli 字符串（通用高阶观测）
+
+```jsonc
+set_config("manybody.pauli_strings",
+  [[[0,"x"],[1,"y"],[2,"z"]], {"label":"z0","terms":[[0,"z"]]}])
+```
+
+- 引擎只算 `⟨Π σ^a_i⟩`；手性、结构因子、连通减法由调用方组合，引擎不认“chirality”这种物理名。
+- 支持：含时 `ed`、CPU MPS 四档、GPU MPS 两档、轨迹（系综平均）、经典自旋（因子化）；
+  平衡态 `ed/lanczos/gpu-lanczos` 的 gs、`dmrg` 的 gs。PEPS/QMC/KPM/free-fermion/gpu-batch 拒绝并给替代。
+- 结果：含时 `observables.pauli_strings (n_t,n_strings)` + `observables.pauli_string_labels`；
+  平衡态顶层 `pauli_strings (n_strings,)` + `pauli_string_labels`。
+- MPS 用局域算符之积（σˣ=P+M、σʸ=iP−iM、σᶻ=SZ）；实哈密顿量本征态的奇数 σʸ 串期望恒 0（时间反演），
+  要非零手性用复模型或非本征态。近简并基态上单态期望不唯一，先看 `gap`。
+
+## 9. `run_actions`：扫描与多步
+
+```jsonc
+run_actions({
+  "actions": [
+    {"op": "estimate"},
+    {"op": "run", "args": {"spec_patch": {"dynamic.t_max": 500}}},
+    {"op": "run", "args": {"spec_patch": {"dynamic.t_max": 600}}}
+  ],
+  "pick": ["final_top_pop", "method", "ok"]
+})
+```
+
+- op：`estimate`/`run`/`summary`/`schema`，或只读查询 `read_config`/`query_params`/`preview_run`/`query_levels`/`read_waves`。
+- `estimate_run`/`run_sim` 可当 op 别名。
+- `spec` 整表替换；`spec_patch` 只改列出的键；都不给=当前快照。
+- **`run_actions` 不能 `set_config`**；批量改配置要多次 `set_config`，只有跑/估/读能进编排。
+- `pick` 是键路径列表（整键优先，再点分层）；缺失键进 `_missing`，不静默 null。
+- 每步 `output` 自带；`stopped_at=-1` 全成。
+
+## 10. 长任务、摘要与 artifact
+
+```jsonc
+submit_job()                    // 固定提交时快照
+read_job(job_id)                // 轮询；done 带 result
+cancel_job(job_id)              // 协作式；以 read_job 终态为准
+```
+
+- `run_sim` 只回摘要，不搬大数组；完整 `pops/t/observables` 在 artifact。
+- `run_sim` 回执 `artifact_id`/`monitor_id`；artifact 在
+  `http://127.0.0.1:<.run-monitor-port>/api/runs/<id>/artifact`（pickle 的 `(meta,res)`）。
+- 运行卡片是只读投影，不能创建/重跑/删除运行；页面端口是 `.run-monitor-port`，不是 `.monitor-port`。
+- 取消后 `read_job` 的终态与部分结果以回执为准；不要假设 `cancel` 立即停。
+
+## 11. 单位与身份键
+
+- B=Gauss，E=V/cm，t=ns，微波频率=MHz，光频=Hz，Γ=MHz，光强=mW/cm²。
+- 能级身份键来自 `query_levels` 的 `key`（含 kind/n/l/j/m/E），**不要用 label 或猜索引**。
+- 两体初态分量按 `(n,l,j,m)` 解析；多体 calib 的 `g/r` 是四元组。
+- 多体 H 的耦合是**圈频 MHz**（不是 rad）；论文的 rad/µs 要先 /2π。
+- 基序：原子 0 在 MSB，`|g⟩=0, |r⟩=1`，`S^z=1/2−n`；本仓 `sp/sm` 与教科书 σ± 编号相反。
+
+## 12. 错误与拒绝面（不要试错）
+
+失败回执是 `isError=true`，正文：
 
 ```json
-{"name":"波形1","freq_mhz":6800.0,"intensity":0.05,"pol":"π",
- "offset_ns":0.0,"env":["gauss",200.0,40.0,1.0]}
+{"ok":false,"error":{"message":"…","info":{"kind":"…","hint":"…","suggest":"…"}}}
 ```
-- env 高斯：`["gauss", 中心ns, σ_ns, 峰值]`
-- env 方波：**必须 5 个元素** `["square", 起点ns, 沿ns, 高度, 下降起点ns]`
-  （第 5 个是平台结束/开始下降的时刻；只给 4 个会被反序列化器判"波形数据不合法"——
-  实测踩过。平台到演化末尾就写 `t_max`）
-- env 文件（光强包络）：`["file", t_ns 数组, amp 数组]`——保留载频，三引擎全支持
-- pol：微波/光场用 π/σ+/σ-；椭圆偏另带 `'elliptical': {'alpha_deg','theta_deg','eps_deg'}`
-- **完整驱动（`type:'arb'`）**：无载频的完整时域信号，只有 `hard` 直接支持，
-  `sambe`/`mixed` 遇它自动改道 hard（回执 `arb_note` 提示）
 
-### ⚠ 光强包络的两个语义陷阱（实测标定，务必按配方换算）
-`FileEnv` 名为"光强包络"，但实现上：
-1. **峰值归一化**——文件幅值被除以自身峰值，绝对标度丢弃。整体标度只能靠
-   `intensity` 字段，峰值永远钉死在 `intensity` 上。
-2. **它是振幅因子，不是光强因子**——耦合 ∝ √I·env，即 **光强(t) = intensity × env(t)²**。
+常见 `kind`：`unknown_key`（先 `query_params`）、`bad_enum`/`bad_value`/`bad_type`（看 schema）、
+`readonly_key`（`engine.*` 不可写）、`missing_arguments`、`bad_drive`（身份键/偏振/强度时长）、
+`build_failed`（配置组不成 RunSpec）、`unknown_job`、`gate_denied`/`wrong_side`（写权）。
+`hint`/`suggest` 是给下一步的，不要原样重试。
 
-**→ 想要 I(t) = I₀·(1+δ(t))（δ ∈ [−a,+b]）的正确配方**：
-```
-intensity = I₀ · (1 + b)                 # 峰值
-env 采样   = √[ (1 + δ(t)) / (1 + b) ]    # 峰值恰为 1
-```
-**反面教材**：把绝对光强曲线直接塞进文件 → 被静默归一化 → 整体光位移悄悄错掉。
+明确的拒绝（属设计，不是缺陷）：
 
-## 引擎支持面（现行 sambe / hard / mixed 三款）
+- 零波形且无耗散通道 → 拒绝空演化。
+- 多体 `V` 含虚部、`terms` 与数值不一致、`charge_sector` 非守恒 → 拒绝。
+- PXP/blockade 投影给非 ED 后端 → 拒绝。
+- PEPS 非矩形网格/长程键；DMRG projected Plan；GPU 固定荷；不匹配的原生 MPS → 拒绝。
+- MPS 路径 `gamma≠0`；两体显式落点/纯退相 → 拒绝。
 
-| 场类型 | sambe | hard | mixed |
-|---|---|---|---|
-| 微波·任意波形（完整驱动） | 改道 hard | ✅ 直接支持 | 改道 hard |
-| 微波·任意包络（FileEnv） | ✅ | ✅ | ✅ |
-| 光学·任意包络（FileEnv） | ✅ | ✅ | ✅ |
-| 光学·任意波形 | ❌ | ❌ | ❌ |
+## 13. MCP 没暴露什么（别在 MCP 里造轮子）
 
-- 光学场不支持任意波形：无载频 → RHS 带 THz 相位 → 积分器被钉死。光学只能用 env 文件。
-- **耗散通道支持面**：`hard`/`mixed`（单、两体）只支持**丢失**（`to=None`）；显式落点/纯退相
-  仅**单原子 + `sambe`**（转 Lindblad 主方程）支持。要跑"自发辐射落回基态"这类内空间转移，
-  必须 `dynamic.mode=0` + `dynamic.method='sambe'`。
-
-## 坑（已知 · 物理/引擎级，v2 仍成立）
-
-1. **mixed 纯微波亦可**：没光场时光子维退化 P=1，等价 hard 同物理。会强制改道的只有
-   **任意波形（完整驱动）**；光强包络（FileEnv）是普通 Wave，不受影响。
-2. **run_sim 同步预处理可能久**：两体 V_dd 预计算可达数十秒。长任务改用 `submit_job`
-   异步 + `read_job` 轮询，别同步干等。
-3. **双原子模式**：`dynamic.pair.*` 仅双原子模式生效；切模式
-   `set_config('dynamic.mode', 0|1)`。
-4. **两体纠缠初态暗态**：`psi_pair` 对称组合 `(|ab⟩+|ba⟩)/√2` 只吃全局相位、布居不动。
-   想看交换摆动，要么给相对相位（如 `[0,1]`=i），要么用逐原子直积初态。分量按
-   (n,l,j,m) 解析（不是索引），缺项报错列出，绝不静默丢。
-5. **初态键别凭能量猜**：`psi` 用身份键（query_levels 的 `key`）。猜错能量会**静默选到
-   别的能级**（实测落到 59D_3/2 却报 ok）。
-6. **🚨 基组裁剪要给"观测量收敛证据"，否则结论不可引用（灾难级）**：同一脉冲，7 组
-   → C=0.006、13 组 → C=0.9982（差在缺 59D_3/2/60D_5/2 时某双光子通道不被抵消）。
-   做法：≥3 个基组（如 7/10/13 组）跑同一脉冲，观测量变化 ≤1% 才敢下结论。**主判据
-   永远是观测量；配对数只是诊断线索**。逐子能级裁剪：`groups.list` 元素可带
-   `ms:[mJ,…]`（与 `Fs:[[F,m_F],…]` 互斥）只留组内特定子能级；不写=全展开（逐位一致）。
-   ⚠ 不能按"6P 只留两三个"裁——mixed 的光移只来自基组内态对的 ARC 矩阵元，
-   **没有 ARC 伙伴态注入** ⇒ 基组里没有 6P，6P 的贡献就是缺失的（漏算）。
-7. **多光子通道要求中间态在基组里**：做 60P→58G 三光子踢出，基组里必须有 59D 与 58F
-   作中间态；只放 60P/58G 会"频率对、强度对，却一点都踢不动"。
-8. **结果反直觉时的诊断套路**：① 布居**完全不动** → 看目标跃迁在不在保留集里（多为
-   基组缺中间态，或成本窗砍了远失谐梯级）；② 跑得**异常慢** → 光强过大 Ω≫失谐 →
-   步长被钉死，先降 intensity 别硬等。
-9. **零波形 = 跑不了**：没波形也没实际耗散通道时，演化**拒绝启动**（既有设计，空演化
-   没意义，不是缺陷）。静止类验收（只验初态/基底）必须加一个"不落在时间窗内"的脉冲
-   （中心远在 t_max 外的窄高斯）。
-10. **`solve.MAX_STEP` 只是"初始步长上限"**：之后步长由误差控制自由增长。要**真**压
-    步长用 `solve.MAX_STEP_HARD`（默认关；只对 mixed/hard 的 DOP853 生效，sambe 走自带传播子）。
-11. **软件实例的生命周期归人管**：不自己 `python app_entry.py`、不杀 python 进程；需要新代码
-    生效就报"需要重启"，由人重启。
-12. **教训：写入侧通了 ≠ 引擎侧通了——验收必须打到引擎**：任何"接口已实现"的结论，
-    必须用**真引擎跑一次**（哪怕合成小基组）才算数。
-13. **π 脉冲标定别手搓方波**（实测第二轮 §2）：手搓 20 ns 沿的方波在同一时长给
-    0.993839，而 `set_drive` 自动算的 π 脉冲（1 ns 沿）给 1.000000——**脉冲沿吃掉
-    有效面积**。做标定必须用 `set_drive`（或显式控制沿），否则把"沿的锅"读成物理。
-14. **t_max 不跟随脉冲时长——实验设计陷阱**（实测第二轮 4-3）：`run_sim` 回的是
-    **演化窗口末端**的布居。t_max 晚于脉冲结束 ⇒ 读到的是"脉冲后又自由演化了一段"；
-    周期恰好整除时看不出来，换个 Ω 就读错。`set_drive` 回执带 `pulse_end_ns` 与
-    `t_max_note` 对账提示（不拦止——自由演化可能是故意的）；扫描时长时把 t_max
-    与脉冲时长一起 patch。
-
-## v2 暂缺的能力（v1 有、v2 未接线——别按 v1 名字调）
-
-以下在 v1 的 GUI 内嵌 AI 服务里存在，**v2 的 MCP 面不提供**，需要时走"下一步"：
-
-- **`run_python` / 任意代码执行**：v2 用 `run_actions`（结构化动作，不 eval）。
-  要真跑 Python 是宿主 code-runtime 的权力，不在库面。
-- **`submit_sweep` 并行扫描**（多进程网格）：v2 未接线。当前用 `run_actions` 串多步
-  或循环 `submit_job`。多进程扫描器属 Provider 接线推迟项。
-- **`get_diag` 运行诊断**（pairs/steps/sectors/traj/H）：v2 未接线。诊断信息暂从
-  `run_sim` 回执的 `warnings` + `preview_run` 读。
-- **`screenshot` / `undo` / 存档面**：
-  - 操作流水（v1 的 `get_activity`）——**不在 MCP 工具面**，在只读监控端点的
-    `/history`（端口见项目根 `.monitor-port`；dsh 右侧栏「机甲监控」面板消费它，
-    飞行记录仪页逐笔可折叠）；域当前态用 `read_config`；
-  - `undo`——v2 史 append-only，撤销=反向 set 记新事件，等接 GUI 撤销按钮（ADR 已定设计）；
-  - 存档面——journal 即存档，要读历史直接开 `.mecha-v2/journal.jsonl`；
-  - `screenshot`——GUI 侧能力，非 MCP 工具。
-- **`set_groups`/`set_superposition`/`set_pair_superposition`/`add_level_group` 等具名写工具**：
-  v2 统一走 `set_config`（写 `groups.list`/`dynamic.psi_*`）。裁剪/叠加态的写法见上"配置键"与坑 6。
-
-## 副本与同步责任（三份 SKILL）
-
-同一套 AI 指南在本仓有**三份**，职责不同。**漂移了以本文件为准**：
-
-| 文件 | 角色 | 谁读 |
+| 想要 | 现状 | 正确做法 |
 |---|---|---|
-| `skills/energy-level/SKILL.md` | **权威**（入库） | 人 / 工具 |
-| `.dsh/skills/energy-level/SKILL.md` | **镜像**（须与权威**逐字节相同**） | dsh 加载 |
-| `.dsh/skills/re0-mecha/SKILL.md` | **工作副本**（另一份文档：独立坑列表 + v1→v2 工具名对照） | **AI 实际读的那份** |
+| 静态谱/AC-Stark 扫描 | 无专用 MCP 工具；`query_levels` 只给能级 | 用 GUI 静态页，或进程内 Python `src.core.protocol.static_*` |
+| 并行扫描提交 | 无 `submit_sweep` | `run_actions` 串行多步，或循环 `submit_job`；独立 runner 属脚本/GUI |
+| 运行诊断 `get_diag` | MCP 无 | 看 `run_sim` 的 `warnings`、`preview_run`；完整数据在 artifact |
+| 任意 Python / `run_python` | 无 | 宿主 code-runtime，不是库工具 |
+| 截图/undo/存档面 | 无 | GUI；journal 即存档；撤销=反向写新事件 |
+| 具名 `set_groups`/`set_superposition` | 无 | `set_config("groups.list"/"dynamic.psi_*")` |
+| 多体专用 `set_atoms` | 无 | `build_calib` 写 `manybody.calib` |
 
-维护方式：
+## 14. 当前支持面（选后端先看这里）
 
-说明书侧重领域知识与工作流，完整能力由宿主工具 schema 提供。修改常用工具后检查受影响示例即可，不要求每个能力逐名出现在文档。
-技能通过 scripts/link_skills.py 链接到工作区，避免维护独立副本；不扫描整个仓库要求所有 SKILL.md 登记。
+含时：`ed`（精确小维）、`mixed`（默认，光 Sambe+微波当场）、`sambe`（无 RWA）、`hard`（微波硬积分）、
+CPU MPS（`tebd`/`tdvp`/`tdvp-single`/`tdvp-adaptive`）、GPU MPS（`tebd-gpu`/`swap-tebd-gpu`）、
+`tdvp-trajectories`、`classical-spin`、`peps-real-time`。
+
+平衡态：`ed`、`lanczos`、`gpu-lanczos`、`gpu-batch`、`kpm`/`gpu-kpm`、`dmrg`、`qmc`、`free-fermion`。
+
+- `auto`（含时）只选 ED/TDVP；不会静默降级到经典。
+- `kpm/qmc/free-fermion` 没有多体态，不能给 Pauli；
+- 轨迹/经典/PEPS 是近似语义，必须看 `observables.approximation`。
+- 具体适用条件以 `preview_run`、`query_params`、`docs/引擎能力边界.md` 为准。
+
+## 16. 深入文档
+
+- 契约与全部多体键/结果字段：`docs/多体接口与维护约定.md`
+- 引擎适用边界与后端选择：`docs/引擎能力边界.md`
+- 配置/运行/排障：`docs/用户手册.md`
+- 代码地图与模块职责：`docs/代码总览.md`
+- 有限 MPS 资源契约：`docs/有限MPS分析与资源契约.md`
+
+## 17. 维护规则
+
+- 工具签名/返回字段以 `mecha_v2/tools.py` 与运行时 schema 为准；本文与代码冲突时先改本文。
+- 本文是权威；`.dsh/skills/energy-level/SKILL.md` 是镜像（同一文件），不要手改镜像。
+- 新增/删除工具、配置键、后端时，同步更新本文的 §2/§5/§12/§14；`checks/skill_mcp_contract_selfcheck.py`
+  机械校验工具名单与镜像，`run_checks.py` 默认 smoke 会跑它。
+- 跑测试默认 `python run_checks.py`（smoke），共享层改动用 `--cascade`/`--changed`。

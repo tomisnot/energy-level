@@ -70,9 +70,11 @@ def evolve_classical_spin(calib, psi0=None, t_grid=None, Om=None, delta=None, ga
                           terms=None, damping=0.0, integrator="rk4", renormalize=True,
                           max_step_ns=0.05, spins0=None, want_observables=True,
                           link_pairs=None, loops=None, segments=None, plan=None,
-                          progress_arr=None, log=None, **kwargs):
+                          progress_arr=None, log=None, pauli_strings=None, **kwargs):
     reject_options(kwargs)
     validate_time_capabilities('classical-spin', segments=segments, plan=plan, gamma=gamma)
+    if pauli_strings and not want_observables:
+        raise ValueError('manybody.pauli_strings 需要 want_observables=true')
     t_grid = time_grid(t_grid)
     check_cancel(progress_arr)
     n=len(calib.get("atoms") or [])
@@ -122,12 +124,19 @@ def evolve_classical_spin(calib, psi0=None, t_grid=None, Om=None, delta=None, ga
                 np.empty((0, 0), float), np.empty((0, 0), float))
         lp = loop_phase_series[-1].tolist() if loop_phase_series.size else []
         lw = loop_winding_series[-1].tolist() if loop_winding_series.size else []
+        pauli_series = None
+        if pauli_strings:
+            from .observables import pauli_strings_factorized
+            pauli_series = pauli_strings_factorized(states, pauli_strings)
         obs = dict(sx=sx, sy=sy, sz=sz, sp=sp, sm=sm, phase=phase,
                    xy_corr=None, loop_phase=lp, loop_winding=lw,
                    loop_phase_series=loop_phase_series,
                    loop_winding_series=loop_winding_series,
                    link_corr=link_series, link_pairs=link_pairs,
                    approximation='factorized classical-spin')
+        if pauli_series is not None:
+            obs['pauli_strings'] = pauli_series
+            obs['pauli_string_labels'] = [s['label'] for s in pauli_strings]
     return dict(t=t, spins=states, pops=pops, pops_atom=pops, n_atom=pops, states=[{"label":"atom%d"%i,"atom_id":i} for i in range(n)], method="manybody", backend="classical-spin", loss=np.zeros(len(t)), energy=energies,
                 observables=obs,
                 error_report=dict(backend="classical-spin", damping=damp, integrator=integrator, internal_step_ns=max_step, max_spin_norm_dev=max_norm_dev, energy_drift=float(np.max(np.abs(energies-energies[0]))), observables_approximation='factorized'))

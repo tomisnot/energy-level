@@ -49,27 +49,22 @@ cpu = evolve_mps(cal, algorithm='tebd', chi_max=64, truncerr=1e-12, **kw)
 gpu = evolve_mps_gpu(cal, chi_max=64, truncerr=1e-12, dtype='float64', **kw)
 C.check('dispatch table exposes tebd-gpu', runspec.engine_fn('tebd-gpu', 'many') is evolve_mps_gpu)
 
-# Exercise the real configuration-to-execution path with a fake calibration
-# only to keep this check independent of ARC/SQLite.  The production path uses
-# the same calibrated object returned by ``calibrate_memo``.
-old_calibrate = mb_runspec.calibrate_memo
-try:
-    mb_runspec.calibrate_memo = lambda *a, **k: cal
-    params = {
-        'manybody.atoms': [dict(id=i, g=(50, 0, 0, 0), r=(51, 0, 0, 0),
-                                pos=(float(i), 0., 0.), Omega_mhz=0.,
-                                delta_mhz=0., gamma_mhz=0.) for i in range(n)],
-        'manybody.solver': 'tebd-gpu', 'manybody.n_window': 0,
-        'manybody.ed_max_dim': 4096, 'manybody.dtype': 'float32',
-        'manybody.device': 'cuda', 'manybody.psi0': psi,
-        'manybody.link_pairs': [[0, 1]], 'dynamic.t_max': .02,
-        'dynamic.npts': 2,
-    }
-    run = mb_runspec.build_run_manybody(None, params)
-    routed = runspec_module.evolve_run(run)
-    C.check('Runspec routes tebd-gpu end-to-end', routed['backend'] == 'tebd-torch-cuda')
-finally:
-    mb_runspec.calibrate_memo = old_calibrate
+# Exercise the real configuration-to-execution path.  The RunSpec only takes an
+# inline calib, so the fixture hands the calibrated object in directly.
+params = {
+    'manybody.calib': {'atoms': [dict(id=a['id'], pos=a['pos'],
+                                     Omega_mhz=0., delta_mhz=0., gamma_mhz=0.)
+                                for a in cal['atoms']],
+                       'pairs': list(cal.get('pairs') or [])},
+    'manybody.solver': 'tebd-gpu',
+    'manybody.ed_max_dim': 4096, 'manybody.dtype': 'float32',
+    'manybody.device': 'cuda', 'manybody.psi0': psi,
+    'manybody.link_pairs': [[0, 1]], 'dynamic.t_max': .02,
+    'dynamic.npts': 2,
+}
+run = mb_runspec.build_run_manybody(None, params)
+routed = runspec_module.evolve_run(run)
+C.check('Runspec routes tebd-gpu end-to-end', routed['backend'] == 'tebd-torch-cuda')
 C.check('pops vs CPU TEBD', np.max(np.abs(gpu['pops'] - cpu['pops'])) < 2e-7)
 C.check('sx vs ED', np.max(np.abs(gpu['observables']['sx'] - ed['observables']['sx'])) < 2e-7)
 C.check('link correlations vs ED', np.max(np.abs(gpu['observables']['link_corr'] - ed['observables']['link_corr'])) < 2e-7)

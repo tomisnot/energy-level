@@ -7,6 +7,7 @@ Plan 保留物理 calib，同时决定 full / blockade / PXP 的基空间与投�
 """
 import numpy as np
 from .basis import independent_states, validate_edges
+from .couplings import active_terms
 
 __all__ = ['build_plan', 'compile_sparse', 'plan_summary']
 
@@ -67,7 +68,7 @@ def build_plan(calib, Om=None, delta=None, gamma=None, terms=None, constraint=No
                 n_atoms=n, full_dim=1 << n, dim=(len(states) if states is not None else 1 << n),
                 projected=projected, blockade_edges=[list(e) for e in edges],
                 states=states, Om=Om.tolist(), delta=delta.tolist(), gamma=gamma.tolist(),
-                terms=list(calib.get('terms') if terms is None else terms),
+                terms=list(active_terms(calib) if terms is None else terms),
                 calib=calib)
 
 

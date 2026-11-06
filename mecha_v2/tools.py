@@ -106,6 +106,43 @@ def build_tool_registry(engine: ElEngine, gate: Gate, surface: Surface,
                 "before": before, "resolved": ev.after,
                 "readback": gate.snapshot.get(key)}
 
+    # ---- build_calib（RunSpec 之前的转换：文件/ARC → 行内 calib）----
+    def _build_calib(build=None, file=None, atoms=None, arc=None, reason="ai build_calib"):
+        # 不给任何参数 ⇒ 复用快照里的装配入参（与它是同一份数据）
+        if not build and not (file or atoms or arc):
+            build = dict(gate.snapshot.get('manybody.build') or {})
+        out = engine.build_calib({'build': build, 'file': file,
+                                  'atoms': atoms, 'arc': arc})
+        # 快照里存的就是这次**真正用掉**的那份入参（与构造器同一份，不存副本）
+        gate.set(channel, 'manybody.build', out['build'], reason=reason,
+                 call_id=CURRENT_CALL_ID.get())
+        gate.set(channel, 'manybody.calib', out['calib'], reason=reason,
+                 call_id=CURRENT_CALL_ID.get())
+        return {'ok': True, 'calib_summary': out['summary'],
+                'build_receipt': out['receipt'], 'build': out['build']}
+
+    reg.register(define_tool(
+        name="build_calib",
+        description=(
+            "把外部模型**转换成 calib**：写出 manybody.calib，并把这次真正用掉的入参写进 "
+            "manybody.build（同一份数据，不存副本）。两种来源："
+            "build={source:\"file\", file:\"x.json\"}（读 <EL>/.mecha-v2/calib/ 下的 JSON）或 "
+            "build={source:\"arc\", atoms:[…g/r 原子…], arc:{B_gauss,n_window,r_cut_um,"
+            "second_order,guard_mhz,periods_um}}；也可以直接给 file / atoms+arc 参数。"
+            "不传任何参数时读已有的 manybody.build 重跑一次装配。返回 calib 摘要与回执。"
+        ),
+        parameters={"build": {"description": "装配入参：{source:'file',file} 或 {source:'arc',atoms,arc}"},
+                    "file": {"type": "string", "description": "calib JSON 文件名（相对 calib 目录）"},
+                    "atoms": {"description": "ARC 路的原子表：[{g,r,pos,…}]"},
+                    "arc": {"description": "ARC 参数：{B_gauss,n_window,r_cut_um,second_order,guard_mhz,periods_um}"},
+                    "reason": {"type": "string", "default": "ai build_calib",
+                               "description": "一句话说明这次转换的目的（进留痕）"}},
+        output_schema={"type": "object", "required": ["ok", "calib_summary"]},
+        execute=lambda build=None, file=None, atoms=None, arc=None, reason="ai build_calib": _build_calib(
+            build, file, atoms, arc, reason),
+        banned_words=("gate", "choke", "journal", "channel"),
+    ))
+
     # ---- set_config ----
     reg.register(define_tool(
         name="set_config",
@@ -366,14 +403,14 @@ def build_tool_registry(engine: ElEngine, gate: Gate, surface: Surface,
                              "description": "只回这些键路径（点分层；整键优先匹配），投影每步 output"}},
         output_schema={"type": "object", "required": ["ok", "steps", "stopped_at"]},
         execute=lambda actions, spec=None, spec_patch=None, pick=None: _run_actions(
-            surface, gate, channel, actions, spec, spec_patch, pick),
+            engine, surface, gate, channel, actions, spec, spec_patch, pick),
         banned_words=("eval", "解释器", "dispatch"),
     ))
 
     return reg
 
 
-def _run_actions(surface: Surface, gate: Gate,
+def _run_actions(engine: ElEngine, surface: Surface, gate: Gate,
                  channel: Channel, actions, spec=None, spec_patch=None,
                  pick=None):
     """把一串结构化动作交给 CodeAct 编排（逐子调用记日志，可归因）。
