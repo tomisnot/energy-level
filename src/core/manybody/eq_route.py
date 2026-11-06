@@ -370,6 +370,17 @@ def solve_equilibrium(system, want='gs', *, betas=None, backend='auto',
       E/C/F(betas)（thermal）或 rho(dos) 或 taus/gaps/ns（ramp）}。
     """
     system = dict(system)
+    if system.get('idmrg') is not None:
+        if want != 'gs':
+            raise ValueError('iDMRG 只支持 want=gs（得到 %r）' % want)
+        if return_state:
+            raise ValueError('iDMRG 暂不支持 return_state')
+        from .idmrg import idmrg_ground_state
+        return idmrg_ground_state(
+            system['idmrg'], charge_sector=system.get('charge_sector'),
+            chi_max=int(chi_max), truncerr=float(truncerr),
+            max_sweeps=int(max_sweeps), mps_dtype=mps_dtype,
+            progress_arr=progress_arr)
     declared_plan = system.get('plan') or {}
     for key in ('Om', 'delta', 'gamma', 'terms'):
         if system.get(key) is None and key in declared_plan:

@@ -55,6 +55,38 @@ def build_equilibrium(cache, params, want='gs', method=None, betas=None,
     """快照 → 平衡态 RunSpec（紧凑 calib + 驱动，无时间轴）。calibrate 碰 ARC → cache 所属线程。"""
     p = params or {}
     warnings = []
+    backend = normalize_equilibrium_backend(
+        method or _mb.mb_get(p, 'manybody.eq_backend'), want)
+    if backend == 'idmrg':
+        if want != 'gs':
+            raise ValueError('iDMRG 只支持 want=gs（得到 %r）' % want)
+        if p.get('manybody.calib') is not None:
+            raise ValueError('iDMRG 使用 manybody.idmrg；不能同时给 manybody.calib')
+        if p.get('manybody.return_state'):
+            raise ValueError('iDMRG 暂不支持 return_state（无限 MPS 无有限态快照）')
+        raw = p.get('manybody.idmrg')
+        if not raw:
+            raise ValueError('eq_backend=idmrg 需要 manybody.idmrg')
+        from .idmrg import validate_infinite_spec
+        spec = validate_infinite_spec(raw)
+        n = len(spec['cell'])
+        return {
+            'version': 1, 'nbody': 'many', 'equilibrium': True,
+            'two_body': False, 'want': 'gs', 'method': 'idmrg',
+            'method_in': 'idmrg', 'idmrg': spec,
+            'n_atoms': n, 'n_sites': None,
+            'chi_max': int(_mb.mb_get(p, 'manybody.chi_max')),
+            'truncerr': float(_mb.mb_get(p, 'manybody.truncerr')),
+            'max_sweeps': int(_mb.mb_get(p, 'manybody.max_sweeps')),
+            'mixer': bool(raw.get('mixer', True)),
+            'charge_sector': p.get('manybody.charge_sector'),
+            'mps_dtype': _mb.mb_get(p, 'manybody.mps_dtype'),
+            'memory_budget_mb': p.get('manybody.memory_budget_mb'),
+            'dtype': p.get('manybody.dtype') or 'float64',
+            'states': [{'label': 'cell_site%d' % i} for i in range(n)],
+            'labels': ['cell_site%d' % i for i in range(n)],
+            'warnings': warnings,
+        }
     num = _mb.mb_get(p, 'manybody.kpm_num') if num is None else num
     nvec = _mb.mb_get(p, 'manybody.kpm_nvec') if nvec is None else nvec
     seed = _mb.mb_get(p, 'manybody.seed') if seed is None else seed
@@ -68,7 +100,6 @@ def build_equilibrium(cache, params, want='gs', method=None, betas=None,
     plan = build_plan(calib, Om=Om, delta=delta, gamma=gamma,
                       terms=terms, constraint=p.get('manybody.constraint'), max_states=ed_max_dim)
     pauli_specs = _mb.validate_pauli_strings(p.get('manybody.pauli_strings'), n_atoms=n)
-    backend = normalize_equilibrium_backend(method or _mb.mb_get(p, 'manybody.eq_backend'), want)
     if betas is None:
         betas = _mb.mb_get(p, 'manybody.betas')
     if want == 'thermal' and betas is None:
@@ -147,6 +178,28 @@ def run_equilibrium(spec, log=None, progress_arr=None):
     """平衡态 RunSpec → 统一 Result（`evolve_run` 的 many+equilibrium 分支入口）。"""
     log = log or (lambda *a: None)
     want = spec.get('want', 'gs')
+    if spec.get('idmrg') is not None:
+        from .idmrg import idmrg_ground_state
+        res = idmrg_ground_state(
+            spec['idmrg'], charge_sector=spec.get('charge_sector'),
+            chi_max=int(spec.get('chi_max', 128)),
+            truncerr=float(spec.get('truncerr', 1e-10)),
+            max_sweeps=int(spec.get('max_sweeps', 20)),
+            mixer=bool(spec.get('mixer', True)),
+            mps_dtype=spec.get('mps_dtype', 'complex'),
+            progress_arr=progress_arr)
+        res['method'] = 'gs'
+        res['want'] = 'gs'
+        res['states'] = spec.get('states')
+        res['labels'] = spec.get('labels')
+        res['n_atoms'] = len(spec['idmrg']['cell'])
+        res['sites'] = [
+            dict(site_id=i, **({'pos': list(a['pos'])} if 'pos' in a else {}))
+            for i, a in enumerate(spec['idmrg']['cell'])]
+        from .results import describe_result
+        res = describe_result(res, None)
+        report_progress(progress_arr, 1.0)
+        return res
     n = int(spec.get('n_atoms') or len(spec['calib']['atoms']))
     report_progress(progress_arr, 0.3)
     system = dict(calib=spec['calib'], plan=spec.get('hamiltonian_plan'),

@@ -81,6 +81,7 @@ TIME_BACKENDS = {
 
 EQ_BACKENDS = {
     'ed': ('gs', 'thermal', 'dos', 'spectrum'),
+    'idmrg': ('gs',),
     'gpu-batch': ('gs',), 'gpu-lanczos': ('gs',), 'lanczos': ('gs', 'spectrum'),
     'kpm': ('thermal', 'dos'), 'gpu-kpm': ('thermal', 'dos'),
     'free-fermion': ('gs',), 'dmrg': ('gs',), 'qmc': ('gs', 'thermal'),

@@ -89,6 +89,11 @@ CONFIG_SCHEMA_MB = {
                                  desc='MPS/PEPS/轨迹/经典自旋内部最大步长（ns）；ED 使用指数传播，无此步长旋钮'),
     'manybody.classical_damping': dict(type='float', default=0.0, lo=0.0, desc='classical-spin Landau-Lifshitz 阻尼系数'),
     'manybody.grid_shape': dict(type='list', default=None, desc='PEPS 矩形网格 [rows,cols]'),
+    'manybody.idmrg': dict(
+        type='dict', default=None,
+        desc='无限 MPS / iDMRG 的通用模型规格：{cell:[{...}], terms:[{kind:"onsite",site,op,coeff} 或 {kind:"pair",i,j,dx,op_i,op_j,coeff}], mixer?:bool}。'
+             'dx 是 j 相对 i 的单胞偏移；只支持一个平移方向、有限程、局部维数 2。'
+             'Rydberg 单元胞可经 from_rydberg_cell 生成；本键与 manybody.calib 互斥。'),
     'manybody.eq_backend': dict(
         type='str', enum=equilibrium_backend_names(),
         default='auto',

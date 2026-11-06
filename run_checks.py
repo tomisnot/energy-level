@@ -54,6 +54,7 @@ CORE = {
     'manybody_thermal_corr_selfcheck.py',
     'manybody_ensemble_selfcheck.py',
     'manybody_dmrg_warmstart_selfcheck.py',
+    'manybody_idmrg_selfcheck.py',
 }
 # 慢基准：默认跳过（约 18 分钟），--slow 才跑
 SLOW = {'mw_bench_firstprinciples.py'}
@@ -118,6 +119,8 @@ AFFECTED = (
       'manybody_state_solver')),
     ('src/core/manybody/ensemble.py',
      ('manybody_ensemble',)),
+    ('src/core/manybody/idmrg.py',
+     ('manybody_idmrg', 'manybody_contract')),
     ('src/core/manybody/state.py',
      ('manybody_ensemble', 'manybody_source_spectrum')),
     ('src/core/manybody/engine_mps_gpu.py',

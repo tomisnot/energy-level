@@ -182,6 +182,10 @@ run_sim()
   DOS `energies/rho`；谱 `spectral/energies/source_norm`。
 - DMRG 扫描：`return_state=True` 取 `state.kind="mps"`，下一点作为
   `manybody.psi0={kind:"mps",...}` 传入；order/charge 由 state 携带，不要手改。
+- iDMRG：`eq_backend="idmrg"` + `manybody.idmrg={cell,terms}`（不能同时给 `manybody.calib`）。
+  通用 `cell+terms` 不是阵列枚举；`cell>=2`、一个平移方向、局部维数 2、`dx<=64`。
+  结果用 `E_per_site/E_per_cell/S_per_bond/corr_length/chi/trunc_err`，没有有限体系 `E0`/`gap`。
+  Rydberg 单胞用 `from_rydberg_cell` 转 terms，但 iDMRG 核心不绑定 Rydberg。
 - `estimate_run` 对多体 `charge_sector` 不缩维（按 2^N 估，偏高）；`preview_run` 对多体是模型摘要，不是跃迁预览。
 
 ## 8. 系综驱动（Python API，不是 MCP 工具）
