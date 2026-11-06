@@ -10,7 +10,7 @@ bit i ↔ 原子 i，MSB，bit=1↔|r⟩）。
 
 这些求解器**本身是被测对象**——`checks/equibench_*` 用独立暴力 ED / 解析闭式 /
 自由费米子 / 二聚体 / 2D 海森堡（Lieb-Mattis 单重态）来钉它们的正确性
-（见 docs/标杆判据库-平衡态多体算法正确性实例.md）。
+（见 docs/history/标杆判据库-平衡态多体算法正确性实例.md）。
 """
 import numpy as np
 import scipy.sparse as sp
@@ -20,8 +20,8 @@ from .observables import bit_matrix, entropy_at_cut
 from .matrix_free import torch_lanczos_ground_state
 
 __all__ = ['ground_state', 'ground_state_imagtime', 'thermal_from_h',
-           'gs_observables', 'thermal_from_spectrum', 'detect_gpu', 'batched_ground_state',
-           'torch_lanczos_ground_state']
+           'thermal_from_eigh', 'gs_observables', 'thermal_from_spectrum',
+           'detect_gpu', 'batched_ground_state', 'torch_lanczos_ground_state']
 
 
 def _to_array_dim(H):
@@ -165,11 +165,41 @@ def thermal_from_spectrum(evals, betas, return_weights=False):
     return result
 
 
+def _occupation_correlations(bits, probabilities):
+    """(dim,n) 位表 + (dim,B) 概率 → n_atom (B,n)、连通 corr (B,n,n)。
+
+    ``bits`` 是占据数（0/1）而不是 σz；因此相关矩阵是
+    ``⟨n_i n_j⟩−⟨n_i⟩⟨n_j⟩``，与 ``⟨σz_iσz_j⟩`` 只差常数/线性项。
+    """
+    bits = np.asarray(bits, float)
+    probabilities = np.asarray(probabilities, float)
+    b = probabilities.shape[1]
+    n_atom = (bits.T @ probabilities).T                 # (B,n)
+    corr = np.empty((b, bits.shape[1], bits.shape[1]), float)
+    for k in range(b):
+        p = probabilities[:, k]
+        corr[k] = (bits * p[:, None]).T @ bits - np.outer(n_atom[k], n_atom[k])
+    return n_atom, corr
+
+
+def thermal_from_eigh(evals, evecs, betas, bits):
+    """一次 eigh 的精确 Gibbs 热态：E/C/F、⟨n_i⟩、连通占据关联。
+
+    ``bits`` 为 (dim,n) 占据表。返回的 ``n_atom`` 是 (B,n)，``corr`` 是
+    (B,n,n)；单 β 也不例外，调用方需要 1D 时自行取 [0]。
+    """
+    thermal = thermal_from_spectrum(evals, betas, return_weights=True)
+    weights = np.asarray(thermal['weights'], float)        # (B,dim)
+    probabilities = (np.abs(np.asarray(evecs, complex)) ** 2) @ weights.T
+    n_atom, corr = _occupation_correlations(bits, probabilities)
+    return dict(thermal, n_atom=n_atom, corr=corr)
+
+
 def thermal_from_h(H, beta, n_atoms=None, basis_indices=None):
-    """精确有限温 Gibbs：由谱分解 e^{−βH}，给 E(β)、F(β)、C(β)、⟨n_i⟩_β、χ_β(Σn)。
+    """精确有限温 Gibbs：由谱分解 e^{−βH}，给 E/F/C、⟨n_i⟩、χ_β(Σn)、连通关联。
 
     β=1/MHz（β→∞ 趋于基态）。小维稠密 `eigh`（精确，O(2^N)）。
-    返回 dict(E, F, C, Z, n_atom(dim=n), chi_n, evals)。
+    返回 dict(E, F, C, lnZ, n_atom(n,), corr(n,n), chi_n, evals)。
     """
     d = _to_array_dim(H)
     n = n_atoms if n_atoms is not None else d
@@ -186,13 +216,14 @@ def thermal_from_h(H, beta, n_atoms=None, basis_indices=None):
     E,F,C,lnZ = (float(thermal[key][0]) for key in ('E','F','C','lnZ'))
     # 组态对角占据 P_s = Σ_m pm_m |evecs[s,m]|²
     Ps = (np.abs(evecs) ** 2) @ pm
-    n_atom = bits @ Ps
+    n_atom, corr = _occupation_correlations(bits.T, Ps[:, None])
+    n_atom = n_atom[0]
     m_tot = bits.sum(axis=0)                     # 总激发数算符（对角）
     mean_m = float(m_tot @ Ps)
     var_m = float((m_tot ** 2) @ Ps - mean_m ** 2)
     chi_n = float(beta * var_m)
-    return dict(E=E, F=F, C=C, lnZ=lnZ, n_atom=n_atom, chi_n=chi_n,
-                evals=evals)
+    return dict(E=E, F=F, C=C, lnZ=lnZ, n_atom=n_atom, corr=corr[0],
+                chi_n=chi_n, evals=evals)
 
 
 # =====================================================================

@@ -51,6 +51,24 @@ try:
 except ValueError as e:
     C.check('TEBD 长程守卫', True, '拒绝并建议 TDVP：%s' % e)
 
+# 分段驱动：同一段内复用 engine，只在段边界重建；语义必须与整段等价。
+_segs = [dict(t0=0.0, Om=Om, delta=de), dict(t0=10.0, Om=Om, delta=de)]
+_seg = evolve_mps(calib, psi0='gggg', t_grid=t, segments=_segs,
+                  algorithm='tdvp', chi_max=32, truncerr=1e-12,
+                  max_step_ns=1.0, want_corr=False)
+_const = evolve_mps(calib, psi0='gggg', t_grid=t, Om=Om, delta=de,
+                    algorithm='tdvp', chi_max=32, truncerr=1e-12,
+                    max_step_ns=1.0, want_corr=False)
+C.group('分段驱动不改变结果', [
+    ('max|Δpops| < 1e-10（实测 %.2e）'
+     % np.max(np.abs(_seg['pops_atom'] - _const['pops_atom'])),
+     np.max(np.abs(_seg['pops_atom'] - _const['pops_atom'])) < 1e-10),
+    ('段边界各重建一次（实测 %d）' % _seg['error_report']['timings_s']['engine_builds'],
+     _seg['error_report']['timings_s']['engine_builds'] == 2),
+    ('段内发生复用（实测 %d）' % _seg['error_report']['timings_s']['engine_reuses'],
+     _seg['error_report']['timings_s']['engine_reuses'] > 0),
+])
+
 for solver, expected in [('auto', 'ed'), ('tebd', 'tebd'), ('tdvp', 'tdvp'), ('mps', 'tdvp')]:
     w = []
     C.check('solver=%s' % solver, resolve_solver(solver, 4, 1 << 12, w) == expected)

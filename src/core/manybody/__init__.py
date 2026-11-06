@@ -15,6 +15,7 @@ from .topology import (fukui_chern, loop_flux, twist_pairs, twist_calibration, w
                        topology_report)  # noqa: F401
 from .spectrum import source_spectrum, lanczos, quadrature, lorentz_spectrum  # noqa: F401
 from .calib_build import (lattice_positions, distance_pairs, from_positions)  # noqa: F401
+from .ensemble import run_ensemble, ensemble_stats  # noqa: F401
 
 __all__ = ['solve_equilibrium', 'build_equilibrium', 'run_equilibrium',
            'build_plan', 'compile_sparse', 'plan_summary',
@@ -23,7 +24,8 @@ __all__ = ['solve_equilibrium', 'build_equilibrium', 'run_equilibrium',
            'spectral_flow', 'entanglement_spectrum', 'topology_result',
            'topology_report', 'evolve_classical_spin', 'evolve_trajectories', 'evolve_peps',
            'source_spectrum', 'lanczos', 'quadrature', 'lorentz_spectrum',
-           'lattice_positions', 'distance_pairs', 'from_positions']
+           'lattice_positions', 'distance_pairs', 'from_positions',
+           'run_ensemble', 'ensemble_stats']
 
 from .classical_spin import evolve_classical_spin
 from .engine_trajectories import evolve_trajectories

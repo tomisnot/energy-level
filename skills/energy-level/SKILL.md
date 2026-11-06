@@ -27,7 +27,7 @@ whenToUse: 需要操作 Energy Level（改参数、加能级组、建驱动、�
 三条铁律：
 
 1. **写只经 `set_config` / `set_drive` / `reset_config` / `build_calib`**；读用 `read_config` / `query_params` / `query_levels` / `read_waves` / `read_write_authority`。
-2. **不要自己实现库里已有的能力**：多体装配、ED/MPS/DMRG/KPM/QMC、Pauli 串、源态谱、运行卡片都在库里；MCP 没暴露的走 GUI / Python API / artifact，见 §8。
+2. **不要自己实现库里已有的能力**：多体装配、ED/MPS/DMRG/KPM/QMC、Pauli 串、源态谱、运行卡片都在库里；MCP 没暴露的走 GUI / Python API / artifact，见 §14。
 3. **失败先读 `error.info.kind` / `hint` / `suggest`**，不要重试硬撞；写被拒先 `read_write_authority`。
 
 ## 1. 连接与写权
@@ -157,7 +157,7 @@ run_sim()
 - `manybody.constraint`：`{kind:"none"/"blockade"/"pxp",mode:"full"/"project",threshold_mhz,edges}`；投影基当前主要给 ED。
 - `manybody.drive_segments`：`[{t0,Om:[N],delta:[N],phase:[N]}]`；长度必须=N。
 - `manybody.loops` / `manybody.link_pairs`：环路/有向边；闭环边自动并入 `link_pairs`。
-- `manybody.pauli_strings`：见 §7。
+- `manybody.pauli_strings`：见 §9。
 - `manybody.chi_max/truncerr/max_sweeps/mps_order/mps_dtype/mps_diagnostics/return_state/memory_budget_mb/dtype/device`：MPS/资源选项。
 
 ## 7. 多体平衡态与谱
@@ -172,11 +172,39 @@ run_sim()
 
 - `want="thermal"` 配 `manybody.betas`（1/MHz）；`want="dos"` 由 KPM 生成 `energies/rho`
   （`manybody.kpm_num`/`kpm_nvec` 控精度）。
-- `want="spectrum"` 需 `manybody.source`：`{kind:"vector"|"diagonal"|"sparse"|"full_sparse"|"site_weights"}`；源态谱只支持 ED/Lanczos 类后端，DMRG/QMC/KPM 会拒。
-- 平衡态结果：`E0`、`gap`、`n_atom`、`corr`（小维）、`evals`；热态 `E/C/F` + `betas`；DOS `energies/rho`；谱 `spectral/energies/source_norm`。
+- `eq_backend="ed"` + `want="thermal"` 且 N≤12 时给 `n_atom (n_beta,N)` 与
+  `corr (n_beta,N,N)`（连通占据 `⟨n_i n_j⟩−⟨n_i⟩⟨n_j⟩`）；N>12 仍给 E/C/F，
+  但带 `corr_unavailable_reason`，不填零。局域线性响应用两次 δ± 热态有限差分，不在引擎里。
+- `want="spectrum"`：`manybody.source` 可给 `{kind:"vector"|"psi0"|"diagonal"|"sparse"|"full_sparse"|"site_weights"}`；
+  省略 source 时默认用 `manybody.psi0` 作 `|0⟩`（模式串/向量会物化，原生 MPS 会拒）。
+  源态谱只支持 ED/Lanczos 类后端，DMRG/QMC/KPM 会拒。
+- 平衡态结果：`E0`、`gap`、`n_atom`、`corr`、`evals`；热态另加 `E/C/F+betas`；
+  DOS `energies/rho`；谱 `spectral/energies/source_norm`。
+- DMRG 扫描：`return_state=True` 取 `state.kind="mps"`，下一点作为
+  `manybody.psi0={kind:"mps",...}` 传入；order/charge 由 state 携带，不要手改。
 - `estimate_run` 对多体 `charge_sector` 不缩维（按 2^N 估，偏高）；`preview_run` 对多体是模型摘要，不是跃迁预览。
 
-## 8. Pauli 字符串（通用高阶观测）
+## 8. 系综驱动（Python API，不是 MCP 工具）
+
+```python
+from src.core.manybody import run_ensemble
+r = run_ensemble(params, sampler, n_samples=100, seed=1234,
+                 observables=('pops_atom', 'corr'),
+                 conditional=lambda res: res['pops_atom'][-1, 0] > 0.5,
+                 return_samples=False)
+# r['unconditional'] / r['conditional'] -> {mean, stderr, n}
+# r['n_valid'], r['rejected'], r['error_report']
+```
+
+- `sampler(rng) -> calib` 或 `(calib, overrides)`；可改初态做初始缺陷，原子数/ID/pair 会被校验。
+- 内部复用 `protocol.build_run + evolve_run`，ED/MPS 走同一分派；不新写求解器。
+- `stderr = std(ddof=1)/sqrt(n)`；n=1 为 NaN；无条件/后选两套，后选不得冒充无条件。
+- 速度不是 calib 字段：shot 间初始位置偏移折进 `sampler` 的 `pos`；
+  时变位置/Doppler 属新物理模型，不支持。
+- 因为 sampler 是 callable，MCP 不暴露；MCP 批量扫描用 `run_actions` 的 `spec_patch`；
+  CLI 薄包装 `scripts/run_ensemble.py` 可做位置抖动/初态翻转。
+
+## 9. Pauli 字符串（通用高阶观测）
 
 ```jsonc
 set_config("manybody.pauli_strings",
@@ -191,7 +219,7 @@ set_config("manybody.pauli_strings",
 - MPS 用局域算符之积（σˣ=P+M、σʸ=iP−iM、σᶻ=SZ）；实哈密顿量本征态的奇数 σʸ 串期望恒 0（时间反演），
   要非零手性用复模型或非本征态。近简并基态上单态期望不唯一，先看 `gap`。
 
-## 9. `run_actions`：扫描与多步
+## 10. `run_actions`：扫描与多步
 
 ```jsonc
 run_actions({
@@ -211,7 +239,7 @@ run_actions({
 - `pick` 是键路径列表（整键优先，再点分层）；缺失键进 `_missing`，不静默 null。
 - 每步 `output` 自带；`stopped_at=-1` 全成。
 
-## 10. 长任务、摘要与 artifact
+## 11. 长任务、摘要与 artifact
 
 ```jsonc
 submit_job()                    // 固定提交时快照
@@ -225,7 +253,7 @@ cancel_job(job_id)              // 协作式；以 read_job 终态为准
 - 运行卡片是只读投影，不能创建/重跑/删除运行；页面端口是 `.run-monitor-port`，不是 `.monitor-port`。
 - 取消后 `read_job` 的终态与部分结果以回执为准；不要假设 `cancel` 立即停。
 
-## 11. 单位与身份键
+## 12. 单位与身份键
 
 - B=Gauss，E=V/cm，t=ns，微波频率=MHz，光频=Hz，Γ=MHz，光强=mW/cm²。
 - 能级身份键来自 `query_levels` 的 `key`（含 kind/n/l/j/m/E），**不要用 label 或猜索引**。
@@ -233,7 +261,7 @@ cancel_job(job_id)              // 协作式；以 read_job 终态为准
 - 多体 H 的耦合是**圈频 MHz**（不是 rad）；论文的 rad/µs 要先 /2π。
 - 基序：原子 0 在 MSB，`|g⟩=0, |r⟩=1`，`S^z=1/2−n`；本仓 `sp/sm` 与教科书 σ± 编号相反。
 
-## 12. 错误与拒绝面（不要试错）
+## 13. 错误与拒绝面（不要试错）
 
 失败回执是 `isError=true`，正文：
 
@@ -254,7 +282,7 @@ cancel_job(job_id)              // 协作式；以 read_job 终态为准
 - PEPS 非矩形网格/长程键；DMRG projected Plan；GPU 固定荷；不匹配的原生 MPS → 拒绝。
 - MPS 路径 `gamma≠0`；两体显式落点/纯退相 → 拒绝。
 
-## 13. MCP 没暴露什么（别在 MCP 里造轮子）
+## 14. MCP 没暴露什么（别在 MCP 里造轮子）
 
 | 想要 | 现状 | 正确做法 |
 |---|---|---|
@@ -266,7 +294,7 @@ cancel_job(job_id)              // 协作式；以 read_job 终态为准
 | 具名 `set_groups`/`set_superposition` | 无 | `set_config("groups.list"/"dynamic.psi_*")` |
 | 多体专用 `set_atoms` | 无 | `build_calib` 写 `manybody.calib` |
 
-## 14. 当前支持面（选后端先看这里）
+## 15. 当前支持面（选后端先看这里）
 
 含时：`ed`（精确小维）、`mixed`（默认，光 Sambe+微波当场）、`sambe`（无 RWA）、`hard`（微波硬积分）、
 CPU MPS（`tebd`/`tdvp`/`tdvp-single`/`tdvp-adaptive`）、GPU MPS（`tebd-gpu`/`swap-tebd-gpu`）、
@@ -286,11 +314,12 @@ CPU MPS（`tebd`/`tdvp`/`tdvp-single`/`tdvp-adaptive`）、GPU MPS（`tebd-gpu`/
 - 配置/运行/排障：`docs/用户手册.md`
 - 代码地图与模块职责：`docs/代码总览.md`
 - 有限 MPS 资源契约：`docs/有限MPS分析与资源契约.md`
+- 性能/观测开销微基准：`python scripts/bench_mps.py --help`
 
 ## 17. 维护规则
 
 - 工具签名/返回字段以 `mecha_v2/tools.py` 与运行时 schema 为准；本文与代码冲突时先改本文。
 - 本文是权威；`.dsh/skills/energy-level/SKILL.md` 是镜像（同一文件），不要手改镜像。
-- 新增/删除工具、配置键、后端时，同步更新本文的 §2/§5/§12/§14；`checks/skill_mcp_contract_selfcheck.py`
+- 新增/删除工具、配置键、后端时，同步更新本文的 §2/§5/§13/§15；`checks/skill_mcp_contract_selfcheck.py`
   机械校验工具名单与镜像，`run_checks.py` 默认 smoke 会跑它。
 - 跑测试默认 `python run_checks.py`（smoke），共享层改动用 `--cascade`/`--changed`。

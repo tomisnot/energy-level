@@ -77,12 +77,21 @@ def build_equilibrium(cache, params, want='gs', method=None, betas=None,
     dmrg_ok = _dmrg_ok(calib, Om, delta)
     source = p.get('manybody.source')
     spectrum_options = p.get('manybody.spectrum')
-    if want == 'spectrum' and not source:
-        raise ValueError('want=spectrum 需要 manybody.source'
-                         '（vector/diagonal/sparse/full_sparse）')
     # 制备态初态（另一个模型的基态 / 置换扇区投影）：平衡态也要按后端落地。
     # DMRG 走 MPS 通道（原生 TeNPy 态，同 order/charge），其余走 ED 向量通道。
     psi0 = _mb.mb_get(p, 'manybody.psi0')
+    if want == 'spectrum':
+        # |0⟩ 默认取 manybody.psi0；source 未给时用 psi0 本身作源态。
+        # 字符串/模式在这里物化成向量（ED/Lanczos 谱）；MPS 态明确拒绝。
+        if isinstance(psi0, dict) and psi0.get('kind') == 'mps':
+            raise ValueError('want=spectrum 的 psi0 必须是向量/模式，不能是原生 MPS')
+        if psi0 is not None and not isinstance(psi0, dict) and psi0 != 'ground':
+            from .state import state_vector
+            if n > 16:
+                raise ValueError('want=spectrum 的 psi0 物化上限为 N=16')
+            psi0 = state_vector(psi0, n)
+        if source is None:
+            source = {'kind': 'psi0'}
     quench_meta = None
     if isinstance(psi0, dict) and psi0.get('kind') in _mb.PREPARE_KINDS:
         psi0, quench_meta = _mb.prepare_initial_state(

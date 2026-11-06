@@ -163,10 +163,12 @@ def _equilibrium_result(fn):
 def _resolve_source(source, psi0, n_sites, idx=None):
     """源态规格 → 与 ``|0⟩`` 同基的 ``φ``。返回 ``(phi, info)``。
 
-    四种**都在"当前基"里**的声明（当前基=扇区基或全空间，由调用方口径决定）：
+    几种**都在"当前基"里**的声明（当前基=扇区基或全空间，由调用方口径决定）：
 
     ``{"kind":"vector","values":[…]}}``
         直接给 φ（长度 = 当前基维度）。
+    ``{"kind":"psi0"}``
+        复用当前 ``|0⟩``（manybody.psi0；省略 source 时的默认）。
     ``{"kind":"diagonal","values":[…]}``
         对角算符 D，φ = D⊙ψ0（占据/计数这类探针的标准写法）。
     ``{"kind":"sparse","rows":[…],"cols":[…],"values":[…]}``
@@ -203,6 +205,9 @@ def _resolve_source(source, psi0, n_sites, idx=None):
         if v.size != dim:
             raise ValueError('source vector 长度 %d ≠ 当前基维度 %d' % (v.size, dim))
         return v, {'kind': kind, 'dim': dim}
+    if kind in ('psi0', 'state'):
+        # 复用 manybody.psi0：|0⟩ 本身作为源态，不再引入第二套向量语法。
+        return psi.copy(), {'kind': 'psi0', 'dim': dim}
     if kind == 'diagonal':
         d = np.asarray(source.get('values', ()), dtype=complex).reshape(-1)
         if d.size != dim:
@@ -249,7 +254,7 @@ def _resolve_source(source, psi0, n_sites, idx=None):
         norm_full = float(np.linalg.norm(phi_full))
         leak = 0.0 if norm_full == 0 else 1.0 - float(np.linalg.norm(phi)) ** 2 / norm_full ** 2
         return phi, {'kind': kind, 'dim': dim, 'projected_leak': max(0.0, leak)}
-    raise ValueError('未知 source.kind=%r（可选 vector/diagonal/sparse/full_sparse）' % kind)
+    raise ValueError('未知 source.kind=%r（可选 vector/psi0/diagonal/sparse/full_sparse）' % kind)
 
 
 def _solve_spectrum(system, base, *, sector, dense_max, memory_budget_mb,
@@ -264,8 +269,11 @@ def _solve_spectrum(system, base, *, sector, dense_max, memory_budget_mb,
     n_sites = int(n_sites)
     opts = dict(system.get('spectrum') or {})
     source = system.get('source')
+    if source is None and system.get('psi0') is not None:
+        source = {'kind': 'psi0'}
     if source is None:
-        raise ValueError('want=spectrum 需要 system["source"]（vector/diagonal/sparse/full_sparse）')
+        raise ValueError('want=spectrum 需要 system["source"] 或 system["psi0"]'
+                         '（vector/psi0/diagonal/sparse/full_sparse）')
     # 当前基：扇区（固定激发数）或全空间
     idx = None
     if sector is not None:
@@ -281,7 +289,19 @@ def _solve_spectrum(system, base, *, sector, dense_max, memory_budget_mb,
     dim = len(idx) if idx is not None else (1 << n_sites)
     # |0⟩：显式态矢优先，否则就地求基态
     psi0 = system.get('psi0')
+    if psi0 is not None and not isinstance(psi0, (np.ndarray, dict)) and psi0 != 'ground':
+        from .state import state_vector
+        psi0 = state_vector(psi0, n_sites, idx)
     if isinstance(psi0, np.ndarray) and psi0.ndim == 1:
+        if psi0.size == (1 << n_sites) and psi0.size != dim:
+            if idx is None:
+                raise ValueError('初态维度 %d ≠ 当前基 %d' % (psi0.size, dim))
+            full = psi0
+            psi0 = full[np.asarray(idx, int)]
+            if np.linalg.norm(psi0) <= 0:
+                raise ValueError('manybody.psi0 在固定扇区内的权重为零')
+            if abs(np.linalg.norm(psi0) - np.linalg.norm(full)) > 1e-10:
+                raise ValueError('manybody.psi0 含固定扇区之外的权重；不会静默投影')
         gs = {'vec': np.asarray(psi0, dtype=complex), 'E0': float('nan')}
     else:
         gs = _eq.ground_state(H, dense_max=dense_max, k=1, v0=None, seed=0)
@@ -712,8 +732,18 @@ def _solve_thermal(system, base, *, betas, num, nvec, seed, exact, qmc_options,
     if exact or backend == 'ed':
         require_workspace(H.shape[0]**2*16*4, memory_budget_mb, '精确热态谱分解')
     if backend == 'ed':
-        spectrum = np.linalg.eigvalsh(H.toarray() if sp.issparse(H) else np.asarray(H))
-        return dict(base, **_eq.thermal_from_spectrum(spectrum,betas))
+        n_sites = int(system.get('n_sites') or 0)
+        Hd = H.toarray() if sp.issparse(H) else np.asarray(H)
+        if n_sites and n_sites <= 12:
+            evals, evecs = np.linalg.eigh(Hd)
+            bits = basis_bits(n_sites, np.arange(1 << n_sites)).T
+            return dict(base, **_eq.thermal_from_eigh(evals, evecs, betas, bits))
+        spectrum = np.linalg.eigvalsh(Hd)
+        out = dict(base, **_eq.thermal_from_spectrum(spectrum, betas))
+        out['corr_unavailable_reason'] = (
+            'exact thermal correlation needs dense eigenvectors; '
+            'N>12 is not supported (got N=%s)' % (n_sites or '?'))
+        return out
     if backend in ('gpu-kpm', 'kpm-gpu'):
         kp = _kpm.kpm_moments_gpu(H, num=num, nvec=nvec, seed=seed,
                                   chunk=system.get('kpm_chunk', 32),

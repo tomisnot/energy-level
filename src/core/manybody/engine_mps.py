@@ -329,6 +329,9 @@ def evolve_mps(calib, psi0=None, t_grid=None, Om=None, delta=None, gamma=None,
     # engine, preserving the old semantics for nonuniform grids and drives.
     eng = None
     eng_dt = None
+    eng_seg = object()
+    engine_builds = 0
+    engine_reuses = 0
     n_internal_steps = 0
     active_alg = ('tdvp' if alg == 'tdvp-adaptive' else alg)
     adaptive_switch_chi = int(adaptive_switch_chi)
@@ -348,24 +351,35 @@ def evolve_mps(calib, psi0=None, t_grid=None, Om=None, delta=None, gamma=None,
             if progress_arr is not None and float(progress_arr[1]) != 0.0:
                 raise RuntimeError('用户取消')
             dt_ns = tb - ta
-            seg = _segment_for(0.5 * (ta + tb), segments, n)
+            mid = 0.5 * (ta + tb)
+            seg = _segment_for(mid, segments, n)
+            seg_key = (None if not segments else
+                       max([float(s['t0']) for s in segments
+                            if float(s['t0']) <= mid],
+                           default=min(float(s['t0']) for s in segments)))
             Om_k, de_k = (Om, delta) if seg is None else seg
-            # Rebuild only when a segment changes.  The MPS itself is retained
-            # and remains compatible because all models use the same Chain.
-            if segments:
+            # A segment change is the only reason to rebuild the model.  Within
+            # one piecewise-constant segment the engine/environments are valid
+            # across internal steps (same as the constant-model path).
+            seg_changed = bool(segments) and (eng is None or seg_key != eng_seg)
+            if seg_changed:
                 t_seg_model0 = time.perf_counter()
-                _, on_k, cp_k, _ = terms_from_calib(selected, Om_k, de_k, gamma,order=order)
+                _, on_k, cp_k, _ = terms_from_calib(selected, Om_k, de_k, gamma, order=order)
                 model_k = rydberg_cluster_model(on_k, cp_k, conserve=conserve)
                 if alg == 'tebd':
                     model_k = NearestNeighborModel.from_MPOModel(model_k)
                 timing['segment_model_s'] += time.perf_counter() - t_seg_model0
-            else:
+                eng = None
+            elif not segments:
                 model_k = model
-            # A segment rebuild changes the MPO.  For the common constant-model
-            # path, reuse the engine and its environments across internal steps.
-            can_reuse = (not segments and eng is not None and eng_dt == dt_ns
-                         and active_alg == getattr(eng, '_el_algorithm', active_alg))
-            if not can_reuse:
+            # Reuse only when model/dt/algorithm and segment are unchanged.
+            can_reuse = (eng is not None
+                         and np.isclose(eng_dt, dt_ns, rtol=1e-12, atol=1e-15)
+                         and active_alg == getattr(eng, '_el_algorithm', active_alg)
+                         and (not segments or seg_key == eng_seg))
+            if can_reuse:
+                engine_reuses += 1
+            else:
                 t_engine0 = time.perf_counter()
                 opts = dict(dt=CONV * dt_ns, N_steps=1)
                 if active_alg != 'tdvp-single':
@@ -388,6 +402,8 @@ def evolve_mps(calib, psi0=None, t_grid=None, Om=None, delta=None, gamma=None,
                     eng = TwoSiteTDVPEngine(psi, model_k, opts)
                 eng._el_algorithm = active_alg
                 eng_dt = dt_ns
+                eng_seg = seg_key
+                engine_builds += 1
                 timing['engine_build_s'] += time.perf_counter() - t_engine0
             t_run0 = time.perf_counter()
             eng.run()
@@ -421,6 +437,8 @@ def evolve_mps(calib, psi0=None, t_grid=None, Om=None, delta=None, gamma=None,
                adaptive_switched_at=(adaptive_switched_at if alg == 'tdvp-adaptive' else None),
                timings_s=dict(timing, model_build_s=float(model_build_s),
                               state_init_s=float(state_init_s),
+                              engine_builds=int(engine_builds),
+                              engine_reuses=int(engine_reuses),
                               total_s=float(time.perf_counter() - t_total0)),
                mps_order=list(order), entropy_cut=cut if want_entropy else None,
                n_legs=int(info.get('n_legs', 0)),

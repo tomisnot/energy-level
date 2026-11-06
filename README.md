@@ -97,7 +97,7 @@ mecha 提供连接与治理机制；原子模型、引擎适用条件、参数�
 ## 开发与验证
 
 ```bash
-python run_checks.py                 # 主干 smoke（默认，<1 min）
+python run_checks.py                 # 主干 smoke（默认，~1 min）
 python run_checks.py --cascade       # smoke 通过即停；失败展开 core
 python run_checks.py --changed       # 按工作区改动选判据
 python run_checks.py --core          # 核心契约与小尺寸物理结果

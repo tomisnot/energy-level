@@ -103,6 +103,18 @@ def main():
     check('vector 源：权重与对角源一致',
           np.max(np.abs(np.asarray(res_v["spectrum_weights"], float) - weights_x)) < 1e-9)
 
+    # ④b psi0 作为 |0⟩：source 省略时默认走 psi0，和显式 vector 源一致
+    psi_vec = np.zeros(1 << 4, dtype=complex)
+    psi_vec[idx] = phi
+    res_p = run(dict(base, **{"manybody.psi0": psi_vec.tolist()}))
+    wv = np.asarray(res_v["spectrum_weights"], float) / res_v["source_norm"]
+    wp = np.asarray(res_p["spectrum_weights"], float) / res_p["source_norm"]
+    check('psi0 作为默认源：归一化权重 = 显式 vector 源',
+          np.max(np.abs(wp - wv)) < 1e-9)
+    check('psi0 作为源：source_kind 如实标注',
+          (res_p.get('error_report') or {}).get('source_kind') == 'psi0',
+          (res_p.get('error_report') or {}).get('source_kind'))
+
     # ⑤ full_sparse：保扇区的对角算符 → 泄漏 0，结果一致
     n_full = 1 << 4
     rows = list(range(n_full))

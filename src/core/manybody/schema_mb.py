@@ -52,8 +52,9 @@ CONFIG_SCHEMA_MB = {
         desc='简短备注（**只用于卡片折叠区**，不参与运行）：为什么跑这一组、引用等。'),
     'manybody.source': dict(
         type='dict', default=None,
-        desc='源态谱的源（want=spectrum 必填），在**当前基**里给 φ 或算符：'
-             '{kind:"vector",values} / {kind:"diagonal",values} / '
+        desc='源态谱的源（want=spectrum；省略时默认用 manybody.psi0 作 |0⟩，'
+             'psi0 也为空则用基态），在**当前基**里给 φ 或算符：'
+             '{kind:"vector",values} / {kind:"psi0"}（|0⟩ 本身） / {kind:"diagonal",values} / '
              '{kind:"site_weights",weights:[…N…],subtract_mean?:bool}'
              '（O=Σwᵢnᵢ 的对角展开；subtract_mean=true 扣掉 ⟨O⟩，得连通谱） / '
              '{kind:"sparse",rows,cols,values} / {kind:"full_sparse",…}（扇区模式下投影回扇区'
@@ -180,7 +181,10 @@ CONFIG_SCHEMA_MB = {
              '单格点矩阵是标准 Pauli，基为 (|g⟩,|r⟩)；本仓 sp/sm 是 |r><g|/|g><r|，'
              '与 σ± 的教科书编号相反。引擎**不解释**物理含义（手性要不要 /8、'
              '要不要连通减法，由调用方组合）。支持：含时 ed（全空间/投影基）、'
-             '平衡态 ed/lanczos 的 gs、dmrg 的 gs；其余后端**明确拒绝**，不静默忽略。'),
+             'CPU MPS 四档（tebd/tdvp/tdvp-single/tdvp-adaptive）、GPU MPS 两档'
+             '（tebd-gpu/swap-tebd-gpu）、轨迹（系综平均）、经典自旋（因子化）；'
+             '平衡态 ed/lanczos 的 gs、dmrg 的 gs。PEPS/QMC/KPM/free-fermion/gpu-batch'
+             '**明确拒绝**，不静默忽略。'),
     'manybody.charge_sector': dict(
         type='int', default=None, lo=0,
         desc='DMRG/ED 可选固定总激发数扇区；仅守恒 Hamiltonian 生效'),

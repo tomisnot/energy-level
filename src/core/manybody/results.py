@@ -39,7 +39,10 @@ def describe_result(result, calib=None, *, loss_kind='norm_drift', approximation
     add('basis_probabilities', 'basis_probability', ('time', 'basis'))
     add('stderr', 'standard_error', ('time', 'site'), of='pops_atom')
     add('S', 'entanglement_entropy', ('time',) if out.get('t') is not None else (), 'nat')
-    add('corr', 'connected_occupation_correlation', ('site', 'site'))
+    add('corr', 'connected_occupation_correlation',
+        ('beta', 'site', 'site') if out.get('betas') is not None
+        and out.get('corr') is not None and np.asarray(out['corr']).ndim == 3
+        else ('site', 'site'))
     add('energy', 'energy', ('time',), 'MHz')
     add('E0', 'ground_state_energy', (), 'MHz')
     add('energy_expectation', 'energy_expectation', (), 'MHz')

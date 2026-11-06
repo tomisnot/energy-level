@@ -73,6 +73,21 @@ for beta in (0.05, 0.5, 3.0):
     ]
 C.group('A·XX 二聚体热力学：E/lnZ/C ≡ 四能级谱闭式', subs_dm)
 
+# ---------- 有限温关联：独立 Gibbs 密度矩阵 ----------
+th_corr = eq.thermal_from_h(sp.csr_matrix(Hd), 0.5)
+evals, evecs = np.linalg.eigh(Hd)
+w = np.exp(-0.5 * (evals - evals.min())); w /= w.sum()
+rho = (evecs * w) @ evecs.conj().T
+bits = np.array([((np.arange(4) >> (1 - i)) & 1) for i in range(2)])
+p = np.diag(rho).real
+n_ref = bits @ p
+corr_ref = (bits * p) @ bits.T - np.outer(n_ref, n_ref)
+C.group('A·二聚体有限温 corr ≡ Tr(e^{-βH} n_i n_j)/Z', [
+    ('⟨n_i⟩ 逐元素 <1e-12', np.max(np.abs(th_corr['n_atom'] - n_ref)) < 1e-12),
+    ('连通 corr 逐元素 <1e-12',
+     np.max(np.abs(th_corr['corr'] - corr_ref)) < 1e-12),
+])
+
 # ---------- N=1 顺磁 Curie ----------
 eps = 3.0
 H1 = asm.build_H_ed(_calib(1, [], ('I1',)), Om=[0.0], delta=[eps])
