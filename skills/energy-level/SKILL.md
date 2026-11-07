@@ -51,8 +51,8 @@ whenToUse: 需要操作 Energy Level（改参数、加能级组、建驱动、�
 | `build_calib` | 文件/ARC → `manybody.calib` | `build` 或 `file` 或 `atoms`+`arc`；`reason` | `calib_summary,build_receipt,build` |
 | `set_drive` | 在跃迁上建波 | `src,tgt`；`rabi_mhz` 或 `intensity_mwcm2`；`pulse` 或 `duration_ns`；`pol,detuning_mhz,mode,atom,name,reason` | `key,wave,n_waves,pulse_end_ns,t_max_note?` |
 | `estimate_run` | 干跑成本 | — | `est_sec` 及规模字段 |
-| `preview_run` | 干跑预览 | — | `basis_enough`, 驱动/模型摘要 |
-| `run_sim` | 同步跑一次 | `cancel_after_sec?` | `ok,method,n_t,n_states,top_states_avg_pop,final_top_pop,monitor_id,artifact_id?,warnings?` |
+| `preview_run` | 干跑预览 | — | `basis_enough`, 驱动/模型摘要；多体含 `n_segments,segment_t0,max_Omega_mhz,max_delta_mhz,pauli_count` |
+| `run_sim` | 同步跑一次 | `cancel_after_sec?` | `ok,method,n_t,n_states,top_states_avg_pop,final_top_pop,summary,pauli_strings?,pauli_strings_total?,monitor_id,artifact_id?,warnings?` |
 | `submit_job` | 后台任务 | — | `job_id,state` |
 | `read_job` | 查任务 | `job_id?`（省略=列表） | `state`；done 带 `result`，failed 带 `error` |
 | `cancel_job` | 请求取消 | `job_id` | `state`（协作式，终态以 `read_job` 为准） |
@@ -222,6 +222,8 @@ set_config("manybody.pauli_strings",
   平衡态 `ed/lanczos/gpu-lanczos` 的 gs、`dmrg` 的 gs。PEPS/QMC/KPM/free-fermion/gpu-batch 拒绝并给替代。
 - 结果：含时 `observables.pauli_strings (n_t,n_strings)` + `observables.pauli_string_labels`；
   平衡态顶层 `pauli_strings (n_strings,)` + `pauli_string_labels`。
+- MCP `run_sim`/`read_job` 摘要按 `data_schema.summary` 策略给前 12 条终值
+  （`pauli_strings`、`pauli_strings_total`、`pauli_strings_time_ns`）；完整数组仍在 artifact。
 - MPS 用局域算符之积（σˣ=P+M、σʸ=iP−iM、σᶻ=SZ）；实哈密顿量本征态的奇数 σʸ 串期望恒 0（时间反演），
   要非零手性用复模型或非本征态。近简并基态上单态期望不唯一，先看 `gap`。
 
@@ -253,7 +255,7 @@ read_job(job_id)                // 轮询；done 带 result
 cancel_job(job_id)              // 协作式；以 read_job 终态为准
 ```
 
-- `run_sim` 只回摘要，不搬大数组；完整 `pops/t/observables` 在 artifact。
+- `run_sim` 只回摘要，不搬大数组；摘要由 `data_schema.summary` 策略派生（标量/前几条终值），完整 `pops/t/observables` 在 artifact。
 - `run_sim` 回执 `artifact_id`/`monitor_id`；artifact 在
   `http://127.0.0.1:<.run-monitor-port>/api/runs/<id>/artifact`（pickle 的 `(meta,res)`）。
 - 运行卡片是只读投影，不能创建/重跑/删除运行；页面端口是 `.run-monitor-port`，不是 `.monitor-port`。

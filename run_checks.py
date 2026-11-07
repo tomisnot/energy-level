@@ -102,6 +102,17 @@ SMOKE = {
 
 #: 改动路径 → 需要展开的判据（前缀匹配）。命中不到就退回 SMOKE。
 AFFECTED = (
+    ('src/core/manybody/results.py',
+     ('manybody_integration', 'run_visualization', 'manybody_tdvp_dense')),
+    ('src/core/manybody/runtime.py',
+     ('manybody_tdvp_dense', 'run_monitor', 'run_visualization',
+      'manybody_integration')),
+    ('src/core/runspec.py',
+     ('manybody_integration', 'run_visualization', 'mcp_entry_smoke')),
+    ('src/core/protocol.py',
+     ('manybody_integration', 'mcp_entry_smoke', 'hub_mcp_e2e')),
+    ('web/run_monitor/',
+     ('run_visualization', 'run_monitor')),
     ('src/core/manybody/channels.py',
      ('manybody_channel', 'manybody_m1_ed', 'equibench_engine_ed',
       'equibench_sector_matrixfree')),

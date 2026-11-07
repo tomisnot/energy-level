@@ -790,18 +790,33 @@ def result_summary(run, res, top_n=8, want_labels=None):
     arr = np.asarray(arr)
     if arr.ndim < 2:
         arr = arr.reshape(1, -1)
-    avg = arr.mean(axis=0)
-    order = np.argsort(-avg)[:max(int(top_n), 1)]
-    lab = (lambda i: labels[i] if i < len(labels) else '#%d' % i)
+    from .manybody.results import summarize_result
+    summ = summarize_result(res, labels=labels, top_n=top_n)
     out = {
         'ok': True,
         'n_t': int(arr.shape[0]),
         'n_states': int(arr.shape[1]),
-        'top_states_avg_pop': {lab(int(i)): round(float(avg[i]), 6)
-                               for i in order},
-        'final_top_pop': {lab(int(i)): round(float(arr[-1][i]), 6)
-                          for i in order},
+        'summary': summ,
     }
+    pop_sum = summ.get('pops')
+    if pop_sum:
+        out['top_states_avg_pop'] = pop_sum.get('top', {})
+        out['final_top_pop'] = pop_sum.get('final', {})
+    else:
+        avg = arr.mean(axis=0)
+        order = np.argsort(-avg)[:max(int(top_n), 1)]
+        lab = (lambda i: labels[i] if i < len(labels) else '#%d' % i)
+        out['top_states_avg_pop'] = {lab(int(i)): round(float(avg[i]), 6)
+                                     for i in order}
+        out['final_top_pop'] = {lab(int(i)): round(float(arr[-1][i]), 6)
+                                for i in order}
+    p_sum = summ.get('observables.pauli_strings')
+    if p_sum:
+        out['pauli_strings'] = p_sum['items']
+        out['pauli_strings_total'] = p_sum['total']
+        tv = res.get('t')
+        if tv is not None and len(tv):
+            out['pauli_strings_time_ns'] = round(float(np.asarray(tv)[-1]), 9)
     if want_labels:
         sel = {}
         for frag in want_labels:
@@ -823,27 +838,22 @@ def _equilibrium_summary(run, res):
     out = {'ok': True, 'equilibrium': True, 'want': want,
            'backend': res.get('backend'), 'n_atoms': n,
            'dim': int(run.get('dim') or (1 << n) if n else 0)}
+    from .manybody.results import summarize_result
+    summ = summarize_result(res)
+    out['summary'] = summ
     r6 = lambda v: round(float(v), 6)          # noqa: E731
     if want == 'gs':
-        if res.get('E0') is not None:
-            out['E0'] = round(float(res['E0']), 9)
-        for k in ('gap', 'chi', 'S'):
-            if res.get(k) is not None:
-                out[k] = round(float(res[k]), 9)
-        na = res.get('n_atom')
-        if na is not None:
-            out['n_atom'] = [r6(v) for v in np.asarray(na).ravel()]
-        if res.get('pauli_strings') is not None:
-            # 任意阶 Pauli 字符串：摘要里给前若干条的实部（复数值保留虚部时用 [re, im]）
-            vals = np.asarray(res['pauli_strings'], complex).ravel()
-            labs = list(res.get('pauli_string_labels') or [])
-            head = min(len(vals), 12)
-            out['pauli_strings'] = {
-                (labs[i] if i < len(labs) else '#%d' % i):
-                    (round(float(vals[i].real), 9) if vals[i].imag == 0.0
-                     else [round(float(vals[i].real), 9), round(float(vals[i].imag), 9)])
-                for i in range(head)}
-            out['pauli_strings_total'] = int(len(vals))
+        for path in ('E0', 'gap', 'chi', 'S'):
+            entry = summ.get(path)
+            if entry:
+                out[path] = entry['value']
+        entry = summ.get('n_atom')
+        if entry:
+            out['n_atom'] = entry['values']
+        entry = summ.get('pauli_strings')
+        if entry:
+            out['pauli_strings'] = entry['items']
+            out['pauli_strings_total'] = entry['total']
         return out
     if want == 'thermal':
         b = np.asarray([] if res.get('betas') is None else res['betas'], float)
@@ -851,9 +861,9 @@ def _equilibrium_summary(run, res):
         if b.size:
             out['betas'] = [r6(v) for v in b[:8]]
             for key in ('E', 'C', 'F'):
-                a = np.asarray([] if res.get(key) is None else res[key], float)
-                if a.size == b.size:
-                    out['%s_first_last' % key] = [r6(a[0]), r6(a[-1])]
+                entry = summ.get(key)
+                if entry:
+                    out['%s_first_last' % key] = [entry['first'], entry['last']]
         return out
     if want == 'dos':
         e = np.asarray([] if res.get('energies') is None else res['energies'], float)

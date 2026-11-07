@@ -112,7 +112,8 @@ def main():
     specs = [[[0, 'x'], [3, 'z']], [[1, 'y']], [[2, 'z']]]
     p_pauli = dict(p, **{'manybody.pauli_strings': specs,
                          'manybody.want_observables': False})
-    out_pauli = protocol.evolve_run(protocol.build_run(None, p_pauli))
+    run_pauli = protocol.build_run(None, p_pauli)
+    out_pauli = protocol.evolve_run(run_pauli)
     perm = [0, 3, 1, 4, 2, 5]
     p_po = dict(p_pauli, **{'manybody.mps_order': perm})
     out_po = protocol.evolve_run(protocol.build_run(None, p_po))
@@ -150,6 +151,29 @@ def main():
              ('值 vs tdvp', pauli_cross),
              ('显式 mps_order 值 vs tdvp', pauli_order)],
             detail=pauli_detail)
+
+    # MCP 摘要 / preview：从 data_schema 与 describe_drive 派生，不手写 Pauli/段
+    from src.core.runspec import result_summary
+    summ = result_summary(run_pauli, out_pauli)
+    p_sum = summ.get('pauli_strings') or {}
+    C.group('MCP 摘要 / preview',
+            [('含时摘要含 Pauli', len(p_sum) == 3),
+             ('含时摘要含 summary 块', 'summary' in summ),
+             ('Pauli 终值对齐',
+              abs((complex(p_sum['x@0 z@3'][0], p_sum['x@0 z@3'][1])
+                   if isinstance(p_sum.get('x@0 z@3'), list)
+                   else complex(p_sum.get('x@0 z@3', 0)))
+                  - out_pauli['observables']['pauli_strings'][-1][0]) < 1e-9)])
+    p_prev = dict(p_seg, **{'manybody.pauli_strings': specs})
+    prev = protocol.preview(None, p_prev)
+    C.group('MCP preview 的 segments/Pauli',
+            [('n_segments', prev.get('n_segments') == 2),
+             ('分段最大 Ω', abs(float(prev.get('max_Omega_mhz')) - 0.5) < 1e-9),
+             ('分段最大 δ', abs(float(prev.get('max_delta_mhz')) - 0.2) < 1e-9),
+             ('pauli_count', prev.get('pauli_count') == 3),
+             ('estimate 的 ED 口径有提示',
+              protocol.estimate(None, p_prev).get('cost_model') == 'ed'
+              and 'tdvp-dense' in str(protocol.estimate(None, p_prev).get('backend_note')))])
 
     # 显式 mps_order（原子序 → MPS 序的映射）
     perm = [0, 3, 1, 4, 2, 5]

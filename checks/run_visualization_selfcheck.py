@@ -14,7 +14,8 @@ from mecha.surface import ExecutionContext
 from mecha_v2.engine import ElEngine
 from mecha_v2.bridge import ElOps
 from mecha_v2.run_monitor import RunMonitorStore
-from mecha_v2.visualization import project_result, sampled_indices, MAX_LINKS
+from mecha_v2.visualization import (project_result, project_input_view,
+                                    sampled_indices, MAX_LINKS)
 from src.core import protocol
 from src.core.manybody import runspec_mb
 from src.core.manybody.results import describe_result
@@ -143,6 +144,35 @@ class VisualizationTests(unittest.TestCase):
         self.assertEqual(ds['observables.pauli_strings.1']['label'],
                          'Pauli 串期望 · x@0 x@1')
         json.dumps(project_result({}, raw), allow_nan=False)
+
+    def test_generic_itemized_projection(self):
+        vals = np.array([[.5, .2], [.6, .3], [.7, .4]], complex)
+        raw = describe_result(dict(
+            t=np.array([0., 1., 2.]),
+            observables=dict(custom_strings=vals,
+                             custom_string_labels=['a', 'b'])), self.cal)
+        raw['data_schema']['quantities']['observables.custom_strings'] = dict(
+            quantity='custom', axes=['time', 'item'], unit='1',
+            items=dict(labels='observables.custom_string_labels'))
+        ds = {d['id']: d for d in project_result({}, raw)['datasets']}
+        self.assertTrue(ds['observables.custom_strings.0']['label'].endswith(' · a'))
+        self.assertEqual(ds['observables.custom_strings.1']['x'], [0., 1., 2.])
+
+    def test_input_view_segments(self):
+        run = dict(nbody='many', n_atoms=2, t_max=1.,
+                   Om=np.array([0., 0.], complex), delta=np.array([0., 0.]),
+                   segments=[dict(t0=0., Om=[0.5, 0.5], delta=[0., 0.]),
+                             dict(t0=.5, Om=[0., 0.], delta=[.2, .2])],
+                   engine_kwargs=dict(pauli_strings=[[[0, 'x']], [[1, 'z']]]))
+        view = project_input_view(run, {})
+        self.assertEqual(view['drive']['kind'], 'segments')
+        self.assertEqual(view['drive']['n_segments'], 2)
+        self.assertEqual([s['t0'] for s in view['drive']['segments']], [0., .5])
+        self.assertEqual(view['observables']['pauli_count'], 2)
+        self.assertEqual(len(view['drives_preview']), 4)
+        card = RunMonitorStore._view(run, {})
+        self.assertEqual(card['drive']['n_segments'], 2)
+        self.assertEqual(card['observables']['pauli_count'], 2)
 
     def test_projection_failure_does_not_fail_physics(self):
         store=RunMonitorStore()

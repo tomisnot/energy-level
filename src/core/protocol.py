@@ -407,12 +407,21 @@ def _mb_estimate(cache, snap):
         gb = cost_mb.estimate_mb_peak_gb(n, int(npts), effective_dim=out.get('effective_dim'))
         out['est_peak_gb'] = round(gb, 3) if gb else None
     eff = out.get('effective_dim', dim)
+    out['cost_model'] = 'ed'
     out['note'] = ('多体 ED 成本按有效维度估算（N=%d, full_dim=%d, effective_dim=%d）；'
                    'est_sec 粗估，决定要不要走 async' % (n, dim, eff))
+    if solver not in ('auto', 'ed', 'lanczos'):
+        out['backend_note'] = ('当前 solver=%s 不是 ED；est_sec/ed_feasible 只是 ED 参考，'
+                               '实际成本取决于 χ、纠缠和 max_step_ns' % solver)
     if not out['ed_feasible']:
-        out['warnings'].append(
-            '有效维度=%d（full_dim=2^%d=%d）超 ed_max_dim=%d——ED 不可行，建议使用稀疏/MPS 后端'
-            % (eff, n, dim, ed_max))
+        if solver not in ('auto', 'ed', 'lanczos'):
+            out['warnings'].append(
+                'ED 有效维度=%d 超 ed_max_dim=%d；当前后端 %s 不受此限，但仍受 χ/内存约束'
+                % (eff, ed_max, solver))
+        else:
+            out['warnings'].append(
+                '有效维度=%d（full_dim=2^%d=%d）超 ed_max_dim=%d——ED 不可行，建议使用稀疏/MPS 后端'
+                % (eff, n, dim, ed_max))
     return out
 
 
@@ -423,6 +432,7 @@ def _mb_preview(cache, snap):
     ``el_build_calib`` 转换好；没有模型就返回空预览 + note，不报错。
     """
     from .manybody import runspec_mb
+    from .manybody.runtime import describe_drive
     explicit = runspec_mb.calib_from_params(snap)
     out = {'backend': 'sim', 'nbody': 'many', 'waves': [], 'driven': [], 'notes': []}
     if explicit is None:
@@ -437,8 +447,23 @@ def _mb_preview(cache, snap):
         out['notes'].append('manybody.calib.atoms 为空——先给模型')
         out['basis_enough'] = False
         return out
-    Oms = [abs(float(a.get('Omega_mhz', 0.0) or 0.0)) for a in atoms]
-    out['max_Omega_mhz'] = round(max(Oms), 6) if Oms else 0.0
+    base_om = np.asarray([complex(a.get('Omega_mhz', 0.0) or 0.0)
+                          * np.exp(1j * float(a.get('Omega_phase_rad', 0.0) or 0.0))
+                          for a in atoms], complex)
+    base_de = np.asarray([float(a.get('delta_mhz', 0.0) or 0.0) for a in atoms], float)
+    drive = describe_drive((snap or {}).get('manybody.drive_segments'),
+                           base_om, base_de, n, (snap or {}).get('dynamic.t_max'))
+    out['drive'] = {k: drive[k] for k in ('kind', 'n_segments', 'segments')}
+    out['n_segments'] = int(drive['n_segments'])
+    out['segment_t0'] = [s['t0'] for s in drive['segments']]
+    if drive['segments']:
+        out['max_Omega_mhz'] = round(max(s['omega_max'] for s in drive['segments']), 6)
+        out['max_delta_mhz'] = round(max(s['delta_max'] for s in drive['segments']), 6)
+    else:
+        out['max_Omega_mhz'] = round(float(np.max(np.abs(base_om))), 6) if n else 0.0
+        out['max_delta_mhz'] = round(float(np.max(np.abs(base_de))), 6) if n else 0.0
+    pauli = (snap or {}).get('manybody.pauli_strings')
+    out['pauli_count'] = len(pauli or []) if isinstance(pauli, (list, tuple)) else 0
     pairs = calib.get('pairs') or []
     out['n_pairs'] = len(pairs)
     out['n_dropped'] = len(calib.get('dropped') or [])
@@ -451,6 +476,11 @@ def _mb_preview(cache, snap):
         out['blockade_note'] = ('max|V|/max|Ω|=%.3g（≫1 为 blockade 区）'
                                 % (out['max_V_mhz'] / out['max_Omega_mhz']))
     out['basis_enough'] = True
+    if drive['kind'] == 'segments':
+        out['notes'].append('分段驱动：%d 段（t0=%s）；preview 的 Ω/δ 取分段最大值'
+                            % (drive['n_segments'], out['segment_t0'][:8]))
+    if out['pauli_count']:
+        out['notes'].append('请求了 %d 条 Pauli 字符串；终值见 run 摘要' % out['pauli_count'])
     out['notes'].append('多体预览：%d 原子、%d 耦合对、dim=2^%d=%d'
                         % (n, len(pairs), n, 1 << n))
     return out

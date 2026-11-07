@@ -210,7 +210,8 @@ def build_tool_registry(engine: ElEngine, gate: Gate, surface: Surface,
         name="preview_run",
         description=(
             "预览当前配置会驱动哪些跃迁、基组够不够（不演化）。"
-            "若报缺组，先补 groups.list 再 run_sim，否则结果失真。"
+            "多体时含分段驱动的段数/t0 与 Pauli 串计数；若报缺组，先补 groups.list "
+            "再 run_sim，否则结果失真。"
         ),
         parameters={},
         output_schema={"type": "object", "required": ["ok", "basis_enough"]},
@@ -223,7 +224,8 @@ def build_tool_registry(engine: ElEngine, gate: Gate, surface: Surface,
         name="run_sim",
         description=(
             "按当前配置真正跑一次演化，返回终态布居摘要（top 态 + 平均布居）。"
-            "跑前建议先 estimate_run 看耗时、preview_run 看基组是否完整。"
+            "data_schema 声明了 summary 策略的量（如 Pauli 串）会给前若干条终值；"
+            "跑前建议先 estimate_run 看耗时、preview_run 看基组/分段/Pauli。"
         ),
         parameters={"cancel_after_sec": {"type": "number",
                     "description": "可选：超过此秒数自动请求取消"}},

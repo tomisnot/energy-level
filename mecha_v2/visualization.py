@@ -62,24 +62,48 @@ def project_drives(run, config):
     t=np.linspace(0,float(end),160)
     traces=[]
     if run.get('nbody')=='many':
-        from src.core.manybody.runtime import segment_drive
-        n=run.get('n_atoms',0)
-        om=np.asarray(run.get('Om',np.zeros(n)),complex)
-        delta=np.asarray(run.get('delta',np.zeros(n)),float)
-        drive=[segment_drive(float(x),run.get('segments'),n) for x in t]
-        for site in range(min(n,3)):
-            traces.append(dict(label=f'Ω · 原子 {site}',x=numbers(t),
-                values=numbers([abs(v[0][site]) if v else abs(om[site]) for v in drive]),unit='MHz'))
-            if any(v is not None for v in drive) or np.any(delta):
-                traces.append(dict(label=f'δ · 原子 {site}',x=numbers(t),
-                    values=numbers([v[1][site] if v else delta[site] for v in drive]),unit='MHz'))
-        return traces
+        from src.core.manybody.runtime import describe_drive
+        return describe_drive(run.get('segments'), run.get('Om'), run.get('delta'),
+                              run.get('n_atoms', 0), run.get('t_max'))['traces']
     from src.core.waveforms import restore_waves
     for channel in ('single','A','B'):
         for wave in restore_waves(config.get('dynamic.waves_'+channel) or []):
             traces.append(dict(label=channel+' · '+wave.name,x=numbers(t),
                 values=numbers(wave.intensity_mwcm2*np.asarray(wave.waveform(t))),unit='mW/cm²'))
     return traces
+
+
+def project_input_view(run, config):
+    """Declared input view shared by the run card and MCP-side summaries.
+
+    The effective drive comes from ``describe_drive`` (one definition for
+    static/segments); the requested observables are counted, not dumped.
+    """
+    n = int((run or {}).get('n_atoms') or 0)
+    from src.core.manybody.runtime import describe_drive
+    if (run or {}).get('nbody') == 'many' and n:
+        drive = describe_drive((run or {}).get('segments'),
+                               (run or {}).get('Om'), (run or {}).get('delta'),
+                               n, (run or {}).get('t_max'))
+    else:
+        drive = None
+    ek = (run or {}).get('engine_kwargs') or {}
+    pauli = ek.get('pauli_strings')
+    if pauli is None:
+        pauli = (config or {}).get('manybody.pauli_strings')
+    links = ek.get('link_pairs')
+    loops = ek.get('loops')
+    return {
+        'drive': ({k: drive[k] for k in ('kind', 'n_segments', 'segments')}
+                  if drive is not None else None),
+        'observables': {
+            'pauli_count': len(pauli) if isinstance(pauli, (list, tuple)) else 0,
+            'link_count': len(links) if isinstance(links, (list, tuple)) else 0,
+            'loop_count': len(loops) if isinstance(loops, (list, tuple)) else 0,
+        },
+        'drives_preview': (drive['traces'] if drive is not None
+                           else project_drives(run or {}, config or {})),
+    }
 
 
 def model_view(calib):
@@ -186,26 +210,28 @@ def project_result(run, result):
                 a = a[ids]
             else:
                 ds['axis'] = None
-            if path == 'observables.pauli_strings':
-                labels = ((result.get('observables') or {}).get('pauli_string_labels')
-                          or [])
-                if a.ndim != 2:
-                    notes.append(label + '：Pauli 串数组维度不匹配，未绘制')
-                    continue
+            items_meta = (schema.get('quantities', {}).get(path) or {}).get('items')
+            if items_meta and a.ndim == 2:
+                labels = at(result, items_meta.get('labels')) or []
+                if not isinstance(labels, (list, tuple)):
+                    labels = list(labels)
                 for q in range(a.shape[1]):
                     enc = encode(a[:, q])
                     if enc is None:
-                        notes.append(label + '：Pauli 串超出卡片预算，未绘制')
+                        notes.append(label + '：逐项数据超出卡片预算，未绘制')
                         break
                     ds_q = dict(id='%s.%d' % (path, q),
                                 label='%s · %s' % (label,
                                                    labels[q] if q < len(labels) else q),
                                 unit=ds['unit'], shape=[len(a)], kind='curve',
-                                axis='time', x=ds.get('x'),
+                                axis=axis_names[0], x=ds.get('x'),
                                 axis_unit=ds.get('axis_unit'), complex=True)
                     ds_q.update(enc)
                     datasets.append(ds_q)
                 represented.add(path)
+                continue
+            if items_meta and a.ndim != 2:
+                notes.append(label + '：逐项数据维度不匹配，未绘制')
                 continue
             if axis_names == ['site','site']:
                 if a.ndim!=2 or a.shape!=(n,n):

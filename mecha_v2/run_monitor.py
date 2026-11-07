@@ -10,7 +10,8 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, unquote
-from .visualization import project_result, project_drives, model_view
+from .visualization import (project_result, project_drives, model_view,
+                           project_input_view)
 
 
 def _jsonable(value):
@@ -247,10 +248,12 @@ class RunMonitorStore:
                           'E_vpcm': config.get('field.E_vpcm', 0)})
         view['psi0_label'] = _psi0_label(run)
         try:
-            view['drives_preview']=project_drives(run,config)
-        except (ValueError,TypeError,KeyError,AssertionError) as exc:
-            view['drives_preview']=[]
-            view['drive_preview_note']=str(exc)
+            view.update(project_input_view(run, config))
+        except (ValueError, TypeError, KeyError, AssertionError) as exc:
+            view['drive'] = None
+            view['observables'] = {'pauli_count': 0, 'link_count': 0, 'loop_count': 0}
+            view['drives_preview'] = []
+            view['drive_preview_note'] = str(exc)
         return view
 
     def begin(self, run=None, config=None, *, actor="ai", reason=""):
