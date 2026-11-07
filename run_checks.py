@@ -55,6 +55,7 @@ CORE = {
     'manybody_ensemble_selfcheck.py',
     'manybody_dmrg_warmstart_selfcheck.py',
     'manybody_idmrg_selfcheck.py',
+    'manybody_mpo_tdvp_selfcheck.py',
 }
 # 慢基准：默认跳过（约 18 分钟），--slow 才跑
 SLOW = {'mw_bench_firstprinciples.py'}
@@ -91,6 +92,7 @@ SMOKE = {
     'manybody_build_selfcheck.py',
     'manybody_pauli_string_selfcheck.py',
     'manybody_mps_selfcheck.py',
+    'manybody_mpo_tdvp_selfcheck.py',
     'manybody_thermal_corr_selfcheck.py',
     'manybody_ensemble_selfcheck.py',
     'field_loss_engine_selfcheck.py',

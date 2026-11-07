@@ -142,7 +142,7 @@ build_calib(build={"source":"arc",
 set_config("dynamic.mode", 2)
 set_config("dynamic.t_max", 1000)
 set_config("dynamic.npts", 501)
-set_config("manybody.solver", "ed")        // auto/ed/tdvp/tebd/tdvp-single/tdvp-adaptive/...
+set_config("manybody.solver", "ed")        // auto/ed/tdvp/tebd/tdvp-mpo/tdvp-single/tdvp-adaptive/...
 set_config("manybody.psi0", "rggrgg")      // 模式串 / 产物态索引 / ['sup',…] / {kind:"product",…}
 set_config("manybody.want", "")            // 空 = 含时
 set_config("manybody.max_step_ns", 0.1)    // MPS/PEPS/经典/轨迹的内部步长
@@ -303,7 +303,7 @@ cancel_job(job_id)              // 协作式；以 read_job 终态为准
 ## 15. 当前支持面（选后端先看这里）
 
 含时：`ed`（精确小维）、`mixed`（默认，光 Sambe+微波当场）、`sambe`（无 RWA）、`hard`（微波硬积分）、
-CPU MPS（`tebd`/`tdvp`/`tdvp-single`/`tdvp-adaptive`）、GPU MPS（`tebd-gpu`/`swap-tebd-gpu`）、
+CPU MPS（`tebd`/`tdvp`/`tdvp-single`/`tdvp-adaptive`/`tdvp-mpo`）、GPU MPS（`tebd-gpu`/`swap-tebd-gpu`）、
 `tdvp-trajectories`、`classical-spin`、`peps-real-time`。
 
 平衡态：`ed`、`lanczos`、`gpu-lanczos`、`gpu-batch`、`kpm`/`gpu-kpm`、`dmrg`、`qmc`、`free-fermion`。

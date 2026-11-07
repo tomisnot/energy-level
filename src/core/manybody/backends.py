@@ -48,6 +48,8 @@ TIME_BACKENDS = {
                                  options=GPU_MPS, segments=True, return_state=True,
                                  pauli='torch',
                                  native_state='torch', algorithm='swap-tebd'),
+    'tdvp-mpo': TimeBackend('mpo_tdvp', 'evolve_mpo_tdvp', options=CPU_MPS,
+                            segments=False, return_state=False, pauli=''),
     'tdvp': TimeBackend('engine_mps', 'evolve_mps', aliases=('mps', 'mps_mpo'),
                         options=CPU_MPS, segments=True, return_state=True,
                         charge=True, pauli='mps', native_state='tenpy'),
