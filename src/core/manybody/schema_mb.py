@@ -81,12 +81,13 @@ CONFIG_SCHEMA_MB = {
         type='str', enum=time_backend_names(), default='auto',
         desc='**含时演化**求解器：auto=小系统 ED、大系统 TDVP / ed=精确对角化 / '
              'tebd=最近邻 MPS / tebd-gpu=CUDA 最近邻 MPS / swap-tebd-gpu=CUDA 任意键 SWAP-TEBD / tdvp=两站点 TDVP / tdvp-single=单站点 TDVP / '
-             'tdvp-adaptive=两站点到单站点自适应 TDVP。平衡态不看本键，看 `manybody.eq_backend`。'),
+             'tdvp-adaptive=两站点到单站点自适应 TDVP / tdvp-dense=CPU 稠密两站点 TDVP（有限开链，支持 segments/Pauli；无 charge/return_state；与 tdvp 同阶对拍）。'
+             '平衡态不看本键，看 `manybody.eq_backend`。'),
     'manybody.collapse_ops': dict(type='list', default=None, desc='开放系统局部跳跃通道：[{site, rate, operator|matrix}]，供 tdvp-trajectories'),
     'manybody.n_trajectories': dict(type='int', default=32, lo=1, hi=100000, desc='量子轨迹条数'),
     'manybody.seed': dict(type='int', default=0, desc='量子轨迹、QMC 与 KPM 的随机种子'),
     'manybody.max_step_ns': dict(type='float', default=0.1, lo=1e-6,
-                                 desc='MPS/PEPS/轨迹/经典自旋内部最大步长（ns）；ED 使用指数传播，无此步长旋钮'),
+                                 desc='MPS/PEPS/轨迹/经典自旋/tdvp-dense 内部最大步长（ns）；ED 使用指数传播，无此步长旋钮'),
     'manybody.classical_damping': dict(type='float', default=0.0, lo=0.0, desc='classical-spin Landau-Lifshitz 阻尼系数'),
     'manybody.grid_shape': dict(type='list', default=None, desc='PEPS 矩形网格 [rows,cols]'),
     'manybody.idmrg': dict(
@@ -139,7 +140,7 @@ CONFIG_SCHEMA_MB = {
     'manybody.mps_dtype': dict(type='str',enum=list(MPS_DTYPES),default='auto',
         desc='通用 calib DMRG 静态张量策略：auto=严格实数时 float64，否则 complex128；real 拒绝任何非零虚部；complex 保留复数'),
     'manybody.mps_order': dict(type='list',default=None,
-        desc='通用 calib DMRG / CPU MPS 演化的显式顺序，列出全部原子下标；不改变原子身份或模型耦合'),
+        desc='通用 calib DMRG / CPU MPS 演化 / tdvp-dense 的显式顺序，列出全部原子下标；不改变原子身份或模型耦合'),
     'manybody.mps_diagnostics': dict(type='dict',default=None,
         desc='通用 calib DMRG 可选诊断：{variance:bool, corr:bool, permutation:[目标原子下标], blocks:[连续块长度]}；corr 给连通占据关联 C_ij=⟨n_i n_j⟩−⟨n_i⟩⟨n_j⟩（O(N²) 次收缩）；精确收缩受 memory_budget_mb 预算约束'),
     'manybody.qmc_sweeps': dict(
@@ -186,7 +187,7 @@ CONFIG_SCHEMA_MB = {
              '单格点矩阵是标准 Pauli，基为 (|g⟩,|r⟩)；本仓 sp/sm 是 |r><g|/|g><r|，'
              '与 σ± 的教科书编号相反。引擎**不解释**物理含义（手性要不要 /8、'
              '要不要连通减法，由调用方组合）。支持：含时 ed（全空间/投影基）、'
-             'CPU MPS 四档（tebd/tdvp/tdvp-single/tdvp-adaptive）、GPU MPS 两档'
+             'CPU MPS 四档（tebd/tdvp/tdvp-single/tdvp-adaptive）+ tdvp-dense、GPU MPS 两档'
              '（tebd-gpu/swap-tebd-gpu）、轨迹（系综平均）、经典自旋（因子化）；'
              '平衡态 ed/lanczos 的 gs、dmrg 的 gs。PEPS/QMC/KPM/free-fermion/gpu-batch'
              '**明确拒绝**，不静默忽略。'),

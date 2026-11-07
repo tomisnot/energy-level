@@ -1,0 +1,1280 @@
+﻿ 
+
+Report GitHub Issue
+
+ × 
+
+Title: 
+
+Content selection saved. Describe the issue below:
+
+Description: 
+
+Submit without GitHub 
+ Submit in GitHub 
+
+arXiv is now an independent nonprofit! 
+ Learn more 
+ × 
+
+Back to arXiv 
+
+Why HTML? 
+
+Report Issue 
+
+Back to Abstract 
+
+Download PDF 
+
+Abstract 
+
+References 
+
+Supplemental Material for “Dirac spin liquid in quantum dipole arrays” 
+
+SM1 The $U(1)$ Dirac spin liquid: theoretical aspects 
+
+SM1.1 Stability of the DSL with dipolar XY interactions 
+
+SM1.2 Mean-field spinon theory 
+
+SM1.3 Mass term for staggered $\sigma^{z}$ field 
+
+SM1.4 Kagome Brillouin zones 
+
+SM2 Edge states and bulk modes on infinite strips 
+
+SM3 Additional iDMRG results 
+
+SM3.1 iDMRG methodology 
+
+SM3.2 Connection to Heisenberg model 
+
+SM3.3 Global XY phase diagrams 
+
+SM3.3.1 Five-coupling model 
+
+SM3.3.2 Longer-range interactions 
+
+SM4 Additional finite-size DMRG 
+
+SM4.1 The $N=80$ cluster: VBS vs DSL 
+
+SM4.2 Interstitial defect for other phases 
+
+SM5 Note on adiabaticity 
+
+SM6 Dipolar XY antiferromagnets 
+
+References 
+
+License: arXiv.org perpetual non-exclusive license
+
+arXiv:2406.00098v1 [cond-mat.str-el] 31 May 2024
+
+Dirac spin liquid in quantum dipole arrays
+
+Marcus Bintz
+ 
+ Affiliation:  Department of Physics, Harvard University, Cambridge, Massachusetts 02138, USA
+
+Vincent S. Liu
+ 
+ Affiliation:  Department of Physics, Harvard University, Cambridge, Massachusetts 02138, USA
+
+Johannes Hauschild
+ 
+ Affiliation:  Technical University of Munich, TUM School of Natural Sciences,
+Physics Department, James-Franck-Str. 1, 85748 Garching, Germany
+ 
+ Affiliation:  Munich Center for Quantum Science and Technology (MCQST), Schellingstr. 4, 80799 München, Germany
+
+Ahmed Khalifa
+ 
+ Affiliation:  Department of Physics, Carnegie Mellon University, Pittsburgh, PA 15213, USA
+
+Shubhayu Chatterjee
+ 
+ Affiliation:  Department of Physics, Carnegie Mellon University, Pittsburgh, PA 15213, USA
+
+Michael P. Zaletel
+ 
+ Affiliation:  Department of Physics, University of California, Berkeley, CA 94720, USA
+ 
+ Affiliation:  Material Science Division, Lawrence Berkeley National Laboratory, Berkeley, CA 94720, USA
+
+Norman Y. Yao
+ 
+ Affiliation:  Department of Physics, Harvard University, Cambridge, Massachusetts 02138, USA
+
+August 24, 2026
+
+Abstract
+
+We predict that the gapless $U(1)$ Dirac spin liquid naturally emerges in a two-dimensional array of quantum dipoles.
+In particular, we demonstrate that the dipolar XY model—realized in both Rydberg atom arrays and ultracold polar molecules—hosts a quantum spin liquid ground state on the kagome lattice.
+Large-scale density matrix renormalization group calculations indicate that this spin liquid
+exhibits signatures of gapless, linearly-dispersing spinons, consistent with the $U(1)$ Dirac spin liquid.
+We identify a route to adiabatic preparation via staggered on-site fields and demonstrate that this approach can prepare cold spin liquids within experimentally realistic time-scales.
+Finally, we propose a number of novel signatures of the Dirac spin liquid tailored to near-term quantum simulators, including termination-dependent edge modes and the Friedel response to a local perturbation.
+
+Exotic phases of matter can emerge in deceptively simple quantum systems.
+For example, material electrons subject to a strong magnetic field and Coulomb interactions can fractionalize, forming
+quantum Hall liquids whose quasiparticle excitations carry a fraction of the original electron’s quantum numbers  [ 1 , 2 ] .
+When such fractionalization occurs in an insulating spin system, the resulting phase of matter is known as a quantum spin liquid  [ 13 ] .
+Although the theoretical viability of such phases is well-established  [ 4 , 5 ] , their definitive identification and characterization remain a perennial challenge for both quantum materials and quantum simulators  [ 6 , 7 , 8 ] .
+On the latter front, recent works have explored several gapped quantum spin liquids and their topological orders.
+For example, a $\mathbb{Z}_{2}$ spin liquid may naturally arise from Rydberg blockade interactions  [ 9 , 10 ] , while digitally-operating quantum devices have probed wavefunctions with non-Abelian $D_{4}$ topological order  [ 11 ] .
+
+The spin liquids that emerge in conventional quantum materials are of a rather different sort.
+In particular, studies of geometrically-frustrated antiferromagnets (e.g. on triangular, kagome, or pyrochlore lattices) often find indications of gapless quantum spin liquids  [ 12 , 13 , 14 , 15 , 16 , 17 , 18 , 19 , 20 , 21 , 22 , 23 , 24 , 25 , 26 , 27 ] .
+In two-dimensional systems, the exemplar is the $U(1)$ Dirac spin liquid (DSL), whose low-energy excitations can be understood as massless, linearly-dispersing fermionic spinons coupled to an emergent $U(1)$ gauge field  [ 28 , 29 , 30 , 31 , 32 ] .
+Its governing laws are those of a (2+1)-dimensional version of quantum electrodynamics (QED 3 ), which represents a potentially stable, quantum critical phase of matter  [ 33 , 34 , 2 , 1 , 3 , 5 , 6 , 40 , 41 , 4 ] .
+
+Figure 1: (a) Schematic depiction of a spin liquid emerging from the dipolar XY Hamiltonian in a two-dimensional array of easy-plane quantum dipoles.
+(b) Real-space spin-spin correlations of the ground state of $H_{\rm{dXY}}$ on the kagome lattice, obtained via iDMRG on the YC12 cylinder.
+Bonds between nearest- and next-nearest neighbors are colored according to $\langle\sigma^{x}_{i}\sigma^{x}_{j}\rangle$ .
+Circles depict $\langle\sigma^{x}_{i}\sigma^{x}_{0}\rangle$ correlations with a fixed site (dark red circle).
+(c) Depicts spin-spin correlations on lattices where the ground state exhibits collinear ordering.
+Dashed red bonds mark $\langle\sigma_{i}^{x}\sigma^{x}_{j}\rangle>0$ . (d) Depicts
+correlations on lattices where the ground state exhibits trivial local-singlets.
+
+In this work, we predict a new route to realize the gapless $U(1)$ Dirac spin liquid in synthetic quantum matter experiments.
+Our proposal centers on a generic Hamiltonian that describes the interactions between coplanar quantum dipoles (Fig.  1 a).
+In particular, we consider effective spin-1/2 degrees of freedom, possessing a large transition dipole moment but no permanent moment.
+For a two-dimensional array of such objects, where the spin is quantized out of plane (i.e. owing to a magnetic field), resonant dipole-dipole interactions yield the dipolar XY (dXY) Hamiltonian,
+
+$H_{\rm{dXY}}=\frac{J}{2}\sum_{i<j}\frac{\sigma^{x}_{i}\sigma^{x}_{j}+\sigma^{y}_{i}\sigma^{y}_{j}}{r_{ij}^{3}}.$ 
+ 
+ (1) 
+
+Here, $J$ is the interaction strength, $\vec{\sigma}$ are Pauli matrices, and $r_{ij}$ is the distance between spins $i$ and $j$ .
+This model is naturally realized in a wide variety of quantum simulators  [ 43 ] , including ultracold polar molecules  [ 44 , 45 ] , strongly-driven trapped ions  [ 46 , 47 ] , and Rydberg atom arrays  [ 20 ] .
+
+Our main results are threefold.
+First, we conduct a large-scale infinite density matrix renormalization group (iDMRG)  [ 49 , 50 , 51 , 52 , 53 ] investigation of $H_{\rm dXY}$ with antiferromagnetic interactions on an extensive set of two-dimensional lattices (Fig.  1 ).
+The majority exhibit either symmetry breaking or trivial paramagnetic ground states.
+However, on the kagome lattice, we observe a symmetric, highly-entangled spin liquid.
+The appearance of Dirac cones upon flux insertion suggests that this state is the $U(1)$ DSL.
+Second, we identify a path to adiabatically prepare the DSL by applying a staggered on-site field, which effectively controls the mass of the Dirac spinons.
+Dynamical simulations of our preparation protocol yield low-energy, liquid-like states within relatively short time-scales, $\tau\sim 10/J$ .
+Finally, we propose and analyze a number of novel probes that can experimentally distinguish the $U(1)$ DSL from competing orders in near-term quantum simulators: (i) negative spin susceptibilities, (ii) termination-dependent spinon edge modes and (iii) the Friedel response to a local perturbation.
+
+Dipolar XY antiferromagnets. —We compute the ground state of $H_{\rm{dXY}}$ on each of the eleven Archimedean tilings  [ 21 , 55 ] using iDMRG on infinitely long cylinders with circumference $W$   [ 56 , 57 , 58 , 59 ] .
+We study states at half-filling of the conserved $U(1)$ charge, $M^{z}\equiv\sum_{i}\sigma^{z}_{i}=0$ , and include long-range couplings up to a maximum distance $R_{\rm{max}}\lesssim W/2$   [ 60 ] .
+We find two main phases, and two exceptions.
+One common state is collinear $U(1)$ symmetry breaking order, evinced by long-range $\langle\sigma^{x}_{i}\sigma^{x}_{j}\rangle$ correlations with a clear Neél sign structure  [ 60 ] .
+This occurs when frustration is weak: on the square, hexagonal, truncated square, snub square, and truncated trihexagonal lattices [Fig.  1 (c)].
+A second possibility arises for more frustrated systems but with an even number of spins per unit cell: the elongated triangular, truncated hexagonal, rhombitrihexagonal, and snub trihexagonal lattices [Fig.  1 (d)].
+On these geometries, neighboring spins form local two- or six-spin singlet states, and the full many-body wavefunction is a trivial paramagnet (i.e. to good approximation, a tensor product of the local singlets)  [ 60 ] .
+The exceptional geometries are, perhaps unsurprisingly, the triangular and kagome lattices.
+The former is somewhat sensitive to our numerical approximations and several phases closely compete in energy  [ 61 ] .
+
+Figure 2: (a) The spin structure factor, $S^{xx}(\mathbf{k})$ , exhibits diffuse weight near the perimeter of the extended Brillouin zone (dash-dot gray hexagon), with some excess at the $M_{E}$ points. The inner Brillouin zone is shown as a black dashed hexagon. (b) Analogous structure factor for $S^{zz}(\mathbf{k})$ . (c) Adiabatically inserting an external flux $\theta$ shifts the spinon momentum bands towards the Dirac point (inset). The entanglement entropy diverges as $\theta$ approaches $\pi$ (YC8-2 cylinder, $d=7168$ ). Gray stars mark the region where adiabaticity is lost, and the teal line is a fit to Eq.  2 . (d) The transfer matrix spectrum exhibits linearly dispersing modes. Teal points indicate eigenvalues with wavevectors corresponding to internode scattering.
+
+Kagome dipolar XY spin liquid .—On the kagome lattice, we find a robust, highly-entangled liquid.
+We characterize this state on cylinders up to width $W=12$ (i.e. the so-called YC12 geometry) and $R_{\rm max}\approx 3.7$ , obtaining good convergence (truncation error $\sim 2\times 10^{-5}$ ) at bond dimension $d=10240$   [ 60 ] .
+The real-space $\langle\sigma^{x}_{i}\sigma^{x}_{j}\rangle$ correlations are depicted in Fig.  1 (b): their spatial uniformity and rapid decay indicate the absence of both spatial- and $U(1)$ -symmetry-breaking order  1 1 
+ 1 
+
+For distances greater than $W$ , the decay is exponential. .
+This carries through to momentum space, where the equal-time spin structure factor,
+ $S^{xx}(\mathbf{k})=\frac{1}{N}\sum_{i,j}e^{i\mathbf{k}\cdot(\mathbf{r}_{i}-\mathbf{r}_{j})}\langle\sigma^{x}_{i}\sigma^{x}_{j}\rangle,$ 
+exhibits diffuse weight around the extended Brillouin zone perimeter with some excess at the edge-centered $M_{E}$ points [Fig.  2 (a)].
+Interestingly, the $\sigma^{z}$ -basis correlations show similar structure [Fig.  2 (b)], even though the microscopic interactions are purely XY.
+For other observables (such as bond-bond correlations) and smaller cylinder circumferences, we find analogous results: all symmetries of $H_{\rm{dXY}}$ are unbroken  [ 60 ] .
+Unlike the trivial paramagnets seen on other lattices, the Lieb-Schulz-Matthis-Oshikawa-Hastings theorems imply that our observed liquid must be non-trivial owing to the three-site unit cell of the kagome lattice  [ 63 , 64 , 65 ] .
+The nature of this non-trivial liquid is perhaps hinted at by the relatively strong correlations at the $M_{E}$ points  [ 66 , 67 ] .
+Indeed, within the theory of the $U(1)$ DSL, such correlations in both $\sigma^{x}$ and $\sigma^{z}$ are natural, corresponding to spin-triplet monopole fluctuations of QED 3   [ 1 , 3 ] .
+
+Figure 3: (a) Depicts the phase diagram of $H_{\rm{dXY}}-\Omega\sum_{i}\sigma^{x}_{i}$ on the YC8 cylinder. A series of different phases (background color) are observed as quasi-plateaus in the average $\sigma^{x}$ magnetization.
+(b) Depicts the entanglement entropy and the staggered $\sigma^{z}$ -polarization, $P_{z}$ , as a function of $\delta$ for $H_{\rm{dXY}}+\delta H^{\prime}$ on the YC8 cylinder.
+There is a direct crossover from the critical $U(1)$ DSL at $\delta=0$ to the trivial paramagnet at large $\delta$ .
+(Inset) The staggering pattern used on the YC8 cylinder. Red (blue) circles indicate $\eta_{i}=+1$ ( $\eta_{i}=-1$ ); gray lines connect neighboring sites with opposite $\eta$ , which have enhanced correlations at intermediate $\delta$ .
+Left, right: illustration of the Dirac spinon band structure, which develops a mass gap when $\delta\neq 0$ .
+(c) Depicts a TDVP simulation of the adiabatic preparation protocol: $H_{\rm{dXY}}+\delta(t)H^{\prime}$ evolution of an initial $\sigma^{z}$ product state (inset) using an exponential ramp $\delta(t)=\delta(0)e^{-t/\tau}$ with $\delta(0)=20\,J$ and $\tau=0.6\times 2\pi/J$ . $P_{z}$ exhibits a smooth decay to zero, while the interaction energy approaches the DSL ground state energy, $E_{0}$ (dotted magenta line).
+The final $\langle\sigma^{x}_{i}\sigma^{x}_{j}\rangle$ correlations are shown at right.
+
+To further probe this $U(1)$ DSL hypothesis, we search for signatures of gapless spinons.
+In the kagome DSL, the spinon Dirac points are at $Q_{\pm}=\pm M_{I}/2$ , and physical spin excitations (i.e. two-spinon scattering processes) are gapless at the $\Gamma$ and $M_{I}$ points of the inner Brillouin zone [Fig  2 (c), inset].
+However, on a finite-width cylinder, the allowed spinon momentum bands generically avoid the Dirac points, and all excitations develop a $1/W$ gap  [ 17 , 18 ] .
+This can be overcome by simulated flux insertion: starting with a well-converged state on the YC8-2 cylinder, we slowly modify all couplings by $\sigma_{i}^{+}\sigma_{j}^{-}\to e^{i\theta_{ij}}\sigma_{i}^{+}\sigma_{j}^{-}$ and follow the changing ground state  [ 17 , 19 , 14 ] .
+Here, $\theta_{ij}=(\mathbf{r}_{ij}\cdot\mathbf{r}_{\rm mod}/r_{\rm mod}^{2})\,\theta$ , with $\mathbf{r}_{\rm{mod}}$ the periodic vector around the cylinder.
+This flux insertion gradually shifts the spinon momenta by $\theta/2$ , forcing them towards the Dirac points at $\theta=\pi$ ; we reach $\sim 3\pi/4$ before losing adiabatic continuity.
+
+We track two key quantities as the flux is inserted.
+The first is the half-system von Neumann entanglement entropy, $S_{\rm vN}$ , which appears to diverge [Fig.  2 (c)] consistent with the response expected from two Dirac cones,
+
+$S_{\rm vN}(\theta)=A-B\sum_{i=0,1}\log\absolutevalue{2 \sin\frac{\theta-(-1)^i\pi}{2}},$ 
+ 
+ (2) 
+
+where $A,B$ are non-universal constants  [ 19 ] .
+Second, we compute the iDMRG transfer matrix eigenvalues $\tau_{n}$ : their magnitudes correspond to correlation lengths, $\xi_{n}=-1/\log\absolutevalue{\tau_n}$ , which are inversely proportional to excitation energies in critical systems with dynamical exponent $z=1$   [ 69 , 70 , 71 , 72 ] .
+The phases of $\tau_{n}$ correspond to wavevectors for these excitations.
+As $\theta$ approaches $\pi$ , we find that the eigenvalues with wavevectors near $M_{I}$ trend linearly downwards [Fig.  2 (d)], suggestive of the linearly-dispersing gapless excitations characteristic of the DSL.
+
+A few remarks are in order.
+First, our iDMRG results are reminiscent of the quantum spin liquid seen in the paradigmatic nearest-neighbor kagome Heisenberg model, $H_{\rm{nn}}=(J/2)\sum_{\langle i,j\rangle}\vec{\sigma}_{i}\cdot\vec{\sigma}_{j}$   [ 73 , 74 , 17 , 19 ] .
+Indeed, we find that the ground state of $H_{\rm dXY}$ can be adiabatically connected to that of $H_{\rm{nn}}$ , with no sign of any intervening phase transition  [ 60 ] .
+Our results are also consistent with the observation of quantum spin liquids in the dipolar Heisenberg model  [ 75 , 76 , 77 ] and in short-range kagome XXZ models  [ 16 , 79 , 80 , 17 , 82 ] .
+Relatedly, we note that although the symmetries of $H_{\rm{dXY}}$ are reduced relative to $H_{\rm{nn}}$ , they are still sufficient to forbid relevant perturbations to QED 3   [ 60 , 9 ] .
+
+Figure 4: 
+(a) DMRG ground state on an $N=83$ cluster for a short-range XY Hamiltonian  [ 60 ] in the 120 ∘ order phase (left) and for the $H_{\rm{dXY}}$ DSL (right). Bonds indicate $\langle\sigma^{x}_{i}\sigma^{x}_{j}\rangle$ , and circles have size proportional to $\langle\sigma^{z}_{i}\rangle$ (lavender for $\langle\sigma^{z}_{i}\rangle>0$ , green for $\langle\sigma^{z}_{i}\rangle<0$ ). In the 120 ∘ state, the bulk spins uniformly cant up, while the $U(1)$ DSL exhibits strong oscillations.
+(b) Similar oscillations can be induced by placing an interstitial spin at the center of a kagome hexagon. (Additionally, this spin binds its twelve closest neighbors into a small collinear antiferromagnet). (c) Depicts edge physics of free Dirac spinons  [ 60 ] for different boundary terminations. Left panels show the spectrum on an infinitely long strip with finite width. Dark teal (light blue) lines indicate states below (above) half-filling. The two modes closest to half-filling are highlighted with dark purple and light pink lines. With the spiky, flat, and bowtie terminations, these zero-energy modes correspond to exponentially-localized edge states; the local density $|\psi_{i}|^{2}$ of the purple mode is shown on the right panels. By contrast, the special “hexagon” boundary hosts no edge states: the center two modes are instead uniformly delocalized over the strip. (d) Left panel depicts free-spinon Friedel oscillations in response to a local impurity potential $\delta_{F}\sigma^{z}_{0}$ . Red circles denote $\langle\sigma^{z}_{i}\rangle>0$ , while blue circles denote $\langle\sigma^{z}_{i}\rangle<0$ , with the size scaling as $\log|\langle\sigma^{z}_{i}\rangle|$ . Semi-transparent markers are placed for sites on sublattices different than $\mathbf{r}_{0}$ . Right panel: Fourier transform of $\langle\sigma^{z}_{i}\rangle$ , restricting to sites on the same sublattice as $\mathbf{r}_{0}$ . The dominant weight is at $M_{I}$ .
+
+Adiabatic preparation. —We now turn to the question of how to prepare the Dirac spin liquid.
+Contemporary quantum simulators are well-isolated systems, so correlated states must generally be prepared in a dynamical fashion  [ 84 ] .
+The criticality of the $U(1)$ DSL suggests a conceptually simple adiabatic strategy: apply a relevant perturbation  [ 19 ] .
+In the ideal case, the ground state can be smoothly followed between the low- and high-strength limits of the perturbing field.
+As the applied field, $\delta$ , is decreased towards the critical phase (at $\delta=0$ ), the correlation length will diverge as $\xi\sim\delta^{-\nu}$ until either adiabaticity is lost or $\xi$ exceeds the linear system size.
+In fact, adiabaticity can be maintained for all times if $\delta(t)$ decreases asymptotically as $t^{-p}$ with $p<1/(\nu z)$   [ 19 ] .
+
+The problem is then to identify a relevant perturbation that is experimentally feasible and does not lead to intervening phases at intermediate field strengths.
+Perhaps the most straightforward possibility is to apply a uniform field, $\Omega\sum\sigma^{x}_{i}$ , i.e. a resonant, global driving field; this corresponds to a conserved $SU(4)$ current of QED 3 with scaling dimension $\Delta_{J}=2$ .
+However, in iDMRG we find a long cascade of phase transitions between the $U(1)$ DSL and the large-field paramagnet [Fig.  3 (a)], prohibiting this as a route for adiabatic preparation.
+
+Instead, we propose a spatially modulated transverse field,
+ $H^{\prime}=-\sum_{i}\eta_{i}\sigma^{z}_{i}$ ,
+where $\eta_{i}=\pm 1$ is a binary staggering pattern  [ 86 , 87 , 88 ] .
+We note that such a perturbation was recently implemented in a Rydberg-based dipolar XY experiment using light-shifts from local addressing  [ 20 , 89 ] .
+Theoretically, it corresponds to a mass term for the Dirac fermions: a relevant operator with scaling dimension $\Delta_{N}\approx 1.4$ , which is ordinarily forbidden by spatial and spin-flip symmetries that $H^{\prime}$ explicitly breaks  [ 1 , 60 ] .
+This mass gaps out the Dirac spinons, in turn triggering a confinement transition of the compact $U(1)$ gauge field into a trivial gapped paramagnetic phase  [ 90 , 91 ] .
+With the proper choice of $\eta_{i}$ , we find that the ground state phase diagram of $H_{\rm{dXY}}+\delta H^{\prime}$ indeed exhibits a smooth crossover from the DSL to the high-field paramagnet, as shown in Fig.  3 (b)  2 2 
+ 2 
+
+This is a finite- $W$ smoothing of the singular behavior expected as $\delta\to 0$ in the thermodynamic limit. .
+Indeed, the entanglement entropy and the staggered $\sigma^{z}$ -polarization, $P_{z}=\sum_{i}\eta_{i}\langle\sigma^{z}_{i}\rangle$ , smoothly interpolate between the $\delta=0$ [ $U(1)$ DSL] and the $\delta\to\infty$ (trivial paramagnet) limits  [ 60 ] .
+In principle, then, this is a promising route for adiabatic preparation.
+
+To test this, we utilize a time-dependent variational principle calculation  [ 93 , 94 ] to directly simulate preparation dynamics on an open boundary kagome cluster with $N=42$ spins [Fig.  3 (c)].
+Beginning with the product state shown in Fig.  3 (c, inset), we evolve under the Hamiltonian, $H(t)=H_{\rm{dXY}}+\delta(t)H_{\eta\rm{Z}}$ .
+Starting with $\delta(0)=20\,J$ , we exponentially ramp down the field, $\delta(t)=\delta(0)e^{-t/\tau}$ with $\tau=0.6\times 2\pi/J$ up to a final preparation time $T$ .
+Even for short preparation time-scales, $T=5\times 2\pi/J$ , we observe that $P_{Z}$ smoothly reduces towards zero and the final spin-spin correlation functions are relatively uniform in the bulk [Fig.  3 (c)].
+Moreover, by the end of the ramp, the energy of the state is within a few percent of the DSL ground state value ( $0.984\,E_{0}$ ).
+
+Signatures of the DSL in quantum simulators —We finally come to a common challenge for the experimental detection of a spin liquid: how to tell?
+In principle, the presence of gapless, fractionalized spinon excitations will influence most equilibrium and dynamical observables; for instance, generic correlation functions should decay as power-laws in space and time  [ 1 ] .
+In this sense, the $U(1)$ DSL may actually be somewhat easier to probe than a gapped quantum spin liquid.
+However, there are two key challenges for small- and intermediate-size experiments: (i) limited length scales to cleanly resolve power-laws, and (ii) the presence of an edge.
+In particular, the low-energy, spin-singlet modes of QED 3 with finite momentum will generally condense into valence bond solids at the boundary  [ 95 , 96 , 3 , 1 ] .
+These edge correlations will decay into the liquid bulk as a power-law, $r^{-\Delta}$ , which complicates the interpretation of many observables  3 3 
+ 3 
+
+We note that $\Delta$ may be as low as $\Delta_{\Phi}\approx 1.1$ for monopole excitations. .
+
+Nevertheless, there are positive signatures of the DSL that we expect can be probed even on existing quantum simulators (with $N\sim 100$ ).
+In fact, the spin structure factor, $S^{xx}(\mathbf{k})$ , already provides some insight: the monopole weight at the $M_{E}$ point can be seen on moderately sized clusters, and its presence allows one to rule out competing valence bond solids with different structure factors  [ 60 ] .
+In what follows, we describe three additional DSL signatures.
+First, we note that the aforementioned $M_{E}$ signal could just as well indicate coplanar 120 ∘ magnetic order—a natural and oft-seen competing phase near the Dirac spin liquid  [ 3 ] .
+One probe that cleanly cuts between the DSL and the 120 ∘ state is as follows: measure $\langle\sigma^{z}_{i}\rangle$ in systems with an excess spin 1/2, i.e. on odd- $N$ clusters.
+A coplanar magnet will uniformly cant its bulk spins upward, leading to $\langle\sigma^{z}_{i}\rangle\sim 1/N$ ; an example of this behavior for a short-ranged XY model is illustrated in Fig.  4 (a)  [ 60 ] .
+By contrast, we observe that the local magnetization in the spin-doped DSL is highly oscillatory, with many spins exhibiting a large, negative response, $\langle\sigma^{z}_{i}\rangle<0$ [Fig.  4 (b)]  [ 98 , 99 ] .
+Relatedly, when an interstitial spin is placed at the center of a kagome hexagon, we again observe that the excess charge produces large local oscillations in $\langle\sigma^{z}_{i}\rangle$ [Fig.  4 (c)].
+
+The other two signatures we propose to explore in near-term experiments are both related to the presence of fermionic spinons in the DSL.
+To start, in the standard, mean-field spinon theory of the $U(1)$ DSL  [ 30 , 32 , 60 ] , we find that generic boundaries of the kagome lattice will host localized edge modes at the Fermi level; the exception is a special “hexagon” termination where the zero-energy excitations instead uniformly spread over the system [Fig.  4 (d)].
+This is reminiscent of the termination-dependent edge modes seen in graphene  [ 100 , 101 ] , and is intimately related to the presence of Dirac cones  [ 102 , 103 , 60 ] .
+The ability of optical tweezer arrays to realize arbitrary geometries provides a natural testbed for this physics; for instance, by exploring which types of edges can coherently propagate a flipped spin  [ 104 ] .
+Finally, applying a local static perturbation $\sigma_{0}^{z}$ should induce $M_{I}$ -point Friedel oscillations from internode spinon scattering [Fig.  4 (e)], i.e., a particle-hole excitation between the DSL’s two different Dirac points separated by $M_{I}$ .
+These manifest in the single-body $\langle\sigma^{z}_{i}\rangle$ static response, which is particularly apt for experiments with single-site resolution.
+
+Looking forward, there are a number of intriguing direction to further investigate.
+First, it is important to understand the stability of the DSL to positional disorder  [ 7 , 106 , 107 , 108 ] and missing spins  [ 109 , 98 , 110 , 99 ] , both of which are present in near-term simulators.
+Second, the dipolar XY Hamiltonian has no free parameters, but can be tuned by modifying the lattice geometry; possible applications of this geometric control could be to reduce edge effects or to study line defects in the DSL  [ 111 , 112 , 113 , 114 ] .
+Finally, we note that the spinon-edge-state and Friedel oscillation signatures are both mean-field spinon predictions—understanding possible modifications from the dynamical $U(1)$ gauge field remains an important open question  [ 115 , 116 , 117 ] .
+
+Acknowledgments. —We gratefully acknowledge the insights of A. Browaeys, G. Bornet, C. Chen, G. Emperauger, J. Kemp, T. Lahaye, K. K. Ni, P. Scholl, R. Verresen, A. Vishwanath, and J. Wei.
+This work was supported in part by the U.S. Department of Energy, Office of Science, National Quantum Information Science Research Centers, Quantum Systems Accelerator and by the Air Force Office of Scientific Research via the MURI program (FA9550-21-1-0069).
+V.L. acknowledges support from the NSF through the Center for Ultracold Atoms.
+J.H. was funded by the U.S. Department of Energy, Office of Science, Office of Basic Energy Sciences, Materials Sciences and Engineering Division under Contract No. DE-AC02-05- CH11231 through the Scientific Discovery through Advanced Computing (SciDAC) program (KC23DAC Topological and Correlated Matter via Tensor Networks and Quantum Monte Carlo).
+M.Z. was supported primarily by the U.S. Department of Energy, Office of Science, Basic Energy Sciences, under Early Career Award No. DE-SC0022716.
+N.Y.Y. acknowledges support from a Simons Investigator award.
+
+References
+
+[1] 
+ D. C. Tsui, H. L. Stormer, and A. C. Gossard, Physical Review Letters 48 , 1559 (1982) . 
+
+[2] 
+ R. B. Laughlin, Reviews of Modern Physics 71 , 863 (1999) . 
+
+[3] 
+ L. Savary and L. Balents, Reports on Progress in Physics 80 , 016502 (2017) . 
+
+[4] 
+ N. Read and S. Sachdev, Physical Review Letters 66 , 1773 (1991) . 
+
+[5] 
+ A. Kitaev, Annals of Physics 321 , 2 (2006) . 
+
+[6] 
+ J. Knolle and R. Moessner, Annual Review of Condensed Matter Physics 10 , 451 (2019) . 
+
+[7] 
+ L. Clark and A. H. Abdeldaim, Annual Review of Materials Research 51 , 495 (2021) . 
+
+[8] 
+ E. Altman, K. R. Brown, G. Carleo, L. D. Carr, E. Demler, C. Chin, B. DeMarco, S. E. Economou, M. A. Eriksson, K.-M. C. Fu, M. Greiner, K. R. Hazzard, R. G. Hulet, A. J. Kollár, B. L. Lev, M. D. Lukin, R. Ma, X. Mi, S. Misra, C. Monroe, K. Murch, Z. Nazario, K.-K. Ni, A. C. Potter, P. Roushan, M. Saffman, M. Schleier-Smith, I. Siddiqi, R. Simmonds, M. Singh, I. Spielman, K. Temme, D. S. Weiss, J. Vučković, V. Vuletić, J. Ye, and M. Zwierlein, PRX Quantum 2 , 017003 (2021) . 
+
+[9] 
+ R. Verresen, M. D. Lukin, and A. Vishwanath, Physical Review X 11 , 031005 (2021) . 
+
+[10] 
+ G. Semeghini, H. Levine, A. Keesling, S. Ebadi, T. T. Wang, D. Bluvstein, R. Verresen, H. Pichler, M. Kalinowski, R. Samajdar, A. Omran, S. Sachdev, A. Vishwanath, M. Greiner, V. Vuletić, and M. D. Lukin, Science 374 , 1242 (2021) . 
+
+[11] 
+ M. Iqbal, N. Tantivasadakarn, R. Verresen, S. L. Campbell, J. M. Dreiling, C. Figgatt, J. P. Gaebler, J. Johansen, M. Mills, S. A. Moses, J. M. Pino, A. Ransford, M. Rowe, P. Siegfried, R. P. Stutz, M. Foss-Feig, A. Vishwanath, and H. Dreyer, Nature 626 , 505 (2024) . 
+
+[12] 
+ N. E. Sherman, M. Dupont, and J. E. Moore, Physical Review B 107 , 165146 (2023) . 
+
+[13] 
+ M. Drescher, L. Vanderstraeten, R. Moessner, and F. Pollmann, Physical Review B 108 , L220401 (2023) . 
+
+[14] 
+ S. Hu, W. Zhu, S. Eggert, and Y.-C. He, Physical Review Letters 123 , 207203 (2019) . 
+
+[15] 
+ S. Xu, R. Bag, N. E. Sherman, L. Yadav, A. I. Kolesnikov, A. A. Podlesnyak, J. E. Moore, and S. Haravifard, Realization of U(1) Dirac Quantum Spin Liquid in YbZn2GaO5 (2023), arxiv:2305.20040 [cond-mat] . 
+
+[16] 
+ A. Wietek, S. Capponi, and A. M. Läuchli, Physical Review X 14 , 021010 (2024) . 
+
+[17] 
+ Y.-C. He, M. P. Zaletel, M. Oshikawa, and F. Pollmann, Physical Review X 7 , 031020 (2017) . 
+
+[18] 
+ H. J. Liao, Z. Y. Xie, J. Chen, Z. Y. Liu, H. D. Xie, R. Z. Huang, B. Normand, and T. Xiang, Physical Review Letters 118 , 137202 (2017) . 
+
+[19] 
+ W. Zhu, X. Chen, Y.-C. He, and W. Witczak-Krempa, Science Advances 4 , eaat5535 (2018) . 
+
+[20] 
+ S. Jiang, P. Kim, J. H. Han, and Y. Ran, SciPost Physics 7 , 006 (2019) . 
+
+[21] 
+ Z. Zeng, C. Zhou, H. Zhou, L. Han, R. Chi, K. Li, M. Kofu, K. Nakajima, Y. Wei, W. Zhang, D. G. Mazzone, Z. Y. Meng, and S. Li, Nature Physics 10.1038/s41567-024-02495-z (2024). 
+
+[22] 
+ E. M. Smith, O. Benton, D. R. Yahne, B. Placke, R. Schäfer, J. Gaudet, J. Dudemaine, A. Fitterman, J. Beare, A. R. Wildes, S. Bhattacharya, T. DeLazzer, C. R. C. Buhariwalla, N. P. Butch, R. Movshovich, J. D. Garrett, C. A. Marjerrison, J. P. Clancy, E. Kermarrec, G. M. Luke, A. D. Bianchi, K. A. Ross, and B. D. Gaulin, Physical Review X 12 , 021015 (2022) . 
+
+[23] 
+ E. M. Smith, J. Dudemaine, B. Placke, R. Schäfer, D. R. Yahne, T. DeLazzer, A. Fitterman, J. Beare, J. Gaudet, C. R. C. Buhariwalla, A. Podlesnyak, G. Xu, J. P. Clancy, R. Movshovich, G. M. Luke, K. A. Ross, R. Moessner, O. Benton, A. D. Bianchi, and B. D. Gaulin, Physical Review B 108 , 054438 (2023) . 
+
+[24] 
+ V. Porée, H. Yan, F. Desrochers, S. Petit, E. Lhotel, M. Appel, J. Ollivier, Y. B. Kim, A. H. Nevidomskyy, and R. Sibille, Fractional matter coupled to the emergent gauge field in a quantum spin ice (2023). 
+
+[25] 
+ B. Gao, F. Desrochers, D. W. Tam, P. Steffens, A. Hiess, Y. Su, S.-W. Cheong, Y. B. Kim, and P. Dai, Emergent photons and fractionalized excitations in a quantum spin liquid (2024). 
+
+[26] 
+ C.-J. Huang, C. Liu, Z. Meng, Y. Yu, Y. Deng, and G. Chen, Physical Review Research 2 , 042022 (2020) . 
+
+[27] 
+ L. E. Chern, F. Desrochers, Y. B. Kim, and C. Castelnovo, Physical Review B 109 , 184421 (2024) . 
+
+[28] 
+ L. B. Ioffe and A. I. Larkin, Physical Review B 39 , 8988 (1989) . 
+
+[29] 
+ J. B. Marston and I. Affleck, Physical Review B 39 , 11538 (1989) . 
+
+[30] 
+ M. B. Hastings, Physical Review B 63 , 014413 (2000) . 
+
+[31] 
+ X.-G. Wen, Physical Review B 65 , 165113 (2002) . 
+
+[32] 
+ Y. Ran, M. Hermele, P. A. Lee, and X.-G. Wen, Physical Review Letters 98 , 117205 (2007) . 
+
+[33] 
+ T. Appelquist and R. D. Pisarski, Physical Review D 23 , 2305 (1981) . 
+
+[34] 
+ V. Borokhov, A. Kapustin, and X. Wu, Journal of High Energy Physics 2002 , 049 (2002) . 
+
+[35] 
+ M. Hermele, T. Senthil, M. P. A. Fisher, P. A. Lee, N. Nagaosa, and X.-G. Wen, Physical Review B 70 , 214437 (2004) . 
+
+[36] 
+ M. Hermele, Y. Ran, P. A. Lee, and X.-G. Wen, Physical Review B 77 , 224413 (2008) . 
+
+[37] 
+ X.-Y. Song, C. Wang, A. Vishwanath, and Y.-C. He, Nature Communications 10 , 4254 (2019) . 
+
+[38] 
+ S. Albayrak, R. S. Erramilli, Z. Li, D. Poland, and Y. Xin, Physical Review D 105 , 085008 (2022) . 
+
+[39] 
+ Y.-C. He, J. Rong, and N. Su, SciPost Physics 13 , 014 (2022) . 
+
+[40] 
+ W. Ye, M. Guo, Y.-C. He, C. Wang, and L. Zou, SciPost Physics 13 , 066 (2022) . 
+
+[41] 
+ S. Budaraju, Y. Iqbal, F. Becca, and D. Poilblanc, Physical Review B 108 , L201116 (2023) . 
+
+[42] 
+ N. Karthik and R. Narayanan, Physical Review D 109 , 034507 (2024) . 
+
+[43] 
+ K. R. A. Hazzard, M. Van Den Worm, M. Foss-Feig, S. R. Manmana, E. G. Dalla Torre, T. Pfau, M. Kastner, and A. M. Rey, Physical Review A 90 , 063622 (2014) . 
+
+[44] 
+ Y. Bao, S. S. Yu, L. Anderegg, E. Chae, W. Ketterle, K.-K. Ni, and J. M. Doyle, arXiv 10.48550/ARXIV.2211.09780 (2022). 
+
+[45] 
+ L. Christakis, J. S. Rosenberg, R. Raj, S. Chi, A. Morningstar, D. A. Huse, Z. Z. Yan, and W. S. Bakr, Nature 614 , 64 (2023) . 
+
+[46] 
+ P. Jurcevic, B. P. Lanyon, P. Hauke, C. Hempel, P. Zoller, R. Blatt, and C. F. Roos, Nature 511 , 202 (2014) . 
+
+[47] 
+ P. Richerme, Z.-X. Gong, A. Lee, C. Senko, J. Smith, M. Foss-Feig, S. Michalakis, A. V. Gorshkov, and C. Monroe, Nature 511 , 198 (2014) . 
+
+[48] 
+ C. Chen, G. Bornet, M. Bintz, G. Emperauger, L. Leclerc, V. S. Liu, P. Scholl, D. Barredo, J. Hauschild, S. Chatterjee, M. Schuler, A. M. Läuchli, M. P. Zaletel, T. Lahaye, N. Y. Yao, and A. Browaeys, Nature 616 , 691 (2023) . 
+
+[49] 
+ S. R. White, Physical Review Letters 69 , 2863 (1992) . 
+
+[50] 
+ S. Östlund and S. Rommer, Physical Review Letters 75 , 3537 (1995) . 
+
+[51] 
+ I. P. McCulloch, Infinite size density matrix renormalization group, revisited (2008), arxiv:0804.2509 [cond-mat] . 
+
+[52] 
+ U. Schollwöck, Annals of Physics 326 , 96 (2011) . 
+
+[53] 
+ J. Hauschild and F. Pollmann, SciPost Physics Lecture Notes , 5 (2018) . 
+
+[54] 
+ B. Grünbaum and G. C. Shephard, Tilings and Patterns , second edition ed. (Dover Publications, Inc, Mineola, New York, 2016). 
+
+[55] 
+ These regular polygon geometries lead to all nearest-neighbor interactions being equal in strength for $H_{\rm{dXY}}$ .
+
+[56] 
+ E. Stoudenmire and S. R. White, Annual Review of Condensed Matter Physics 3 , 111 (2012) . 
+
+[57] 
+ L. Cincio and G. Vidal, Physical Review Letters 110 , 067208 (2013) . 
+
+[58] 
+ M. P. Zaletel, R. S. K. Mong, and F. Pollmann, Physical Review Letters 110 , 236801 (2013) . 
+
+[59] 
+ A. Szasz, J. Motruk, M. P. Zaletel, and J. E. Moore, Physical Review X 10 , 021042 (2020) . 
+
+[60] 
+ See Supplemental Material.
+
+[61] 
+ To appear.
+
+[62] 
+ For distances greater than $W$ , the decay is exponential.
+
+[63] 
+ E. Lieb, T. Schultz, and D. Mattis, Annals of Physics 16 , 407 (1961) . 
+
+[64] 
+ M. Oshikawa, Physical Review Letters 84 , 1535 (2000) , arxiv:cond-mat/9911137 . 
+
+[65] 
+ M. B. Hastings, Physical Review B 69 , 104431 (2004) . 
+
+[66] 
+ W. Zhu, S.-s. Gong, and D. N. Sheng, Proceedings of the National Academy of Sciences 116 , 5437 (2019) . 
+
+[67] 
+ C. Zhang and T. Li, Physical Review B 102 , 195106 (2020) . 
+
+[68] 
+ F. Ferrari, A. Parola, and F. Becca, Physical Review B 103 , 195140 (2021) . 
+
+[69] 
+ V. Zauner, D. Draxler, L. Vanderstraeten, M. Degroote, J. Haegeman, M. M. Rams, V. Stojevic, N. Schuch, and F. Verstraete, New Journal of Physics 17 , 053002 (2015) . 
+
+[70] 
+ M. M. Rams, P. Czarnik, and L. Cincio, Physical Review X 8 , 041033 (2018) . 
+
+[71] 
+ B. Vanhecke, J. Haegeman, K. Van Acoleyen, L. Vanderstraeten, and F. Verstraete, Physical Review Letters 123 , 250604 (2019) . 
+
+[72] 
+ A. A. Eberharter, L. Vanderstraeten, F. Verstraete, and A. M. Läuchli, Physical Review Letters 131 , 226502 (2023) . 
+
+[73] 
+ V. Elser, Physical Review Letters 62 , 2405 (1989) . 
+
+[74] 
+ G. Misguich and C. Lhuillier, TWO-DIMENSIONAL QUANTUM ANTIFERROMAGNETS, in Frustrated Spin Systems (WORLD SCIENTIFIC, 2013) pp. 235–319, 2nd ed.
+
+[75] 
+ N. Y. Yao, M. P. Zaletel, D. M. Stamper-Kurn, and A. Vishwanath, Nature Physics 14 , 405 (2018) . 
+
+[76] 
+ H. Zou, E. Zhao, and W. V. Liu, Physical Review Letters 119 , 050401 (2017) . 
+
+[77] 
+ A. Keleş and E. Zhao, Physical Review Letters 120 , 187202 (2018) . 
+
+[78] 
+ A. M. Läuchli and R. Moessner, Quantum simulations made easy plane (2015), arxiv:1504.04380 [cond-mat] . 
+
+[79] 
+ Y.-C. He and Y. Chen, Physical Review Letters 114 , 037201 (2015) . 
+
+[80] 
+ W. Zhu, S. S. Gong, and D. N. Sheng, Physical Review B 92 , 014424 (2015) . 
+
+[81] 
+ W.-J. Hu, S.-S. Gong, F. Becca, and D. N. Sheng, Physical Review B 92 , 201105 (2015) . 
+
+[82] 
+ H. J. Changlani, D. Kochkov, K. Kumar, B. K. Clark, and E. Fradkin, Physical Review Letters 120 , 117202 (2018) . 
+
+[83] 
+ T. Dodds, S. Bhattacharjee, and Y. B. Kim, Physical Review B 88 , 224413 (2013) , arxiv:1303.1154 [cond-mat] . 
+
+[84] 
+ T. Albash and D. A. Lidar, Reviews of Modern Physics 90 , 015002 (2018) . 
+
+[85] 
+ A. Chandran, A. Erez, S. S. Gubser, and S. L. Sondhi, Physical Review B 86 , 064304 (2012) . 
+
+[86] 
+ D. Jaksch, C. Bruder, J. I. Cirac, C. W. Gardiner, and P. Zoller, Physical Review Letters 81 , 3108 (1998) . 
+
+[87] 
+ A. Priyadarshee, S. Chandrasekharan, J.-W. Lee, and H. U. Baranger, Physical Review Letters 97 , 115703 (2006) . 
+
+[88] 
+ J. Motruk and F. Pollmann, Physical Review B 96 , 165107 (2017) . 
+
+[89] 
+ G. Bornet, G. Emperauger, C. Chen, F. Machado, S. Chern, L. Leclerc, B. Gély, D. Barredo, T. Lahaye, N. Y. Yao, and A. Browaeys, Enhancing a Many-body Dipolar Rydberg Tweezer Array with Arbitrary Local Controls (2024), arxiv:2402.11056 [cond-mat, physics:physics, physics:quant-ph] . 
+
+[90] 
+ A. Polyakov, Nuclear Physics B 120 , 429 (1977) . 
+
+[91] 
+ A. M. Polyakov, Gauge fields and strings (Taylor & Francis, 1987). 
+
+[92] 
+ This is a finite- $W$ smoothening of the singular behavior expected as $\delta\to 0$ in the thermodynamic limit.
+
+[93] 
+ J. Haegeman, J. I. Cirac, T. J. Osborne, I. Pižorn, H. Verschelde, and F. Verstraete, Physical Review Letters 107 , 070601 (2011) . 
+
+[94] 
+ J. Haegeman, C. Lubich, I. Oseledets, B. Vandereycken, and F. Verstraete, Physical Review B 94 , 165116 (2016) . 
+
+[95] 
+ D. McAvity and H. Osborn, Nuclear Physics B 455 , 522 (1995) . 
+
+[96] 
+ H. W. Diehl, International Journal of Modern Physics B 11 , 3503 (1997) . 
+
+[97] 
+ We note that $\Delta$ may be as low as $\Delta_{\Phi}\approx 1.1$ for monopole excitations.
+
+[98] 
+ K. Gregor and O. I. Motrunich, Physical Review B 77 , 184423 (2008) . 
+
+[99] 
+ J. Yang and T. Li, Physical Review B 109 , 115103 (2024) . 
+
+[100] 
+ M. Fujita, K. Wakabayashi, K. Nakada, and K. Kusakabe, Journal of the Physical Society of Japan 65 , 1920 (1996) . 
+
+[101] 
+ K. Nakada, M. Fujita, G. Dresselhaus, and M. S. Dresselhaus, Physical Review B 54 , 17954 (1996) . 
+
+[102] 
+ L. Brey and H. A. Fertig, Physical Review B 73 , 235411 (2006) . 
+
+[103] 
+ S. Biswas and G. W. Semenoff, Journal of High Energy Physics 2022 , 45 (2022) . 
+
+[104] 
+ C. Braun, R. Saint-Jalm, A. Hesse, J. Arceri, I. Bloch, and M. Aidelsburger, Real-space detection and manipulation of topological edge modes with ultracold atoms (2023), arxiv:2304.01980 [cond-mat, physics:quant-ph] . 
+
+[105] 
+ A. Thomson and S. Sachdev, Physical Review B 95 , 235146 (2017) . 
+
+[106] 
+ S. Dey, Physical Review B 102 , 235165 (2020) . 
+
+[107] 
+ U. F. P. Seifert, J. Willsher, M. Drescher, F. Pollmann, and J. Knolle, Spin-Peierls instability of the U(1) Dirac spin liquid (2023), arxiv:2307.12295 [cond-mat, physics:hep-th] . 
+
+[108] 
+ F. Ferrari, F. Becca, and R. Valentí, Physical Review B 109 , 165133 (2024) . 
+
+[109] 
+ A. Olariu, P. Mendels, F. Bert, F. Duc, J. C. Trombe, M. A. De Vries, and A. Harrison, Physical Review Letters 100 , 087202 (2008) . 
+
+[110] 
+ D. Poilblanc and A. Ralko, Physical Review B 82 , 174424 (2010) . 
+
+[111] 
+ M. Vekić and S. R. White, Physical Review Letters 71 , 4283 (1993) . 
+
+[112] 
+ H. Katsura, Journal of Physics A: Mathematical and Theoretical 45 , 115003 (2012) . 
+
+[113] 
+ M. Billò, V. Gonçalves, E. Lauria, and M. Meineri, Journal of High Energy Physics 2016 , 1 (2016) . 
+
+[114] 
+ L. Hu, Y.-C. He, and W. Zhu, Nature Communications 15 , 3659 (2024) . 
+
+[115] 
+ A. Kolezhuk, S. Sachdev, R. R. Biswas, and P. Chen, Physical Review B 74 , 165114 (2006) . 
+
+[116] 
+ Y. Ran, W.-H. Ko, P. A. Lee, and X.-G. Wen, Physical Review Letters 102 , 047205 (2009) . 
+
+[117] 
+ C. P. Herzog and V. Schaub, Journal of High Energy Physics 2023 , 129 (2023) . 
+
+Supplemental Material for “Dirac spin liquid in quantum dipole arrays”
+
+Contents
+
+References 
+
+Supplemental Material for “Dirac spin liquid in quantum dipole arrays” 
+
+SM1 The $U(1)$ Dirac spin liquid: theoretical aspects 
+
+SM1.1 Stability of the DSL with dipolar XY interactions 
+
+SM1.2 Mean-field spinon theory 
+
+SM1.3 Mass term for staggered $\sigma^{z}$ field 
+
+SM1.4 Kagome Brillouin zones 
+
+SM2 Edge states and bulk modes on infinite strips 
+
+SM3 Additional iDMRG results 
+
+SM3.1 iDMRG methodology 
+
+SM3.2 Connection to Heisenberg model 
+
+SM3.3 Global XY phase diagrams 
+
+SM3.3.1 Five-coupling model 
+
+SM3.3.2 Longer-range interactions 
+
+SM4 Additional finite-size DMRG 
+
+SM4.1 The $N=80$ cluster: VBS vs DSL 
+
+SM4.2 Interstitial defect for other phases 
+
+SM5 Note on adiabaticity 
+
+SM6 Dipolar XY antiferromagnets 
+
+References 
+
+In this Supplemental Material, we provide additional methodological details, numerical results, and analytical arguments that support the conclusions in the main text.
+In the first two sections, we discuss analytic aspects of the $U(1)$ DSL and its corresponding free-spinon mean-field theory.
+The next two sections give additional numerical details and results for the $H_{\rm{dXY}}$ model on the kagome lattice.
+The final sections discuss other lattice geometries and some aspects of the adiabatic preparation, and are mostly independent of the preceding discussion.
+
+SM1 The $U(1)$ Dirac spin liquid: theoretical aspects
+
+We first review some basic properties of the $U(1)$ DSL and establish some notation.
+The $U(1)$ DSL is a fractionalized, quantum critical state of matter whose low-energy, long-wavelength excitations can be understood as massless Dirac fermions, $\psi$ , coupled to a compact $U(1)$ gauge field, $A_{\mu}$ .
+Their dynamics are governed by the Lagrangian of (2+1)-dimensional quantum electrodynamics (QED 3 ),
+
+$\mathcal{L}_{\mathrm{QED}}=\bar{\Psi}\left[-i\gamma^{\mu}(\partial_{\mu}+iA_{\mu})\right]\Psi+\frac{1}{2e^{2}}\sum_{\mu}\left(\epsilon_{\mu\nu\lambda}\partial_{\nu}A_{\lambda}\right)^{2}.$ 
+ 
+ (S1) 
+
+Here, we follow the conventions of Ref.  [ 1 ] : $\Psi$ is a vector of $N_{f}$ two-component Dirac fermions, $\psi$ ; $\gamma^{\nu}=(\tau^{3},\tau^{2},-\tau^{1})$ for $\nu=0,1,2$ , where $\tau$ are Pauli matrices acting on the two-component Dirac space; $\bar{\Psi}=i\Psi^{\dagger}\tau^{3}$ ; and $e$ is the coupling constant.
+For a spin-1/2 lattice system with two Dirac cones, $N_{f}=4$ and $\mathcal{L}_{\mathrm{QED}}$ possesses a global $SU(4)$ symmetry generated by $T^{a}=\left\{\sigma^{i},\mu^{i},\sigma^{i}\mu^{j}\right\}$ , where $\sigma$ acts on the spin degree of freedom, and $\mu$ on the valley indices.
+The essential physical consequence of this $SU(4)$ symmetry is that microscopically very different operators can exhibit exactly the same scaling dimensions  [ 2 ] (and, consequently, power-law decays).
+Lastly, $\mathcal{L}_{QED}$ exhibits an emergent global $U(1)$ symmetry corresponding to the total magnetic flux through the plane; in a spin system, the $U(1)$ gauge field is compact, so this flux is only conserved modulo $2\pi$   [ 2 ] .
+Field operators that change this flux (i.e. when acting on the QED 3 vacuum) by units of $2\pi$ are referred to as monopoles  [ 2 , 3 ] .
+
+As an effective field theory, $\mathcal{L}_{\mathrm{QED}}$ should be supplemented with a series of all symmetry-allowed local terms.
+If all such terms are irrelevant, $\mathcal{L}_{\mathrm{QED}}$ will flow in the infrared (IR) to a strongly-coupled conformal field theory (CFT), and thus represents a stable critical phase (i.e. without fine tuning).
+The most important classes of perturbations are fermion billinear (mass) terms, and monopole insertion operators.
+In the kagome Heisenberg antiferromagnet, all fermion billinears and $2\pi$ -monopole operators are forbidden by the global symmetries of the microscopic model  [ 1 , 3 ] .
+The stability of the phase then depends on the scaling dimension of the $4\pi$ -monopole operator: the most recent lattice monte carlo estimate for $N_{f}=4$ QED 3 is $\Delta_{4\pi}=3.7(3)$ , which is irrelevant and so implies that the $U(1)$ DSL phase is possibly stable  [ 4 ] .
+We note there is currently some tension between lattice monte carlo and conformal bootstrap approaches  [ 5 , 6 ] .
+
+The emergent long-wavelength fields can be related to microscopic physical observables through symmetry arguments and the operator product expansion (OPE).
+Precisely, if a physical operator $\mathcal{O}$ has the same symmetries as some emergent field $\phi$ with scaling dimension $\Delta$ , then it should generally exhibit two-point correlations that decay spatially as $r^{-2\Delta}$ .
+If $\phi$ has nontrivial momentum then the decay will also oscillate at that wavevector.
+The microscopic correspondences of several important kagome DSL fields have been worked out previously  [ 1 , 7 , 3 , 8 ] , and some are illustrated in Fig.  S1 .
+
+Figure S1: Illustration of leading microscopic operators that are symmetry-equivalent to the emergent $U(1)$ gauge fields (top row) and to the $2\pi$ -monopoles (bottom row)  [ 1 , 7 , 3 , 8 ] . (a,b) The electric field corresponds to spatial anisotropy in spin-spin correlations $\langle\vec{\sigma}_{i}\cdot\vec{\sigma}_{j}\rangle$ . (c) The leading magnetic field operator is the three-spin scalar chirality $\langle\vec{\sigma}_{i}\cdot(\vec{\sigma}_{j}\times\vec{\sigma}_{k})\rangle$ about a fundamental kagome triangle. (d, e, f) The spin-singlet monopoles $\Phi_{s}$ carry finite momentum and correspond to different valence bond solid patterns. (g) The spin-triplet monopole $\Phi_{t}$ induces coplanar $120^{\circ}$ magnetic order. This “ $q=0$ state” breaks spatial reflection and rotation, but not translation.
+
+SM1.1 Stability of the DSL with dipolar XY interactions
+
+There are two key ways that $H_{\rm dXY}$ differs from $H_{\rm nnH}$ which could alter the DSL stability argument: the spin-rotation symmetry is reduced ( $U(1)\rtimes\mathbb{Z}_{2}\subset SU(2)$ ), and the interactions are somewhat long-ranged.
+
+The first point could enable a relevant operator that was previously symmetry-forbidden to become symmetry-allowed.
+We argue this does not end up happening.
+Besides the $U(1)\rtimes\mathbb{Z}_{2}$ rotation symmetry, $H_{\rm{dXY}}$ also has the antiunitary time reversal symmetry $\vec{\sigma}\to-\vec{\sigma}$ , as well as all spatial symmetries of the kagome lattice.
+As stated earlier, the potentially relevant operators are the fermion billinears and the $2\pi$ monopoles.
+The understood symmetry transformations of these fields are summarized in Table 3 of Ref.  [ 3 ] , from which one can immediately verify that all such operators transform nontrivially under at least one of the $H_{\rm{dXY}}$ symmetries.
+As an alternative perspective, in the mean-field spinon framework (see Sec.  SM1.2 ), one can explicitly determine all symmetry-allowed spinon billinears; this was done in Ref.  [ 9 ] , and in the time-reversal symmetric $(D=0)$ case of their Eq. (18), (19), the DSL is seen to be mean-field stable.
+
+The second point is also not expected to be an issue, because the decay of the $r^{-3}$ interaction and of the DSL spin-spin correlations are sufficiently fast.
+More explicitly, we can follow a general argument by Cardy  [ 10 ] : consider a short-range Hamiltonian $H_{0}$ which is critical, and perturb it with some long-range interaction $H_{1}=\sum_{r,r^{\prime}}V(r-r^{\prime})\mathcal{O}(r)\mathcal{O}(r^{\prime})$ , where $V(r)\sim v_{0}r^{-d-\sigma_{V}}$ , with $d$ the spatial dimension.
+We then determine whether this is a relevant perturbation to the short-range fixed point.
+Define $q(R)\equiv\int\mathrm{d}^{d}r\;V(r)\mathcal{O}(R+r/2)\mathcal{O}(R-r/2)$ , so that
+
+$\langle q(R_{1})q(R_{2})\sim\int\int V(r_{1})V(r_{2})\langle\mathcal{O}(R_{1}+r_{1}/2)\mathcal{O}(R_{1}-r_{1}/2)\mathcal{O}(R_{2}+r_{1}/2)\mathcal{O}(R_{2}-r_{1}/2)\rangle\differential^{d}r_{1}\differential^{d}r_{2}.$ 
+ 
+ (S2) 
+
+The scaling of this expression with $R_{12}=R_{1}-R_{2}$ follows from the scaling behavior of each individual component: it is $R_{12}^{2d-2(d+\sigma_{V})-4\Delta_{\phi}}$ , where $\phi$ is the most relevant operator contributing to $\mathcal{O}$ correlations.
+The scaling dimension of the perturbing interaction is then $\Delta_{q}=2\Delta_{\phi}+\sigma$ .
+In our $H_{\rm{dXY}}$ setting, $\sigma_{V}=1$ , and the most relevant operator related to $\sigma^{+}\sigma^{-}$ correlations is the spin-triplet $2\pi$ monopole $\Phi_{t}$   [ 1 , 3 ] .
+This operator is generally found to have dimension slightly greater than 1  [ 6 , 5 ] , for example, the monte carlo study Ref.  [ 11 ] gives $\Delta_{\Phi}=1.26(8)$ .
+The $r^{-3}$ spin-spin interactions of $H_{\rm{dXY}}$ are thus expected to be renormalization group irrelevant ( $\Delta_{q}\approx 3.5>3$ ), leaving the $U(1)$ DSL fixed point in principle stable.
+Two additional remarks: (i) The stability of the $U(1)$ DSL for short-range kagome Heisenberg interactions remains somewhat ambiguous  [ 6 , 5 , 4 ] . Our claim is that $H_{\rm{dXY}}$ does not introduce any new essential instabilities. (ii) Generically, microscopic energetics could instead favor a spontaneous-symmetry-breaking phase, i.e. into one of the proximate, descendant orders of the $U(1)$ DSL  [ 12 , 1 , 3 ] .
+Numerically, we were able to stabilize several such states by adjusting the strength of various long-range couplings (see Sec.  SM3.3 ).
+However, our DMRG results indicate $H_{\rm{dXY}}$ instead lies in the critical, symmetry-unbroken phase.
+
+SM1.2 Mean-field spinon theory
+
+Figure S2: Basic properties of the $(\pi,0)$ model for free Dirac spinons on the kagome lattice. (a) One choice of unit cell (light orange parallelogram) and gauge (red dash-dot lines). (b) The spinon BZ is half of the inner BZ, and contains two Dirac points, $\pm Q$ . (c) Center two bands, $E_{\rm{MF}}(\mathbf{k})$ , of the $(\pi,0)$ model, along the momentum cut shown with black arrows in (b). (d) The dynamical spin structure factor, $\mathcal{S}_{{\mathfrak{a}\mathfrak{a}}}(\mathbf{k},\omega)$ , is a gauge-invariant convolution of two spinons, and so displays conical weight at the $\Gamma$ and $M=2Q$ points.
+
+An alternative way to understand the $U(1)$ DSL is through the mean-field “parton theory” approach  [ 13 ] , in which one fractionalizes the local spin-1/2 operators into pairs of fermionic spinons
+
+$S^{+}_{i}=f_{i,\uparrow}^{\dagger}f_{i,\downarrow},\quad S^{-}_{i}=f_{i,\downarrow}^{\dagger}f_{i,\uparrow},\quad\sigma^{z}_{i}=n_{i,\uparrow}-n_{i,\downarrow},$ 
+ 
+ (S3) 
+
+where $f$ are fermionic ladder operators, and $n=f^{\dagger}f$ .
+If one imposes the single occupancy constraint, $n_{i,\uparrow}+n_{i,\downarrow}=1$ , then the spin and constrained fermion Hilbert spaces and operator algebras are isomorphic.
+In the mean-field approximation, this local constraint is relaxed to be true only on average (i.e. the fermions are at half-filling), and different possible spin liquid states are then represented by gauge-inequivalent quadratic spinon Hamiltonians  [ 14 ] .
+The one for the kagome DSL takes the pure-hopping form,
+
+$H_{\rm\sigma MF}=-t\sum_{\sigma=\uparrow,\downarrow}\sum_{\langle ij\rangle}s_{ij}f^{\dagger}_{\sigma i}f_{\sigma j},$ 
+ 
+ (S4) 
+
+where $t$ is a uniform hopping and $s_{ij}=\pm 1$ is understood as follows: writing $w_{ij}=e^{iA_{ij}}$ , $A_{ij}$ can be interpreted as (the spatial components of) an emergent $U(1)$ gauge field, whose mean-field configuration on the kagome lattice has $0$ flux through elementary triangles, and $\pi$ flux through elementary hexagons.
+One choice of gauge for this flux pattern is shown in Fig.   S2 (a); other gauges are related by local unitary transformations, $f_{j,\sigma}^{\dagger}\to e^{i\theta_{j}}f_{j,\sigma}^{\dagger}$ .
+On the infinite plane, $H_{\rm\sigma MF}$ is reduced to a six-band model, for which the two center bands meet at a pair of Dirac points, $\pm{Q}=\pm M_{3}/2$ [Fig.  S2 (b,c)].
+(Due to the $\pi$ fluxes, the spinon Brillouin zone (sBZ) is necessarily halved, reflecting the projective symmetry group of the fermions.)
+We note that in the mean-field approximation, the up- and down-spinons do not interact, so it is often convenient to focus on a single species of spinon, i.e. work with the spinless Hamiltonian $H_{\rm MF}=-\sum_{\langle i,j\rangle}t_{ij}f_{i}^{\dagger}f_{j}$ 
+
+SM1.3 Mass term for staggered $\sigma^{z}$ field
+
+Figure S3: (a) Inner Brillouin zone (hexagon), magnetic spinon Brillouin zone (rectangle), high-symmetry points, and two orthogonal momentum cuts that pass through a spinon Dirac point $Q_{+}$ . (b-d) The $\sigma^{z}$ staggering pattern studied in the main text can be decomposed into a $q=M_{I}$ part and a translation-invariant part. The lattice bonds depict a compatible set of amplitudes for mean-field spinons (see Fig.  S2 ). (e) Mean-field spinon band structure in the absence of the staggered field. Blue and red lines correspond to the two different cuts in (a). Dark/light lines are the bands below/above the Fermi level. The Dirac dispersion is isotropic, as seen by the overlap of the red and blue lines. (f) The $q=M_{I}$ contribution opens a mass gap at the Dirac point. (g) The translation-invariant part introduces a velocity anisotropy. (h) Combined effect of the two terms.
+
+We now discuss how the staggered $\sigma^{z}$ field introduced in the main text can be understood from the continuum theory.
+Here we write this perturbation as:
+
+$H_{z}=-\sum_{i}\eta_{i}\sigma_{i}^{z},$ 
+ 
+ (S5) 
+
+where $\eta_{i}=\pm 1$ is the binary staggering pattern, which we reproduce in Fig.  S3 (d).
+(In the main text, this perturbation was denoted $H^{\prime}$ .)
+We then split $H_{z}$ into a sum of two terms, $H_{z}=H_{z}^{(1)}+H_{z}^{(2)}$ , where the $\eta$ for $H_{z}^{(1)},H_{z}^{(2)}$ , are shown in Fig.  S3 (b,c).
+The first term, $H_{z}^{(1)}$ , is nonzero on a single sublattice and alternates in sign at $q=M_{I}$ .
+As pointed out in Ref.  [ 1 ] (c.f. Fig. 4 in that work), this exactly corresponds to the fermion mass billinear $(\mathbf{N}^{2}_{A})^{z}=\Psi^{\dagger}\tau^{3}\mu^{2}\sigma^{z}\Psi$ .
+This also holds in the standard mean-field spinon description, where $\sigma^{z}_{i}=n_{i,\uparrow}-n_{i,\downarrow}$ corresponds to an onsite chemical potential of opposite sign for spin-up vs. spin-down spinons.
+Representing $H_{z}^{(1)}$ in this way and adding it to the gapless mean-field Hamiltonian (Eq.  S4 ) directly opens a mass gap at the Dirac point [Fig.  S3 (f)].
+
+The second, translation-invariant term is somewhat more subtle, but its effect can be determined through a similar mean-field analysis.
+As shown in Fig.  S3 (g), this term does not open a gap, but instead leads to an anisotropic dispersion relation, which can be seen by considering two orthogonal cuts through momentum space.
+The anisotropy is of opposite sign for up/down spinons (not shown), and the corresponding continuum operator is the kinetic term $K_{a}=-i\Psi^{\dagger}\sigma^{3}\mu^{3}\left[\tau^{1}(\partial_{1}+iA_{1})-\tau^{2}(\partial_{2}+iA_{2})\right]\Psi$   [ 12 ] .
+This type of perturbation is in fact expected to be irrelevant (e.g. in the large- $N_{f}$ expansion)  [ 12 ] .
+It also does not impact the primary effect of the combined term $H_{z}^{(1)}+H_{z}^{(2)}$ , which is to open a gap for fermion excitations [Fig.  S3 (h)] and consequentially confine the $U(1)$ gauge field.
+
+SM1.4 Kagome Brillouin zones
+
+For completeness, we recount some details of the kagome geometry that can occasionally cause confusion.
+The kagome lattice is composed of three interlacing triangular sublattices, which we label $\mathfrak{a}$ , $\mathfrak{b}$ , and $\mathfrak{c}$ .
+We take units where the spacing between nearest-neighbors is $a=1$ , then choose the positions within the unit cell to be $\mathbf{\rho}_{\mathfrak{a}}=(0,0)$ , $\mathbf{\rho}_{\mathfrak{b}}=(\sqrt{3}/2,1/2)$ , and $\mathbf{\rho}_{\mathfrak{c}}=(0,1)$ , and the basis vectors as $\mathbf{a}_{1}=(\sqrt{3},1)$ , $\mathbf{a}_{2}=(0,2)$ .
+With this choice, $\mathbf{a}_{2}$ is along the periodic direction of the YC-oriented cylinders (e.g. YC12 in main text Fig. 1(b)).
+Each site of the lattice is then at the position $\mathbf{r}_{i}=m_{i}\mathbf{a}_{2}+n_{i}\mathbf{a}_{2}+\rho_{i}$ , where $(m_{i},n_{i})\in\mathbb{Z}^{2}$ .
+The corresponding reciprocal vectors are $\mathbf{b}_{1}=(\pi,0)$ and $\mathbf{b}_{2}=(2\pi/\sqrt{3},-\pi/\sqrt{3})$ , so that $\mathbf{a}_{i}\cdot\mathbf{b}_{j}=2\pi\delta_{ij}$ .
+These span a triangular Bravais lattice, and momentum space can hence be divided into hexagonal Brillouin zones (BZ), shown as the black hexagon in Fig.  S2 .
+The high-symmetry points of this inner BZ are $\Gamma=(0,0)$ , $M_{I}^{(i)}=\pm\pi\cdot(\cos(2\pi i/6),\,\sin(2\pi i/6))$ , where $i=1,2,3$ ; and $K_{I}^{\pm}=\pm(\pi,\pi/\sqrt{3})$ .
+
+It is often useful in studies of kagome systems to also consider the extended BZ, shown as the light gray hexagon in Fig.  S7 .
+This corresponds to the BZ of the finer triangular lattice of which the kagome lattice is a subset (i.e. the one which arises by adding a site to the center of each hexagon).
+The extended BZ has twice the linear dimension of the inner BZ, and we denote its high symmetry points as $M_{E}^{(i)}=2M_{I}^{(i)}$ and $K_{E}^{\pm}=2K_{I}^{\pm}$ .
+A typical appearance of the extended BZ is in the sublattice-unresolved, equal-time, spin structure factor,
+
+$S^{\alpha\beta}(\mathbf{k})=\frac{1}{N}\sum_{i,j}e^{i\mathbf{k}\cdot(\mathbf{r}_{i}-\mathbf{r}_{j})}\langle S^{\alpha}_{i}S^{\beta}_{j}\rangle,$ 
+ 
+ (S6) 
+
+which is, for instance, probed in neutron scattering experiments.
+
+The fermion billinear excitations of the $U(1)$ DSL have momentum at the $\Gamma$ or $M_{I}$ points.
+They are thus most cleanly probed in the inner BZ; the Friedel oscillations discussed in the main text are an example of this.
+Another example is the sublattice-resolved dynamical spin structure factor,
+
+$\mathcal{S}_{\lambda\mu}^{\alpha\beta}(\mathbf{k},\omega)=\frac{1}{2\pi}\sum_{\mathbf{R}}\int_{-\infty}^{\infty}e^{i(\omega t-\mathbf{k}\cdot\mathbf{r})}\langle\sigma_{\mathbf{R},\lambda}^{\alpha}(t)\sigma_{\mathbf{0},\mu}^{\beta}(0)\rangle,$ 
+ 
+ (S7) 
+
+where $\lambda,\mu$ are sublattice indices, for which we plot the mean-field spinon contribution in Fig.  S2 (d).
+The gapless weight at the $\Gamma$ and $M_{I}$ points respectively correspond to intra- or inter-node particle-hole scattering processes.
+
+SM2 Edge states and bulk modes on infinite strips
+
+In the main text, we discussed how certain terminations of the kagome lattice hosts specific low-energy modes, as a consequence of the presence of Dirac-cones in the mean-field spinon spectrum.
+In this section, we elaborate on the origin of these low-energy modes, and show that they can be derived from a continuum low-energy theory that describes the Dirac cones, together with appropriate boundary conditions that describe the edge terminations.
+Alternatively, one may solve the tight-binding Hamiltonian in Eq. ( S4 ) on an infinite strip to obtain these low-energy modes, as shown in Fig. 4 in the main text.
+Our analytic description, based on the Dirac spectrum, can precisely capture not only the energetics of such modes, but also whether they are localized or not — indicating a strong connection of these modes with the Dirac spectrum of spinons.
+
+Our strategy is to first derive an effective continuum low energy model for the bands near the Dirac cones.
+We then solve the resulting Dirac equation for the spectrum using appropriate boundary conditions, that depends on the specific termination of interest.
+For convenience, we rotate the unit cell shown in FIG. S2 .
+Note that the unit cell now has 6 sites, because of the presence of $\pi$ flux through each hexagonal plaquette.
+After taking a Fourier transform of the tight-binding Hamiltonian in Eq. ( S4 ), the two Dirac points lie at $\mathbf{Q}=\pm(0,\frac{\pi}{2})$ .
+
+We begin by expanding the Hamiltonian near $\mathbf{Q}$ to linear order
+in momentum (in the spirit of a $\mathbf{k}\cdot\mathbf{p}$ expansion).
+Defining $D_{+}(\mathbf{k})=H(\mathbf{Q}+\mathbf{k})-H(\mathbf{Q})$ , we find
+
+$D_{+}(\mathbf{k})=\begin{pmatrix}0&0&-(k_{x}+\sqrt{3}k_{y})&0&4ik_{x}&0\\
+0&0&0&0&0&-(k_{x}+\sqrt{3}k_{y})\\
+-(k_{x}+\sqrt{3}k_{y})&0&0&0&3k_{x}-\sqrt{3}k_{y}&0\\
+0&0&0&0&0&(k_{x}+\sqrt{3}k_{y})\\
+-4ik_{x}&0&3k_{x}-\sqrt{3}k_{y}&0&0&0\\
+0&-(k_{x}+\sqrt{3}k_{y})&0&(k_{x}+\sqrt{3}k_{y})&0&0\end{pmatrix}$ 
+ 
+ (S8) 
+
+We can find a similar expression for $D_{-}(\mathbf{k})$ by expanding around $\mathbf{Q}_{-}$ .
+At each Dirac point there are two dgenerate bands, so the low-energy Hilbert space manifold is four dimensional and is spanned by the following vectors:
+
+$\displaystyle v_{1}^{+}$ 
+ $\displaystyle=\frac{1}{\sqrt{6}}\left(e^{-2\pi i/3}~\sqrt{2}e^{-\pi i/12}~i~e^{\pi i/3}~0~1\right)^{T}$ 
+ 
+ (S9) 
+
+$\displaystyle v_{2}^{+}$ 
+ $\displaystyle=\frac{1}{\sqrt{6}}\left(e^{11\pi i/12}~0~e^{-3\pi i/4}~e^{11\pi i/12}~\sqrt{2}e^{\pi i/3}~e^{-\pi i/4}\right)^{T}$ 
+ 
+ (S10) 
+
+$\displaystyle v_{1}^{-}$ 
+ $\displaystyle=\frac{1}{\sqrt{6}}\left(e^{2\pi i/3}~\sqrt{2}e^{\pi i/12}~-i~e^{-\pi i/3}~0~1\right)^{T}$ 
+ 
+ (S11) 
+
+$\displaystyle v_{2}^{-}$ 
+ $\displaystyle=\frac{1}{\sqrt{6}}\left(e^{-11\pi i/12}~0~e^{3\pi i/4}~e^{-11\pi i/12}~\sqrt{2}e^{-\pi i/3}~e^{\pi i/4}\right)^{T}$ 
+ 
+ (S12) 
+
+Each vector has six components for the six atoms in the unit cell $(A,B,C,D,E,F)$ . The effective Hamiltonian’s matrix elements (in first order perturbation theory) are $H_{ij}=\bra{v_i}D(\mathbf{k})\ket{v_j}$ .
+This leads to the following effective Hamiltonian description of the low-energy theory:
+
+$H(\mathbf{q})=\sqrt{2}\left(q_{x}\sigma_{y}+q_{y}\tau_{x}\sigma_{x}\right),$ 
+ 
+ (S13) 
+
+where $\sigma$ is a band index and $\tau$ is the valley index. We will use this effective Hamiltonian to study systems that are finite in one direction and infinite in the other to describe the resulting bulk and edge modes.
+
+We consider the systems with hexagon and flat terminations (as defined in the main text) to illustrate the utility of our model.
+The system with the hexagon termination shows chiral zero-energy modes that are extended throughout the lattice while the flat termination shows exponentially localized edge states.
+Both these features can be understood from stuyding the continuum Hamiltonian near the Dirac cones.
+
+Starting with the hexagon termination, we take the strip to be infinite in the $x$ direction and finite in the $y$ direction. This implies that we can substitute for $q_{y}$ as $q_{y}=-i\partial_{y}$ while $q_{x}$ remains a good quantum number. This leads to the following differential equations in the $\tau=+$ valley,
+
+$\displaystyle i\sqrt{2}\left(-q_{x}+\partial_{y}\right)\phi_{2}^{+}(y)=\varepsilon\phi_{1}^{+}(y)$ 
+
+(S14) 
+
+$\displaystyle i\sqrt{2}\left(q_{x}+\partial_{y}\right)\phi_{1}^{+}(y)=\varepsilon\phi_{2}^{+}(y)$ 
+ 
+ (S15) 
+
+which leads to the decoupled equation
+
+$\left(q_{x}^{2}-\partial_{y}^{2}\right)\phi_{1}^{+}(y)=\frac{\varepsilon^{2}}{2}\phi_{1}^{+}(y)$ 
+ 
+ (S16) 
+
+The general solution to this equation is,
+
+$\phi_{1}^{+}(y)=Ae^{izy}+Be^{-izy},$ 
+ 
+ (S17) 
+
+$z^{2}=\frac{\varepsilon^{2}}{2}-q_{x}^{2}$ which gives the energy as a function of $q_{x}$ to be $\varepsilon=\sqrt{2(q_{x}^{2}+z^{2})}$ .
+The role of the boundary conditions is to then determine what values of $z$ are allowed.
+
+The appropriate boundary conditions are determined by setting the wave function to zero at the lattice sites that are extensions of the atoms at the ends of the strip. In the low energy theory, the wave function at a band $\mu$ is given by
+
+$\Psi_{\mu}(\bm{r})=e^{i\bm{Q}\cdot\bm{r}}\psi_{\mu}^{+}(\bm{r})+e^{-i\bm{Q}\cdot\bm{r}}\psi_{\mu}^{-}(\bm{r})$ 
+ 
+ (S18) 
+
+Since the system is infinite in the $x$ direction, we can write the wave function $\psi(x,y)$ as $\psi(x,y)=e^{iq_{x}x}\phi(y)$ .
+The ends of the strips are found at $y=0$ and $y=W$ , where $W$ is the width of the strip.
+At $y=0$ , we get
+
+$0=e^{iq_{x}x}(\phi_{1}^{+}(0)+\phi_{1}^{-}(0))$ 
+ 
+ (S19) 
+
+To satisfy the above equation for all $x$ , we must have $\phi_{1}^{+}(0)+\phi_{1}^{-}(0)=0$ .
+
+At $y=W$ , we get
+
+$0=e^{iq_{x}x}\left(e^{i\frac{\pi}{2}W}\phi_{1}^{+}(W)+e^{-i\frac{\pi}{2}W}\phi_{1}^{-}(W)\right)$ 
+ 
+ (S20) 
+
+Let us consider propagating modes in the $y$ -direction, such that $\phi_{1}^{+}(y)=e^{izy}$ , $\phi_{1}^{-}(y)=-e^{-izy}$ , satisfying the boundary condition $\phi_{1}^{+}(0)+\phi_{1}^{-}(0)=0$ .
+In order to satisfy the boundary conditions at $y=W$ we must have
+
+$e^{izW}=e^{-i\pi W}e^{-izW}$ 
+ 
+ (S21) 
+
+which we can solve for $z$ to get
+
+$z=-\frac{\pi}{2}+\frac{n\pi}{W}~~~~\text{for}~n\in\mathbb{Z}$ 
+ 
+ (S22) 
+
+Now, recall the energy on the finite strip is given by $\varepsilon=\sqrt{2(q_{x}^{2}+z^{2})}$ , where $q_{x}=0$ corresponds to the Dirac point.
+So, the spectrum can be gapless for $n=\frac{W}{2}$ .
+However, since $n\in\mathbb{Z}$ , such a solution is only possible if $W$ is even, which corresponds to the hexagon termination.
+Additionally, note that such a mode is delocalized all over the bulk, consistent with numerical observations.
+
+We now turn to the flat termination, which is obtained by having the periodic direction along $y$ and the strip begins at $x=0$ and ends at $x=W$ .
+In this termination, the wave function vanishes at the sublattice E at $x=0$ and at sublattice B at $x=W$ .
+Writing the wavefunction as $\psi(x,y)=e^{ik_{y}y}\phi(x)$ , the vanishing of the required components of $\psi(x,y)$ at $x=0$ and $x=W$ translates to the boundary conditions
+
+$\phi_{1}^{+}(x=0)=\phi_{1}^{-}(x=0)=\phi_{2}^{+}(x=W)=\phi_{2}^{-}(x=W)=0.$ 
+ 
+ (S23) 
+
+We note that this is identical to the boundary condition of the zigzag termination in graphene. We seek to find solutions that are decaying in the bulk so they take the form $\phi_{1}^{+}(x)=Ae^{zx}+Be^{-zx}$ , where $z^{2}=\frac{\varepsilon^{2}}{2}-q_{y}^{2}$ . To satisfy these boundary conditions, we find that we need to solve the transcendental equation,
+
+$\frac{k_{y}-z}{k_{y}+z}=e^{-2Wz}$ 
+ 
+ (S24) 
+
+Finding real solutions for Eq. ( S24 ) amounts to finding states that are localized on the edge (edge states).
+Real solutions are found for $k_{y}>k_{c}=1/W$ with no real solutions for $k_{y}<0$ .
+These analytical results agree with the tight-binding numerics on a strip, where surface states are only found to the right/left of the Dirac points, and are absent on the other side.
+
+SM3 Additional iDMRG results
+
+SM3.1 iDMRG methodology
+
+Here we comment on the application of iDMRG to the $H_{\rm{dXY}}$ problem.
+There are three key approximations that must be made.
+First, the true two-dimensional lattice must be compactified to a quasi-one-dimensional system, by choosing periodic boundary conditions along some vector $\vec{r}_{\rm mod}$ .
+This corresponds to an infinitely long cylinder with finite circumference, $W=\norm{\vec{r}_{\rm mod}}$ , which is typically six to twelve sites.
+Second, the power-law interactions of $H_{\rm{dXY}}$ cannot be exactly represented as a matrix product operator (MPO), so we introduce an additional length scale, $R_{\rm{int}}$ , for the interaction range.
+There are various schemes to perform this MPO compression, but in practice we found that the ground state is typically insensitive to the longest-range interactions, and so we simply set all couplings to zero beyond some maximum radius $R_{\rm{int}}\lesssim W/2$ .
+Finally, the matrix product state (MPS) representation is necessarily restricted to a finite bond dimension $d$ .
+The true ground state of the system corresponds to the limit in which $W$ , $R_{\rm int}$ , and $d$ are all three taken to infinity.
+
+While powerful, iDMRG is not an infallible technique for studying two-dimensional systems.
+This is especially so for frustrated magnetic systems, with many competing orders and the possibility of strong finite size effects.
+To help ensure the reliability of the iDMRG results, we proceed as follows.
+
+First, we work with a broad set of cylindrical geometries, which correspond to different choices of the periodic vector.
+This helps to check against the emergence of ordered states (e.g. $\sqrt{3}\times\sqrt{3}$ ) that are energetically frustrated by certain unfavorable geometries.
+However, we are generally speaking unable to rule out ordered states with unit cells larger than the circumference of our cylinders (as may be the case for certain large-scale valence bond solids).
+The largest cylinder we study is the YC12 geometry shown in the main text.
+In somewhat different models, it is known that long-range antiferromagnetic interactions have a tendency to stabilize mesoscopic ordering patterns; assessing this possibility appears beyond the capabilities of iDMRG or any numerically-exact technique we know of, but may be an interesting topic for future study with variational methods.
+
+Second, we attempt to safeguard against iDMRG’s tendency to get stuck in local energy minima.
+We believe this is especially important for $H_{\rm{dXY}}$ , which has many competing interactions and proximate phases.
+To do so, on each cylinder we first initialize up to 40 random states.
+These states are either random singlet coverings of the unit cell, or the result of a moderate depth random unitary circuit projected to $\chi=512$ .
+We use real wavefunctions for these; separately, we also use time-reversal-breaking (Kalmeyer-Laughlin) chiral spin liquid wavefunctions as candidate initial states.
+We perform a first run of iDMRG on these states up to an intermediate bond dimension of $\chi=2048-4096$ .
+Then we sort them into equivalency classes based off their energy and the structure of their spin- and momentum-resolved entanglement spectrum.
+
+We then run iDMRG a second time on single representatives of these classes, scaling to much larger bond dimension, $\chi=6144-10240$ .
+In our iDMRG sweeps, we generally increment the bond dimension in units of $1024$ or $2048$ , and make use of a mixer (for two-site iDMRG) or subspace expansion (for single-site iDMRG) whenever the bond dimension is increased.
+Occasionally there are many states competing at very small energy scales, with relative ordering that can change with increasing bond dimension.
+Nevertheless, in most cases we are able to identify a unique lowest energy state.
+We focus on this lowest state for each cylinder.
+
+SM3.2 Connection to Heisenberg model
+
+Figure S4: Interpolation from $H_{\rm nn}$ ( $\alpha=0$ ) to $H_{\rm dXY}$ ( $\alpha=1$ ) on the infinite YC8 cylinder (bond dimension $d=3072$ ). (a) The ground state overlap (per three-site kagome unit cell) remains large, with no indication of any sharp dip that would be seen at a phase transition. (b) Going from $H_{\rm{nn}}$ to $H_{\rm{dXY}}$ , the entanglement entropy smoothly decreases by a small amount. (c) The largest change is at the $\tilde{M}$ point, for which the $XX$ correlations are enhanced, and the $ZZ$ correlations diminish. (d) At the $\tilde{K}$ point, correlations are slightly reduced for both $XX$ and $ZZ$ .
+
+We consistently find spin liquid states that are very similar to that of the antiferromagnetic Heisenberg model, $H_{\mathrm{nn}}=(J/2)\sum_{\langle i,j\rangle}\vec{\sigma_{i}}\cdot\vec{\sigma_{j}}$ ,
+with the sum taken over just nearest-neighbors.
+To explicitly test this relation, we consider the continuous interpolation $\alpha H_{\rm nn}+(1-\alpha)H_{\rm dXY}$ , and compute the iDMRG ground state as $\alpha$ varies from 0 to 1, using the YC8 cylinder.
+We find a smooth crossover between the two endpoints, with no sign of any intervening phase transition (Fig.   S4 ).
+Thus, the quantum spin liquid we find is likely in the same phase as the extensively characterized $H_{\rm nn}$ ground state.
+
+SM3.3 Global XY phase diagrams
+
+The dipolar XY Hamiltonian, $H_{\rm dXY}$ , can be located within a broader phase diagram of generic antiferromagnetic $XY$ models on the kagome lattice.
+To this end, we consider the three-coupling model,
+
+$H_{3J}=J_{1}\sum_{\langle i,j\rangle}(X_{i}X_{j}+Y_{i}Y_{j})+J_{2}\sum_{\langle\langle i,j\rangle\rangle}(X_{i}X_{j}+Y_{i}Y_{j})+J_{3}\sum_{\langle\langle\langle i,j\rangle\rangle\rangle}(X_{i}X_{j}+Y_{i}Y_{j}),$ 
+ 
+ (S25) 
+
+where the three sums are taken over nearest-neighbors, next-nearest-neighbors, and next-next-nearest neighbors, respectively.
+Note that the $J_{3}$ terms have two geometric types on the kagome lattice, across hexagons and across bowties, which we include both of.
+
+Figure S5: Left: Global phase diagram of the $J_{1}-J_{2}-J_{3}$ model on the kagome XC8 infinite cylinder (bond dimension $d=3072$ ). White diamond marks the $J\propto 1/r^{3}$ point. Black markers are phase transitions determined from vertical or horizontal cuts; black lines interpolate between them. Gray hatched area is a thin critical region where the VBS order vanishes and the $\sqrt{3}\times\sqrt{3}$ correlations are short-ranged. Right: Real-space correlation patterns of the various phases. Bonds show nearest- and next-nearest-neighbor $\langle\sigma^{x}_{i}\sigma^{z}_{j}\rangle$ correlations; sites show correlations $\langle\sigma^{x}_{i}\sigma^{x}_{0}\rangle$ with a fixed site (dark red circle).
+
+With only nearest-neighbor interactions, the ground state of the XY kagome AFM is likely to be a spin liquid.
+In fact, numerical studies have generally found that the nearest-neighbor kagome XXZ model, $H_{\rm XXZ}=-\frac{J}{2}\sum_{\langle ij\rangle}X_{i}X_{j}+Y_{i}Y_{j}+\Delta Z_{i}Z_{j}$ ,
+has a constant spin liquid ground state for any $\Delta>-1/2$   1 1 
+ 1 
+
+Note our convention for $J$ here, which is chosen to match $H_{\rm dXY}$ , but differs from the standard one in the literature. .
+The XY point ( $\Delta=0$ ),
+
+$H_{\rm nnXY}=-\frac{J}{2}\sum_{\langle ij\rangle}X_{i}X_{j}+Y_{i}Y_{j}$ 
+ 
+ (S26) 
+
+has been specifically studied on occasion  [ 16 , 17 ] .
+For example, in Ref.  [ 16 ] , Läuchli and Moessner showed via exact diagonalization that the low-lying spectra of the XY and the $\Delta=1$ SU(2) kagome models are essentially identical up to rescaling.
+This suggests that the $H_{\rm nnXY}$ ground state is also in the $U(1)$ DSL phase, which we confirmed through iDMRG flux insertion calculations.
+
+Taking a series of cuts through the $J_{2},J_{3}$ phase space, and setting $J_{1}=1$ , we find the iDMRG ground state of $H_{3J}$ on the infinite XC8 cylinder.
+The results of this calculation are summarized in Fig.  S5 .
+The addition of $J_{2}$ favors the formation of the 120-ordering state, which spontaneously breaks the $U(1)$ symmetry but is translation invariant.
+At large $J_{3}$ , one instead finds the $\sqrt{3}\times\sqrt{3}$ state, which again has XY LRO but also enlarges the real-space unit cell to be 9 sites.
+When $J_{2}$ and $J_{3}$ are of comparable magnitude, competition between the two gives way to either a spin liquid state, or to a valence bond solid (VBS) characterized by spatially non-uniform, short-range correlations.
+
+The interactions of the dipolar XY model correspond to the point $J_{2}/J_{1}=1/(3\sqrt{3})\approx 0.192$ and $J_{3}/J_{1}=1/8$ , within this region of competition.
+In fact, it is very close to a second-order phase boundary between two quantum spin liquids.
+The first of these is the presumed-DSL, which is smoothly connected to the nearest-neighbor point.
+The second is a Kalmeyer-Laughlin chiral spin liquid (CSL) state that spontaneously breaks time-reversal-symmetry, and has chiral semion topological order.
+On this cylinder, the dipolar point appears to be slightly on the DSL side; larger cylinders and the inclusion of longer-range interactions further stabilize the DSL state.
+
+SM3.3.1 Five-coupling model
+
+We now zoom in on the parameter space surrounding $H_{\rm{dXY}}$ .
+In particular, we fix $(J_{2},J_{3})=(0.19,0.125)$ to their $1/r^{3}$ values, and now perturb the system with couplings $(J_{4},J_{5})$ , coupling sites at distances $(r_{4},r_{5})=(\sqrt{7},3)$ .
+Near the dipolar values $(J_{4},J_{5})=(0.054,0.037)$ , there is an enlarged region of the DSL phase.
+Thus, although the influence of $(J_{2},J_{3})$ bring the system close to the CSL phase, the longer-range antiferromagnetic interactions provide sufficient frustration to return towards the original DSL.
+
+Figure S6: Phase diagram of the five-coupling model on the XC8 kagome cylinder, fixing $(J_{2},J_{3})=(0.192,0.125)$ to match the dipolar Hamiltonian. White diamond marks the dipolar point.
+
+SM3.3.2 Longer-range interactions
+
+In practice we checked that adding the additional unambiguous couplings for XC8 ( $J_{6}=0.024$ , $J_{7}=0.021$ ) did not lead to any considerable impact on the ground state, i.e. the long-range interactions appear to have stabilized the system within the DSL phase.
+For the YC12 and YC8-2 calculations discussed in the main text, we used an $R_{max}=3.7$ cutoff, which corresponds to the inclusion of seven different couplings.
+The first excluded coupling in this case is $J_{8}=1/64$ , between sites separated by distance 4.
+We chose this as a reasonable balance between long-range coupling effects (which are eventually irrelevant, i.e. in the renormalization group sense [Sec.  SM1 ]) and computational cost.
+We also believe that finite- $W$ effects are dominant over the impact of the excluded interactions  [ 18 ] .
+
+SM4 Additional finite-size DMRG
+
+SM4.1 The $N=80$ cluster: VBS vs DSL
+
+In the thermodynamic limit, a VBS phase is most simply distinguished from the DSL by local correlations which spontaneously break spatial symmetries.
+This is subtle to judge on finite, open-boundary clusters, so we seek an alternative.
+This turns out to be straightforward, at least for the particular VBS seen in the global XY phase diagram.
+In Fig.  S7 , we show $\langle\sigma^{x}_{i}\sigma^{x}_{j}\rangle$ and its Fourier transforms for the $J_{2}=0.025$ DSL and the $(J_{2},J_{3})=(0.128,0.125)$ VBS on an $N=80$ site cluster: the DSL correlations are predominantly at the $M_{E}$ points of the extended B.Z., while for the VBS the weight is concentrated near the corners.
+This distinction can be further amplified by omitting the nearest-neighbor correlations (not shown).
+
+Figure S7: Finite DMRG results for an $N=80$ cluster, at bond dimension $d=4096$ . (a,b) Real-space $\langle\sigma^{x}_{i}\sigma^{x}_{j}\rangle$ correlations in the (a) DSL and (b) VBS phases of the $J_{1}-J_{2}-J_{3}$ model. (c,d) The respective Fourier transforms reveal the $M_{E}$ weight is strong for the DSL but absent in the VBS, and so can distinguish the two.
+
+SM4.2 Interstitial defect for other phases
+
+In the main text, we proposed using an interstitial defect atom as a way to introduce an additional spin-1/2 into the system.
+To our knowledge, such a defect has not been previously studied in kagome numerics.
+In Fig.  S8 , we show finite-cylinder DMRG results for the effect of this defect on other phases of the $J_{1}-J_{2}-J_{3}$ model.
+In the $120^{\circ}$ state [Fig.  S8 (a)], the excess spin-1/2 mostly spreads uniformly over the system, with some inhomogeneity near the inserted site.
+Interestingly, this acts as a defect in the $q=0$ ordering, which may lead to more complex effects on open clusters.
+The VBS [Fig.  S8 (b)] behaves somewhat similarly to the DSL: the twelve spins near the interstitial site become very strongly correlated with one another, and largely decouple from the rest of the system.
+There are large oscillations in $\sigma^{z}_{i}$ near the defect; the particular eight-spin “diamond” resonance is possibly an artifact of the cylinder geometry.
+
+Figure S8: The effect of an interstitial site on other kagome XY phases, as seen in finite-cylinder DMRG (bond dimension $d=3072$ ). Bonds again indicate $\sigma^{x}\sigma^{x}$ correlations, while the circles show single-body $\langle\sigma^{z}_{i}\rangle$ (lavender for positive, green for negative, with area proportional to $|\langle\sigma^{z}_{i}\rangle|$ ).
+
+SM5 Note on adiabaticity
+
+The staggered $\sigma^{z}$ field ramp is an example of the “end-critical protocol” discussed in Ref.  [ 19 ] .
+As noted in the main text, with sufficiently slow power-law-type ramps $\delta(t)\sim t^{-p}$ , the $\delta=0$ critical point ( $U(1)$ DSL) can be approached arbitrary closely without losing adiabaticity.
+Here we give a short analysis of the exponential ramp used in the TDVP simulation.
+
+The Ref.  [ 19 ] criteria for adiabaticity is that the change in correlation time $\Delta\xi_{t}$ over a period of correlation time $\xi_{t}$ is much smaller than the correlation time $\xi_{t}$ itself.
+In other words, we need $\Delta\xi_{t}=\dot{\xi}_{t}\xi_{t}\ll\xi_{t}$ , or $\dot{\xi}_{t}\ll 1$ .
+For an exponential ramp of a relevant parameter $\delta=\delta_{0}e^{-t/\tau}$ , the instantaneous correlation time is given by
+
+$\xi_{t}\sim[\delta(t)]^{-\nu z}=\delta_{0}^{-\nu z}e^{\nu zt/\tau}\implies\dot{\xi}_{t}=\frac{\nu z}{\tau}\delta_{0}^{-\nu z}e^{\nu zt/\tau}$ 
+ 
+ (S27) 
+
+If we want to estimate the time $t_{Q}$ such that $\dot{\xi}_{t=t_{Q}}=1$ , we find that
+
+$\dot{\xi}_{t=t_{Q}}=1=\frac{\nu z}{\tau}\delta_{0}^{-\nu z}e^{\nu zt_{Q}/\tau}\implies t_{Q}=\frac{\tau}{\nu z}\left(\ln(\tau/\nu z)+\nu z\ln(\delta_0)\right)$ 
+ 
+ (S28) 
+
+Unlike the power law case discussed in Ref.  [ 19 ] , in this case there is a finite time-scale $t_{Q}$ after which the system falls out of equilibrium.
+However, for large $\tau$ this time-scale diverges as $t_{Q}\sim\tau\ln(\tau)$ so we can ramp down to very small values of $\delta$ over a time-scale $\sim A\tau$ where $A<\ln(\tau)$ and still be approximately adiabatic.
+
+SM6 Dipolar XY antiferromagnets
+
+Figure S9: Enlarged depiction of the various collinear ordering patterns supported by $H_{\rm{dXY}}$ , as found in iDMRG ( $d=2048$ ). Bonds show ground state correlations between nearest-neighbor and next-nearest neighbors sites; red dashed lines correspond to ferromagnetic $\langle\sigma^{x}_{i}\sigma^{x}_{j}\rangle>0$ , while blue solid lines are antiferromagnetic. Circles show $\langle\sigma^{x}_{i}\sigma^{x}_{0}\rangle$ correlations with a fixed site (dark red circle), and those with $\langle\sigma^{x}_{i}\sigma^{x}_{0}\rangle>0$ are also marked with a ’ $+$ ’ sign.
+
+Figure S10: Enlarged depiction of the various local singlet states (plot uses same scheme as in Fig.  S9 ). In the condensed matter literature, these lattices occasionally go under different names (“Fisher” for (a), “ruby” for (c), and “maple leaf” for (d)).
+
+Here we give some additional information on the non-kagome-lattice ground states of the $H_{\rm{dXY}}$ antiferromagnet.
+(For ferromagnetic interactions, $H_{\rm{dXY}}$ is generally expected to host a simple, lattice-independent $U(1)$ symmetry breaking ground state—notably, one stable to finite temperature due to the long-range interactions  [ 20 ] .)
+
+The Archimedean lattices  [ 21 ] with collinear ordering are shown in Fig.  S9 .
+The square lattice is also in this class  [ 20 ] .
+The basic signature of spontaneous $U(1)$ symmetry breaking in our iDMRG calculations (which use $U(1)$ -symmetric tensors) is off-diagonal long-range order in the $\sigma^{x}$ (equivalently, $\sigma^{y}$ ) correlations.
+In the depicted geometries, the ground state $\langle\sigma^{x}_{i}\sigma^{x}_{j}\rangle$ correlations are large and roughly constant out to long distances, before slowly decaying due to the quasi-1d infinite cylinder geometry and the finite MPS bond dimension.
+The correlations exhibit an obvious sign structure characteristic of a simple, bipartite Neél antiferromagnet.
+Such order is frustrated at the nearest-neighbor level for the snub square tiling, but only at longer distances (and hence weaker coupling) in the other cases.
+
+Local geometric frustration penalizes collinear ordering.
+For some lattices with complex unit cells, no ordering occurs at all, and the ground state of $H_{\rm dXY}$ is a short-range-entangled paramagnet (Fig.  S10 ).
+This type of state is similar to a valence bond solid, but strictly speaking is not a true “solid” as no spatial symmetries are spontaneously broken.
+Such a fully symmetric paramagnetic state is possible because the unit cells contain an even number of spins.
+Note that although our Hamiltonian is only $U(1)$ symmetric, the ground state of an antiferromagnet XY interaction between two spin-1/2 is identical to an $SU(2)$ singlet; this relation no longer holds exactly for our many-body wavefunctions, but we do find that the local correlations in this class of states are largely spin-isotropic (not shown).
+
+References
+
+[1] 
+ M. Hermele, Y. Ran, P. A. Lee, and X.-G. Wen, Physical Review B 77 , 224413 (2008) . 
+
+[2] 
+ M. Hermele, T. Senthil, M. P. A. Fisher, P. A. Lee, N. Nagaosa, and X.-G. Wen, Physical Review B 70 , 214437 (2004) . 
+
+[3] 
+ X.-Y. Song, C. Wang, A. Vishwanath, and Y.-C. He, Nature Communications 10 , 4254 (2019) . 
+
+[4] 
+ N. Karthik and R. Narayanan, Physical Review D 109 , 034507 (2024) . 
+
+[5] 
+ S. Albayrak, R. S. Erramilli, Z. Li, D. Poland, and Y. Xin, Physical Review D 105 , 085008 (2022) . 
+
+[6] 
+ Y.-C. He, J. Rong, and N. Su, SciPost Physics 13 , 014 (2022) . 
+
+[7] 
+ A. Thomson and S. Sachdev, Physical Review B 95 , 235146 (2017) . 
+
+[8] 
+ G. Nambiar, D. Bulmash, and V. Galitski, Physical Review Research 5 , 013169 (2023) . 
+
+[9] 
+ T. Dodds, S. Bhattacharjee, and Y. B. Kim, Physical Review B 88 , 224413 (2013) , arxiv:1303.1154 [cond-mat] . 
+
+[10] 
+ J. L. Cardy, Scaling and Renormalization in Statistical Physics , Cambridge Lecture Notes in Physics No. 5 (Cambridge University Press, Cmabridge ; New York, 1996). 
+
+[11] 
+ N. Karthik and R. Narayanan, Physical Review D 100 , 054514 (2019) . 
+
+[12] 
+ M. Hermele, T. Senthil, and M. P. A. Fisher, Physical Review B 72 , 104404 (2005) . 
+
+[13] 
+ L. Savary and L. Balents, Reports on Progress in Physics 80 , 016502 (2017) . 
+
+[14] 
+ X.-G. Wen, Quantum Field Theory of Many-Body Systems: From the Origin of Sound to an Origin of Light and Electrons , repr ed., Oxford Graduate Texts (Oxford University Press, Oxford, 2010). 
+
+[15] 
+ Note our convention for $J$ here, which is chosen to match $H_{\rm dXY}$ , but differs from the standard one in the literature.
+
+[16] 
+ A. M. Läuchli and R. Moessner, Quantum simulations made easy plane (2015), arxiv:1504.04380 [cond-mat] . 
+
+[17] 
+ W.-J. Hu, S.-S. Gong, F. Becca, and D. N. Sheng, Physical Review B 92 , 201105 (2015) . 
+
+[18] 
+ F. Ferrari, A. Parola, and F. Becca, Physical Review B 103 , 195140 (2021) . 
+
+[19] 
+ A. Chandran, A. Erez, S. S. Gubser, and S. L. Sondhi, Physical Review B 86 , 064304 (2012) . 
+
+[20] 
+ C. Chen, G. Bornet, M. Bintz, G. Emperauger, L. Leclerc, V. S. Liu, P. Scholl, D. Barredo, J. Hauschild, S. Chatterjee, M. Schuler, A. M. Läuchli, M. P. Zaletel, T. Lahaye, N. Y. Yao, and A. Browaeys, Nature 616 , 691 (2023) . 
+
+[21] 
+ B. Grünbaum and G. C. Shephard, Tilings and Patterns , second edition ed. (Dover Publications, Inc, Mineola, New York, 2016). 
+
+Experimental support, please
+ view the build logs 
+ for errors. Generated by
+
+L
+ A 
+ T
+ E 
+ 
+ xml 
+ 
+ .
+
+Instructions for reporting errors
+
+We are continuing to improve HTML versions of papers, and your feedback helps enhance accessibility and mobile
+ support. To report errors in the HTML that will help us improve conversion and rendering, choose any of the
+ methods listed below:
+
+Click the "Report Issue" ( 
+ 
+ ) button, located in the page header.
+
+Tip: You can select the relevant text first, to include it in your report.
+
+Our team has already identified the following issues . We appreciate your time reviewing and reporting rendering errors we
+ may not have found yet. Your efforts will help us improve the HTML versions for all readers, because disability
+ should not be a barrier to accessing research. Thank you for your continued support in championing open access for
+ all.
+
+Have a free development cycle? Help support accessibility at arXiv! Our collaborators at LaTeXML maintain a list of packages that need conversion , and welcome developer contributions .
+
+We gratefully acknowledge support from
+ our major funders ,
+ member institutions , ,
+ and all contributors.
+
+About 
+ · 
+ Help 
+ · 
+ Contact 
+ · 
+ Subscribe 
+ · 
+ Copyright 
+ · 
+ Privacy 
+ · 
+ Accessibility 
+ · 
+ Operational Status (opens in new tab) 
+
+Major funding support from
+
+

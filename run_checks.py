@@ -56,6 +56,7 @@ CORE = {
     'manybody_dmrg_warmstart_selfcheck.py',
     'manybody_idmrg_selfcheck.py',
     'manybody_mpo_tdvp_selfcheck.py',
+    'manybody_tdvp_dense_selfcheck.py',
 }
 # 慢基准：默认跳过（约 18 分钟），--slow 才跑
 SLOW = {'mw_bench_firstprinciples.py'}
@@ -107,6 +108,10 @@ AFFECTED = (
     ('src/core/manybody/assemble.py',
      ('manybody_channel', 'manybody_m1_ed', 'equibench_engine_ed',
       'equibench_heisenberg2d')),
+    ('src/core/manybody/tdvp_dense.py',
+     ('manybody_tdvp_dense', 'manybody_contract')),
+    ('src/core/manybody/backends.py',
+     ('manybody_contract', 'manybody_tdvp_dense', 'manybody_mpo_tdvp')),
     ('src/core/manybody/matrix_free.py',
      ('manybody_channel', 'equibench_sector_matrixfree', 'equibench_gs_solvers')),
     ('src/core/manybody/observables.py',

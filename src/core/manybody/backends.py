@@ -17,6 +17,7 @@ class TimeBackend:
     gamma: bool = False
     return_state: bool = False
     charge: bool = False
+    order: bool = False
     #: Pauli 串能力：''=不支持；'full'=全空间/受限基态矢；'mps'=TeNPy MPS；
     #: 'torch'=CUDA 张量 MPS；'ensemble'=轨迹系综；'factorized'=经典因子化。
     pauli: str = ''
@@ -38,7 +39,7 @@ TIME_BACKENDS = {
                       projected=True, gamma=True, return_state=True, pauli='full'),
     'tebd': TimeBackend('engine_mps', 'evolve_mps', options=CPU_MPS,
                         segments=True, return_state=True, charge=True,
-                        pauli='mps', native_state='tenpy'),
+                        pauli='mps', native_state='tenpy', order=True),
     'tebd-gpu': TimeBackend('engine_mps_gpu', 'evolve_mps_gpu',
                             aliases=('mps-gpu', 'cuda-tebd', 'tebd-cuda'), options=GPU_MPS,
                             segments=True, return_state=True, pauli='torch',
@@ -50,21 +51,27 @@ TIME_BACKENDS = {
                                  native_state='torch', algorithm='swap-tebd'),
     'tdvp-mpo': TimeBackend('mpo_tdvp', 'evolve_mpo_tdvp', options=CPU_MPS,
                             segments=False, return_state=False, pauli=''),
+    'tdvp-dense': TimeBackend('tdvp_dense', 'evolve_tdvp_dense',
+                              options=TRUNCATION + STEP + KRYLOV + (
+                                  ('mps_order', 'mps_order'),),
+                              segments=True, projected=False, gamma=False,
+                              return_state=False, charge=False, pauli='mps',
+                              order=True, algorithm='tdvp-dense'),
     'tdvp': TimeBackend('engine_mps', 'evolve_mps', aliases=('mps', 'mps_mpo'),
                         options=CPU_MPS, segments=True, return_state=True,
-                        charge=True, pauli='mps', native_state='tenpy'),
+                        charge=True, pauli='mps', native_state='tenpy', order=True),
     'tdvp-single': TimeBackend('engine_mps', 'evolve_mps',
                                aliases=('tdvp-1site', 'tdvp1', 'single-site-tdvp'),
                                options=CPU_MPS, segments=True, return_state=True,
                                charge=True, pauli='mps',
-                               native_state='tenpy'),
+                               native_state='tenpy', order=True),
     'tdvp-adaptive': TimeBackend('engine_mps', 'evolve_mps',
                                  aliases=('tdvp-hybrid', 'adaptive-tdvp'),
                                  options=CPU_MPS + (
                                      ('tdvp_adaptive_switch_chi', 'adaptive_switch_chi'),
                                      ('tdvp_adaptive_min_steps', 'adaptive_min_steps')),
                                  segments=True, return_state=True, charge=True,
-                                 pauli='mps', native_state='tenpy'),
+                                 pauli='mps', native_state='tenpy', order=True),
     'tdvp-trajectories': TimeBackend('engine_trajectories', 'evolve_trajectories',
                                      aliases=('trajectories', 'mcwf'), gamma=True,
                                      options=TRUNCATION + STEP + KRYLOV + (
@@ -159,7 +166,7 @@ def validate_time_capabilities(name, *, segments=None, plan=None, gamma=None,
         raise ValueError(
             '%s 不提供可求 Pauli 串的多体态（能力=%r）；请改用 %s。'
             '该键不会被静默忽略' % (name, backend.pauli or 'none', alts))
-    if mps_order is not None and backend.native_state != 'tenpy':
+    if mps_order is not None and not backend.order:
         raise ValueError('%s does not support explicit mps_order' % name)
     if segments and not backend.segments:
         raise ValueError('%s 尚不支持 drive_segments' % name)

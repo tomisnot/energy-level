@@ -282,6 +282,7 @@ GET http://127.0.0.1:<run-monitor-port>/api/runs/<id>/artifact
 | 路径 | 管什么 |
 |---|---|
 | `src/core/runspec.py` | 总装配入口：`build_run` / `evolve_run` / 摘要；按 `want` 分派平衡态与含时 |
+| `src/core/manybody/tdvp_dense.py` | 稠密 CPU 两站点 TDVP（`tdvp-dense`）；支持 `drive_segments` 与 `pauli_strings`，拒绝 charge/return_state/corr |
 | `src/core/manybody/runspec_mb.py` | 多体装配：calib 解析与校验、两条装配路、`psi0` 制备（`ground_of` / `permutation_sector`） |
 | `src/core/manybody/eq_engine.py` | 平衡态 RunSpec（`want=gs/thermal/dos/spectrum`），含源态谱与制备态初态 |
 | `src/core/manybody/eq_route.py` | 后端路由（ed/lanczos/kpm/dmrg/qmc/free-fermion），源态谱与关联的求解 |
