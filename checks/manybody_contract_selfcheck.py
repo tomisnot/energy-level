@@ -52,7 +52,7 @@ def params(cal):
 
 # B5：能力冲突必须是 typed ConfigConflict，带冲突键，供 MCP 映射。
 try:
-    validate_time_capabilities('tdvp-dense', return_state=True)
+    validate_time_capabilities('tdvp-dense', charge_sector=1)
     conflict_kind = None
 except ConfigConflict as exc:
     conflict_kind = (type(exc).__name__, exc.keys)
@@ -65,9 +65,25 @@ except ConfigConflict as exc:
     eq_conflict = exc.keys
 except Exception as exc:  # noqa: BLE001
     eq_conflict = ('WRONG', type(exc).__name__)
+# P2：距离截断是真模型选项，丢弃必须留痕。
+cut_cal = {'atoms': [{'id': i, 'pos': [p, 0.0, 0.0]} for i, p in enumerate([0., 1., 2., 10.])],
+           'pairs': [{'i': 0, 'j': 1, 'J': 0.4},
+                     {'i': 1, 'j': 2, 'J': 0.4},
+                     {'i': 2, 'j': 3, 'J': 0.4}]}
+cut_warn = []
+cut_calib, _m, _t = mb.resolve_model(
+    {'manybody.calib': cut_cal, 'manybody.distance_cutoff_um': 2.0},
+    warnings=cut_warn)
+C.group('距离截断（P2）', [
+    ('只保留近程对', len(cut_calib['pairs']) == 2),
+    ('丢弃项留痕', any(d.get('reason') == 'r_cut_product'
+                       for d in (cut_calib.get('dropped') or []))),
+    ('warning 可见', any('distance_cutoff_um' in str(x) for x in cut_warn)),
+])
+
 C.group('配置冲突是 typed（B5）', [
     ('时间能力冲突类型/键',
-     conflict_kind == ('ConfigConflict', ('manybody.return_state',))),
+     conflict_kind == ('ConfigConflict', ('manybody.charge_sector',))),
     ('平衡态冲突键', eq_conflict == ('manybody.mps_order',)),
 ])
 

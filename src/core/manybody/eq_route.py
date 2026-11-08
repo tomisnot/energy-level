@@ -380,7 +380,8 @@ def solve_equilibrium(system, want='gs', *, betas=None, backend='auto',
             system['idmrg'], charge_sector=system.get('charge_sector'),
             chi_max=int(chi_max), truncerr=float(truncerr),
             max_sweeps=int(max_sweeps), mps_dtype=mps_dtype,
-            progress_arr=progress_arr)
+            progress_arr=progress_arr,
+            pauli_strings=system.get('pauli_strings'))
     declared_plan = system.get('plan') or {}
     for key in ('Om', 'delta', 'gamma', 'terms'):
         if system.get(key) is None and key in declared_plan:

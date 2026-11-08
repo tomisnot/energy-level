@@ -76,16 +76,37 @@ def main():
     C.group('charge_sector 的组合判据（B1）',
             [('P_i M_j 放行', ok_pm), ('单站点 P 仍拒绝', bad_ok)])
 
+    # R1：任意 Pauli（含 X/Y 展开）直接在无限 MPS 上求值。
+    field_spec = {'cell': [{'site': 0}, {'site': 1}], 'terms': [
+        {'kind': 'onsite', 'site': 0, 'op': 'Z', 'coeff': -1.0},
+        {'kind': 'onsite', 'site': 1, 'op': 'Z', 'coeff': -1.0},
+    ]}
+    p_specs = [{'label': 'z0', 'terms': [[0, 'z']]},
+               {'label': 'x0', 'terms': [[0, 'x']]},
+               {'label': 'chiral', 'terms': [[0, 'x'], [1, 'y']]}]
+    pr = idmrg_ground_state(field_spec, chi_max=8, max_sweeps=4,
+                            pauli_strings=p_specs)
+    C.group('任意 Pauli（含 X/Y，R1）',
+            [('标签/形状', pr.get('pauli_string_labels') == ['z0', 'x0', 'chiral']
+              and np.shape(pr.get('pauli_strings')) == (3,)),
+             ('极化态 Z≈1', abs(pr['pauli_strings'][0] - 1.0) < 1e-6),
+             ('极化态 X≈0', abs(pr['pauli_strings'][1]) < 1e-6),
+             ('极化态手性项≈0', abs(pr['pauli_strings'][2]) < 1e-6)])
+
     # 经 build/run 产品路径：字段和 data_schema 必须出现。
     from src.core.manybody.eq_engine import build_equilibrium, run_equilibrium
     p = {'manybody.idmrg': _ising_spec(), 'manybody.eq_backend': 'idmrg',
-         'manybody.chi_max': 16, 'manybody.max_sweeps': 4}
+         'manybody.chi_max': 16, 'manybody.max_sweeps': 4,
+         'manybody.pauli_strings': p_specs}
     run = build_equilibrium(None, p, want='gs')
     out = run_equilibrium(run)
     C.check('产品路径返回 E_per_site/E_per_cell',
             'E_per_site' in out and 'E_per_cell' in out)
     C.check('产品路径 data_schema 含 E_per_site',
             'E_per_site' in out['data_schema']['quantities'])
+    C.check('产品路径返回 Pauli（R1）',
+            np.shape(out.get('pauli_strings')) == (3,)
+            and out.get('pauli_string_labels') == ['z0', 'x0', 'chiral'])
     return 0 if C.summary() else 1
 
 

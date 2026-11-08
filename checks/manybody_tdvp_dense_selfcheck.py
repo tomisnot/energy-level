@@ -224,6 +224,20 @@ def main():
               np.array_equal(default['pops_atom'], ramp['left']['pops_atom']))],
             detail='left=%.3e midpoint=%.3e' % (e_left, e_mid))
 
+    # R5：原生 dense MPS return_state；可继续喂给同一后端
+    st = evolve_tdvp_dense(cal4, psi0='rggg', t_grid=np.array([0.0, 1.0]),
+                           Om=Om4, delta=de4, chi_max=16, truncerr=1e-12,
+                           max_step_ns=1.0, return_state=True)
+    state = st.get('state') or {}
+    again = evolve_tdvp_dense(cal4, psi0=state, t_grid=np.array([1.0, 2.0]),
+                              Om=Om4, delta=de4, chi_max=16, truncerr=1e-12,
+                              max_step_ns=1.0)
+    C.group('原生 dense return_state（R5）',
+            [('state backend/order', state.get('backend') == 'tdvp-dense'
+              and state.get('order') == [0, 1, 2, 3]),
+             ('续跑边界布居连续',
+              np.max(np.abs(st['pops_atom'][-1] - again['pops_atom'][0])) < 1e-12)])
+
     # 显式 mps_order（原子序 → MPS 序的映射）
     perm = [0, 3, 1, 4, 2, 5]
     p2 = dict(p, **{'manybody.mps_order': perm, 'manybody.want_observables': False})
@@ -253,7 +267,6 @@ def main():
     # 拒绝面
     base = dict(psi0='rggg', t_grid=np.array([0.0, 1.0]), Om=Om4, delta=de4)
     reject = [
-        ('return_state', dict(return_state=True)),
         ('charge_sector', dict(charge_sector=1)),
         ('gamma', dict(gamma=np.full(4, 0.1))),
         ('projected plan', dict(plan={'projected': True})),

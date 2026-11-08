@@ -76,12 +76,12 @@ CONFIG_SCHEMA_MB = {
              "Python RunSpec 可用返回的 kind=mps 原生状态接续，跨会话请使用 HDF5 checkpoint"),
     'manybody.return_state': dict(
         type='bool', default=False,
-        desc='显式返回基态向量或有限 MPS 状态以供后续演化；可能占用额外内存，原始态不放入摘要'),
+        desc='显式返回基态向量或有限 MPS 状态以供后续演化（tdvp-dense 返回原生 dense MPS）；可能占用额外内存，原始态不放入摘要'),
     'manybody.solver': dict(
         type='str', enum=time_backend_names(), default='auto',
         desc='**含时演化**求解器：auto=小系统 ED、大系统 TDVP / ed=精确对角化 / '
              'tebd=最近邻 MPS / tebd-gpu=CUDA 最近邻 MPS / swap-tebd-gpu=CUDA 任意键 SWAP-TEBD / tdvp=两站点 TDVP / tdvp-single=单站点 TDVP / '
-             'tdvp-adaptive=两站点到单站点自适应 TDVP / tdvp-dense=CPU 稠密两站点 TDVP（有限开链，支持 segments/Pauli；无 charge/return_state；与 tdvp 同阶对拍）。'
+             'tdvp-adaptive=两站点到单站点自适应 TDVP / tdvp-dense=CPU 稠密两站点 TDVP（有限开链，支持 segments/Pauli/原生 MPS return_state；无 charge；与 tdvp 同阶对拍）。'
              '平衡态不看本键，看 `manybody.eq_backend`。'),
     'manybody.collapse_ops': dict(type='list', default=None, desc='开放系统局部跳跃通道：[{site, rate, operator|matrix}]，供 tdvp-trajectories'),
     'manybody.n_trajectories': dict(type='int', default=32, lo=1, hi=100000, desc='量子轨迹条数'),
@@ -99,7 +99,7 @@ CONFIG_SCHEMA_MB = {
         type='str', enum=equilibrium_backend_names(),
         default='auto',
         desc='**平衡态**求解后端：auto=按规模路由 / ed=稠密对角 / gpu-batch=批量本征 / '
-             'gpu-lanczos=CUDA 矩阵自由 Lanczos / lanczos=稀疏迭代 / kpm=Chebyshev 谱 / dmrg=TeNPy 有限 MPS DMRG / '
+             'gpu-lanczos=CUDA 矩阵自由 Lanczos / lanczos=稀疏迭代 / kpm=Chebyshev 谱 / dmrg=TeNPy 有限 MPS DMRG / idmrg=无限 MPS iDMRG / '
              'gpu-kpm=CUDA 分块 KPM / free-fermion=适用范围内二次费米子 / qmc=stoquastic SSE（带统计误差）'
              '（**任意点云**：多腿/无周期/逐键复耦合，自写 autoMPO）。'),
     'manybody.want': dict(
@@ -168,6 +168,10 @@ CONFIG_SCHEMA_MB = {
         desc='分段驱动取值规则：left=每段左端点常数值（默认，逐位兼容旧结果）；'
              'midpoint=把段条目视为线性 ramp 的控制点，取该段中点值（二阶 ramp 精度）。'
              '仅 ED / CPU MPS / tdvp-dense 消费；其它后端会在 build 阶段显式拒绝。'),
+    'manybody.distance_cutoff_um': dict(
+        type='float', default=None, lo=0.0,
+        desc='可选的距离截断（µm，按 calib 显式 pos 的欧氏距离，不做周期最小像）：只保留 R≤cutoff 的原子对，丢弃项写进 calib.dropped/'
+             'warnings；这是近似，会改变 ξ/χ_bulk，必须由调用方自查。None=不截断。'),
     'manybody.constraint': dict(
         type='dict', default=None,
         desc='Hamiltonian 约束：{kind:none|blockade|pxp, mode:full|project, '
@@ -194,7 +198,7 @@ CONFIG_SCHEMA_MB = {
              '要不要连通减法，由调用方组合）。支持：含时 ed（全空间/投影基）、'
              'CPU MPS 四档（tebd/tdvp/tdvp-single/tdvp-adaptive）+ tdvp-dense、GPU MPS 两档'
              '（tebd-gpu/swap-tebd-gpu）、轨迹（系综平均）、经典自旋（因子化）；'
-             '平衡态 ed/lanczos 的 gs、dmrg 的 gs。PEPS/QMC/KPM/free-fermion/gpu-batch'
+             '平衡态 ed/lanczos 的 gs、dmrg/idmrg 的 gs。PEPS/QMC/KPM/free-fermion/gpu-batch'
              '**明确拒绝**，不静默忽略。'),
     'manybody.charge_sector': dict(
         type='int', default=None, lo=0,

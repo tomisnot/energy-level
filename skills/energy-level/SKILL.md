@@ -151,10 +151,11 @@ run_sim()
 
 常用可写键（完整清单以 `query_params` 为准）：
 
-- `manybody.solver`：含时后端；`auto` 只在 ED/TDVP 间选。`tdvp-dense` 是纯 CPU 稠密两站点 TDVP（有限开链/分段驱动/厄米/乘积初态；支持 segments 与 Pauli；拒绝 charge/return_state/corr），需显式选择；环境变量 `EL_TDVP_BLAS_THREADS` 可限制其 BLAS 线程。
+- `manybody.solver`：含时后端；`auto` 只在 ED/TDVP 间选。`tdvp-dense` 是纯 CPU 稠密两站点 TDVP（有限开链/分段驱动/厄米/乘积初态；支持 segments、Pauli 与原生 MPS `return_state`；拒绝 charge/corr），需显式选择；环境变量 `EL_TDVP_BLAS_THREADS` 可限制其 BLAS 线程。
 - `manybody.psi0`：初态；`"ground"`、`{kind:"product"}`、`{kind:"mps"}`、`{kind:"ground_of",…}`、`{kind:"permutation_sector",…}`。
 - `manybody.charge_sector`：固定激发数（ED/Lanczos/DMRG；非守恒输入会拒）。
 - `manybody.constraint`：`{kind:"none"/"blockade"/"pxp",mode:"full"/"project",threshold_mhz,edges}`；投影基当前主要给 ED。
+- `manybody.distance_cutoff_um`：可选距离截断（µm，按显式 pos 欧氏距离，不做周期最小像）；只保留 R≤cutoff 的对，丢弃项进 `calib.dropped`/warnings，属近似，需自查 ξ/χ。
 - `manybody.drive_segments`：`[{t0,Om:[N],delta:[N],phase:[N]}]`；长度必须=N。
 - `manybody.drive_interp`：`left`（默认，左端点阶梯，逐位兼容）/ `midpoint`（段条目视为线性 ramp 控制点，取段中点值；仅 ED/CPU MPS/tdvp-dense，ramp 二阶）。
 - `manybody.loops` / `manybody.link_pairs`：环路/有向边；闭环边自动并入 `link_pairs`。
@@ -168,7 +169,7 @@ run_sim()
 ```jsonc
 set_config("dynamic.mode", 2)
 set_config("manybody.want", "gs")           // gs / thermal / dos / spectrum
-set_config("manybody.eq_backend", "ed")     // ed/lanczos/gpu-lanczos/dmrg/kpm/qmc/free-fermion
+set_config("manybody.eq_backend", "ed")     // ed/lanczos/gpu-lanczos/dmrg/idmrg/kpm/qmc/free-fermion
 set_config("manybody.charge_sector", 4)     // 可选
 run_sim()
 ```
@@ -188,7 +189,8 @@ run_sim()
 - iDMRG：`eq_backend="idmrg"` + `manybody.idmrg={cell,terms}`（不能同时给 `manybody.calib`）。
   通用 `cell+terms` 不是阵列枚举；`cell>=2`、一个平移方向、局部维数 2、`dx<=64`。
   结果用 `E_per_site/E_per_cell/S_per_bond/corr_length/chi/trunc_err`，没有有限体系 `E0`/`gap`。
-  Rydberg 单胞用 `from_rydberg_cell` 转 terms，但 iDMRG 核心不绑定 Rydberg。
+  `manybody.pauli_strings` 也支持（cell 内任意阶；X/Y 自动展开成 P/M，固定 Sz 只留净 ΔN=0 项），
+  可算手性 χ 等三体串；Rydberg 单胞用 `from_rydberg_cell` 转 terms，但 iDMRG 核心不绑定 Rydberg。
 - `estimate_run` 对多体 `charge_sector` 不缩维（按 2^N 估，偏高）；`preview_run` 对多体是模型摘要，不是跃迁预览。
 
 ## 8. 系综驱动（Python API，不是 MCP 工具）

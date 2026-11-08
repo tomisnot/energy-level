@@ -120,6 +120,48 @@ def _op_name(op):
     return {'N': 'Nhat', 'I': 'Id', 'X': 'SX', 'Y': 'SY', 'Z': 'SZ'}.get(op, op)
 
 
+_PAULI_TERMS = {
+    'I': ((1.0, 'Id'),),
+    'Z': ((1.0, 'SZ'),),
+    'X': ((1.0, 'P'), (1.0, 'M')),
+    # P=|r><g|, M=|g><r|; sigma_y = i(P-M)
+    'Y': ((1.0j, 'P'), (-1.0j, 'M')),
+}
+
+
+def _pauli_expectation(psi, specs, *, charge_sector=None):
+    """Evaluate arbitrary in-cell Pauli strings on a TeNPy infinite MPS.
+
+    X/Y are expanded into P/M (the two charge-changing halves); with a fixed
+    Sz sector only combinations with net ΔN=0 contribute.  This avoids adding
+    non-charge-conserving SX/SY operators to a conserved site.
+    """
+    from itertools import product
+    from .observables import normalize_pauli_strings
+    specs = normalize_pauli_strings(specs, n_atoms=psi.L) or []
+    values, labels = [], []
+    for spec in specs:
+        choices = [_PAULI_TERMS[axis.upper()] for _site, axis in spec['terms']]
+        total = 0.0j
+        for combo in product(*choices):
+            coeff = 1.0 + 0.0j
+            ops = []
+            net = 0
+            for (site, _axis), (c, op) in zip(spec['terms'], combo):
+                coeff *= c
+                if op == 'P':
+                    net += 1
+                elif op == 'M':
+                    net -= 1
+                ops.append((op, int(site)))
+            if charge_sector is not None and net != 0:
+                continue
+            total += coeff * psi.expectation_value_term(ops)
+        values.append(total)
+        labels.append(spec['label'])
+    return values, labels
+
+
 def infinite_model(spec, *, charge_sector=None, mps_dtype='complex'):
     """Build a TeNPy infinite ``Lattice`` MPO from a cell + generic terms."""
     _require_tenpy()
@@ -221,7 +263,8 @@ def from_rydberg_cell(cell, pairs):
 
 def idmrg_ground_state(spec, *, charge_sector=None, chi_max=128,
                        truncerr=1e-10, max_sweeps=20, mixer=True,
-                       mps_dtype='complex', progress_arr=None):
+                       mps_dtype='complex', progress_arr=None,
+                       pauli_strings=None):
     """Run TeNPy infinite two-site DMRG; return bulk observables per unit cell."""
     _require_tenpy()
     spec = validate_infinite_spec(spec)
@@ -259,6 +302,8 @@ def idmrg_ground_state(spec, *, charge_sector=None, chi_max=128,
     E, psi = eng.run()
     psi = psi.copy()
     psi.canonical_form(renormalize=False)
+    pauli_vals, pauli_labels = _pauli_expectation(
+        psi, pauli_strings, charge_sector=charge_sector) if pauli_strings else ([], [])
     n_atom = np.asarray(psi.expectation_value('Nhat'), dtype=float).reshape(-1)
     S = np.asarray(psi.entanglement_entropy(), dtype=float).reshape(-1)
     if len(S) == 0:
@@ -285,6 +330,8 @@ def idmrg_ground_state(spec, *, charge_sector=None, chi_max=128,
         'trunc_err': terr, 'sweeps': int(eng.sweeps),
         'solver_converged': bool(eng.is_converged()),
         'charge_sector': charge_sector,
+        **({'pauli_strings': np.asarray(pauli_vals, complex),
+            'pauli_string_labels': pauli_labels} if pauli_strings else {}),
         'error_report': {'solver_converged': bool(eng.is_converged()),
                          'sweeps': int(eng.sweeps), 'trunc_err': terr},
     }

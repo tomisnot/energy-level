@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Dense CPU two-site TDVP backend (finite open chain; no charge/return_state).
+"""Dense CPU two-site TDVP backend (finite open chain; no charge).
 
 Product backend for ``manybody.solver='tdvp-dense'``.  It uses plain numpy
 tensors (no TeNPy ``np_conserved`` objects) and the same Hamiltonian convention
@@ -7,7 +7,8 @@ as ``src/core/manybody/assemble.py``.  The sweep semantics match TeNPy's
 ``TwoSiteTDVPEngine``; ``scripts/tdvp_fast/`` keeps the benchmark driver and the
 experimental CUDA port.  Cross-backend checks live in
 ``checks/manybody_tdvp_dense_selfcheck.py``.  The product wrapper supports
-piecewise-constant drive segments and arbitrary Pauli strings; the pure
+piecewise-constant drive segments, arbitrary Pauli strings and native dense-MPS
+return_state; the pure
 ``evolve_dense`` helper below is the static research path.
 
 Conventions
@@ -512,6 +513,44 @@ from .runtime import (check_cancel, report_progress, reject_options,
 from .results import time_result
 
 
+def make_dense_state(mps, order):
+    """Serialize the finite dense MPS without converting to 2^N vectors."""
+    return dict(
+        kind='mps', backend='tdvp-dense', version=1,
+        order=list(map(int, order)), local_basis=['g', 'r'],
+        n_atoms=len(order), norm=float(mps.norm),
+        tensors=[np.array(B, copy=True) for B in mps.B],
+        S=[np.array(S, copy=True) for S in mps.S],
+        forms=[tuple(f) for f in mps.form])
+
+
+def _load_dense_state(state, n, order):
+    if state.get('backend') != 'tdvp-dense' or state.get('version') != 1:
+        raise ValueError('tdvp-dense 原生态需要 backend=tdvp-dense, version=1')
+    if state.get('local_basis') != ['g', 'r']:
+        raise ValueError('tdvp-dense 原生态的局部基必须是 g/r')
+    if list(map(int, state.get('order') or [])) != list(map(int, order)):
+        raise ValueError('tdvp-dense 原生态的 order 必须与本次 mps_order 一致')
+    tensors = [np.asarray(B, complex) for B in (state.get('tensors') or [])]
+    S = [np.asarray(x, float) for x in (state.get('S') or [])]
+    forms = [tuple(f) for f in (state.get('forms') or [])]
+    if len(tensors) != n or len(S) != n + 1 or len(forms) != n:
+        raise ValueError('tdvp-dense 原生态的张量/S/form 长度与 N 不匹配')
+    for i, B in enumerate(tensors):
+        if B.ndim != 3 or B.shape[1] != 2:
+            raise ValueError('tdvp-dense 原生态 B[%d] 形状必须是 (chi,2,chi)' % i)
+        if i == 0 and B.shape[0] != 1 or i == n - 1 and B.shape[2] != 1:
+            raise ValueError('tdvp-dense 原生态必须开链（两端 bond=1）')
+        if i + 1 < n and B.shape[2] != tensors[i + 1].shape[0]:
+            raise ValueError('tdvp-dense 原生态相邻 bond 不连续')
+    norm = float(state.get('norm', 0.0))
+    if not np.isfinite(norm) or norm <= 0:
+        raise ValueError('tdvp-dense 原生态 norm 必须为有限正数')
+    mps = DenseMPS(tensors, S, forms)
+    mps.norm = norm
+    return mps
+
+
 def _psi0_to_vectors(spec, n):
     """Product-state spec (atom order) -> list of local 2-vectors."""
     if spec is None:
@@ -629,7 +668,7 @@ def evolve_tdvp_dense(calib, psi0=None, t_grid=None, Om=None, delta=None,
                       link_pairs=None, loops=None, plan=None, return_state=False,
                       charge_sector=None, pauli_strings=None, drive_interp='left',
                       **kwargs):
-    """Dense CPU two-site TDVP (finite open chain; no charge/return/corr).
+    """Dense CPU two-site TDVP (finite open chain; no charge/corr).
 
     Supports piecewise-constant drive segments and arbitrary Pauli strings.
     Segments rebuild only the onsite MPO at each boundary and re-initialize the
@@ -638,8 +677,6 @@ def evolve_tdvp_dense(calib, psi0=None, t_grid=None, Om=None, delta=None,
     reject_options(kwargs)
     if plan is not None and plan.get('projected'):
         raise ValueError('tdvp-dense 不支持 projected HamiltonianPlan；请用 ed')
-    if return_state:
-        raise ValueError('tdvp-dense 不支持 return_state；请用 tdvp/ed')
     if charge_sector is not None:
         raise ValueError('tdvp-dense 不支持 charge_sector；请用 tdvp')
     if link_pairs or loops:
@@ -670,11 +707,14 @@ def evolve_tdvp_dense(calib, psi0=None, t_grid=None, Om=None, delta=None,
     order = list(map(int, order))
     W = build_mpo(onsite, couplings, n)
 
-    vecs_atom = _psi0_to_vectors(psi0, n)
-    mps = DenseMPS([vecs_atom[a].reshape(1, 2, 1) for a in order],
-                   [np.array([1.0])] + [np.array([1.0]) for _ in range(n)],
-                   [(0.0, 1.0)] * n)
-    mps.norm = 1.0
+    if isinstance(psi0, dict) and psi0.get('kind') == 'mps':
+        mps = _load_dense_state(psi0, n, order)
+    else:
+        vecs_atom = _psi0_to_vectors(psi0, n)
+        mps = DenseMPS([vecs_atom[a].reshape(1, 2, 1) for a in order],
+                       [np.array([1.0])] + [np.array([1.0]) for _ in range(n)],
+                       [(0.0, 1.0)] * n)
+        mps.norm = 1.0
     LP, RP = init_env(mps, W)
 
     max_step_ns = (None if max_step_ns is None or float(max_step_ns) <= 0
@@ -789,4 +829,5 @@ def evolve_tdvp_dense(calib, psi0=None, t_grid=None, Om=None, delta=None,
     return dict(t=t, pops=pops, pops_atom=pops, states=states,
                 method='manybody', backend='tdvp-dense',
                 S=ent if want_entropy else None, corr=None, loss=loss,
-                error_report=err, observables=obs, diag=None)
+                error_report=err, observables=obs, diag=None,
+                **({'state': make_dense_state(mps, order)} if return_state else {}))

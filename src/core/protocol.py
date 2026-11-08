@@ -439,7 +439,7 @@ def _mb_preview(cache, snap):
         out.update({'n_atoms': 0, 'dim': 0, 'basis_enough': False})
         out['notes'].append('manybody.calib 为空——先给模型（文件/ARC 用 el_build_calib 转换）')
         return out
-    calib = runspec_mb.validate_calib(explicit)
+    calib, _model, _terms = runspec_mb.resolve_model(snap, warnings=out['notes'])
     atoms = calib['atoms']
     n = len(atoms)
     out.update({'n_atoms': n, 'dim': 1 << n, 'terms': list(calib['terms'])})

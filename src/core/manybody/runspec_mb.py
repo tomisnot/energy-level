@@ -341,8 +341,30 @@ def resolve_model(p, cache=None, *, warnings=None):
                          '文件请用 el_build_calib({"file": …})，'
                          'ARC 请用 el_build_calib({"atoms": […g/r…], "arc": {…}})。')
     calib = validate_calib(explicit)
+    cutoff = p.get('manybody.distance_cutoff_um')
+    if cutoff is not None:
+        cutoff = float(cutoff)
+        if not np.isfinite(cutoff) or cutoff <= 0:
+            raise ValueError('manybody.distance_cutoff_um 必须为有限正数')
+        atoms = calib['atoms']
+        kept, dropped = [], list(calib.get('dropped') or [])
+        for pr in calib['pairs']:
+            pi = np.asarray(atoms[int(pr['i'])]['pos'], float)
+            pj = np.asarray(atoms[int(pr['j'])]['pos'], float)
+            R = float(np.linalg.norm(pi - pj))
+            if R <= cutoff:
+                kept.append(pr)
+            else:
+                dropped.append(dict(i=int(pr['i']), j=int(pr['j']), R_um=R,
+                                    reason='r_cut_product'))
+        calib['pairs'] = kept
+        calib['dropped'] = dropped
+        calib['terms'] = [name for name, key in (('I1', 'V'), ('I2', 'J'), ('I3', 'A'))
+                          if any(abs(pr[key]) > 0.0 for pr in kept)]
+        if dropped and warnings is not None:
+            warnings.append('[多体标定] distance_cutoff_um=%.6g 丢弃 %d 对（近似）'
+                            % (cutoff, len(dropped) - len(explicit.get('dropped') or [])))
     return calib, None, list(calib['terms'])
-    return calib, model, list(model.terms)
 
 
 def drive_from_calib(calib):
@@ -595,6 +617,8 @@ def _backend_options(p, solver, ed_max_dim):
     if backend.module in ('engine_mps', 'engine_mps_gpu'):
         options['algorithm'] = backend.algorithm or solver
         options['return_state'] = bool(mb_get(p, 'manybody.return_state'))
+    if backend.module == 'tdvp_dense':
+        options['return_state'] = bool(mb_get(p, 'manybody.return_state'))
     if backend.segments and backend.module in ('engine_ed', 'engine_mps', 'tdvp_dense'):
         options['drive_interp'] = mb_get(p, 'manybody.drive_interp') or 'left'
     if backend.charge:
@@ -636,7 +660,16 @@ def build_run_manybody(cache, params, *, pump=None, method=None, diag=False,
     solver_request = solver_in
     if isinstance(psi0, dict) and psi0.get('kind') == 'mps':
         if str(solver_in or 'auto').lower() == 'auto':
-            solver_request = 'tdvp' if psi0.get('backend') == 'tenpy' else 'swap-tebd-gpu'
+            native = psi0.get('backend')
+            solver_request = {
+                'tenpy': 'tdvp',
+                'tdvp-dense': 'tdvp-dense',
+                'torch': 'swap-tebd-gpu',
+            }.get(native)
+            if solver_request is None:
+                raise ConfigConflict(
+                    '未知的 MPS 初态 backend=%r；支持 tenpy/tdvp-dense/torch'
+                    % (native,), keys=('manybody.psi0',))
             warnings.append('[多体] solver=auto 按 MPS 初态选择 '+solver_request)
     Om, delta, gamma = drive_from_calib(calib)
     plan = build_plan(calib, Om=Om, delta=delta, gamma=gamma,
@@ -697,7 +730,7 @@ def build_run_manybody(cache, params, *, pump=None, method=None, diag=False,
                         % {k: round(float(v), 6) for k, v in off.items()})
     ndrop = len(calib.get('dropped') or [])
     if ndrop:
-        warnings.append('[多体标定] r_cut 截断 %d 对（尾项未计入 H）' % ndrop)
+        warnings.append('[多体标定] 标定截断/丢弃 %d 对（尾项未计入 H）' % ndrop)
     guarded = sum(int((pr.get('info') or {}).get('n_guarded', 0))
                   for pr in calib.get('pairs', []))
     if guarded:

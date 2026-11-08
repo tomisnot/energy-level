@@ -67,8 +67,9 @@ TIME_BACKENDS = {
                               options=TRUNCATION + STEP + KRYLOV + (
                                   ('mps_order', 'mps_order'),),
                               segments=True, projected=False, gamma=False,
-                              return_state=False, charge=False, pauli='mps',
-                              order=True, algorithm='tdvp-dense'),
+                              return_state=True, charge=False, pauli='mps',
+                              native_state='tdvp-dense', order=True,
+                              algorithm='tdvp-dense'),
     'tdvp': TimeBackend('engine_mps', 'evolve_mps', aliases=('mps', 'mps_mpo'),
                         options=CPU_MPS, segments=True, return_state=True,
                         charge=True, pauli='mps', native_state='tenpy', order=True),
@@ -140,7 +141,7 @@ def pauli_backends():
 
 def equilibrium_pauli_backends():
     """平衡态 gs 里能算 Pauli 串的后端。"""
-    return ['ed', 'lanczos', 'gpu-lanczos', 'dmrg']
+    return ['ed', 'lanczos', 'gpu-lanczos', 'dmrg', 'idmrg']
 
 
 def equilibrium_backend_names():

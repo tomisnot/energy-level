@@ -80,6 +80,8 @@ def build_equilibrium(cache, params, want='gs', method=None, betas=None,
             'max_sweeps': int(_mb.mb_get(p, 'manybody.max_sweeps')),
             'mixer': bool(raw.get('mixer', True)),
             'charge_sector': p.get('manybody.charge_sector'),
+            'pauli_strings': _mb.validate_pauli_strings(
+                p.get('manybody.pauli_strings'), n_atoms=n),
             'mps_dtype': _mb.mb_get(p, 'manybody.mps_dtype'),
             'memory_budget_mb': p.get('manybody.memory_budget_mb'),
             'dtype': p.get('manybody.dtype') or 'float64',
@@ -187,7 +189,8 @@ def run_equilibrium(spec, log=None, progress_arr=None):
             max_sweeps=int(spec.get('max_sweeps', 20)),
             mixer=bool(spec.get('mixer', True)),
             mps_dtype=spec.get('mps_dtype', 'complex'),
-            progress_arr=progress_arr)
+            progress_arr=progress_arr,
+            pauli_strings=spec.get('pauli_strings'))
         res['method'] = 'gs'
         res['want'] = 'gs'
         res['states'] = spec.get('states')
