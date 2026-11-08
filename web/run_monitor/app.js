@@ -8,7 +8,7 @@ const bodyName=r=>r.nbody==='many'?(r.equilibrium?'多体平衡态':'多体演�
 const filtered=()=>records.filter(r=>(filter==='all'||filter==='attention'?filter==='all'||['failed','cancelled'].includes(r.status):r.status===filter)&&`${r.id} ${r.reason||''} ${r.run.method||''} ${r.run.want||''} ${((r.run.setup||{}).intent||{}).label||''}`.toLowerCase().includes($('#search').value.trim().toLowerCase()))
 function dispose(){if(widget){saved.set(renderedId,{...widget.state,playing:false});widget.destroy();widget=null}}
 function setConnection(text,mode){$('#connection').textContent=text;$('#connection').className='connection '+mode}
-function pair(label,value){return `<div><dt>${escape(label)}</dt><dd>${escape(value??'—')}</dd></div>`}
+function pair(label,value,wide=false){return `<div${wide?' class="wide"':''}><dt>${escape(label)}</dt><dd>${escape(value??'—')}</dd></div>`}
 function fraction(v){if(!finite(Number(v)))return String(v);const x=Number(v);return Number.isInteger(x)?String(x):`${Math.round(x*2)}/2`}
 function level(s){if(!Array.isArray(s))return String(s);return `${s[0]}${['S','P','D','F','G','H'][s[1]]||(' l='+s[1])} ${fraction(s[2])} · m=${fraction(s[3])}`}
 function levels(run){
@@ -52,7 +52,7 @@ function buildMarkup(run){
   if(run.notes)rows.push(['备注',String(run.notes)])
   if(r.fingerprint)rows.push(['回执',`${r.fingerprint} · ${r.n_atoms??'—'} 原子 · ${r.n_pairs??'—'} 对 · Σ|J| ${fmt(r.sum_abs_J,3)}`])
   const grid=rows.map(([k,v])=>`<div>${escape(k)}</div><div>${escape(v)}</div>`).join('')
-  return{row:`<div><dt>装配</dt><dd class="chips">${parts.join('')}</dd></div>`,
+  return{row:`<div class="wide"><dt>装配</dt><dd class="chips">${parts.join('')}</dd></div>`,
          details:`<details class="setup-block"><summary>装配（入参与回执）</summary><div class="grid">${grid}</div></details>`}
 }
 function inputMarkup(run,record){
@@ -63,11 +63,11 @@ function inputMarkup(run,record){
   const build=buildMarkup(run)
   const hBlock=many?`<h3>哈密顿量</h3><div class="model-formula"><code>载入中…</code></div>`:''
   const geo=`${many?`<h3>原子几何 · 系数视图</h3><div class="geo-tools"><label>原子 <select class="atom-quantity" disabled><option value="delta">δ</option><option value="omega">Ω</option><option value="none">不显示</option></select></label><label>耦合 <select class="pair-quantity" disabled><option value="J">J</option><option value="V">V</option><option value="none">不显示</option></select></label></div><canvas class="input-geometry" role="img" aria-label="原子几何与系数"></canvas><div class="geo-legend"></div>`:''}<div class="geo-readout"></div>`
-  return `${captionMarkup(run,record)}<div class="section-label">输入 / RUNSPEC</div><dl class="params">${pair('体系 × 方法',bodyName(run)+' · '+(run.method||'准备中'))}${pair('请求',run.want||'含时演化')}${many?pair('模型',model):''}${build.row}${pair(many?'有效维度':'能级数',many?`${run.dim??'—'}`:run.states?.length)}${pair('物理时间',finite(run.t_max)?fmt(run.t_max)+' ns':'静态')}${finite(run.npts)?pair('采样点',run.npts):''}${run.field?pair('磁场 B',fmt(run.field.B_gauss)+' G'):''}${pair('初态',run.psi0_label??initial(run))}${run.plan_summary?.kind&&run.plan_summary.kind!=='none'?pair('约束',run.plan_summary.kind+' · '+run.plan_summary.mode):''}${run.drive?.kind==='segments'?pair('分段驱动',`${run.drive.n_segments} 段 · t0 ${run.drive.segments.map(s=>fmt(s.t0)).join(' / ')}${run.drive.interp==='midpoint'?' · 中点':''}`):''}${run.observables?.pauli_count?pair('Pauli 串',`${run.observables.pauli_count} 条`):''}</dl>${hBlock}${geo}${many?'':levelBlock}${run.equilibrium?'':`<h3>${many?'驱动 Ω / δ':'波形光强包络'}</h3>${drives.length?'<canvas class="drive-mini" role="img" aria-label="真实输入波形"></canvas><div class="small-note">'+escape(drives.slice(0,3).map(d=>d.label).join(' · '))+(drives.length>3?' …':'')+'</div>':'<div class="small-note">'+escape(run.drive_preview_note||'静态驱动 / 无光场波形')+'</div>'}`}${build.details}<h3>耗散与配置提醒</h3><div class="small-note">${escape((run.warnings||[]).join('；')||((run.decays||run.decays_A||[]).length+' 条显式衰减通道'))}</div><details><summary>输入详情</summary><pre class="small-note">${escape(JSON.stringify({calib_summary:cs,build:run.build||null,build_receipt:run.build_receipt||null,engine_kwargs:run.engine_kwargs||{}},null,2))}</pre></details>`
+  return `${captionMarkup(run,record)}<div class="section-label">输入 / RUNSPEC</div><dl class="params">${pair('体系 × 方法',bodyName(run)+' · '+(run.method||'准备中'),true)}${pair('请求',run.want||'含时演化')}${many?pair('模型',model,true):''}${build.row}${pair(many?'有效维度':'能级数',many?`${run.dim??'—'}`:run.states?.length)}${pair('物理时间',finite(run.t_max)?fmt(run.t_max)+' ns':'静态')}${finite(run.npts)?pair('采样点',run.npts):''}${run.field?pair('磁场 B',fmt(run.field.B_gauss)+' G'):''}${pair('初态',run.psi0_label??initial(run),true)}${run.plan_summary?.kind&&run.plan_summary.kind!=='none'?pair('约束',run.plan_summary.kind+' · '+run.plan_summary.mode,true):''}${run.drive?.kind==='segments'?pair('分段驱动',`${run.drive.n_segments} 段 · t0 ${run.drive.segments.map(s=>fmt(s.t0)).join(' / ')}${run.drive.interp==='midpoint'?' · 中点':''}`,true):''}${run.observables?.pauli_count?pair('Pauli 串',`${run.observables.pauli_count} 条`):''}</dl>${hBlock}${geo}${many?'':levelBlock}${run.equilibrium?'':`<h3>${many?'驱动 Ω / δ':'波形光强包络'}</h3>${drives.length?'<canvas class="drive-mini" role="img" aria-label="真实输入波形"></canvas><div class="small-note">'+escape(drives.slice(0,3).map(d=>d.label).join(' · '))+(drives.length>3?' …':'')+'</div>':'<div class="small-note">'+escape(run.drive_preview_note||'静态驱动 / 无光场波形')+'</div>'}`}${build.details}<h3>耗散与配置提醒</h3><div class="small-note">${escape((run.warnings||[]).join('；')||((run.decays||run.decays_A||[]).length+' 条显式衰减通道'))}</div><details><summary>输入详情</summary><pre class="small-note">${escape(JSON.stringify({calib_summary:cs,build:run.build||null,build_receipt:run.build_receipt||null,engine_kwargs:run.engine_kwargs||{}},null,2))}</pre></details>`
 }
 // ---- 哈密顿量可视化：单原子项（节点）+ 两原子项（边）同时画，各自独立选择 ----
 let currentModel=null,atomMode='delta',pairMode='J',geoRun=null
-const POS_LO=[18,58,56],POS_HI=[88,214,199],NEG_LO=[58,42,18],NEG_HI=[246,173,85]
+const POS_LO=[148,163,184],POS_HI=[15,118,110],NEG_LO=[148,163,184],NEG_HI=[194,65,12]
 function rampColor(v,vmax){
   const t=Math.min(1,Math.abs(Number(v)||0)/Math.max(vmax,1e-12))
   const lo=v>=0?POS_LO:NEG_LO,hi=v>=0?POS_HI:NEG_HI
@@ -101,12 +101,12 @@ function paintGeometry(run){
   const siteVals=showAtom?(atomMode==='delta'?model.delta:model.omega):null
   const vmax=siteVals?Math.max(...siteVals.map(v=>Math.abs(Number(v)||0)),1e-12):0
   p.positions.forEach((point,i)=>{if(!point)return
-    let fill='#70d5c6'
+    let fill='#0f766e'
     if(siteVals){const v=Number(siteVals[i])||0
-      fill=Math.abs(v)<1e-12?'#28405a':rampColor(v,vmax)}
+      fill=Math.abs(v)<1e-12?'#cbd5e1':rampColor(v,vmax)}
     ctx.fillStyle=fill;ctx.beginPath();ctx.arc(point[0],point[1],showPair?3.4:4.6,0,Math.PI*2);ctx.fill()
-    if(siteVals&&sites.length<=36){ctx.fillStyle='#cfe2f2';ctx.font='9px sans-serif';ctx.textAlign='center';ctx.fillText(fmt(siteVals[i],2),point[0],point[1]-7)}
-    else if(sites.length<=24){ctx.fillStyle='#a6bbd0';ctx.font='10px sans-serif';ctx.textAlign='center';ctx.fillText(String(sites[i].site_id??i),point[0],point[1]+15)}
+    if(siteVals&&sites.length<=36){ctx.fillStyle='#334155';ctx.font='9px sans-serif';ctx.textAlign='center';ctx.fillText(fmt(siteVals[i],2),point[0],point[1]-7)}
+    else if(sites.length<=24){ctx.fillStyle='#475569';ctx.font='10px sans-serif';ctx.textAlign='center';ctx.fillText(String(sites[i].site_id??i),point[0],point[1]+15)}
   })
   const lg=$('.geo-legend')
   if(lg){

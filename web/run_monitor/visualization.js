@@ -122,7 +122,7 @@ export class ResultView {
     const box=canvasContext(this.canvas);if(!box)return
     const {ctx,w,h}=box,sites=this.data.sites||[],n=sites.length
     if(!n||sites.some(s=>!s.pos)){
-      this.points=[];ctx.fillStyle='#9eafc4';ctx.textAlign='center';ctx.fillText('没有返回原子坐标；下方显示真实曲线',w/2,h/2);return
+      this.points=[];ctx.fillStyle='#64748b';ctx.textAlign='center';ctx.fillText('没有返回原子坐标；下方显示真实曲线',w/2,h/2);return
     }
     const p=projection(sites,this.state.plane,w,Math.max(35,h-88),this.state.zoom);p.positions=p.positions.map(point=>point?[point[0],point[1]+34]:null);this.points=p.positions
     let vals=this.row(ds)||[],occupancy=null,vectors=null
@@ -137,8 +137,8 @@ export class ResultView {
     const span=Math.max(p.bounds[1]-p.bounds[0],p.bounds[3]-p.bounds[2])
     if(span>0){
       const raw=Math.min(span/3,95/p.scale),power=10**Math.floor(Math.log10(raw)),length=[1,2,5,10].map(v=>v*power).filter(v=>v<=raw).at(-1)||raw
-      ctx.strokeStyle='#7890a8';ctx.lineWidth=1.3;ctx.beginPath();ctx.moveTo(w-20-length*p.scale,23);ctx.lineTo(w-20,23);ctx.moveTo(w-20-length*p.scale,20);ctx.lineTo(w-20-length*p.scale,26);ctx.moveTo(w-20,20);ctx.lineTo(w-20,26);ctx.stroke()
-      ctx.fillStyle='#9cb1c6';ctx.font='11px "Segoe UI", sans-serif';ctx.textAlign='right';ctx.fillText(`${fmt(length,3)} μm`,w-20,15)
+      ctx.strokeStyle='#64748b';ctx.lineWidth=1.3;ctx.beginPath();ctx.moveTo(w-20-length*p.scale,23);ctx.lineTo(w-20,23);ctx.moveTo(w-20-length*p.scale,20);ctx.lineTo(w-20-length*p.scale,26);ctx.moveTo(w-20,20);ctx.lineTo(w-20,26);ctx.stroke()
+      ctx.fillStyle='#475569';ctx.font='11px "Segoe UI", sans-serif';ctx.textAlign='right';ctx.fillText(`${fmt(length,3)} μm`,w-20,15)
     }
     const max=Math.max(Math.abs(lo),Math.abs(hi),1e-12)
     let cut=max*this.state.threshold/100
@@ -152,7 +152,7 @@ export class ResultView {
         let strength=Math.abs(v)/max
         if(ds.complex&&this.state.component==='phase') {const re=ds.axis?ds.values[this.frame(ds)][i]:ds.values[i],im=ds.axis?ds.imaginary[this.frame(ds)][i]:ds.imaginary[i];const magnitude=Math.hypot(re||0,im||0);if(magnitude<cut)return;strength=magnitude/this.cache.get(magKey)}
         this.visibleEdges.push({index:i,points:[aa,bb]})
-        if(this.state.edgePicked&&this.state.edge===i){ctx.strokeStyle='#effaff';ctx.globalAlpha=.3;ctx.lineWidth=8;ctx.beginPath();ctx.moveTo(...aa);ctx.lineTo(...bb);ctx.stroke()}
+        if(this.state.edgePicked&&this.state.edge===i){ctx.strokeStyle='#0f766e';ctx.globalAlpha=.3;ctx.lineWidth=8;ctx.beginPath();ctx.moveTo(...aa);ctx.lineTo(...bb);ctx.stroke()}
         ctx.globalAlpha=.25+.65*Math.min(1,strength);ctx.lineWidth=.6+5*Math.min(1,strength);ctx.strokeStyle=color(v,lo,hi,phase,signed);ctx.beginPath();ctx.moveTo(...aa);ctx.lineTo(...bb);ctx.stroke();ctx.globalAlpha=1
       })
     }
@@ -166,15 +166,15 @@ export class ResultView {
       const [nodeLo,nodeHi]=occupancy?this.scaleFor(occupancy,[0,1]):[lo,hi]
       const actual=finite(value)?value:null,selected=i===this.state.selected
       const r=radius*(ds.kind==='basis'?(actual===1?1:.58):.8)
-      ctx.beginPath();ctx.arc(...point,r,0,Math.PI*2);ctx.fillStyle=ds.kind==='partition'?palette[actual]:actual===null?'#30475c':color(actual,nodeLo,nodeHi,!occupancy&&phase,!occupancy&&signed);ctx.fill();ctx.lineWidth=selected?2.3:1;ctx.strokeStyle=selected?'#e5f8ff':'#98b5c477';ctx.stroke()
-      if(n<=48&&radius>=7&&!vectors&&finite(actual)&&!['links','loops'].includes(ds.kind)){ctx.fillStyle=ds.kind==='partition'||actual>.65?'#14283a':'#e2f8ff';ctx.font='10px sans-serif';ctx.textAlign='center';ctx.fillText(ds.kind==='partition'?(actual?'B':'A'):ds.kind==='basis'?(actual?'r':'g'):fmt(actual,2),point[0],point[1]+3);ctx.font='11px sans-serif'}
-      if(selected){ctx.beginPath();ctx.arc(...point,r+5,0,Math.PI*2);ctx.strokeStyle='#d6f4ff88';ctx.lineWidth=1;ctx.stroke()}
+      ctx.beginPath();ctx.arc(...point,r,0,Math.PI*2);ctx.fillStyle=ds.kind==='partition'?palette[actual]:actual===null?'#cbd5e1':color(actual,nodeLo,nodeHi,!occupancy&&phase,!occupancy&&signed);ctx.fill();ctx.lineWidth=selected?2.3:1;ctx.strokeStyle=selected?'#0f766e':'#94a3b8aa';ctx.stroke()
+      if(n<=48&&radius>=7&&!vectors&&finite(actual)&&!['links','loops'].includes(ds.kind)){ctx.fillStyle=ds.kind==='partition'||phase||Math.abs(actual)>.65?'#ffffff':'#1f2937';ctx.font='10px sans-serif';ctx.textAlign='center';ctx.fillText(ds.kind==='partition'?(actual?'B':'A'):ds.kind==='basis'?(actual?'r':'g'):fmt(actual,2),point[0],point[1]+3);ctx.font='11px sans-serif'}
+      if(selected){ctx.beginPath();ctx.arc(...point,r+5,0,Math.PI*2);ctx.strokeStyle='#0f766e88';ctx.lineWidth=1;ctx.stroke()}
       const error=ds.stderr?.[this.frame(ds)]?.[i]
-      if(finite(error)&&error>0){ctx.beginPath();ctx.arc(...point,r+3+Math.min(10,error*25),0,Math.PI*2);ctx.strokeStyle='#f1c67799';ctx.stroke()}
+      if(finite(error)&&error>0){ctx.beginPath();ctx.arc(...point,r+3+Math.min(10,error*25),0,Math.PI*2);ctx.strokeStyle='#b4530999';ctx.stroke()}
       const vector=vectors?.[i];if(vector&&finite(vector[0])&&finite(vector[1])&&Math.hypot(vector[0],vector[1])>1e-10){
-        const dx=vector[0]*radius*1.6,dy=-vector[1]*radius*1.6,ex=point[0]+dx,ey=point[1]+dy,ang=Math.atan2(dy,dx),head=Math.min(5,Math.hypot(dx,dy)*.45);ctx.strokeStyle='#eaf7ff';ctx.lineWidth=1.8;ctx.beginPath();ctx.moveTo(...point);ctx.lineTo(ex,ey);ctx.lineTo(ex-head*Math.cos(ang-.5),ey-head*Math.sin(ang-.5));ctx.moveTo(ex,ey);ctx.lineTo(ex-head*Math.cos(ang+.5),ey-head*Math.sin(ang+.5));ctx.stroke()
+        const dx=vector[0]*radius*1.6,dy=-vector[1]*radius*1.6,ex=point[0]+dx,ey=point[1]+dy,ang=Math.atan2(dy,dx),head=Math.min(5,Math.hypot(dx,dy)*.45);ctx.strokeStyle='#0f172a';ctx.lineWidth=1.8;ctx.beginPath();ctx.moveTo(...point);ctx.lineTo(ex,ey);ctx.lineTo(ex-head*Math.cos(ang-.5),ey-head*Math.sin(ang-.5));ctx.moveTo(ex,ey);ctx.lineTo(ex-head*Math.cos(ang+.5),ey-head*Math.sin(ang+.5));ctx.stroke()
       }
-      if(n<=96||selected){ctx.fillStyle=selected?'#effbff':'#a3bbd2';ctx.textAlign='center';ctx.fillText(String(sites[i].site_id??i),point[0],point[1]+r+15)}
+      if(n<=96||selected){ctx.fillStyle=selected?'#1f2937':'#475569';ctx.textAlign='center';ctx.fillText(String(sites[i].site_id??i),point[0],point[1]+r+15)}
     })
     const quantity=ds.kind==='partition'?`二分纠缠熵 S = ${fmt(this.row(ds),5)} nat`:ds.kind==='basis'?`构型概率 ${fmt((this.row(ds)||[])[this.state.basis],5)}`:ds.kind==='links'?`${ds.label}${ds.temporal?'':' · 仅末态'}`:ds.label
     const singleCoordinate=ds.axis&&ds.x?.length===1?` · ${ds.axis} = ${fmt(ds.x[0],4)} ${unitOf(ds)}`:''

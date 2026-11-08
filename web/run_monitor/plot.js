@@ -56,27 +56,27 @@ export function canvasContext(canvas) {
   ctx.font='12px "Segoe UI", "Microsoft YaHei", sans-serif';ctx.lineCap='round';ctx.lineJoin='round'
   return {ctx,w,h}
 }
-export const palette=['#58d6c7','#86aaff','#efc577','#f291b7','#ba9cef','#7bcbf3']
+export const palette=['#0f766e','#2563eb','#b45309','#be185d','#7c3aed','#0369a1']
 export function color(value,lo,hi,phase=false,signed=false) {
-  if(!finite(value))return '#536477'
-  if(phase) return `hsl(${(value+Math.PI)/(2*Math.PI)*360} 67% 66%)`
+  if(!finite(value))return '#94a3b8'
+  if(phase) return `hsl(${(value+Math.PI)/(2*Math.PI)*360} 70% 40%)`
   const u=Math.max(0,Math.min(1,(value-lo)/(hi-lo||1)))
   const mix=(a,b,t)=>`rgb(${a.map((v,i)=>Math.round(v+(b[i]-v)*t)).join(',')})`
-  if(signed) return u<.5?mix([255,137,128],[42,58,76],u*2):mix([42,58,76],[89,220,210],(u-.5)*2)
-  return u<.65?mix([35,60,85],[65,191,183],u/.65):mix([65,191,183],[245,213,129],(u-.65)/.35)
+  if(signed) return u<.5?mix([220,38,38],[226,232,240],u*2):mix([226,232,240],[15,118,110],(u-.5)*2)
+  return u<.65?mix([148,163,184],[13,148,136],u/.65):mix([13,148,136],[180,83,9],(u-.65)/.35)
 }
 export function drawLines(canvas, curves, options={}) {
   const box=canvasContext(canvas);if(!box)return
   const {ctx,w,h}=box, left=53,right=19,top=options.compact?25:43,bottom=options.compact?29:52
-  if(!curves.some(c=>(c.y||[]).some(finite))){ctx.textAlign='center';ctx.fillStyle='#94a9bf';ctx.fillText('没有返回此观测量的含时序列',w/2,h/2);return}
+  if(!curves.some(c=>(c.y||[]).some(finite))){ctx.textAlign='center';ctx.fillStyle='#64748b';ctx.fillText('没有返回此观测量的含时序列',w/2,h/2);return}
   const all=curves.flatMap(c=>(c.y||[]).flatMap((y,i)=>finite(y)?[y-(c.error?.[i]||0),y+(c.error?.[i]||0)]:[]))
   let [lo,hi]=extent(all); if(options.yRange)[lo,hi]=options.yRange
   if(options.histogram)lo=0
   if(lo===hi){const d=Math.max(.05,Math.abs(lo)*.1);lo-=d;hi+=d}else{const d=(hi-lo)*.08;lo-=d;hi+=d}
   if(options.histogram)lo=0
   const [xlo,xhi]=extent(curves.flatMap(c=>c.x||[])), x=v=>xhi===xlo?(left+w-right)/2:left+(w-left-right)*(v-xlo)/(xhi-xlo), y=v=>h-bottom-(h-top-bottom)*(v-lo)/(hi-lo||1)
-  ctx.textAlign='right';ctx.fillStyle='#93a9c0'
-  for(let i=0;i<=3;i++){const v=lo+(hi-lo)*i/3,yy=y(v);ctx.strokeStyle='#2d405444';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(left,yy);ctx.lineTo(w-right,yy);ctx.stroke();ctx.fillText(fmt(v,3),left-8,yy+4)}
+  ctx.textAlign='right';ctx.fillStyle='#475569'
+  for(let i=0;i<=3;i++){const v=lo+(hi-lo)*i/3,yy=y(v);ctx.strokeStyle='#cbd5e1';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(left,yy);ctx.lineTo(w-right,yy);ctx.stroke();ctx.fillText(fmt(v,3),left-8,yy+4)}
   ctx.textAlign='center'
   for(let i=0;i<=(xlo===xhi?0:4);i++){const v=xlo+(xhi-xlo)*i/4;ctx.fillText(fmt(v,2),x(v),h-bottom+18)}
   ctx.textAlign='right';ctx.font='10px sans-serif';ctx.fillText(options.xLabel||'',w-right,h-bottom+28);ctx.font='12px sans-serif'
@@ -86,6 +86,6 @@ export function drawLines(canvas, curves, options={}) {
     curve.y.forEach((v,i)=>{if(!finite(v)||!finite(curve.x[i])){open=false;return}const xx=x(curve.x[i]),yy=y(v);if(options.spectrum){ctx.moveTo(xx-7,yy);ctx.lineTo(xx+7,yy)}else if(options.histogram){ctx.fillStyle=stroke;ctx.fillRect(xx-4,yy,8,Math.max(1,y(0)-yy))}else{open?ctx.lineTo(xx,yy):ctx.moveTo(xx,yy);open=true}});ctx.stroke()
     if(!options.spectrum&&!options.histogram&&curve.y.filter(finite).length===1){const i=curve.y.findIndex(finite);ctx.beginPath();ctx.arc(x(curve.x[i]),y(curve.y[i]),3,0,Math.PI*2);ctx.fillStyle=stroke;ctx.fill()}
   })
-  if(finite(options.cursor)){ctx.setLineDash([3,4]);ctx.strokeStyle='#d5e9f0a0';ctx.beginPath();ctx.moveTo(x(options.cursor),top);ctx.lineTo(x(options.cursor),h-bottom);ctx.stroke();ctx.setLineDash([])}
-  if(!curves.length){ctx.textAlign='center';ctx.fillStyle='#94a9bf';ctx.fillText('没有可用的曲线数据',w/2,h/2)}
+  if(finite(options.cursor)){ctx.setLineDash([3,4]);ctx.strokeStyle='#334155';ctx.beginPath();ctx.moveTo(x(options.cursor),top);ctx.lineTo(x(options.cursor),h-bottom);ctx.stroke();ctx.setLineDash([])}
+  if(!curves.length){ctx.textAlign='center';ctx.fillStyle='#64748b';ctx.fillText('没有可用的曲线数据',w/2,h/2)}
 }
