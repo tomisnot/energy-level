@@ -311,6 +311,48 @@ def validate_psi_spec(spec, n):
     raise ValueError('无法解析多体初态 psi0=%r' % (spec,))
 
 
+def initial_sigma_z(spec, n, *, max_mps_n=16):
+    """初态的逐格点 ⟨σᶻᵢ⟩（g=+1，r=−1），不要求直积态。
+
+    乘积态/索引/模式串按局部态直接算，不分配 2^N；叠加态、任意全空间态矢先物
+    化成向量再算局域期望；有限 MPS 仅在 ``n <= max_mps_n`` 时物化，否则返回
+    ``None``（调用方应显示"不可用"，不要编造）。``ground`` 需要求解器先算基态，
+    这里同样返回 ``None``。
+    """
+    n = int(n)
+    if n <= 0:
+        return None
+    if spec is None:
+        return np.ones(n, dtype=float)
+    if isinstance(spec, str) and spec == 'ground':
+        return None
+    # 乘积态/模式串/索引/局部直积：局部期望即可，避免 2^N。
+    try:
+        vectors = product_vectors(spec, n)
+    except (ValueError, TypeError):
+        vectors = None
+    if vectors is not None:
+        return np.array([abs(v[0]) ** 2 - abs(v[1]) ** 2 for v in vectors], float)
+    # 原生 MPS 只在明确的小 N 上限内物化；大 MPS 的局域期望留给执行层。
+    if isinstance(spec, dict) and spec.get('kind') == 'mps':
+        try:
+            vec = mps_state_to_vector(spec, n, max_n=max_mps_n)
+        except (ValueError, TypeError):
+            return None
+        basis = np.arange(1 << n, dtype=np.int64)
+    else:
+        try:
+            vec = state_vector(spec, n)
+        except (ValueError, TypeError):
+            return None
+        basis = np.arange(1 << n, dtype=np.int64)
+    from .basis import basis_bits
+    bits = np.asarray(basis_bits(n, basis), dtype=np.int8)
+    probs = np.abs(vec) ** 2
+    return (1.0 - 2.0 * bits) @ probs
+
+
 __all__ = ['product_vectors', 'product_vector', 'validate_product_spec',
            'validate_psi_spec', 'make_mps_state', 'validate_mps_state',
-           'save_mps_checkpoint', 'load_mps_checkpoint']
+           'save_mps_checkpoint', 'load_mps_checkpoint', 'mps_state_to_vector',
+           'initial_sigma_z']

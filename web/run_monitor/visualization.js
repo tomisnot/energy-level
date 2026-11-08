@@ -60,6 +60,17 @@ export class ResultView {
     if(!modes.some(([id])=>id===this.state.mode))this.state.mode=modes[0][0]
     this.root.innerHTML=`<div class="metrics">${(this.data.scalars||[]).slice(0,8).map(s=>`<span class="metric">${escape(s.label)}<b>${fmt(s.value,5)}</b><small>${s.unit==='1'?'':escape(s.unit)}</small></span>`).join('')}</div><div class="view-tabs">${modes.map(([id,label])=>`<button data-mode="${id}" class="${id===this.state.mode?'active':''}">${label}</button>`).join('')}<button class="export" title="下载当前运行的绘图数据">绘图数据 ↓</button>${this.data.artifact_available?`<a class="artifact-link" href="/api/runs/${encodeURIComponent(this.summary.monitor_id)}/artifact">完整结果 ↓</a>`:""}</div><div class="visual-controls"></div><div class="plot-stage"><canvas class="main-canvas" role="img" aria-label="运行结果可视化，点击原子查看数值和曲线"></canvas><div class="plot-label"></div><div class="legend"></div><div class="node-readout"></div></div><div class="basis-picker hidden"></div><div class="playback"><button class="play" aria-label="播放或暂停动画">▶</button><input class="scrub" type="range" min="0" max="1000" value="1000" aria-label="选择实际采样时刻"><span class="coordinate"></span><span class="duration">8 秒 / 轮</span><label><input class="loop" type="checkbox" checked>循环</label></div><div class="trace-box"><canvas class="trace-canvas" role="img" aria-label="选中原子或观测量的真实数值曲线"></canvas><span class="trace-title"></span><span class="trace-legend"></span></div><div class="result-note"></div><details class="technical"><summary>计算诊断与数据说明</summary><pre></pre></details>`
     this.canvas=this.root.querySelector('.main-canvas');this.trace=this.root.querySelector('.trace-canvas')
+    this.canvas.title='滚轮缩放 · 双击复位'
+    const wheelZoom=e=>{
+      if(!['array','basis'].includes(this.state.mode))return
+      e.preventDefault();e.stopImmediatePropagation()
+      const factor=Math.exp(-Number(e.deltaY||0)*.0015)
+      this.state.zoom=Math.max(.35,Math.min(8,this.state.zoom*factor));this.paint()
+    }
+    this.canvas.onwheel=wheelZoom
+    // 图例/标签覆盖在 canvas 上：整个 .plot-stage 都优先缩放，不能被卡片翻页截走。
+    const stage=this.root.querySelector('.plot-stage');if(stage)stage.onwheel=wheelZoom
+    this.canvas.ondblclick=()=>{if(!['array','basis'].includes(this.state.mode))return;this.state.zoom=1;this.paint()}
     this.root.querySelectorAll('[data-mode]').forEach(b=>b.onclick=()=>{this.state.mode=b.dataset.mode;this.state.dataset=null;this.state.fraction=1;this.state.playing=false;this.controls();this.paint()})
     this.root.querySelector('.play').onclick=()=>{if(!this.state.playing&&this.state.fraction>=1)this.state.fraction=0;this.state.playing=!this.state.playing;this.last=0;this.paint()}
     this.root.querySelector('.scrub').oninput=e=>{this.state.fraction=Number(e.target.value)/1000;this.state.playing=false;this.paint()}

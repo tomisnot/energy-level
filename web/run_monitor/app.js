@@ -62,11 +62,11 @@ function inputMarkup(run,record){
   const levelBlock=`<h3>具体能级 · 可按能级组折叠</h3>${levels(run)}`
   const build=buildMarkup(run)
   const hBlock=many?`<h3>哈密顿量</h3><div class="model-formula"><code>载入中…</code></div>`:''
-  const geo=`${many?`<h3>原子几何 · 系数视图</h3><div class="geo-tools"><label>原子 <select class="atom-quantity" disabled><option value="delta">δ</option><option value="omega">Ω</option><option value="none">不显示</option></select></label><label>耦合 <select class="pair-quantity" disabled><option value="J">J</option><option value="V">V</option><option value="none">不显示</option></select></label></div><canvas class="input-geometry" role="img" aria-label="原子几何与系数"></canvas><div class="geo-legend"></div>`:''}<div class="geo-readout"></div>`
+  const geo=`${many?`<h3>原子几何 · 系数视图</h3><div class="geo-tools"><label>原子 <select class="atom-quantity" disabled><option value="delta">δ</option><option value="omega">Ω</option><option value="initial">初态 ⟨σᶻ⟩</option><option value="none">不显示</option></select></label><label>耦合 <select class="pair-quantity" disabled><option value="J">J</option><option value="V">V</option><option value="none">不显示</option></select></label></div><canvas class="input-geometry" role="img" aria-label="原子几何与系数"></canvas><div class="geo-legend"></div>`:''}<div class="geo-readout"></div>`
   return `${captionMarkup(run,record)}<div class="section-label">输入 / RUNSPEC</div><dl class="params">${pair('体系 × 方法',bodyName(run)+' · '+(run.method||'准备中'),true)}${pair('请求',run.want||'含时演化')}${many?pair('模型',model,true):''}${build.row}${pair(many?'有效维度':'能级数',many?`${run.dim??'—'}`:run.states?.length)}${pair('物理时间',finite(run.t_max)?fmt(run.t_max)+' ns':'静态')}${finite(run.npts)?pair('采样点',run.npts):''}${run.field?pair('磁场 B',fmt(run.field.B_gauss)+' G'):''}${pair('初态',run.psi0_label??initial(run),true)}${run.plan_summary?.kind&&run.plan_summary.kind!=='none'?pair('约束',run.plan_summary.kind+' · '+run.plan_summary.mode,true):''}${run.drive?.kind==='segments'?pair('分段驱动',`${run.drive.n_segments} 段 · t0 ${run.drive.segments.map(s=>fmt(s.t0)).join(' / ')}${run.drive.interp==='midpoint'?' · 中点':''}`,true):''}${run.observables?.pauli_count?pair('Pauli 串',`${run.observables.pauli_count} 条`):''}</dl>${hBlock}${geo}${many?'':levelBlock}${run.equilibrium?'':`<h3>${many?'驱动 Ω / δ':'波形光强包络'}</h3>${drives.length?'<canvas class="drive-mini" role="img" aria-label="真实输入波形"></canvas><div class="small-note">'+escape(drives.slice(0,3).map(d=>d.label).join(' · '))+(drives.length>3?' …':'')+'</div>':'<div class="small-note">'+escape(run.drive_preview_note||'静态驱动 / 无光场波形')+'</div>'}`}${build.details}<h3>耗散与配置提醒</h3><div class="small-note">${escape((run.warnings||[]).join('；')||((run.decays||run.decays_A||[]).length+' 条显式衰减通道'))}</div><details><summary>输入详情</summary><pre class="small-note">${escape(JSON.stringify({calib_summary:cs,build:run.build||null,build_receipt:run.build_receipt||null,engine_kwargs:run.engine_kwargs||{}},null,2))}</pre></details>`
 }
 // ---- 哈密顿量可视化：单原子项（节点）+ 两原子项（边）同时画，各自独立选择 ----
-let currentModel=null,atomMode='delta',pairMode='J',geoRun=null
+let currentModel=null,atomMode='delta',pairMode='J',geoRun=null,geoZoom=1
 const POS_LO=[148,163,184],POS_HI=[15,118,110],NEG_LO=[148,163,184],NEG_HI=[194,65,12]
 function rampColor(v,vmax){
   const t=Math.min(1,Math.abs(Number(v)||0)/Math.max(vmax,1e-12))
@@ -80,7 +80,7 @@ function paintGeometry(run){
   const b=canvasContext(c);if(!b)return
   const sites=(run&&run.atoms)||[],{ctx,w,h}=b
   if(!sites.length)return
-  const p=projection(sites,bestPlane(sites),w,h)
+  const p=projection(sites,bestPlane(sites),w,h,geoZoom)
   const model=currentModel
   const showPair=!!model&&pairMode!=='none',showAtom=!!model&&atomMode!=='none'
   let pairMax=1e-12
@@ -98,8 +98,8 @@ function paintGeometry(run){
       ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(bb[0],bb[1]);ctx.stroke()
     }
   }
-  const siteVals=showAtom?(atomMode==='delta'?model.delta:model.omega):null
-  const vmax=siteVals?Math.max(...siteVals.map(v=>Math.abs(Number(v)||0)),1e-12):0
+  const siteVals=showAtom?(atomMode==='initial'?model.initial_sz:atomMode==='delta'?model.delta:model.omega):null
+  const vmax=siteVals?(atomMode==='initial'?1:Math.max(...siteVals.map(v=>Math.abs(Number(v)||0)),1e-12)):0
   p.positions.forEach((point,i)=>{if(!point)return
     let fill='#0f766e'
     if(siteVals){const v=Number(siteVals[i])||0
@@ -111,21 +111,26 @@ function paintGeometry(run){
   const lg=$('.geo-legend')
   if(lg){
     const bits=[]
-    if(siteVals)bits.push(`<span><i style="background:${rampColor(vmax,vmax)}"></i>原子 ${atomMode==='delta'?'δ':'Ω'} 正</span><span><i style="background:${rampColor(-vmax,vmax)}"></i>负</span><span>节点亮度/颜色 ∝ |值| · max ${fmt(vmax,3)} MHz</span>`)
+    if(siteVals&&atomMode==='initial')bits.push(`<span><i style="background:${rampColor(1,1)}"></i>+1 · |g⟩</span><span><i style="background:${rampColor(-1,1)}"></i>−1 · |r⟩</span><span>节点颜色 ∝ ⟨σᶻ⟩；0=混合/纠缠</span>`)
+    else if(siteVals)bits.push(`<span><i style="background:${rampColor(vmax,vmax)}"></i>原子 ${atomMode==='delta'?'δ':'Ω'} 正</span><span><i style="background:${rampColor(-vmax,vmax)}"></i>负</span><span>节点亮度/颜色 ∝ |值| · max ${fmt(vmax,3)} MHz</span>`)
     else if(model)bits.push(`<span>原子项：未显示（上方选 δ/Ω）</span>`)
     if(showPair)bits.push(`<span><i style="background:${rampColor(pairMax,pairMax)}"></i>${pairMode}&gt;0</span><span><i style="background:${rampColor(-pairMax,pairMax)}"></i>${pairMode}&lt;0</span><span>线宽与亮度 ∝ |${pairMode}| · 最多 90 条</span>`)
     else if(model)bits.push(`<span>耦合项：未显示（上方选 J/V）</span>`)
     lg.innerHTML=bits.length?bits.join(''):`<span>节点 = 原子编号；模型载入后可按系数着色</span>`
   }
   c.style.cursor='crosshair'
+  c.title='滚轮缩放 · 双击复位'
+  c.onwheel=e=>{e.preventDefault();e.stopPropagation();const factor=Math.exp(-Number(e.deltaY||0)*.0015);geoZoom=Math.max(.35,Math.min(8,geoZoom*factor));paintGeometry(geoRun)}
+  c.ondblclick=()=>{geoZoom=1;paintGeometry(geoRun)}
   c.onmousemove=e=>{const rect=c.getBoundingClientRect(),x=e.clientX-rect.left,y=e.clientY-rect.top
     let best=-1,bestD=64
     p.positions.forEach((point,i)=>{if(!point)return;const d=(point[0]-x)**2+(point[1]-y)**2;if(d<bestD){bestD=d;best=i}})
     const out=$('.geo-readout');if(!out)return
     if(best<0){out.textContent='';return}
-    const s=sites[best]||{},dv=model&&model.delta?Number(model.delta[best])||0:null,ov=model&&model.omega?Number(model.omega[best])||0:null
+    const s=sites[best]||{},dv=model&&model.delta?Number(model.delta[best])||0:null,ov=model&&model.omega?Number(model.omega[best])||0:null,
+      iv=model&&model.initial_sz?Number(model.initial_sz[best]):null
     out.textContent=`#${s.site_id??best} · (${fmt(s.pos?.[0],3)}, ${fmt(s.pos?.[1],3)}) µm`+
-      (dv!==null?` · δ ${fmt(dv,3)}`:'')+(ov?` · Ω ${fmt(ov,3)}`:'')}
+      (dv!==null?` · δ ${fmt(dv,3)}`:'')+(ov?` · Ω ${fmt(ov,3)}`:'')+(iv!==null?` · ⟨σᶻ⟩ ${fmt(iv,3)}`:'')}
   c.onmouseleave=()=>{const out=$('.geo-readout');if(out)out.textContent=''}
 }
 function paintModel(model,running){
@@ -133,6 +138,9 @@ function paintModel(model,running){
   currentModel=model||null
   const atomSel=$('.atom-quantity'),pairSel=$('.pair-quantity')
   for(const sel of [atomSel,pairSel])if(sel)sel.disabled=!model
+  const initialOpt=atomSel?.querySelector('option[value="initial"]')
+  if(initialOpt)initialOpt.disabled=!model?.initial_sz
+  if(atomMode==='initial'&&!model?.initial_sz)atomMode='delta'
   if(!model){
     box.innerHTML=running?'<code>模型载入中…</code>':'<code>本次结果未携带模型数据</code>'
     paintGeometry(geoRun);return
@@ -207,7 +215,7 @@ async function render(){
   const key=`${record.id}|${record.status}|${record.result_version}|${record.input_version}`
   if(signature===key){const progress=$('.progress-track i');if(progress)progress.style.width=Math.max(0,Math.min(100,record.progress||0))+'%';if($('.progress-text'))$('.progress-text').textContent=fmt(record.progress||0,1)+'% · '+(record.elapsed||'—');if($('.stage-text')&&record.status==='running')$('.stage-text').textContent=record.stage;return}
   saveInput();dispose();signature=key;renderedId=record.id;const token=++renderToken
-  currentModel=null;atomMode='delta';pairMode='J'
+  currentModel=null;atomMode='delta';pairMode='J';geoZoom=1
   $('#card-host').innerHTML=`<article class="run-card"><header class="card-head"><span class="id">${escape(record.id)}</span><span>${escape(record.createdAt)}</span><span class="reason">${escape(record.reason||bodyName(record.run))}</span><span class="status ${escape(record.status)}">${escape(statusNames[record.status]||record.status)} · ${escape(record.elapsed||'—')}</span></header><div class="card-content"><aside class="input-panel">${inputMarkup(record.run,record)}</aside><section class="result-panel"><div class="result-header"><span class="section-label">输出 / ENGINE RESULT</span><span class="source">${escape(record.run.method||'')} · 真实运行</span></div>${record.error?`<div class="error">${escape(record.error)}</div>`:''}<div class="result-mount">${pending(record)}</div></section></div></article>`
   restoreInput();requestAnimationFrame(()=>{paintInput(record.run);if(!record.has_visualization)paintModel(null,record.status==='running')});loadModel(record)
   if(record.has_visualization){

@@ -63,6 +63,23 @@ def _psi0_label(run):
 
 
 
+
+def _initial_sigma_z(run):
+    """逐格点初态 ⟨σᶻ⟩；不可物化（ground/大 MPS/非态矢）时返回 ``None``。"""
+    run = run or {}
+    if not isinstance(run, dict):
+        return None
+    n = int(run.get('n_atoms') or ((run.get('calib') or {}).get('atoms') or []).__len__() or 0)
+    if n <= 0:
+        return None
+    try:
+        from src.core.manybody.state import initial_sigma_z
+        out = initial_sigma_z(run.get('psi0'), n)
+    except Exception:                               # noqa: BLE001 - 展示层绝不拖垮运行
+        return None
+    return None if out is None else [float(x) for x in out]
+
+
 class RunMonitorStore:
     """运行卡片：内存视图 **+ 磁盘持久化**。
 
@@ -262,7 +279,8 @@ class RunMonitorStore:
                "progress":0,"stage":"准备","elapsed":"—","actor":actor,"reason":reason,
                "created_epoch":time.time(),"run":self._view(run or {},config),"result":None,"error":None,
                "has_visualization":False,"result_version":0,"input_version":0,
-               "_progress_arr":None,"_started":time.monotonic(),"_visualization":None}
+               "_progress_arr":None,"_started":time.monotonic(),"_visualization":None,
+               "_initial_sigma_z":_initial_sigma_z(run or {})}
         with self._lock:
             self._records[rid]=rec
             self._trim()
@@ -285,6 +303,7 @@ class RunMonitorStore:
             # 模型本体只留在**内存**里：结果投影要画哈密顿量（耦合矩阵/δ），
             # 但它不该进轮询快照，也不落盘（重启后旧卡没有它，前端如实降级）。
             rec['_calib']=run.get('calib') if isinstance(run,dict) else None
+            rec['_initial_sigma_z']=_initial_sigma_z(run if isinstance(run,dict) else {})
             rec['input_version']+=1
             snapshot = dict(rec)
         self._write_meta(snapshot)                  # 文件 I/O 不占锁
@@ -353,13 +372,19 @@ class RunMonitorStore:
         return dict(ok=True,id=rid,visualization=viz,summary=summary or {})
 
     def model(self, rid):
-        """按需取**模型本体**（耦合矩阵/δ 的可视化数据）。只在内存里，不落盘、不进轮询。"""
+        """按需取**模型本体**（耦合矩阵/δ/初态 σᶻ）。只在内存里，不落盘、不进轮询。"""
         with self._lock:
             rec = self._records.get(rid)
             calib = rec.get('_calib') if rec is not None else None
+            initial = rec.get('_initial_sigma_z') if rec is not None else None
+            label = (rec.get('run') or {}).get('psi0_label') if rec is not None else None
         if not calib:
             return None
-        return {'ok': True, 'id': rid, 'model': model_view(calib)}
+        view = model_view(calib) or {}
+        if initial is not None:
+            view['initial_sz'] = initial
+        view['initial_label'] = label
+        return {'ok': True, 'id': rid, 'model': view}
 
     def snapshot(self, config=None):
         with self._lock:

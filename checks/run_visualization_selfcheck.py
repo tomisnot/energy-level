@@ -65,6 +65,9 @@ class VisualizationTests(unittest.TestCase):
                     self.assertEqual(ds['rho']['kind'],'curve')
                     self.assertEqual(ds['rho']['x'][0],float(raw['energies'][0]))
                 json.dumps(view,allow_nan=False)
+                model=engine.run_monitor.model(out['monitor_id'])['model']
+                self.assertEqual(model['initial_sz'],[1.0,1.0,1.0])
+                self.assertEqual(model['initial_label'],'|g…g⟩')
             poll=engine.run_monitor.snapshot()['runs']
             self.assertEqual(len(poll),4)
             self.assertTrue(all(r['has_visualization'] for r in poll))
@@ -75,6 +78,16 @@ class VisualizationTests(unittest.TestCase):
                            context=ExecutionContext())
             self.assertEqual(len(engine.run_monitor.snapshot()['runs']),5)
             self.assertEqual(engine.run_monitor.snapshot()['runs'][0]['status'],'failed')
+
+    def test_initial_sigma_z_any_state(self):
+        from src.core.manybody.state import initial_sigma_z
+        # 直积态
+        np.testing.assert_allclose(initial_sigma_z('|grg>',3),[1,-1,1])
+        # 叠加/纠缠态也能给出逐点均值，而不是猜一个直积态
+        vec=np.zeros(8,complex);vec[0]=1/np.sqrt(2);vec[7]=1/np.sqrt(2)
+        np.testing.assert_allclose(initial_sigma_z(vec,3),[0,0,0],atol=1e-12)
+        # ground 需要求解器，展示层必须明确“不可用”
+        self.assertIsNone(initial_sigma_z('ground',3))
 
     def test_complex_missing_and_exact_count_histogram(self):
         raw=describe_result(dict(t=np.array([0.,1.,9.]),pops_atom=np.ones((3,3))*.5,
