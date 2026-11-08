@@ -6,6 +6,18 @@ declarations; model-dependent restrictions remain in the numerical backend.
 from dataclasses import dataclass
 
 
+class ConfigConflict(ValueError):
+    """A configuration key/combination is refused by the selected backend.
+
+    ``keys`` is the machine-readable conflict list; the MCP layer maps this
+    to ``kind='config_conflict'`` instead of wrapping an internal error.
+    """
+
+    def __init__(self, message, *, keys=()):
+        super().__init__(message)
+        self.keys = tuple(keys)
+
+
 @dataclass(frozen=True)
 class TimeBackend:
     module: str
@@ -105,8 +117,10 @@ EQ_FEATURES = {'dmrg': frozenset(('mps_dtype', 'mps_analysis', 'mps_order', 'mps
 def require_equilibrium_features(backend, features):
     unsupported=set(features)-EQ_FEATURES.get(backend,frozenset())
     if unsupported:
-        raise ValueError('%s does not support equilibrium options: %s' %
-                         (backend, ', '.join(sorted(unsupported))))
+        raise ConfigConflict(
+            '%s does not support equilibrium options: %s' %
+            (backend, ', '.join(sorted(unsupported))),
+            keys=tuple('manybody.' + key for key in sorted(unsupported)))
 
 
 def time_backend_names():
@@ -163,21 +177,28 @@ def validate_time_capabilities(name, *, segments=None, plan=None, gamma=None,
     backend = TIME_BACKENDS[normalize_time_backend(name)]
     if pauli_strings and not backend.pauli:
         alts = ' / '.join(pauli_backends())
-        raise ValueError(
+        raise ConfigConflict(
             '%s 不提供可求 Pauli 串的多体态（能力=%r）；请改用 %s。'
-            '该键不会被静默忽略' % (name, backend.pauli or 'none', alts))
+            '该键不会被静默忽略' % (name, backend.pauli or 'none', alts),
+            keys=('manybody.pauli_strings',))
     if mps_order is not None and not backend.order:
-        raise ValueError('%s does not support explicit mps_order' % name)
+        raise ConfigConflict('%s does not support explicit mps_order' % name,
+                                    keys=('manybody.mps_order',))
     if segments and not backend.segments:
-        raise ValueError('%s 尚不支持 drive_segments' % name)
+        raise ConfigConflict('%s 尚不支持 drive_segments' % name,
+                                    keys=('manybody.drive_segments',))
     if plan and plan.get('projected') and not backend.projected:
-        raise ValueError('%s 尚不支持 projected HamiltonianPlan；请选择 ed' % name)
+        raise ConfigConflict('%s 尚不支持 projected HamiltonianPlan；请选择 ed' % name,
+                                    keys=('manybody.constraint',))
     if gamma is not None and np.any(np.asarray(gamma) != 0) and not backend.gamma:
-        raise ValueError('%s 仅支持 gamma=0；耗散请使用 ED 或 trajectories' % name)
+        raise ConfigConflict('%s 仅支持 gamma=0；耗散请使用 ED 或 trajectories' % name,
+                                    keys=('manybody.gamma_mhz',))
     if return_state and not backend.return_state:
-        raise ValueError('%s 尚不支持 return_state' % name)
+        raise ConfigConflict('%s 尚不支持 return_state' % name,
+                                    keys=('manybody.return_state',))
     if charge_sector is not None and not backend.charge:
-        raise ValueError('%s 尚不支持实时 charge_sector；请选择 CPU MPS' % name)
+        raise ConfigConflict('%s 尚不支持实时 charge_sector；请选择 CPU MPS' % name,
+                                    keys=('manybody.charge_sector',))
     if collapse_ops and name != 'tdvp-trajectories':
         raise ValueError('collapse_ops 需要 tdvp-trajectories')
     if isinstance(psi0, str) and psi0 == 'ground' and backend.module not in ('engine_ed', 'engine_mps'):

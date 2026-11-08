@@ -163,6 +163,11 @@ CONFIG_SCHEMA_MB = {
         desc='分段常数驱动 [{t0,Om:[…],phase:[…],delta:[…]},…]（缺省=静态，用 atoms 的 Ω/δ）。'
              '结构在 build 阶段当场校验（schema_mb.validate_drive_segments）：'
              'Om 为幅值、phase 为弧度，Om/delta/phase 为长度=原子数的数值序列'),
+    'manybody.drive_interp': dict(
+        type='str', enum=['left', 'midpoint'], default='left',
+        desc='分段驱动取值规则：left=每段左端点常数值（默认，逐位兼容旧结果）；'
+             'midpoint=把段条目视为线性 ramp 的控制点，取该段中点值（二阶 ramp 精度）。'
+             '仅 ED / CPU MPS / tdvp-dense 消费；其它后端会在 build 阶段显式拒绝。'),
     'manybody.constraint': dict(
         type='dict', default=None,
         desc='Hamiltonian 约束：{kind:none|blockade|pxp, mode:full|project, '

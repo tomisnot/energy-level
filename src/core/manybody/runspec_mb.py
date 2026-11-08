@@ -16,7 +16,8 @@ import numpy as np
 
 from .model import ManyBodyModel, TERMS
 from . import assemble as _asm
-from .backends import TIME_BACKENDS, normalize_time_backend, validate_time_capabilities
+from .backends import (TIME_BACKENDS, ConfigConflict, normalize_time_backend,
+                       validate_time_capabilities)
 from .state import validate_psi_spec
 from .hamiltonian_plan import build_plan, plan_summary
 from .schema_mb import (mb_get, validate_drive_segments, validate_loops,
@@ -594,6 +595,8 @@ def _backend_options(p, solver, ed_max_dim):
     if backend.module in ('engine_mps', 'engine_mps_gpu'):
         options['algorithm'] = backend.algorithm or solver
         options['return_state'] = bool(mb_get(p, 'manybody.return_state'))
+    if backend.segments and backend.module in ('engine_ed', 'engine_mps', 'tdvp_dense'):
+        options['drive_interp'] = mb_get(p, 'manybody.drive_interp') or 'left'
     if backend.charge:
         options['charge_sector'] = mb_get(p, 'manybody.charge_sector')
     if solver == 'ed':
@@ -654,6 +657,18 @@ def build_run_manybody(cache, params, *, pump=None, method=None, diag=False,
             memory_budget_mb=p.get('manybody.memory_budget_mb'),
             calib=calib, terms=terms)
     segments = validate_drive_segments(p.get('manybody.drive_segments'), n)
+    drive_interp = mb_get(p, 'manybody.drive_interp') or 'left'
+    if drive_interp not in ('left', 'midpoint'):
+        raise ConfigConflict('manybody.drive_interp 须为 left/midpoint，得到 %r'
+                             % (drive_interp,),
+                             keys=('manybody.drive_interp',))
+    if segments and drive_interp != 'left':
+        module = TIME_BACKENDS[solver].module
+        if module not in ('engine_ed', 'engine_mps', 'tdvp_dense'):
+            raise ConfigConflict(
+                '%s 尚不支持 drive_interp=%s；只有 ED/CPU MPS/tdvp-dense 支持中点规则'
+                % (solver, drive_interp),
+                keys=('manybody.drive_interp',))
     pauli_specs = validate_pauli_strings(p.get('manybody.pauli_strings'), n_atoms=n)
     validate_time_capabilities(
         solver, segments=segments, plan=plan, gamma=gamma, psi0=psi0,

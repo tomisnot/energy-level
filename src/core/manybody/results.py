@@ -41,10 +41,11 @@ def describe_result(result, calib=None, *, loss_kind='norm_drift', approximation
     add('stderr', 'standard_error', ('time', 'site'), of='pops_atom')
     add('S', 'entanglement_entropy', ('time',) if out.get('t') is not None else (), 'nat',
         **({'summary': dict(mode='scalar')} if out.get('t') is None else {}))
+    corr_3d = (out.get('betas') is not None and out.get('corr') is not None
+               and np.asarray(out['corr']).ndim == 3)
     add('corr', 'connected_occupation_correlation',
-        ('beta', 'site', 'site') if out.get('betas') is not None
-        and out.get('corr') is not None and np.asarray(out['corr']).ndim == 3
-        else ('site', 'site'))
+        ('beta', 'site', 'site') if corr_3d else ('site', 'site'),
+        **({'summary': dict(mode='first_last_axis', axis=0)} if corr_3d else {}))
     add('energy', 'energy', ('time',), 'MHz')
     add('E0', 'ground_state_energy', (), 'MHz', summary=dict(mode='scalar'))
     add('E_per_site', 'energy_per_site', (), 'MHz')
@@ -76,9 +77,15 @@ def describe_result(result, calib=None, *, loss_kind='norm_drift', approximation
                                  ('Om_t','drive_amplitude','MHz'),
                                  ('de_t','detuning','MHz')):
         add(key, quantity, ('tau',), unit)
+    if out.get('t') is not None:
+        n_atom_summary = {}
+    elif out.get('betas') is not None:
+        n_atom_summary = {'summary': dict(mode='rows', n=8)}
+    else:
+        n_atom_summary = {'summary': dict(mode='list')}
     add('n_atom', 'site_occupation', ('time','site') if out.get('t') is not None else
         ('beta', 'site') if out.get('betas') is not None else ('site',),
-        **({'summary': dict(mode='list')} if out.get('t') is None else {}))
+        **n_atom_summary)
     for key in ('sx', 'sy', 'sz', 'sp', 'sm', 'phase'):
         add('observables.'+key, key, ('time', 'site'), 'rad' if key == 'phase' else '1')
     for key, axes, unit in (('xy_corr', ('site', 'site'), '1'),
@@ -144,6 +151,13 @@ def _json_num(value):
     if z.imag == 0.0:
         return round(float(z.real), 9)
     return [round(float(z.real), 9), round(float(z.imag), 9)]
+
+
+def _json_array(value):
+    a = np.asarray(value)
+    if a.ndim == 0:
+        return _json_num(a)
+    return [_json_array(x) for x in a]
 
 
 def _labels_at(result, path):
@@ -230,6 +244,22 @@ def summarize_result(result, *, labels=None, top_n=None):
                 top={_label(labs, int(i)): _json_num(avg[i]) for i in order},
                 final={_label(labs, int(i)): _json_num(final[i]) for i in order},
                 total=total)
+        elif mode == 'rows':
+            if a.ndim == 2:
+                n = policy.get('n')
+                k = a.shape[0] if n is None else min(int(n), a.shape[0])
+                out[path] = dict(mode='rows',
+                                 rows=[_json_array(a[i]) for i in range(k)],
+                                 total=int(a.shape[0]))
+        elif mode == 'first_last_axis':
+            axis = int(policy.get('axis', 0))
+            if a.ndim > axis:
+                first = np.take(a, 0, axis=axis)
+                last = np.take(a, -1, axis=axis)
+                out[path] = dict(mode='first_last_axis',
+                                 first=_json_array(first),
+                                 last=_json_array(last),
+                                 total=int(a.shape[axis]))
         elif mode == 'first_last':
             vals = a.reshape(-1)
             if vals.size:

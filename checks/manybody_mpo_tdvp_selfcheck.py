@@ -33,6 +33,19 @@ def main():
     C.check('error_report 含内部步数',
             got['error_report']['n_internal_steps'] == 2)
 
+    # B3：kagome/非恒等 MPS order 下，原子序初态与 pops 必须映射回来
+    cal_o = {'atoms': [{'id': i, 'pos': p} for i, p in enumerate(
+        [[2., 0., 0.], [0., 0., 0.], [1., 0., 0.], [3., 0., 0.]])],
+        'pairs': [{'i': i, 'j': i + 1, 'V': 0.1, 'J': 0.4} for i in range(3)]}
+    t2 = np.array([0.0, 1.0, 2.0])
+    got_o = evolve_mpo_tdvp(cal_o, psi0='rggg', t_grid=t2, chi_max=32)
+    ref_o = evolve_manybody(cal_o, psi0='rggg', t_grid=t2,
+                            terms=['I1', 'I2'], want_corr=False)
+    C.group('非恒等 atom/MPS order（B3）',
+            [('order 非恒等', got_o['error_report'].get('mps_order') != [0, 1, 2, 3]),
+             ('布居按原子序对拍',
+              np.max(np.abs(got_o['pops_atom'] - ref_o['pops_atom'])) < 1e-4)])
+
     # 产品路径与拒绝面
     from src.core import protocol
     p = {'manybody.calib': cal, 'dynamic.mode': 2, 'dynamic.t_max': 1.0,

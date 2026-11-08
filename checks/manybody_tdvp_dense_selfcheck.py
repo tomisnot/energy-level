@@ -175,6 +175,55 @@ def main():
               protocol.estimate(None, p_prev).get('cost_model') == 'ed'
               and 'tdvp-dense' in str(protocol.estimate(None, p_prev).get('backend_note')))])
 
+    # B2：静态（无 segments）的 dt 收敛先做基线；不能把分段阶梯混进来。
+    t2 = np.array([0.0, 20.0])
+    ed_static = evolve_manybody(cal4, psi0='rggg', t_grid=t2,
+                                Om=np.full(4, 15.4, complex), delta=de4,
+                                want_corr=False)
+    err_static = []
+    for dt in (10.0, 5.0, 2.0):
+        r = evolve_tdvp_dense(cal4, psi0='rggg', t_grid=t2,
+                              Om=np.full(4, 15.4, complex), delta=de4,
+                              chi_max=64, truncerr=1e-12, max_step_ns=dt)
+        err_static.append(float(np.max(np.abs(
+            r['pops_atom'][-1] - ed_static['pops_atom'][-1]))))
+    C.group('静态 dt 收敛基线（B2）',
+            [('dt 减半不是一阶（10→5）', err_static[1] < 0.65 * err_static[0]),
+             ('dt 减半不是一阶（5→2）', err_static[2] < 0.65 * err_static[1])],
+            detail='errors=%s' % ['%.2e' % x for x in err_static])
+
+    # R2：分段控制点的 midpoint 规则；与高分辨参考比，midpoint 应优于 left。
+    T, tau, d0, nseg = 20.0, 5.0, 2.0, 20
+    def _ramp_segments(ns):
+        tt = np.linspace(0.0, T, ns + 1)
+        return tt, [{'t0': float(x), 'Om': [0.5] * 4,
+                     'delta': [float(d0 * np.exp(-x / tau))] * 4}
+                    for x in tt[:-1]]
+    tt_ref, seg_ref = _ramp_segments(400)
+    ref = evolve_manybody(cal4, psi0='rggg', t_grid=np.array([0.0, T]),
+                          Om=np.full(4, 0.5, complex), delta=np.zeros(4),
+                          terms=['I2'], segments=seg_ref,
+                          drive_interp='midpoint', want_corr=False)
+    tt, seg = _ramp_segments(nseg)
+    ramp = {}
+    for rule in ('left', 'midpoint'):
+        ramp[rule] = evolve_manybody(
+            cal4, psi0='rggg', t_grid=tt, Om=np.full(4, 0.5, complex),
+            delta=np.zeros(4), terms=['I2'], segments=seg,
+            drive_interp=rule, want_corr=False)
+    e_left = float(np.max(np.abs(ramp['left']['pops_atom'][-1]
+                                 - ref['pops_atom'][-1])))
+    e_mid = float(np.max(np.abs(ramp['midpoint']['pops_atom'][-1]
+                                - ref['pops_atom'][-1])))
+    default = evolve_manybody(cal4, psi0='rggg', t_grid=tt,
+                              Om=np.full(4, 0.5, complex), delta=np.zeros(4),
+                              terms=['I2'], segments=seg, want_corr=False)
+    C.group('drive_interp=midpoint（R2）',
+            [('midpoint 优于 left', e_mid < e_left),
+             ('默认 None 等价 left',
+              np.array_equal(default['pops_atom'], ramp['left']['pops_atom']))],
+            detail='left=%.3e midpoint=%.3e' % (e_left, e_mid))
+
     # 显式 mps_order（原子序 → MPS 序的映射）
     perm = [0, 3, 1, 4, 2, 5]
     p2 = dict(p, **{'manybody.mps_order': perm, 'manybody.want_observables': False})

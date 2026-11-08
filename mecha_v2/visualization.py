@@ -63,8 +63,10 @@ def project_drives(run, config):
     traces=[]
     if run.get('nbody')=='many':
         from src.core.manybody.runtime import describe_drive
+        interp = (config or {}).get('manybody.drive_interp') or 'left'
         return describe_drive(run.get('segments'), run.get('Om'), run.get('delta'),
-                              run.get('n_atoms', 0), run.get('t_max'))['traces']
+                              run.get('n_atoms', 0), run.get('t_max'),
+                              interp=interp)['traces']
     from src.core.waveforms import restore_waves
     for channel in ('single','A','B'):
         for wave in restore_waves(config.get('dynamic.waves_'+channel) or []):
@@ -82,9 +84,12 @@ def project_input_view(run, config):
     n = int((run or {}).get('n_atoms') or 0)
     from src.core.manybody.runtime import describe_drive
     if (run or {}).get('nbody') == 'many' and n:
+        interp = ((run or {}).get('engine_kwargs') or {}).get('drive_interp')
+        if interp is None:
+            interp = (config or {}).get('manybody.drive_interp') or 'left'
         drive = describe_drive((run or {}).get('segments'),
                                (run or {}).get('Om'), (run or {}).get('delta'),
-                               n, (run or {}).get('t_max'))
+                               n, (run or {}).get('t_max'), interp=interp)
     else:
         drive = None
     ek = (run or {}).get('engine_kwargs') or {}
@@ -94,7 +99,7 @@ def project_input_view(run, config):
     links = ek.get('link_pairs')
     loops = ek.get('loops')
     return {
-        'drive': ({k: drive[k] for k in ('kind', 'n_segments', 'segments')}
+        'drive': ({k: drive[k] for k in ('kind', 'n_segments', 'segments', 'interp')}
                   if drive is not None else None),
         'observables': {
             'pauli_count': len(pauli) if isinstance(pauli, (list, tuple)) else 0,

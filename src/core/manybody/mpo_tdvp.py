@@ -53,6 +53,7 @@ def evolve_mpo_tdvp(calib, psi0=None, t_grid=None, Om=None, delta=None,
     selected = dict(calib, terms=list(terms or active_terms(calib)))
     order, onsite, couplings, info = terms_from_calib(
         selected, Om, delta, np.zeros(n), order=None)
+    order = np.asarray(order, dtype=int)
     model = cluster_model(onsite, couplings, conserve=None)
     if psi0 is None or (isinstance(psi0, str) and psi0 == 'ground'):
         psi = MPS.from_product_state(model.lat.mps_sites(), [0] * n, bc='finite')
@@ -74,12 +75,22 @@ def evolve_mpo_tdvp(calib, psi0=None, t_grid=None, Om=None, delta=None,
                 raise ValueError('MPO-TDVP psi0 长度必须等于原子数')
         else:
             p0 = [int(x) for x in psi0]
+        if len(p0) != n:
+            raise ValueError('MPO-TDVP psi0 长度必须等于原子数')
+        p0 = [p0[int(a)] for a in order]          # atom order -> MPS order
         psi = MPS.from_product_state(model.lat.mps_sites(), p0, bc='finite')
         psi.canonical_form(renormalize=False)
     pops = np.zeros((len(t), n), float)
     S_history = np.zeros(len(t), float)
     n_steps = 0
-    pops[0] = np.asarray(psi.expectation_value('Nhat'), float)
+
+    def _atom_pops():
+        vals = np.asarray(psi.expectation_value('Nhat'), float)
+        out = np.empty(n, float)
+        out[order] = vals
+        return out
+
+    pops[0] = _atom_pops()
     S_history[0] = float(psi.entanglement_entropy(bonds=[n // 2])[0])
     for k in range(1, len(t)):
         span = float(t[k] - t[k - 1])
@@ -99,7 +110,7 @@ def evolve_mpo_tdvp(calib, psi0=None, t_grid=None, Om=None, delta=None,
             eng.run()
             n_steps += 1
             check_cancel(progress_arr)
-        pops[k] = np.asarray(psi.expectation_value('Nhat'), float)
+        pops[k] = _atom_pops()
         S_history[k] = float(psi.entanglement_entropy(bonds=[n // 2])[0])
         if log and (k == 1 or k == len(t) - 1):
             log('[mpo-tdvp] %d/%d t=%.6g chi=%s'
@@ -115,5 +126,6 @@ def evolve_mpo_tdvp(calib, psi0=None, t_grid=None, Om=None, delta=None,
                                   truncerr=float(truncerr),
                                   n_internal_steps=int(n_steps),
                                   max_chi=int(max(psi.chi)),
+                                  mps_order=order.tolist(),
                                   backend='tenpy-two-site-tdvp'),
                 observables=None, diag=None)

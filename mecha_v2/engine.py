@@ -149,6 +149,15 @@ class ElEngine:
             watcher.join(timeout=1.0)
             context.report_progress(1.0, "evolve done")
 
+    @staticmethod
+    def _config_conflict(exc):
+        from mecha.errors import InvalidSpec
+        keys = ', '.join(getattr(exc, 'keys', ())) or '未知'
+        return InvalidSpec(
+            f"配置冲突：{exc}", kind='config_conflict',
+            hint=f"冲突键：{keys}",
+            suggest='用 query_params 查看后端能力，或清掉冲突键')
+
     def _run_on_engine(self, snap: dict, progress_arr: list, reason='AI 运行') -> Mapping[str, object]:
         """build → check → evolve → summary，全程在引擎线程（cache 亲和）。"""
         p = self._protocol
@@ -158,8 +167,11 @@ class ElEngine:
         res = None
         summ = None
         try:
+            from src.core.manybody.backends import ConfigConflict
             try:
                 run = p.build_run(self._cache,snap)
+            except ConfigConflict as exc:
+                raise self._config_conflict(exc) from None
             except ValueError as exc:
                 raise InvalidSpec(f"配置无法组装成运行规格：{exc}",kind='build_failed',
                                   hint='先 query_params 查看配置契约',
@@ -178,6 +190,9 @@ class ElEngine:
                 summ['artifact_id'] = self.artifact_writer(run,res)
             store.finish(rid,summary=summ,raw=res)
             return summ
+        except ConfigConflict as exc:
+            store.finish(rid,summary=summ,raw=res,error=exc)
+            raise self._config_conflict(exc) from None
         except Exception as exc:
             store.finish(rid,summary=summ,raw=res,error=exc)
             raise

@@ -11,7 +11,10 @@ from checks.checklib import Checker
 from src.core import runspec, protocol
 from src.core.evolve_util import CONV
 from src.core.manybody import runspec_mb as mb, eq_route, kpm
-from src.core.manybody.backends import TIME_BACKENDS, time_backend_names
+from src.core.manybody.backends import (TIME_BACKENDS, ConfigConflict,
+                                       require_equilibrium_features,
+                                       time_backend_names,
+                                       validate_time_capabilities)
 from src.core.manybody.basis import independent_set_count, independent_states, basis_bits
 from src.core.manybody.assemble import build_H_sparse
 from src.core.manybody.hamiltonian_plan import build_plan, compile_sparse
@@ -46,6 +49,27 @@ def params(cal):
                                          for i, a in enumerate(cal['atoms'])],
                                'pairs': list(cal.get('pairs') or [])}}
 
+
+# B5：能力冲突必须是 typed ConfigConflict，带冲突键，供 MCP 映射。
+try:
+    validate_time_capabilities('tdvp-dense', return_state=True)
+    conflict_kind = None
+except ConfigConflict as exc:
+    conflict_kind = (type(exc).__name__, exc.keys)
+except Exception as exc:  # noqa: BLE001
+    conflict_kind = ('WRONG', type(exc).__name__, str(exc))
+try:
+    require_equilibrium_features('ed', {'mps_order'})
+    eq_conflict = None
+except ConfigConflict as exc:
+    eq_conflict = exc.keys
+except Exception as exc:  # noqa: BLE001
+    eq_conflict = ('WRONG', type(exc).__name__)
+C.group('配置冲突是 typed（B5）', [
+    ('时间能力冲突类型/键',
+     conflict_kind == ('ConfigConflict', ('manybody.return_state',))),
+    ('平衡态冲突键', eq_conflict == ('manybody.mps_order',)),
+])
 
 cal = calibration(2)
 schema = protocol.config_schema()

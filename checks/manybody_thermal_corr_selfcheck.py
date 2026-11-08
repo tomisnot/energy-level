@@ -53,6 +53,15 @@ def main():
         ('corr 轴声明为 beta×site×site',
          res['data_schema']['quantities']['corr']['axes'] == ['beta', 'site', 'site']),
     ])
+    from src.core.runspec import result_summary
+    summ = result_summary({'n_atoms': n, 'want': 'thermal', 'equilibrium': True}, res)
+    C.group('热态摘要保形（B6）', [
+        ('corr 首/末矩阵', np.shape(summ.get('corr_first_last')) == (2, n, n)),
+        ('corr total', summ.get('corr_total') == 1),
+        ('n_atom 保留 beta×site', np.shape(summ.get('n_atom')) == (1, n)),
+        ('summary 块含 corr', 'corr' in (summ.get('summary') or {})),
+    ])
+
     C.check('corr 无 unavailable 标记', 'corr_unavailable_reason' not in res)
     # N>12：仍给 E/C/F，但明确不提供精确 corr（不物化稠密本征矢）。
     out = solve_equilibrium({'H': sp.eye(16), 'n_sites': 13},

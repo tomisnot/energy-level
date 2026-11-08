@@ -52,6 +52,30 @@ def main():
             ok = True
         C.check('%s 被拒绝' % label, ok)
 
+    # B1：P_i M_j 是总激发数守恒项，charge_sector 下必须放行。
+    from src.core.manybody.idmrg import infinite_model
+    pm_spec = {'cell': [{'site': 0}, {'site': 1}], 'terms': [
+        {'kind': 'onsite', 'site': 0, 'op': 'N', 'coeff': 0.2},
+        {'kind': 'pair', 'i': 0, 'j': 1, 'dx': 0,
+         'op_i': 'P', 'op_j': 'M', 'coeff': 0.5},
+        {'kind': 'pair', 'i': 1, 'j': 0, 'dx': 1,
+         'op_i': 'P', 'op_j': 'M', 'coeff': 0.5},
+    ]}
+    try:
+        infinite_model(pm_spec, charge_sector=1)
+        ok_pm = True
+    except ValueError:
+        ok_pm = False
+    bad_pm = {'cell': pm_spec['cell'], 'terms': [
+        {'kind': 'onsite', 'site': 0, 'op': 'P', 'coeff': 1.0}]}
+    try:
+        infinite_model(bad_pm, charge_sector=1)
+        bad_ok = False
+    except ValueError:
+        bad_ok = True
+    C.group('charge_sector 的组合判据（B1）',
+            [('P_i M_j 放行', ok_pm), ('单站点 P 仍拒绝', bad_ok)])
+
     # 经 build/run 产品路径：字段和 data_schema 必须出现。
     from src.core.manybody.eq_engine import build_equilibrium, run_equilibrium
     p = {'manybody.idmrg': _ising_spec(), 'manybody.eq_backend': 'idmrg',

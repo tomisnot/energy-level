@@ -156,6 +156,7 @@ run_sim()
 - `manybody.charge_sector`：固定激发数（ED/Lanczos/DMRG；非守恒输入会拒）。
 - `manybody.constraint`：`{kind:"none"/"blockade"/"pxp",mode:"full"/"project",threshold_mhz,edges}`；投影基当前主要给 ED。
 - `manybody.drive_segments`：`[{t0,Om:[N],delta:[N],phase:[N]}]`；长度必须=N。
+- `manybody.drive_interp`：`left`（默认，左端点阶梯，逐位兼容）/ `midpoint`（段条目视为线性 ramp 控制点，取段中点值；仅 ED/CPU MPS/tdvp-dense，ramp 二阶）。
 - `manybody.loops` / `manybody.link_pairs`：环路/有向边；闭环边自动并入 `link_pairs`。
 - GPU `manybody.dtype="float32"` = complex64，短程实测约 2×；它是近似开关，长时窗需 float64 对拍。
   24 点长程 `swap-tebd` 仍是 O(pair×distance) SVD，不建议当扫描工具。
@@ -256,6 +257,7 @@ cancel_job(job_id)              // 协作式；以 read_job 终态为准
 ```
 
 - `run_sim` 只回摘要，不搬大数组；摘要由 `data_schema.summary` 策略派生（标量/前几条终值），完整 `pops/t/observables` 在 artifact。
+- `want=thermal` 的摘要另外给 `corr_first_last`（首/末 β 的 n×n 矩阵）和 `n_atom` 的逐 β 行，不把二维关联拍平。
 - `run_sim` 回执 `artifact_id`/`monitor_id`；artifact 在
   `http://127.0.0.1:<.run-monitor-port>/api/runs/<id>/artifact`（pickle 的 `(meta,res)`）。
 - 运行卡片是只读投影，不能创建/重跑/删除运行；页面端口是 `.run-monitor-port`，不是 `.monitor-port`。
@@ -322,7 +324,7 @@ CPU MPS（`tebd`/`tdvp`/`tdvp-single`/`tdvp-adaptive`/`tdvp-mpo`/`tdvp-dense`）
 - 配置/运行/排障：`docs/用户手册.md`
 - 代码地图与模块职责：`docs/代码总览.md`
 - 有限 MPS 资源契约：`docs/有限MPS分析与资源契约.md`
-- 性能/观测开销微基准：`python scripts/bench_mps.py --help`
+- 性能/观测开销微基准：`python scripts/bench_mps.py --help`；输出同时给 `chi_actual`（全过程实际最大 χ）与 `chi`（cap），只报 cap 会误导。
 
 ## 17. 维护规则
 

@@ -93,12 +93,14 @@ python scripts/tdvp_fast/bench_exp_mpo.py --n 96 --k 8
 
 ## Support surface (product `tdvp-dense`)
 
-Finite open chain, piecewise-constant `drive_segments`, Hermitian
+Finite open chain, piecewise-constant `drive_segments` (default left;
+`manybody.drive_interp='midpoint'` for second-order ramp control points), Hermitian
 (`gamma=0`), product initial states, optional `mps_order`, `pauli_strings`,
 optional local `observables` (`sx/sy/sz/sp/sm/phase`).  Rejected explicitly:
 fixed charge, `return_state`, `corr`, `link_pairs`/`loops`, projected plans.
 `auto` does not select it; callers must ask for `tdvp-dense`.
 
+Performance numbers must carry `chi_actual`, not only `chi_max`.
 N=12 spot checks (same order, χ=64): segments 0.37 s vs `tdvp` 7.37 s
 (max|Δpops| 3.2e-8); 24 Pauli strings 0.63 s vs 12.8 s
 (max|ΔP| 4.3e-6).

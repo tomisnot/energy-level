@@ -451,10 +451,13 @@ def _mb_preview(cache, snap):
                           * np.exp(1j * float(a.get('Omega_phase_rad', 0.0) or 0.0))
                           for a in atoms], complex)
     base_de = np.asarray([float(a.get('delta_mhz', 0.0) or 0.0) for a in atoms], float)
+    drive_interp = (snap or {}).get('manybody.drive_interp') or 'left'
     drive = describe_drive((snap or {}).get('manybody.drive_segments'),
-                           base_om, base_de, n, (snap or {}).get('dynamic.t_max'))
-    out['drive'] = {k: drive[k] for k in ('kind', 'n_segments', 'segments')}
+                           base_om, base_de, n, (snap or {}).get('dynamic.t_max'),
+                           interp=drive_interp)
+    out['drive'] = {k: drive[k] for k in ('kind', 'n_segments', 'segments', 'interp')}
     out['n_segments'] = int(drive['n_segments'])
+    out['drive_interp'] = drive_interp
     out['segment_t0'] = [s['t0'] for s in drive['segments']]
     if drive['segments']:
         out['max_Omega_mhz'] = round(max(s['omega_max'] for s in drive['segments']), 6)

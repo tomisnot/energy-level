@@ -9,7 +9,8 @@
   python scripts/bench_mps.py --calib checks/fixtures/kagome_n24.json --chi 64 \
       --pauli 96 --pauli-order 3 --t-max 10 --npts 3 --dt 10
 
-输出一行 JSON（stdout），含墙钟、内部步数、engine build/reuse、measure 占比。
+输出一行 JSON（stdout），含墙钟、内部步数、engine build/reuse、measure 占比；
+`chi_actual` 是全过程实际最大键维（`chi` 是 cap，不能当实际值）。
 大系统只在显式调用时运行；默认参数是小规模。
 """
 import argparse
@@ -78,17 +79,38 @@ def main():
         except Exception:
             peak = None
     else:
-        from src.core.manybody.engine_mps import evolve_mps
-        alg = a.algorithm or 'tdvp'
-        res = evolve_mps(calib, psi0=psi0, t_grid=t, Om=Om, delta=de, gamma=ga,
-                         algorithm=alg, chi_max=a.chi, truncerr=1e-10,
-                         max_step_ns=a.dt, want_observables=bool(specs),
-                         want_xy_corr=False, want_corr=False,
-                         want_entropy=False, pauli_strings=specs)
+        from src.core.manybody import backends
+        alg = backends.normalize_time_backend(a.algorithm or 'tdvp')
+        if alg == 'tdvp-dense':
+            from src.core.manybody.tdvp_dense import evolve_tdvp_dense
+            res = evolve_tdvp_dense(
+                calib, psi0=psi0, t_grid=t, Om=Om, delta=de, gamma=ga,
+                chi_max=a.chi, truncerr=1e-10, max_step_ns=a.dt,
+                want_observables=bool(specs), want_entropy=False,
+                pauli_strings=specs)
+        elif alg == 'tdvp-mpo':
+            from src.core.manybody.mpo_tdvp import evolve_mpo_tdvp
+            if specs:
+                raise ValueError('--algorithm tdvp-mpo 当前不支持 Pauli；'
+                                 '改用 tdvp-dense/tdvp 或去掉 --pauli')
+            res = evolve_mpo_tdvp(
+                calib, psi0=psi0, t_grid=t, Om=Om, delta=de, gamma=ga,
+                chi_max=a.chi, truncerr=1e-10, max_step_ns=a.dt)
+        else:
+            from src.core.manybody.engine_mps import evolve_mps
+            if backends.TIME_BACKENDS[alg].module != 'engine_mps':
+                raise ValueError('bench_mps 的 CPU 路径只接受 MPS 后端；'
+                                 'algorithm=%r 请用对应入口' % alg)
+            res = evolve_mps(calib, psi0=psi0, t_grid=t, Om=Om, delta=de, gamma=ga,
+                             algorithm=alg, chi_max=a.chi, truncerr=1e-10,
+                             max_step_ns=a.dt, want_observables=bool(specs),
+                             want_xy_corr=False, want_corr=False,
+                             want_entropy=False, pauli_strings=specs)
         peak = None
     wall = time.perf_counter() - t0
     err = res.get('error_report') or {}
     timing = err.get('timings_s') or {}
+    chi_hist = res.get('chi')
     out = {
         'calib': os.path.basename(a.calib), 'n': n, 'chi': a.chi,
         'npts': a.npts, 't_max_ns': a.t_max, 'dt_ns': a.dt,
@@ -103,6 +125,8 @@ def main():
                          if timing.get('measure_s') is not None and wall > 0 else None),
         'peak_cuda_mb': peak,
         'max_chi': err.get('max_chi'),
+        'chi_actual': err.get('max_chi'),
+        'chi_final': (int(max(chi_hist)) if chi_hist else err.get('max_chi')),
     }
     print(json.dumps(out, ensure_ascii=False, indent=2))
     return 0

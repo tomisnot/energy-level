@@ -47,17 +47,40 @@ def segment_intervals(a, b, segments):
     return zip(boundaries[:-1], boundaries[1:])
 
 
-def segment_drive(t, segments, n):
-    """Existing segment contract: absent Om/delta/phase components mean zero."""
+def _segment_arrays(segment, n):
+    om = np.asarray(segment.get('Om', np.zeros(n)), float).reshape(-1)
+    phase = np.asarray(segment.get('phase', np.zeros(n)), float).reshape(-1)
+    de = np.asarray(segment.get('delta', np.zeros(n)), float).reshape(-1)
+    if om.size != n or phase.size != n or de.size != n:
+        raise ValueError('segment_drive: 每段的 Om/phase/delta 长度必须等于 n')
+    return om * np.exp(1j * phase), de
+
+
+def segment_drive(t, segments, n, *, interp='left'):
+    """Resolve a piecewise-constant drive at time ``t``.
+
+    ``interp='left'`` is the historical, bit-identical rule (latest ``t0``).
+    ``interp='midpoint'`` treats the entries as control points of a linear
+    ramp and returns the value at the **midpoint of the containing segment
+    interval** (the average of its two endpoint values; the last interval uses
+    its right endpoint).  This is a midpoint rule for a smooth ramp and keeps
+    one model per segment, so the existing engine rebuild schedule is intact.
+    """
     if not segments:
         return None
-    segment = sorted(segments, key=lambda s: float(s['t0']))[0]
-    for s in sorted(segments, key=lambda s: float(s['t0'])):
+    if interp not in ('left', 'midpoint'):
+        raise ValueError('drive_interp 须为 left/midpoint，得到 %r' % (interp,))
+    ordered = sorted(segments, key=lambda s: float(s['t0']))
+    index = 0
+    for k, s in enumerate(ordered):
         if float(s['t0']) <= t:
-            segment = s
-    om = np.asarray(segment.get('Om', np.zeros(n)), float)
-    phase = np.asarray(segment.get('phase', np.zeros(n)), float)
-    return om * np.exp(1j * phase), np.asarray(segment.get('delta', np.zeros(n)), float)
+            index = k
+    om, de = _segment_arrays(ordered[index], n)
+    if interp == 'midpoint' and index < len(ordered) - 1:
+        om2, de2 = _segment_arrays(ordered[index + 1], n)
+        om = 0.5 * (om + om2)
+        de = 0.5 * (de + de2)
+    return om, de
 
 
 def _finite(x):
@@ -68,7 +91,8 @@ def _finite(x):
     return x if np.isfinite(x) else None
 
 
-def describe_drive(segments, Om, delta, n, t_max, *, n_trace=160, max_traces=3):
+def describe_drive(segments, Om, delta, n, t_max, *, n_trace=160, max_traces=3,
+                   interp='left'):
     """One definition of the **effective many-body drive** for web/MCP/card.
 
     Returns a bounded, JSON-facing view: static vs segmented, a compact segment
@@ -84,7 +108,8 @@ def describe_drive(segments, Om, delta, n, t_max, *, n_trace=160, max_traces=3):
         raise ValueError('describe_drive: Om/delta 长度必须等于 n')
     segments = list(segments or [])
     out = {'kind': 'segments' if segments else 'static',
-           'n_segments': len(segments), 'segments': [], 'traces': []}
+           'n_segments': len(segments), 'interp': interp,
+           'segments': [], 'traces': []}
     if segments:
         for s in sorted(segments, key=lambda x: float(x['t0'])):
             om = np.asarray(s.get('Om', np.zeros(n)), float).reshape(-1)
@@ -101,7 +126,8 @@ def describe_drive(segments, Om, delta, n, t_max, *, n_trace=160, max_traces=3):
     if end is None or end <= 0 or not n:
         return out
     t = np.linspace(0.0, end, int(max(2, n_trace)))
-    drive = [segment_drive(float(x), segments, n) for x in t] if segments else [None] * len(t)
+    drive = ([segment_drive(float(x), segments, n, interp=interp) for x in t]
+             if segments else [None] * len(t))
     for site in range(min(n, int(max_traces))):
         out['traces'].append(dict(
             label='Ω · 原子 %d' % site,

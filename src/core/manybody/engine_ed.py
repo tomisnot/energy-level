@@ -128,7 +128,8 @@ def _propagate_sparse(H, psi0, t, reduce_k, progress_arr, stage_progress):
 
 
 def _propagate_segments(calib, segments, psi0, t, n, gamma, terms,
-                        reduce_k, progress_arr, stage_progress, basis_indices=None):
+                        reduce_k, progress_arr, stage_progress, basis_indices=None,
+                        interp='left'):
     """Integrate piecewise-constant drives at their exact jump boundaries."""
     matrices = {}
     psi = psi0.astype(complex).copy()
@@ -136,7 +137,7 @@ def _propagate_segments(calib, segments, psi0, t, n, gamma, terms,
     for k in range(1, len(t)):
         for a, b in segment_intervals(t[k-1], t[k], segments):
             check_cancel(progress_arr)
-            om, de = segment_drive((a+b)/2, segments, n)
+            om, de = segment_drive((a+b)/2, segments, n, interp=interp)
             key = (tuple(om), tuple(de))
             if key not in matrices:
                 matrices[key] = build_H_sparse(calib, om, de, terms, gamma,
@@ -157,7 +158,7 @@ def evolve_manybody(calib, psi0=None, t_grid=None, Om=None, delta=None,
                     max_dim=None, entropy_cut=None, record_psi=False,
                     diag=False, plan=None, want_observables=True, loops=None,
                     want_xy_corr=True, link_pairs=None, pauli_strings=None,
-                    memory_budget_mb=None):
+                    memory_budget_mb=None, drive_interp='left'):
     """多体 ED 含时演化 → 统一 Result 契约 dict。
 
     calib   ：`assemble.calibrate` 产物（atoms/pairs[V,J,A]/terms/single_basis）。
@@ -217,7 +218,9 @@ def evolve_manybody(calib, psi0=None, t_grid=None, Om=None, delta=None,
     hermitian = not bool(np.any(np.abs(gamma) > 0.0))
 
     if isinstance(psi0, str) and psi0 == 'ground':
-        initial_drive = segment_drive(t[0], segments, n)
+        # The initial state lives at t=0: use the left/actual value, not
+        # the midpoint rule used for propagating the first interval.
+        initial_drive = segment_drive(t[0], segments, n, interp='left')
         om0, de0 = (Om, delta) if initial_drive is None else initial_drive
         H0 = build_H_sparse(calib, om0, de0, terms, None, basis_indices=basis_indices)
         _, vecs = ground_state(H0, k=1)
@@ -281,7 +284,8 @@ def evolve_manybody(calib, psi0=None, t_grid=None, Om=None, delta=None,
     used_sectors = False
     if segments:
         _propagate_segments(calib, segments, psi0v, t, n, gamma, terms,
-                            _reduce, progress_arr, stage_progress, basis_indices=basis_indices)
+                            _reduce, progress_arr, stage_progress,
+                            basis_indices=basis_indices, interp=drive_interp)
     elif hermitian and dim <= dense_max:
         H = build_H_sparse(calib, Om, delta, terms, gamma, basis_indices=basis_indices)
         want_sec = (not projected and bool(_is_excitation_conserving(calib, Om, use))

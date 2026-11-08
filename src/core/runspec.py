@@ -849,7 +849,7 @@ def _equilibrium_summary(run, res):
                 out[path] = entry['value']
         entry = summ.get('n_atom')
         if entry:
-            out['n_atom'] = entry['values']
+            out['n_atom'] = entry.get('values', entry.get('rows'))
         entry = summ.get('pauli_strings')
         if entry:
             out['pauli_strings'] = entry['items']
@@ -864,6 +864,13 @@ def _equilibrium_summary(run, res):
                 entry = summ.get(key)
                 if entry:
                     out['%s_first_last' % key] = [entry['first'], entry['last']]
+        entry = summ.get('n_atom')
+        if entry:
+            out['n_atom'] = entry.get('rows', entry.get('values'))
+        entry = summ.get('corr')
+        if entry:
+            out['corr_first_last'] = [entry['first'], entry['last']]
+            out['corr_total'] = entry['total']
         return out
     if want == 'dos':
         e = np.asarray([] if res.get('energies') is None else res['energies'], float)

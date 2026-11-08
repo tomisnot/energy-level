@@ -627,7 +627,8 @@ def evolve_tdvp_dense(calib, psi0=None, t_grid=None, Om=None, delta=None,
                       krylov_dim=20, krylov_tol=1e-10, mps_order=None,
                       want_observables=False, want_corr=False, want_entropy=True,
                       link_pairs=None, loops=None, plan=None, return_state=False,
-                      charge_sector=None, pauli_strings=None, **kwargs):
+                      charge_sector=None, pauli_strings=None, drive_interp='left',
+                      **kwargs):
     """Dense CPU two-site TDVP (finite open chain; no charge/return/corr).
 
     Supports piecewise-constant drive segments and arbitrary Pauli strings.
@@ -743,7 +744,7 @@ def evolve_tdvp_dense(calib, psi0=None, t_grid=None, Om=None, delta=None,
                                if float(s['t0']) <= mid],
                               default=min(float(s['t0']) for s in segments))
                     if key != current_seg_key:
-                        Om_k, de_k = segment_drive(mid, segments, n)
+                        Om_k, de_k = segment_drive(mid, segments, n, interp=drive_interp)
                         _, on_k, cp_k, _ = terms_from_calib(
                             selected, Om_k, de_k, gamma, order=order)
                         W = build_mpo(on_k, cp_k, n)
@@ -773,6 +774,7 @@ def evolve_tdvp_dense(calib, psi0=None, t_grid=None, Om=None, delta=None,
     if segments:
         err['n_segments'] = len(segments)
         err['segment_model_builds'] = n_segment_builds
+        err['drive_interp'] = drive_interp
     if pauli_specs_mps:
         err['pauli_count'] = len(pauli_specs_mps)
     obs = None

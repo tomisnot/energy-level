@@ -135,6 +135,7 @@ def _measure(psi, order, n, cut, want_corr, want_observables=False,
 @time_result()
 def evolve_mps(calib, psi0=None, t_grid=None, Om=None, delta=None, gamma=None,
                terms=None, segments=None, progress_arr=None, log=None,
+               drive_interp='left',
                algorithm='tdvp', chi_max=200, truncerr=1e-10, max_sweeps=60,
                want_corr=True, want_entropy=True, diag=False,
                max_dim=None, plan=None, want_observables=True, loops=None,
@@ -352,7 +353,7 @@ def evolve_mps(calib, psi0=None, t_grid=None, Om=None, delta=None, gamma=None,
                 raise RuntimeError('用户取消')
             dt_ns = tb - ta
             mid = 0.5 * (ta + tb)
-            seg = _segment_for(mid, segments, n)
+            seg = _segment_for(mid, segments, n, interp=drive_interp)
             seg_key = (None if not segments else
                        max([float(s['t0']) for s in segments
                             if float(s['t0']) <= mid],
@@ -443,7 +444,8 @@ def evolve_mps(calib, psi0=None, t_grid=None, Om=None, delta=None, gamma=None,
                mps_order=list(order), entropy_cut=cut if want_entropy else None,
                n_legs=int(info.get('n_legs', 0)),
                charge_sector=charge_sector, conserve=conserve,
-               long_range=(alg == 'tdvp'))
+               long_range=(alg == 'tdvp'),
+               **({'drive_interp': drive_interp} if segments else {}))
     lp, lw = loop_observables(xy_last, loops) if (
         want_observables and xy_last is not None and loops is not None) else ([], [])
     loop_series, loop_winding_series = link_loop_observables(

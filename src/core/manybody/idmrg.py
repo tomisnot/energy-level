@@ -127,14 +127,29 @@ def infinite_model(spec, *, charge_sector=None, mps_dtype='complex'):
     n = len(spec['cell'])
     conserve = 'Sz' if charge_sector is not None else None
     if conserve is not None:
-        break_ops = ('P', 'M', 'X', 'Y', 'SX', 'SY')
-        bad = [t for t in spec['terms']
-               if (t['kind'] == 'onsite' and t['op'] in break_ops)
-               or (t['kind'] == 'pair'
-                   and (t['op_i'] in break_ops or t['op_j'] in break_ops))]
+        # Conserved-sector admissibility is a property of the **whole term**,
+        # not of each operator in isolation.  P_i M_j (and M_i P_j) move one
+        # excitation from j to i and therefore conserve total N even though a
+        # single P or M does not.
+        delta_n = {'I': 0, 'N': 0, 'Z': 0, 'SZ': 0,
+                   'P': 1, 'M': -1}
+        bad = []
+        for t in spec['terms']:
+            if t['kind'] == 'onsite':
+                if delta_n.get(t['op']) != 0:
+                    bad.append(t)
+            else:
+                di = delta_n.get(t['op_i'])
+                dj = delta_n.get(t['op_j'])
+                if di is None or dj is None or di + dj != 0:
+                    bad.append(t)
         if bad:
-            raise ValueError('charge_sector 下 P/M/X/Y 单算符破缺守恒；'
-                             '请改用 N/Z 或去掉扇区')
+            raise ValueError(
+                'charge_sector 下这些项的净 ΔN≠0：%s；'
+                '允许 N/Z/I 及 P_i M_j（总激发数守恒），'
+                'X/Y/SX/SY 或 P_i P_j/M_i M_j 请去掉扇区'
+                % [t.get('op') or (t.get('op_i'), t.get('op_j'))
+                   for t in bad[:6]])
     site = _site(conserve)
     from tenpy.models.model import CouplingMPOModel
     from tenpy.models.lattice import Lattice
