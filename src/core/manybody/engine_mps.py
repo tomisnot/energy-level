@@ -7,7 +7,7 @@ TEBD 只接受 MPS 顺序上的最近邻 MPO；任意点云和长程偶极耦合
 """
 import time
 from .results import time_result
-from .runtime import segment_drive, segment_intervals, reject_options
+from .runtime import (segment_drive, time_steps, reject_options, atom_to_mps)
 from .couplings import active_terms
 import numpy as np
 
@@ -262,7 +262,7 @@ def evolve_mps(calib, psi0=None, t_grid=None, Om=None, delta=None, gamma=None,
                                     if charge_sector is not None else None))
         psi = r.pop('psi')
     else:
-        p_mps = [p0[int(a)] for a in order]
+        p_mps = atom_to_mps(p0, order)
         psi = MPS.from_product_state(model.lat.mps_sites(), p_mps,
                                      bc='finite', dtype=complex)
     if charge_sector is not None:
@@ -343,12 +343,7 @@ def evolve_mps(calib, psi0=None, t_grid=None, Om=None, delta=None, gamma=None,
         raise ValueError('adaptive_min_steps 必须 >= 0')
     adaptive_switched_at = None
     for k in range(1, len(t)):
-        steps = []
-        for left, right in segment_intervals(t[k-1], t[k], segments):
-            nsub = 1 if max_step_ns is None else max(1, int(np.ceil((right-left)/max_step_ns)))
-            grid = np.linspace(left, right, nsub+1)
-            steps.extend(zip(grid[:-1], grid[1:]))
-        for ta, tb in steps:
+        for ta, tb in time_steps(t[k-1], t[k], segments, max_step_ns):
             if progress_arr is not None and float(progress_arr[1]) != 0.0:
                 raise RuntimeError('用户取消')
             dt_ns = tb - ta

@@ -40,6 +40,19 @@ def reject_options(options):
         raise TypeError('不支持的多体引擎选项：%s' % ', '.join(sorted(options)))
 
 
+def atom_to_mps(values, order):
+    """Reorder atom-indexed local values into the explicit MPS order."""
+    return [values[int(a)] for a in order]
+
+
+def mps_to_atom(values, order):
+    """Reorder MPS-site values back to atom order (one declaration)."""
+    vals = np.asarray(values)
+    out = np.empty(len(order), dtype=vals.dtype)
+    out[np.asarray(order, dtype=int)] = vals
+    return out
+
+
 def segment_intervals(a, b, segments):
     """Split an output interval at every piecewise-constant drive boundary."""
     boundaries = [float(a)] + sorted({float(s['t0']) for s in segments or []
@@ -54,6 +67,24 @@ def _segment_arrays(segment, n):
     if om.size != n or phase.size != n or de.size != n:
         raise ValueError('segment_drive: 每段的 Om/phase/delta 长度必须等于 n')
     return om * np.exp(1j * phase), de
+
+
+def time_steps(a, b, segments=None, max_step_ns=None):
+    """Internal step grid shared by MPS/dense time evolvers.
+
+    Splits at piecewise-constant boundaries, then at ``max_step_ns`` inside
+    each piece.  Keeping this in one place prevents the ED/MPS/dense paths
+    from drifting on their step construction.
+    """
+    steps = []
+    pieces = segment_intervals(a, b, segments) if segments else [(float(a), float(b))]
+    for left, right in pieces:
+        span = float(right) - float(left)
+        nsub = (1 if max_step_ns is None or float(max_step_ns) <= 0 else
+                max(1, int(np.ceil(span / float(max_step_ns)))))
+        grid = np.linspace(float(left), float(right), nsub + 1)
+        steps.extend(zip(grid[:-1], grid[1:]))
+    return steps
 
 
 def segment_drive(t, segments, n, *, interp='left'):

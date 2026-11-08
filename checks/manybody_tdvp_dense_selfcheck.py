@@ -238,6 +238,17 @@ def main():
              ('续跑边界布居连续',
               np.max(np.abs(st['pops_atom'][-1] - again['pops_atom'][0])) < 1e-12)])
 
+    # R4：上一段 dense 末态直接作为源态谱的 |0>
+    from src.core.manybody.eq_engine import build_equilibrium, run_equilibrium
+    p_spec = {'manybody.calib': cal4, 'manybody.want': 'spectrum',
+              'manybody.eq_backend': 'ed', 'manybody.psi0': state,
+              'manybody.spectrum': {'n_omega': 16, 'eta': 0.05}}
+    sp_run = build_equilibrium(None, p_spec, want='spectrum')
+    sp = run_equilibrium(sp_run)
+    C.group('dense 末态作为 spectrum 源（R4）',
+            [('spectral 形状', np.shape(sp.get('spectral')) == (16,)),
+             ('source 身份', (sp.get('error_report') or {}).get('source_kind') == 'psi0')])
+
     # 显式 mps_order（原子序 → MPS 序的映射）
     perm = [0, 3, 1, 4, 2, 5]
     p2 = dict(p, **{'manybody.mps_order': perm, 'manybody.want_observables': False})

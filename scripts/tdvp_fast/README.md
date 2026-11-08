@@ -101,6 +101,11 @@ fixed charge, `return_state`, `corr`, `link_pairs`/`loops`, projected plans.
 `auto` does not select it; callers must ask for `tdvp-dense`.
 
 Performance numbers must carry `chi_actual`, not only `chi_max`.
+B2 convergence note: static N=12, χ=128, strong field, no segments gives
+max|Δpops| = 2.75e-3 / 9.45e-4 / 1.67e-4 for dt=10/5/2 ns — not first order.
+The first-order drift reported in the CSL feedback is the segment staircase;
+`drive_interp='midpoint'` removes it (see R2 checks).
+
 N=12 spot checks (same order, χ=64): segments 0.37 s vs `tdvp` 7.37 s
 (max|Δpops| 3.2e-8); 24 Pauli strings 0.63 s vs 12.8 s
 (max|ΔP| 4.3e-6).

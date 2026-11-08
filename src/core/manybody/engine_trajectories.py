@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """MPS Monte-Carlo wave-function (quantum-trajectory) evolution."""
-from .runtime import time_grid, check_cancel, report_progress, reject_options
+from .runtime import (time_grid, check_cancel, report_progress, reject_options,
+                      atom_to_mps)
 from .backends import validate_time_capabilities
 from .results import time_result
 from .couplings import active_terms
@@ -117,7 +118,7 @@ def evolve_trajectories(calib, psi0=None, t_grid=None, Om=None, delta=None,
     _register_ops(model, cops)
     p0 = product_vectors(psi0, n)
     if p0 is None: raise ValueError("trajectory 初态必须是 product/local_states；ground 请先用基态后端准备")
-    p_mps = [p0[int(a)] for a in order]
+    p_mps = atom_to_mps(p0, order)
     rng = np.random.default_rng(seed)
     vals = np.zeros((nt, len(t), n), float); jumps = np.zeros(nt, dtype=int); survival = np.ones((nt, len(t)), float)
     obs_acc = None

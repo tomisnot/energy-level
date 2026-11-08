@@ -9,7 +9,8 @@ solver is unchanged and this backend is selected explicitly.
 """
 import numpy as np
 
-from .runtime import check_cancel, report_progress, reject_options
+from .runtime import (check_cancel, report_progress, reject_options,
+                      atom_to_mps, mps_to_atom, time_steps)
 from .results import time_result
 
 __all__ = ['evolve_mpo_tdvp']
@@ -77,7 +78,7 @@ def evolve_mpo_tdvp(calib, psi0=None, t_grid=None, Om=None, delta=None,
             p0 = [int(x) for x in psi0]
         if len(p0) != n:
             raise ValueError('MPO-TDVP psi0 长度必须等于原子数')
-        p0 = [p0[int(a)] for a in order]          # atom order -> MPS order
+        p0 = atom_to_mps(p0, order)
         psi = MPS.from_product_state(model.lat.mps_sites(), p0, bc='finite')
         psi.canonical_form(renormalize=False)
     pops = np.zeros((len(t), n), float)
@@ -87,17 +88,13 @@ def evolve_mpo_tdvp(calib, psi0=None, t_grid=None, Om=None, delta=None,
     def _atom_pops():
         vals = np.asarray(psi.expectation_value('Nhat'), float)
         out = np.empty(n, float)
-        out[order] = vals
+        out = mps_to_atom(vals, order)
         return out
 
     pops[0] = _atom_pops()
     S_history[0] = float(psi.entanglement_entropy(bonds=[n // 2])[0])
     for k in range(1, len(t)):
-        span = float(t[k] - t[k - 1])
-        nsub = 1 if max_step_ns is None else max(
-            1, int(np.ceil(span / float(max_step_ns))))
-        for ta, tb in zip(np.linspace(t[k - 1], t[k], nsub + 1)[:-1],
-                          np.linspace(t[k - 1], t[k], nsub + 1)[1:]):
+        for ta, tb in time_steps(t[k - 1], t[k], None, max_step_ns):
             check_cancel(progress_arr)
             dt_ns = float(tb - ta)
             eng = TwoSiteTDVPEngine(

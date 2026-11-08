@@ -81,6 +81,18 @@ C.group('距离截断（P2）', [
     ('warning 可见', any('distance_cutoff_um' in str(x) for x in cut_warn)),
 ])
 
+# 架构单一真源：order 映射与步长切分不在后端各写一份。
+from src.core.manybody.runtime import atom_to_mps, mps_to_atom, time_steps
+_order = [2, 0, 3, 1]
+_vals = [10.0, 20.0, 30.0, 40.0]
+_round = mps_to_atom(atom_to_mps(_vals, _order), _order)
+_steps = time_steps(0.0, 1.0, [{'t0': 0.0}, {'t0': 0.5}], 0.3)
+C.group('架构单一真源（order/步长）', [
+    ('atom→MPS→atom 还原', list(_round) == _vals),
+    ('步长覆盖完整区间', abs(sum(b - a for a, b in _steps) - 1.0) < 1e-12),
+    ('段边界在步内', all(abs(a - b) < 0.31 + 1e-12 for a, b in _steps)),
+])
+
 C.group('配置冲突是 typed（B5）', [
     ('时间能力冲突类型/键',
      conflict_kind == ('ConfigConflict', ('manybody.charge_sector',))),

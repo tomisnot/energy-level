@@ -54,7 +54,7 @@ CONFIG_SCHEMA_MB = {
         type='dict', default=None,
         desc='源态谱的源（want=spectrum；省略时默认用 manybody.psi0 作 |0⟩，'
              'psi0 也为空则用基态），在**当前基**里给 φ 或算符：'
-             '{kind:"vector",values} / {kind:"psi0"}（|0⟩ 本身） / {kind:"diagonal",values} / '
+             '{kind:"vector",values} / {kind:"psi0"}（|0⟩ 本身；可为原生有限 MPS，N≤16 时显式物化） / {kind:"diagonal",values} / '
              '{kind:"site_weights",weights:[…N…],subtract_mean?:bool}'
              '（O=Σwᵢnᵢ 的对角展开；subtract_mean=true 扣掉 ⟨O⟩，得连通谱） / '
              '{kind:"sparse",rows,cols,values} / {kind:"full_sparse",…}（扇区模式下投影回扇区'

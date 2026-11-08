@@ -180,7 +180,7 @@ run_sim()
   `corr (n_beta,N,N)`（连通占据 `⟨n_i n_j⟩−⟨n_i⟩⟨n_j⟩`）；N>12 仍给 E/C/F，
   但带 `corr_unavailable_reason`，不填零。局域线性响应用两次 δ± 热态有限差分，不在引擎里。
 - `want="spectrum"`：`manybody.source` 可给 `{kind:"vector"|"psi0"|"diagonal"|"sparse"|"full_sparse"|"site_weights"}`；
-  省略 source 时默认用 `manybody.psi0` 作 `|0⟩`（模式串/向量会物化，原生 MPS 会拒）。
+  省略 source 时默认用 `manybody.psi0` 作 `|0⟩`（模式串/向量会物化；原生有限 MPS 在 N≤16 时显式物化，N>16 明确拒绝）。
   源态谱只支持 ED/Lanczos 类后端，DMRG/QMC/KPM 会拒。
 - 平衡态结果：`E0`、`gap`、`n_atom`、`corr`、`evals`；热态另加 `E/C/F+betas`；
   DOS `energies/rho`；谱 `spectral/energies/source_norm`。

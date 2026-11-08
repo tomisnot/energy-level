@@ -395,7 +395,7 @@ def evolve_dense(calib, psi0=None, t_grid=None, Om=None, delta=None,
     def _pops():
         pm = expectation_pops(mps)
         pa = np.empty(n, dtype=float)
-        pa[order] = pm
+        pa = mps_to_atom(pm, order)
         return pa
 
     pops[0] = _pops()
@@ -509,7 +509,7 @@ def _matvec_one_blas(ops, theta):
 # Product entry point
 # ---------------------------------------------------------------------------
 from .runtime import (check_cancel, report_progress, reject_options,
-                      segment_drive, segment_intervals)
+                      segment_drive, time_steps, mps_to_atom)
 from .results import time_result
 
 
@@ -740,7 +740,7 @@ def evolve_tdvp_dense(calib, psi0=None, t_grid=None, Om=None, delta=None,
     def _pops_atom():
         pm = expectation_pops(mps)
         pa = np.empty(n, float)
-        pa[order] = pm
+        pa = mps_to_atom(pm, order)
         return pa
 
     def _record(k):
@@ -764,19 +764,7 @@ def evolve_tdvp_dense(calib, psi0=None, t_grid=None, Om=None, delta=None,
     current_seg_key = None
     with _blas_thread_limit():
         for k in range(1, n_t):
-            if segments:
-                steps = []
-                for left, right in segment_intervals(t[k - 1], t[k], segments):
-                    nsub = (1 if max_step_ns is None else
-                            max(1, int(np.ceil((right - left) / max_step_ns))))
-                    grid = np.linspace(left, right, nsub + 1)
-                    steps.extend(zip(grid[:-1], grid[1:]))
-            else:
-                span = float(t[k] - t[k - 1])
-                nsub = 1 if max_step_ns is None else max(1, int(np.ceil(span / max_step_ns)))
-                steps = zip(np.linspace(t[k - 1], t[k], nsub + 1)[:-1],
-                            np.linspace(t[k - 1], t[k], nsub + 1)[1:])
-            for a, b in steps:
+            for a, b in time_steps(t[k - 1], t[k], segments, max_step_ns):
                 check_cancel(progress_arr)
                 if segments:
                     mid = 0.5 * (float(a) + float(b))

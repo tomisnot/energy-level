@@ -25,6 +25,53 @@ def make_mps_state(psi, order, charge_sector=None):
     return state
 
 
+def _reorder_atom_to_mps(vec, order):
+    n = len(order)
+    order = [int(a) for a in order]
+    out = np.empty(1 << n, complex)
+    for atom_idx in range(1 << n):
+        mps_idx = 0
+        for atom in order:                       # order = atom -> MPS position
+            mps_idx = (mps_idx << 1) | ((atom_idx >> (n - 1 - atom)) & 1)
+        out[atom_idx] = vec[mps_idx]
+    return out
+
+
+def mps_state_to_vector(state, n, *, max_n=16):
+    """Materialize a finite native MPS state in the atom-order full basis.
+
+    Only for spectrum/ED handoff at small N; this is an explicit 2^N
+    materialization, never a silent fallback for large systems.
+    """
+    n = int(n)
+    if n > int(max_n):
+        raise ValueError('原生 MPS 转全空间向量上限为 N=%d（当前 %d）；'
+                         '请改用源态谱支持的向量/模式源或缩减模型' % (max_n, n))
+    if not isinstance(state, dict) or state.get('kind') != 'mps':
+        raise ValueError('state 必须是 kind=mps 的原生态')
+    order = list(map(int, state.get('order') or []))
+    if sorted(order) != list(range(n)):
+        raise ValueError('MPS state.order 必须是原子下标的完整排列')
+    backend = state.get('backend')
+    if backend == 'tenpy':
+        validate_mps_state(state, n)
+        theta = state['psi'].get_theta(0, n)
+        vec = np.asarray(theta.to_ndarray(), complex).reshape(-1)
+    elif backend == 'tdvp-dense':
+        from .tdvp_dense import _load_dense_state
+        mps = _load_dense_state(state, n, order)
+        vec = np.asarray(mps.to_dense(), complex) * float(mps.norm)
+    else:
+        raise ValueError('不支持把 backend=%r 的原生态转为全空间向量' % (backend,))
+    if vec.size != (1 << n):
+        raise ValueError('原生态物化维度 %d ≠ 2^N=%d' % (vec.size, 1 << n))
+    vec = _reorder_atom_to_mps(vec, order)
+    norm = float(np.linalg.norm(vec))
+    if not np.isfinite(norm) or norm <= 0:
+        raise ValueError('原生态物化后零范数/非有限')
+    return vec / norm
+
+
 def validate_mps_state(state, n):
     if state.get('backend') != 'tenpy' or state.get('version') != 1:
         raise ValueError('CPU MPS state 需要 backend=tenpy, version=1')

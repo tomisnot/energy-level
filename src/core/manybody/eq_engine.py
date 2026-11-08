@@ -117,8 +117,10 @@ def build_equilibrium(cache, params, want='gs', method=None, betas=None,
         # |0⟩ 默认取 manybody.psi0；source 未给时用 psi0 本身作源态。
         # 字符串/模式在这里物化成向量（ED/Lanczos 谱）；MPS 态明确拒绝。
         if isinstance(psi0, dict) and psi0.get('kind') == 'mps':
-            raise ValueError('want=spectrum 的 psi0 必须是向量/模式，不能是原生 MPS')
-        if psi0 is not None and not isinstance(psi0, dict) and psi0 != 'ground':
+            from .state import mps_state_to_vector
+            psi0 = mps_state_to_vector(psi0, n)
+        if (psi0 is not None and not isinstance(psi0, (dict, np.ndarray))
+                and psi0 != 'ground'):
             from .state import state_vector
             if n > 16:
                 raise ValueError('want=spectrum 的 psi0 物化上限为 N=16')
