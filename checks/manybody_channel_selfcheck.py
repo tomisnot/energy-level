@@ -16,7 +16,7 @@ from scipy import sparse as sp
 
 from checks.checklib import Checker
 from checks.mb_benchlib import random_calib, random_state, dense_H
-from src.core.manybody.assemble import (calibrate_pair,
+from src.core.manybody.assemble import (build_H_sparse, calibrate_pair,
                                          decompose_pair_channels)
 from src.core.manybody.matrix_free import hamiltonian_linear_operator
 
@@ -88,6 +88,38 @@ def main():
         ('通道字段齐', all({'q1', 'q2', 'tensor', 'matrix'} <= set(c)
                            for c in out['channels'])),
     ])
+    # dtype 由 spec 派生：六种模型覆盖“纯实/复 J/复 A/gamma/V/Omega”。
+    # 每个 case 同时验 dtype 与矩阵自由 matvec（通道语义的另一条实现），
+    # 避免只测“返回了什么 dtype”而没测值。
+    atoms = [{'id': 0, 'pos': [0.0, 0.0, 0.0]},
+             {'id': 1, 'pos': [1.0, 0.0, 0.0]}]
+    base = [{'i': 0, 'j': 1, 'V': 0.2, 'J': 0.4, 'A': 0.0}]
+    cases = [
+        ('纯实（J 实、A=0、V 实、Ω 实）', base, [0.1, 0.0], [0.0, 0.0], np.float64),
+        ('复 J', [{'i': 0, 'j': 1, 'V': 0.2, 'J': 0.4 + 0.2j, 'A': 0.0}],
+         [0.1, 0.0], [0.0, 0.0], np.complex128),
+        ('复 A', [{'i': 0, 'j': 1, 'V': 0.2, 'J': 0.4, 'A': 0.05 + 0.02j}],
+         [0.1, 0.0], [0.0, 0.0], np.complex128),
+        ('gamma≠0', base, [0.1, 0.0], [0.1, 0.0], np.complex128),
+        ('V≠0', [{'i': 0, 'j': 1, 'V': 0.3, 'J': 0.4, 'A': 0.0}],
+         [0.1, 0.0], [0.0, 0.0], np.float64),
+        ('Ω≠0', base, [0.2, 0.0], [0.0, 0.0], np.float64),
+    ]
+    for label, pairs, om, ga_case, expect in cases:
+        cal_case = {'atoms': atoms, 'pairs': pairs}
+        Hc = build_H_sparse(cal_case, np.asarray(om, complex),
+                            np.zeros(2), ['I1', 'I2', 'I3'],
+                            np.asarray(ga_case))
+        opc = hamiltonian_linear_operator(cal_case, np.asarray(om, complex),
+                                          np.zeros(2), np.asarray(ga_case),
+                                          terms=['I1', 'I2', 'I3'])
+        vc = random_state(4, seed=5)
+        err = float(np.max(np.abs(Hc @ vc - opc @ vc)))
+        C.group('dtype 派生：' + label, [
+            ('dtype=%s（实/复由数据决定）' % np.dtype(expect).name,
+             Hc.dtype == np.dtype(expect)),
+            ('matvec 与矩阵自由一致（max|Δ|=%.2e）' % err, err < 1e-12),
+        ])
     return 0 if C.summary() else 1
 
 

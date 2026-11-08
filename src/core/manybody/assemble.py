@@ -276,17 +276,25 @@ def to_json_dict(calib):
 # =====================================================================
 def build_H_sparse(calib, Om=None, delta=None, terms=None, gamma=None,
                    basis_indices=None):
-    """calib → 2^N **稀疏** H（CSR，MHz，复）。Om/delta/gamma：逐原子（缺省 0）。
+    """calib → 2^N **稀疏** H（CSR，MHz；dtype 由 ``ChannelSpec`` 派生）。
 
     H = Σ_i [δ_i n_i + (Ω_i/2)σˣ_i − (i/2)Γ_i n_i]
       + Σ_{i<j} [V·n_i n_j + (J σ⁺_iσ⁻_j + A σ⁺_iσ⁺_j + h.c.)]
     基序 bit i ↔ 原子 i（MSB：bit(s,i)=(s>>(n−1−i))&1），bit=1 ↔ |r⟩。
     矩阵元序 H[t,s]=⟨t|H|s⟩（与 calibrate_pair 的标准序一致）。
 
-    每行 O(N) 非零 ⇒ 取代 2^N×2^N 稠密（N=16 稠密需 68 GB，不可行）。
+    组装走**两遍 CSR**：第一遍只 bincount 每行非零数，第二遍按 cursor 填
+    ``data/indices/indptr``；不再先拼 COO 再 ``tocsr()``，峰值内存从
+    ~2×最终矩阵降到 ~1×。列索引直接来自 selector 命中的位置（不再对 source
+    做第二次 searchsorted）。
+
+    实模型（gamma=0、J/A 复数部分为 0、Ω 实）返回 float64 CSR；只有真的
+    需要虚部时才分配 complex128。
+
     非厄米接缝（默认关，gamma=None ⇒ 厄米）：gamma 是**布居衰减率 Γ(MHz)**，
-    同 evolve_util 约定（物理率 = Γ×1e-3 /ns）；演化用 exp(-i·CONV·H·t)，故 H 虚部
-    对角取 -i·Γ×1e-3/(2·CONV) ⇒ 布居恰按 exp(-Γ×1e-3·t) 衰减（与 auto_decays/Lindblad 一致）。
+    同 evolve_util 约定（物理率 = Γ×1e-3 /ns）；演化用 exp(-i·CONV·H·t)，故 H
+    虚部对角取 -i·Γ×1e-3/(2·CONV) ⇒ 布居恰按 exp(-Γ×1e-3·t) 衰减
+    （与 auto_decays/Lindblad 一致）。
     """
     n = len(calib['atoms'])
     full_dim = 1 << n
@@ -301,43 +309,92 @@ def build_H_sparse(calib, Om=None, delta=None, terms=None, gamma=None,
     if s.ndim != 1 or not len(s) or np.any(s < 0) or np.any(s >= full_dim):
         raise ValueError('basis_indices 须为非空有效位编码')
     dim = len(s)
-    permutation = np.argsort(s)
-    ordered = s[permutation]
-    if np.any(np.diff(ordered) == 0):
-        raise ValueError('basis_indices 不能重复')
+    # 索引数组用 int32：2^N 位编码在 N<=26 时放得下，而 nnz 可能上亿，
+    # int64 会让 indices/indptr 及中间数组各多一倍。
+    idx_dtype = (np.int32 if max(dim, full_dim) <= np.iinfo(np.int32).max
+                 else np.int64)
+    full = basis_indices is None
+    if not full:
+        permutation = np.argsort(s).astype(idx_dtype, copy=False)
+        ordered = s[permutation]
+        if np.any(np.diff(ordered) == 0):
+            raise ValueError('basis_indices 不能重复')
     bit = basis_bits(n, s)
 
-    # 通道语义的唯一来源：对角 + XOR 翻转。这里只做“代码空间 → 基索引”的映射；
-    # J/A/Ω 的符号与掩码只在 channels.channel_spec 定义。
     from .channels import channel_spec, selector_mask
     spec = channel_spec(calib, Om, delta, gamma, terms)
-    rows, cols, vals = [s], [s], [spec.diagonal(bit)]
+    dtype = spec.dtype
+    diag = spec.diagonal(bit, dtype)
+
+    def row_map(codes):
+        """full-space codes → 原 basis 行号；受限基只在这里做一次 searchsorted。"""
+        if full:
+            return codes.astype(idx_dtype, copy=False), np.ones(codes.size, bool)
+        loc = np.searchsorted(ordered, codes)
+        valid = loc < dim
+        valid[valid] &= ordered[loc[valid]] == codes[valid]
+        rows = np.zeros(codes.size, dtype=idx_dtype)
+        rows[valid] = permutation[loc[valid]]
+        return rows, valid
+
+    def amp_value(amp):
+        c = complex(amp)
+        return c.real if np.issubdtype(dtype, np.floating) else c
+
+    # ---- pass 1: row counts ----
+    counts = np.zeros(dim, dtype=np.int64)
+    counts += 1                                  # diagonal, one entry per row
     for selector, mask, amp in spec.channels:
-        ss = s[selector_mask(bit, selector)]
-        rows.append(ss ^ mask)
-        cols.append(ss)
-        vals.append(np.full(ss.size, amp, complex))
+        cols = np.flatnonzero(selector_mask(bit, selector))
+        if cols.size == 0:
+            continue
+        targets = s[cols] ^ np.asarray(mask, dtype=np.int64)
+        rows, valid = row_map(targets)
+        if valid.any():
+            rows = rows[valid]
+            counts += np.bincount(rows, minlength=dim)
 
-    # Map full-space bit identities into the requested basis without ever
-    # assembling the full-space matrix. Supports arbitrary basis ordering.
-    target, source = np.concatenate(rows), np.concatenate(cols)
-    values = np.concatenate(vals)
-    def locate(codes):
-        locations = np.searchsorted(ordered, codes)
-        valid = locations < dim
-        valid[valid] &= ordered[locations[valid]] == codes[valid]
-        return locations, valid
-    ri, valid_r = locate(target)
-    ci, valid_c = locate(source)
-    valid = valid_r & valid_c
-    return sp.coo_matrix((values[valid],
-                          (permutation[ri[valid]], permutation[ci[valid]])),
-                         shape=(dim, dim)).tocsr()
+    # indptr/indices 的元素是 **nnz 下标**，不是 2^N 位编码；N=27 以上
+    # 即使 full_dim 还在 int32 内，nnz 也可能溢出，必须按 nnz 再抬一次。
+    nnz = int(counts.sum())
+    if nnz > np.iinfo(np.int32).max:
+        idx_dtype = np.int64
+    indptr = np.empty(dim + 1, dtype=idx_dtype)
+    indptr[0] = 0
+    np.cumsum(counts, out=indptr[1:])
+    indices = np.empty(nnz, dtype=idx_dtype)
+    data = np.zeros(nnz, dtype=dtype)
+    cursor = indptr[:-1].astype(np.int64, copy=True)
 
+    # ---- pass 2: fill with cursor ----
+    diag_rows = np.arange(dim, dtype=idx_dtype)
+    pos = cursor[diag_rows]
+    data[pos] = diag
+    indices[pos] = diag_rows
+    cursor[diag_rows] += 1
+
+    for selector, mask, amp in spec.channels:
+        cols = np.flatnonzero(selector_mask(bit, selector))
+        if cols.size == 0:
+            continue
+        targets = s[cols] ^ np.asarray(mask, dtype=np.int64)
+        rows, valid = row_map(targets)
+        if not valid.any():
+            continue
+        rows = rows[valid]
+        cols = cols[valid].astype(idx_dtype, copy=False)
+        pos = cursor[rows]
+        data[pos] += amp_value(amp)
+        indices[pos] = cols
+        cursor[rows] += 1
+
+    H = sp.csr_matrix((data, indices, indptr), shape=(dim, dim))
+    H.sort_indices()
+    return H
 
 
 def build_H_ed(calib, Om=None, delta=None, terms=None, gamma=None):
-    """calib → 2^N **稠密** H（MHz，复）——tiny-N 交叉对照用。
+    """calib → 2^N **稠密** H（MHz；dtype 与稀疏版同源）——tiny-N 交叉对照用。
 
     内部委托 `build_H_sparse(...).toarray()`（同一矩阵，M0 约定不变）。
     大 N 请直接用 build_H_sparse（稠密 2^N×2^N 内存不可行）。

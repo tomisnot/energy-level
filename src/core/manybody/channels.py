@@ -38,12 +38,39 @@ class ChannelSpec:
         self.pairs = pairs
         self.channels = tuple(channels)
 
-    def diagonal(self, bits):
-        """逐基矢对角（MHz，复）：δn + Vnn − iΓn/2（按演化约定缩放）。"""
-        diag = np.zeros(len(bits[0]), complex)
-        for i in range(self.n):
-            diag += (self.delta[i]
-                     - 0.5j * self.gamma[i] * 1e-3 / CONV) * bits[i]
+    @property
+    def dtype(self):
+        """H 的数据类型由**数据**派生，不由调用方选择。
+
+        gamma≠0 ⇒ 对角有虚部；任一通道幅度有虚部 ⇒ 非对角复。
+        否则 H 是实对称的，CSR 值数组可以少一半内存。
+        """
+        if np.any(self.gamma):
+            return np.dtype(np.complex128)
+        for _selector, _mask, amp in self.channels:
+            try:
+                if complex(amp).imag != 0.0:
+                    return np.dtype(np.complex128)
+            except (TypeError, ValueError):
+                return np.dtype(np.complex128)
+        return np.dtype(np.float64)
+
+    def diagonal(self, bits, dtype=None):
+        """逐基矢对角（MHz）：δn + Vnn − iΓn/2（按演化约定缩放）。
+
+        ``dtype`` 缺省用 :attr:`dtype`；实模型走 float64，复模型才分配复数。
+        """
+        dtype = np.dtype(self.dtype if dtype is None else dtype)
+        if np.issubdtype(dtype, np.floating) and np.any(self.gamma):
+            raise ValueError('实对角 dtype 不能承载非零 gamma（H 必须有虚部）')
+        diag = np.zeros(len(bits[0]), dtype)
+        if np.issubdtype(dtype, np.floating):
+            for i in range(self.n):
+                diag += self.delta[i] * bits[i]
+        else:
+            for i in range(self.n):
+                diag += (self.delta[i]
+                         - 0.5j * self.gamma[i] * 1e-3 / CONV) * bits[i]
         if 'I1' in self.use:
             for p in self.pairs:
                 diag += p.get('V', 0.0) * (bits[int(p['i'])] * bits[int(p['j'])])
