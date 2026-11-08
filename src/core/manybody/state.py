@@ -311,13 +311,13 @@ def validate_psi_spec(spec, n):
     raise ValueError('无法解析多体初态 psi0=%r' % (spec,))
 
 
-def initial_sigma_z(spec, n, *, max_mps_n=16):
+def initial_sigma_z(spec, n, *, max_mps_n=16, max_vector_n=18):
     """初态的逐格点 ⟨σᶻᵢ⟩（g=+1，r=−1），不要求直积态。
 
     乘积态/索引/模式串按局部态直接算，不分配 2^N；叠加态、任意全空间态矢先物
-    化成向量再算局域期望；有限 MPS 仅在 ``n <= max_mps_n`` 时物化，否则返回
-    ``None``（调用方应显示"不可用"，不要编造）。``ground`` 需要求解器先算基态，
-    这里同样返回 ``None``。
+    化成向量再算局域期望；有限 MPS 仅在 ``n <= max_mps_n`` 时物化，任意态矢
+    仅在 ``n <= max_vector_n`` 时物化，否则返回 ``None``（调用方应显示"不可用"，
+    不要编造）。``ground`` 需要求解器先算基态，这里同样返回 ``None``。
     """
     n = int(n)
     if n <= 0:
@@ -333,6 +333,10 @@ def initial_sigma_z(spec, n, *, max_mps_n=16):
         vectors = None
     if vectors is not None:
         return np.array([abs(v[0]) ** 2 - abs(v[1]) ** 2 for v in vectors], float)
+    # 非直积态要物化才能取局域期望；展示层有明确 N 上限，避免把一次运行
+    # 的 2^N 向量再复制成 N×2^N 的位矩阵。
+    if n > max_vector_n:
+        return None
     # 原生 MPS 只在明确的小 N 上限内物化；大 MPS 的局域期望留给执行层。
     if isinstance(spec, dict) and spec.get('kind') == 'mps':
         try:

@@ -11,7 +11,8 @@ export class ResultView {
     this.root=root;this.data=data;this.datasets=data.datasets||[];this.summary=summary
     this.state={mode:this.datasets.some(d=>spatial.has(d.kind))?'array':this.datasets.some(d=>d.kind==='basis')?'basis':'curves',
       selected:0,edge:0,basis:0,plane:bestPlane(data.sites||[]),component:'real',fraction:1,
-      playing:false,loop:true,threshold:0,reference:'all',zoom:1,
+      zoom:1,panX:0,panY:0,
+      playing:false,loop:true,threshold:0,reference:'all',
       // 色标默认按**数据实际范围**（0.48–0.52 也能看出结构）；需要时切回语义范围（占据 0–1、自旋 ±1）。
       autoScale:true}
     this.cache=new Map();this.closed=false;this.last=0;this.points=[]
@@ -20,7 +21,7 @@ export class ResultView {
     this.resize=new ResizeObserver(()=>this.paint());this.resize.observe(this.root)
     this.animate=this.animate.bind(this);this.raf=requestAnimationFrame(this.animate)
   }
-  destroy(){this.closed=true;cancelAnimationFrame(this.raf);this.resize?.disconnect()}
+  destroy(){this.closed=true;cancelAnimationFrame(this.raf);this.resize?.disconnect();window.removeEventListener('mousemove',this._dragMove);window.removeEventListener('mouseup',this._dragEnd)}
   candidates(){
     return this.datasets.filter(d=>this.state.mode==='array'?spatial.has(d.kind):this.state.mode==='basis'?d.kind==='basis':this.state.mode==='spectrum'?d.kind==='spectrum':this.state.mode==='histogram'?d.kind==='histogram':['curve','sites','links','loops'].includes(d.kind)&&d.axis)
   }
@@ -64,19 +65,32 @@ export class ResultView {
     const wheelZoom=e=>{
       if(!['array','basis'].includes(this.state.mode))return
       e.preventDefault();e.stopImmediatePropagation()
-      const factor=Math.exp(-Number(e.deltaY||0)*.0015)
-      this.state.zoom=Math.max(.35,Math.min(8,this.state.zoom*factor));this.paint()
+      const r=this.canvas.getBoundingClientRect(),mx=e.clientX-r.left,my=e.clientY-r.top
+      const old=this.state.zoom||1,z2=Math.max(.35,Math.min(8,old*Math.exp(-Number(e.deltaY||0)*.0015)))
+      const cx=r.width/2,cy=Math.max(35,r.height-88)/2+34
+      this.state.panX=(mx-cx)-(mx-cx-(this.state.panX||0))*(z2/old)
+      this.state.panY=(my-cy)-(my-cy-(this.state.panY||0))*(z2/old)
+      this.state.zoom=z2;this.paint()
     }
     this.canvas.onwheel=wheelZoom
     // 图例/标签覆盖在 canvas 上：整个 .plot-stage 都优先缩放，不能被卡片翻页截走。
     const stage=this.root.querySelector('.plot-stage');if(stage)stage.onwheel=wheelZoom
-    this.canvas.ondblclick=()=>{if(!['array','basis'].includes(this.state.mode))return;this.state.zoom=1;this.paint()}
-    this.root.querySelectorAll('[data-mode]').forEach(b=>b.onclick=()=>{this.state.mode=b.dataset.mode;this.state.dataset=null;this.state.fraction=1;this.state.playing=false;this.controls();this.paint()})
+    this.canvas.ondblclick=()=>{if(!['array','basis'].includes(this.state.mode))return;this.state.zoom=1;this.state.panX=0;this.state.panY=0;this.paint()}
+    this.dragging=false;this.dragMoved=false;this.dragStart=null;this.suppressClick=false
+    this.canvas.onmousedown=e=>{if(!['array','basis'].includes(this.state.mode)||e.button!==0)return
+      e.preventDefault();this.dragging=true;this.dragMoved=false;this.dragStart=[e.clientX,e.clientY,this.state.panX||0,this.state.panY||0];this.canvas.style.cursor='grabbing'}
+    this._dragMove=e=>{if(!this.dragging)return;const dx=e.clientX-this.dragStart[0],dy=e.clientY-this.dragStart[1]
+      if(Math.abs(dx)+Math.abs(dy)>2)this.dragMoved=true
+      this.state.panX=this.dragStart[2]+dx;this.state.panY=this.dragStart[3]+dy;this.paint()}
+    this._dragEnd=()=>{if(!this.dragging)return;this.dragging=false;this.canvas.style.cursor='';this.suppressClick=this.dragMoved
+      setTimeout(()=>{this.dragMoved=false;this.suppressClick=false},0)}
+    window.addEventListener('mousemove',this._dragMove);window.addEventListener('mouseup',this._dragEnd)
+    this.root.querySelectorAll('[data-mode]').forEach(b=>b.onclick=()=>{this.state.mode=b.dataset.mode;this.state.dataset=null;this.state.fraction=1;this.state.playing=false;this.state.zoom=1;this.state.panX=0;this.state.panY=0;this.controls();this.paint()})
     this.root.querySelector('.play').onclick=()=>{if(!this.state.playing&&this.state.fraction>=1)this.state.fraction=0;this.state.playing=!this.state.playing;this.last=0;this.paint()}
     this.root.querySelector('.scrub').oninput=e=>{this.state.fraction=Number(e.target.value)/1000;this.state.playing=false;this.paint()}
     this.root.querySelector('.loop').onchange=e=>this.state.loop=e.target.checked
     this.root.querySelector('.export').onclick=()=>{const blob=new Blob([JSON.stringify({summary:this.summary,visualization:this.data},null,2)],{type:'application/json'});const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`EL-${this.summary.monitor_id||'result'}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)}
-    this.canvas.onclick=e=>{if(!['array','basis'].includes(this.state.mode))return;const r=this.canvas.getBoundingClientRect();const x=e.clientX-r.left,y=e.clientY-r.top;let best=-1,dist=Infinity;this.points.forEach((p,i)=>{if(!p)return;const d=Math.hypot(p[0]-x,p[1]-y);if(d<dist){best=i;dist=d}});if(best>=0&&dist<22){this.state.selected=best;this.state.edgePicked=false;this.paint();return}
+    this.canvas.onclick=e=>{if(this.suppressClick){this.suppressClick=false;return}if(!['array','basis'].includes(this.state.mode))return;const r=this.canvas.getBoundingClientRect();const x=e.clientX-r.left,y=e.clientY-r.top;let best=-1,dist=Infinity;this.points.forEach((p,i)=>{if(!p)return;const d=Math.hypot(p[0]-x,p[1]-y);if(d<dist){best=i;dist=d}});if(best>=0&&dist<22){this.state.selected=best;this.state.edgePicked=false;this.paint();return}
       let chosen=null,edgeDistance=Infinity
       for(const edge of this.visibleEdges||[]){const [a,b]=edge.points,dx=b[0]-a[0],dy=b[1]-a[1],u=Math.max(0,Math.min(1,((x-a[0])*dx+(y-a[1])*dy)/(dx*dx+dy*dy||1))),d=Math.hypot(x-a[0]-u*dx,y-a[1]-u*dy);if(d<edgeDistance){edgeDistance=d;chosen=edge}}
       if(chosen&&edgeDistance<8){this.state.edge=chosen.index;this.state.edgePicked=true;this.paint()}}
@@ -135,7 +149,11 @@ export class ResultView {
     if(!n||sites.some(s=>!s.pos)){
       this.points=[];ctx.fillStyle='#64748b';ctx.textAlign='center';ctx.fillText('没有返回原子坐标；下方显示真实曲线',w/2,h/2);return
     }
-    const p=projection(sites,this.state.plane,w,Math.max(35,h-88),this.state.zoom);p.positions=p.positions.map(point=>point?[point[0],point[1]+34]:null);this.points=p.positions
+    const vh=Math.max(35,h-88),z=this.state.zoom||1,px=this.state.panX||0,py=this.state.panY||0,cx=w/2,cy=vh/2+34
+    const p=projection(sites,this.state.plane,w,vh,1)
+    p.positions=p.positions.map(point=>point?[(point[0]-cx)*z+cx+px,(point[1]+34-cy)*z+cy+py]:null)
+    p.scale*=z
+    this.points=p.positions
     let vals=this.row(ds)||[],occupancy=null,vectors=null
     if(ds.kind==='spins'){vectors=vals;vals=vectors.map(v=>v?.[2])}
     if(ds.kind==='partition')vals=sites.map((_,i)=>ds.part_a.includes(i)?0:1)

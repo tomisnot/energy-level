@@ -66,7 +66,8 @@ function inputMarkup(run,record){
   return `${captionMarkup(run,record)}<div class="section-label">输入 / RUNSPEC</div><dl class="params">${pair('体系 × 方法',bodyName(run)+' · '+(run.method||'准备中'),true)}${pair('请求',run.want||'含时演化')}${many?pair('模型',model,true):''}${build.row}${pair(many?'有效维度':'能级数',many?`${run.dim??'—'}`:run.states?.length)}${pair('物理时间',finite(run.t_max)?fmt(run.t_max)+' ns':'静态')}${finite(run.npts)?pair('采样点',run.npts):''}${run.field?pair('磁场 B',fmt(run.field.B_gauss)+' G'):''}${pair('初态',run.psi0_label??initial(run),true)}${run.plan_summary?.kind&&run.plan_summary.kind!=='none'?pair('约束',run.plan_summary.kind+' · '+run.plan_summary.mode,true):''}${run.drive?.kind==='segments'?pair('分段驱动',`${run.drive.n_segments} 段 · t0 ${run.drive.segments.map(s=>fmt(s.t0)).join(' / ')}${run.drive.interp==='midpoint'?' · 中点':''}`,true):''}${run.observables?.pauli_count?pair('Pauli 串',`${run.observables.pauli_count} 条`):''}</dl>${hBlock}${geo}${many?'':levelBlock}${run.equilibrium?'':`<h3>${many?'驱动 Ω / δ':'波形光强包络'}</h3>${drives.length?'<canvas class="drive-mini" role="img" aria-label="真实输入波形"></canvas><div class="small-note">'+escape(drives.slice(0,3).map(d=>d.label).join(' · '))+(drives.length>3?' …':'')+'</div>':'<div class="small-note">'+escape(run.drive_preview_note||'静态驱动 / 无光场波形')+'</div>'}`}${build.details}<h3>耗散与配置提醒</h3><div class="small-note">${escape((run.warnings||[]).join('；')||((run.decays||run.decays_A||[]).length+' 条显式衰减通道'))}</div><details><summary>输入详情</summary><pre class="small-note">${escape(JSON.stringify({calib_summary:cs,build:run.build||null,build_receipt:run.build_receipt||null,engine_kwargs:run.engine_kwargs||{}},null,2))}</pre></details>`
 }
 // ---- 哈密顿量可视化：单原子项（节点）+ 两原子项（边）同时画，各自独立选择 ----
-let currentModel=null,atomMode='delta',pairMode='J',geoRun=null,geoZoom=1
+let currentModel=null,atomMode='delta',pairMode='J',geoRun=null
+let geoZoom=1,geoPanX=0,geoPanY=0,geoDragging=false,geoDragStart=null,geoMoved=false
 const POS_LO=[148,163,184],POS_HI=[15,118,110],NEG_LO=[148,163,184],NEG_HI=[194,65,12]
 function rampColor(v,vmax){
   const t=Math.min(1,Math.abs(Number(v)||0)/Math.max(vmax,1e-12))
@@ -80,7 +81,9 @@ function paintGeometry(run){
   const b=canvasContext(c);if(!b)return
   const sites=(run&&run.atoms)||[],{ctx,w,h}=b
   if(!sites.length)return
-  const p=projection(sites,bestPlane(sites),w,h,geoZoom)
+  const p=projection(sites,bestPlane(sites),w,h,1)
+  const cx=w/2,cy=h/2
+  p.positions=p.positions.map(pt=>pt?[(pt[0]-cx)*geoZoom+cx+geoPanX,(pt[1]-cy)*geoZoom+cy+geoPanY]:null)
   const model=currentModel
   const showPair=!!model&&pairMode!=='none',showAtom=!!model&&atomMode!=='none'
   let pairMax=1e-12
@@ -119,10 +122,21 @@ function paintGeometry(run){
     lg.innerHTML=bits.length?bits.join(''):`<span>节点 = 原子编号；模型载入后可按系数着色</span>`
   }
   c.style.cursor='crosshair'
-  c.title='滚轮缩放 · 双击复位'
-  c.onwheel=e=>{e.preventDefault();e.stopPropagation();const factor=Math.exp(-Number(e.deltaY||0)*.0015);geoZoom=Math.max(.35,Math.min(8,geoZoom*factor));paintGeometry(geoRun)}
-  c.ondblclick=()=>{geoZoom=1;paintGeometry(geoRun)}
-  c.onmousemove=e=>{const rect=c.getBoundingClientRect(),x=e.clientX-rect.left,y=e.clientY-rect.top
+  c.title='滚轮以鼠标为中心缩放 · 拖动平移 · 双击复位'
+  c.onwheel=e=>{e.preventDefault();e.stopPropagation()
+    const rect=c.getBoundingClientRect(),mx=e.clientX-rect.left,my=e.clientY-rect.top
+    const factor=Math.exp(-Number(e.deltaY||0)*.0015),z2=Math.max(.35,Math.min(8,geoZoom*factor))
+    const mxC=rect.width/2,myC=rect.height/2
+    geoPanX=(mx-mxC)-(mx-mxC-geoPanX)*(z2/geoZoom)
+    geoPanY=(my-myC)-(my-myC-geoPanY)*(z2/geoZoom)
+    geoZoom=z2;paintGeometry(geoRun)}
+  c.ondblclick=()=>{geoZoom=1;geoPanX=0;geoPanY=0;paintGeometry(geoRun)}
+  c.onmousedown=e=>{if(e.button!==0)return;e.preventDefault();geoDragging=true;geoMoved=false;geoDragStart=[e.clientX,e.clientY,geoPanX,geoPanY];c.style.cursor='grabbing'}
+  c.onmousemove=e=>{
+    if(geoDragging){const dx=e.clientX-geoDragStart[0],dy=e.clientY-geoDragStart[1]
+      if(Math.abs(dx)+Math.abs(dy)>2)geoMoved=true
+      geoPanX=geoDragStart[2]+dx;geoPanY=geoDragStart[3]+dy;paintGeometry(geoRun);return}
+    const rect=c.getBoundingClientRect(),x=e.clientX-rect.left,y=e.clientY-rect.top
     let best=-1,bestD=64
     p.positions.forEach((point,i)=>{if(!point)return;const d=(point[0]-x)**2+(point[1]-y)**2;if(d<bestD){bestD=d;best=i}})
     const out=$('.geo-readout');if(!out)return
@@ -131,6 +145,7 @@ function paintGeometry(run){
       iv=model&&model.initial_sz?Number(model.initial_sz[best]):null
     out.textContent=`#${s.site_id??best} · (${fmt(s.pos?.[0],3)}, ${fmt(s.pos?.[1],3)}) µm`+
       (dv!==null?` · δ ${fmt(dv,3)}`:'')+(ov?` · Ω ${fmt(ov,3)}`:'')+(iv!==null?` · ⟨σᶻ⟩ ${fmt(iv,3)}`:'')}
+  c.onmouseup=()=>{if(!geoDragging)return;geoDragging=false;c.style.cursor='crosshair';setTimeout(()=>{geoMoved=false},0)}
   c.onmouseleave=()=>{const out=$('.geo-readout');if(out)out.textContent=''}
 }
 function paintModel(model,running){
@@ -215,7 +230,7 @@ async function render(){
   const key=`${record.id}|${record.status}|${record.result_version}|${record.input_version}`
   if(signature===key){const progress=$('.progress-track i');if(progress)progress.style.width=Math.max(0,Math.min(100,record.progress||0))+'%';if($('.progress-text'))$('.progress-text').textContent=fmt(record.progress||0,1)+'% · '+(record.elapsed||'—');if($('.stage-text')&&record.status==='running')$('.stage-text').textContent=record.stage;return}
   saveInput();dispose();signature=key;renderedId=record.id;const token=++renderToken
-  currentModel=null;atomMode='delta';pairMode='J';geoZoom=1
+  currentModel=null;atomMode='delta';pairMode='J';geoZoom=1;geoPanX=0;geoPanY=0
   $('#card-host').innerHTML=`<article class="run-card"><header class="card-head"><span class="id">${escape(record.id)}</span><span>${escape(record.createdAt)}</span><span class="reason">${escape(record.reason||bodyName(record.run))}</span><span class="status ${escape(record.status)}">${escape(statusNames[record.status]||record.status)} · ${escape(record.elapsed||'—')}</span></header><div class="card-content"><aside class="input-panel">${inputMarkup(record.run,record)}</aside><section class="result-panel"><div class="result-header"><span class="section-label">输出 / ENGINE RESULT</span><span class="source">${escape(record.run.method||'')} · 真实运行</span></div>${record.error?`<div class="error">${escape(record.error)}</div>`:''}<div class="result-mount">${pending(record)}</div></section></div></article>`
   restoreInput();requestAnimationFrame(()=>{paintInput(record.run);if(!record.has_visualization)paintModel(null,record.status==='running')});loadModel(record)
   if(record.has_visualization){
@@ -247,4 +262,6 @@ document.addEventListener('keydown',e=>{if(e.target.closest('input,select,textar
 $('#stage').addEventListener('wheel',e=>{if(page!=='runs'||e.target.closest('.input-panel,input,select,.basis-picker,.technical'))return;if(Math.abs(e.deltaY)<28)return;e.preventDefault();if(performance.now()-lastWheel<500)return;lastWheel=performance.now();move(e.deltaY>0?1:-1)},{passive:false})
 document.querySelectorAll('[data-page]').forEach(b=>b.onclick=async()=>{page=b.dataset.page;document.querySelectorAll('[data-page]').forEach(x=>x.classList.toggle('active',x===b));saveInput();dispose();signature='';++renderToken;if(page==='runs')return render();$('#card-host').innerHTML='<div class="config-page"><div class="section-label">当前配置 / 只读</div><pre>载入中…</pre></div>';try{const response=await fetch('/api/config');const payload=await response.json();if(page==='config')$('.config-page pre').textContent=JSON.stringify(payload.config,null,2)}catch{if(page==='config')$('.config-page pre').textContent='无法连接配置服务'}})
 window.addEventListener('resize',()=>{const r=records.find(r=>r.id===selected);if(r)paintInput(r.run)})
+
+window.addEventListener('mouseup',()=>{if(!geoDragging)return;geoDragging=false;const c=document.querySelector('.input-geometry');if(c)c.style.cursor='crosshair';setTimeout(()=>{geoMoved=false},0)})
 render();poll()
