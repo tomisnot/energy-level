@@ -233,7 +233,7 @@ C.check('KPM DOS stays sparse and has real energy axis',np.isfinite(dos['rho']).
 
 # Exercise every declared product entry on a real two-site numerical problem.
 for name in TIME_BACKENDS:
-    if 'gpu' in name:
+    if 'gpu' in name or name == 'tdvp-cuda':
         import torch
         if not torch.cuda.is_available():
             C.skip('public entry '+name,'CUDA unavailable')

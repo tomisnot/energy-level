@@ -1,5 +1,9 @@
 # Dense TDVP prototype (CPU / CUDA)
 
+## 2026-11-09 product entry
+
+`manybody.solver="tdvp-cuda"` now exposes the shared CUDA kernel through the standard EL backend registry, schema and RunSpec. The CPU SVD branch already existed here. N24 project benchmarks favor `manybody.dtype="float32"` with `manybody.svd_device="cpu"` for their speed/accuracy balance. The core implementation is `src/core/manybody/tdvp_cuda_kernel.py`; `torch_tdvp.py` remains a compatibility import. See [product configuration](../../docs/tdvp_cuda.md). Timings below describe their original fixtures.
+
 Independent performance prototype for the finite two-site TDVP backend.  The
 production entry point now lives in `src/core/manybody/tdvp_dense.py`
 (`manybody.solver = "tdvp-dense"`); this directory keeps the benchmark driver
@@ -10,7 +14,7 @@ and the experimental CUDA port.
 | File | Role |
 |---|---|
 | `dense_tdvp.py` | Thin re-export of the product kernel `src/core/manybody/tdvp_dense.py` |
-| `torch_tdvp.py` | CUDA port (torch; complex64 fast path, complex128 + CPU SVD accurate path); not yet a product backend |
+| `torch_tdvp.py` | Compatibility entry for the shared core CUDA TDVP kernel |
 | `mpo_compress.py` | Two-site SVD MPO compression experiments |
 | `exp_mpo.py` | Constant-D exponential-sum MPO for 1D power-law couplings |
 | `bench.py` | Reproducible benchmark: CPU/GPU vs TeNPy, optional ED reference |

@@ -82,6 +82,7 @@ CONFIG_SCHEMA_MB = {
         desc='**含时演化**求解器：auto=小系统 ED、大系统 TDVP / ed=精确对角化 / '
              'tebd=最近邻 MPS / tebd-gpu=CUDA 最近邻 MPS / swap-tebd-gpu=CUDA 任意键 SWAP-TEBD / tdvp=两站点 TDVP / tdvp-single=单站点 TDVP / '
              'tdvp-adaptive=两站点到单站点自适应 TDVP / tdvp-dense=CPU 稠密两站点 TDVP（有限开链，支持 segments/Pauli/原生 MPS return_state；无 charge；与 tdvp 同阶对拍）。'
+             'tdvp-cuda=CUDA 两站点 TDVP，可选 CPU/GPU SVD，支持 segments/Pauli/dense MPS 续算。'
              '平衡态不看本键，看 `manybody.eq_backend`。'),
     'manybody.collapse_ops': dict(type='list', default=None, desc='开放系统局部跳跃通道：[{site, rate, operator|matrix}]，供 tdvp-trajectories'),
     'manybody.n_trajectories': dict(type='int', default=32, lo=1, hi=100000, desc='量子轨迹条数'),
@@ -121,7 +122,7 @@ CONFIG_SCHEMA_MB = {
         desc='MPS/PEPS/量子轨迹最大键维 χ（越大越准越慢；键数 ~χ³）'),
     'manybody.truncerr': dict(
         type='float', default=1e-10, lo=0.0, hi=1e-2,
-        desc='MPS 单次截断误差目标（保得越紧越慢）'),
+        desc='MPS 截断参数；TeNPy 为丢弃权重目标，tdvp-dense/tdvp-cuda 为相对奇异值幅度阈值'),
     'manybody.krylov_dim': dict(
         type='int', default=20, lo=4, hi=200,
         desc='TDVP Krylov 子空间维数（越大越准越慢）'),
@@ -167,7 +168,7 @@ CONFIG_SCHEMA_MB = {
         type='str', enum=['left', 'midpoint'], default='left',
         desc='分段驱动取值规则：left=每段左端点常数值（默认，逐位兼容旧结果）；'
              'midpoint=把段条目视为线性 ramp 的控制点，取该段中点值（二阶 ramp 精度）。'
-             '仅 ED / CPU MPS / tdvp-dense 消费；其它后端会在 build 阶段显式拒绝。'),
+             '仅 ED / CPU MPS / tdvp-dense / tdvp-cuda 消费；其它后端会在 build 阶段显式拒绝。'),
     'manybody.distance_cutoff_um': dict(
         type='float', default=None, lo=0.0,
         desc='可选的距离截断（µm，按 calib 显式 pos 的欧氏距离，不做周期最小像）：只保留 R≤cutoff 的原子对，丢弃项写进 calib.dropped/'
@@ -196,7 +197,7 @@ CONFIG_SCHEMA_MB = {
              '单格点矩阵是标准 Pauli，基为 (|g⟩,|r⟩)；本仓 sp/sm 是 |r><g|/|g><r|，'
              '与 σ± 的教科书编号相反。引擎**不解释**物理含义（手性要不要 /8、'
              '要不要连通减法，由调用方组合）。支持：含时 ed（全空间/投影基）、'
-             'CPU MPS 四档（tebd/tdvp/tdvp-single/tdvp-adaptive）+ tdvp-dense、GPU MPS 两档'
+             'CPU MPS 四档（tebd/tdvp/tdvp-single/tdvp-adaptive）+ tdvp-dense/tdvp-cuda、GPU MPS 两档'
              '（tebd-gpu/swap-tebd-gpu）、轨迹（系综平均）、经典自旋（因子化）；'
              '平衡态 ed/lanczos 的 gs、dmrg/idmrg 的 gs。PEPS/QMC/KPM/free-fermion/gpu-batch'
              '**明确拒绝**，不静默忽略。'),
@@ -208,10 +209,19 @@ CONFIG_SCHEMA_MB = {
         desc='ED/GPU 工作区或 PEPS 中间张量内存预算（MiB，保守估计）'),
     'manybody.dtype': dict(
         type='str', enum=['float32', 'float64'], default='float64',
-        desc='GPU 多体计算精度'),
+        desc='GPU 多体计算精度；tdvp-cuda 对应 complex64/complex128，float32+CPU SVD 为已测混合方案'),
     'manybody.device': dict(
         type='str', default='cuda',
         desc='GPU 多体后端设备（如 cuda、cuda:0）；CPU 后端忽略'),
+    'manybody.svd_device': dict(
+        type='str', enum=['cpu','cuda'], default='cpu',
+        desc='tdvp-cuda 的 SVD 设备；默认 CPU，传播和环境收缩仍在 GPU'),
+    'manybody.tdvp_taylor_tol': dict(
+        type='float', default=None, lo=1e-14, hi=1e-2,
+        desc='tdvp-cuda 局域 Taylor 阶数估计容差；None 按精度选择 c64=2e-7 / c128=1e-10，需独立步长收敛检查'),
+    'manybody.tdvp_taylor_order': dict(
+        type='int', default=24, lo=1, hi=100,
+        desc='tdvp-cuda 局域 Taylor 最高阶数'),
     'manybody.svd_driver': dict(
         type='str', enum=['auto', 'gesvdj', 'gesvd'], default='auto',
         desc='GPU MPS SVD 驱动；auto 使用 PyTorch 默认稳定路径，gesvdj 可尝试加速'),

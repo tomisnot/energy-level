@@ -57,6 +57,7 @@ CORE = {
     'manybody_idmrg_selfcheck.py',
     'manybody_mpo_tdvp_selfcheck.py',
     'manybody_tdvp_dense_selfcheck.py',
+    'manybody_tdvp_cuda_selfcheck.py',
 }
 # 慢基准：默认跳过（约 18 分钟），--slow 才跑
 SLOW = {'mw_bench_firstprinciples.py'}

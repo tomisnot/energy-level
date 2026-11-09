@@ -617,9 +617,9 @@ def _backend_options(p, solver, ed_max_dim):
     if backend.module in ('engine_mps', 'engine_mps_gpu'):
         options['algorithm'] = backend.algorithm or solver
         options['return_state'] = bool(mb_get(p, 'manybody.return_state'))
-    if backend.module == 'tdvp_dense':
+    if backend.module in ('tdvp_dense', 'tdvp_cuda'):
         options['return_state'] = bool(mb_get(p, 'manybody.return_state'))
-    if backend.segments and backend.module in ('engine_ed', 'engine_mps', 'tdvp_dense'):
+    if backend.segments and backend.module in ('engine_ed', 'engine_mps', 'tdvp_dense', 'tdvp_cuda'):
         options['drive_interp'] = mb_get(p, 'manybody.drive_interp') or 'left'
     if backend.charge:
         options['charge_sector'] = mb_get(p, 'manybody.charge_sector')
@@ -697,9 +697,9 @@ def build_run_manybody(cache, params, *, pump=None, method=None, diag=False,
                              keys=('manybody.drive_interp',))
     if segments and drive_interp != 'left':
         module = TIME_BACKENDS[solver].module
-        if module not in ('engine_ed', 'engine_mps', 'tdvp_dense'):
+        if module not in ('engine_ed', 'engine_mps', 'tdvp_dense', 'tdvp_cuda'):
             raise ConfigConflict(
-                '%s 尚不支持 drive_interp=%s；只有 ED/CPU MPS/tdvp-dense 支持中点规则'
+                '%s 尚不支持 drive_interp=%s；ED/CPU MPS/tdvp-dense/tdvp-cuda 支持中点规则'
                 % (solver, drive_interp),
                 keys=('manybody.drive_interp',))
     pauli_specs = validate_pauli_strings(p.get('manybody.pauli_strings'), n_atoms=n)
